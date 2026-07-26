@@ -1,0 +1,21 @@
+# Ignore build output and secrets
+target/
+build/
+dist/
+*.class
+*.jar
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+
+# Secrets / local env
+docker/.env
+config/*.local.*
+*.secret.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,78 @@
+# Secrets Rotation and Revocation
+
+## Scope
+
+This runbook covers broker/Arrow, OpenAlgo, Fluss, S3, OpenObserve, TLS, Swarm, and operator credentials. Exact secret names, providers, and rotation APIs are deployment-specific and must be verified against the pinned release.
+
+## Storage rules
+
+### Local development
+
+- Use an ignored `.env` file only with sandbox/test credentials.
+- Never commit `.env`, print it in logs, embed secrets in images, or use production credentials locally.
+- Local credentials must not grant live-money access.
+
+### Production
+
+- Use Docker Swarm secrets or an approved equivalent secret manager.
+- Do not place secrets in stack files, source, images, command lines, environment dumps, or telemetry.
+- Separate identities and permissions for Ingestion, Flink, Action Capture, Executor, S3, Fluss, OpenObserve, and operators.
+- Encrypt secret storage and restrict access by service identity and operator role.
+
+## Rotation procedure
+
+1. Open a change record with secret owner, affected services, expiry, dependencies, rollback credential, and validation plan.
+2. Confirm the order gate is `HALTED` for any rotation affecting the order path, broker, OpenAlgo, Executor, Fluss, S3, or operator authorization.
+3. Create the replacement credential with the minimum required scope.
+4. Store it in the production secret mechanism under a versioned identity.
+5. Roll or reload only services that can safely reload credentials; use controlled restart where required.
+6. Validate authentication, authorization, readiness, telemetry, and no secret leakage.
+7. Revoke the old credential after the overlap window and verify rejection.
+8. Record the secret version, timestamps, service instances, test evidence, and audit event.
+9. Reconcile the order path and require two distinct approvals before returning the gate to `ENABLED`.
+
+## Credential classes
+
+| Credential | Consumers | Required checks |
+| --- | --- | --- |
+| Arrow/broker market-data | Ingestion | Subscription, decode, reconnect, readiness |
+| Arrow/broker postback | Action Capture | Intake, status parsing, correlation |
+| OpenAlgo/broker execution | Executor/OpenAlgo | Request authorization, response, reconciliation |
+| Fluss client/admin | Ingestion, Flink, Action Capture, Executor, operators | Least privilege, table scope, revocation |
+| S3 checkpoint/lake | Flink, offload, recovery operators | Read/write scope, encryption, manifest operations |
+| OpenObserve | Services/operators | Telemetry only; cannot authorize orders |
+| TLS/mTLS material | Cross-host/service paths | Certificate chain, expiry, rotation, transport health |
+| Operator identities | Reconciliation/gate control | MFA/authentication, role, distinct approvals, audit |
+
+## Failure behavior
+
+- Expired or revoked credential: affected service becomes not ready, emits a critical alert, and stops affected processing according to its contract.
+- Executor/OpenAlgo credential uncertainty: gate `HALTED`; no blind retry.
+- S3 credential failure: checkpoint/offload readiness fails; retain source data and do not claim recovery or EOD verification.
+- Fluss credential failure: stop unsafe writes/reads, preserve uncertainty, and reconcile before resuming.
+- Observability credential failure: buffer durable audit where supported; telemetry readiness fails and the live-money gate remains blocked if acceptance evidence is unavailable.
+- Operator credential compromise: revoke, preserve evidence, halt affected order flow, and require fresh authenticated two-person approval.
+
+## Secret safety checks
+
+CI and deployment checks must detect:
+
+- Secrets in source, stack files, images, command lines, logs, traces, support bundles, and generated manifests
+- Excessive service permissions
+- Expired, duplicate, or unowned credentials
+- Missing rotation/revocation evidence
+- Insecure transport or certificate expiry
+- Audit access without access logging
+
+Original packet bytes, postback payloads, tokens, and credentials are never copied into ordinary logs.
+
+## Rotation acceptance
+
+Test planned rotation, expired credentials, immediate revocation, failed refresh, service restart, overlapping credential validity, compromised credentials, unauthorized gate operations, and recovery after rotation. Prove that rotation cannot automatically enable order placement and that all money-moving audit remains reconstructable.
+
+## References
+
+- Security requirements: `../02_requirements/03-non-functional.md` §3.6
+- Runtime requirements: `../02_requirements/02-functional/09-platform-runtime.md` §§REQ-PF-004 and REQ-PF-010
+- Security architecture: `../03_architecture/04-security-model.md`
+- Operational requirements: `../02_requirements/06-operational.md` §§6.7–6.10

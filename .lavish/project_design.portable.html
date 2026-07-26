@@ -1,0 +1,635 @@
+<!doctype html>
+<html data-theme="luxury" lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Design — Streaming Trading Data Platform</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      :where(.grid, .flex) > * {
+        min-width: 0;
+      }
+      :where(p, h1, h2, h3, h4, li, td, th, .badge) {
+        overflow-wrap: anywhere;
+      }
+      body {
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      .muted {
+        opacity: 0.72;
+      }
+      .comp-card {
+        transition:
+          transform 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      .comp-card:hover {
+        transform: translateY(-2px);
+      }
+      code {
+        background: color-mix(in oklab, var(--color-base-300) 60%, transparent);
+        padding: 1px 5px;
+        border-radius: 5px;
+        font-size: 0.85em;
+      }
+    </style>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+      const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const paint = document.createElement("canvas").getContext("2d");
+      function toRgba(c) {
+        paint.clearRect(0, 0, 1, 1);
+        paint.fillStyle = "#000";
+        paint.fillStyle = c;
+        paint.fillRect(0, 0, 1, 1);
+        return paint.getImageData(0, 0, 1, 1).data;
+      }
+      function compositeRgba(f, b) {
+        const fa = f[3] / 255,
+          ba = b[3] / 255,
+          a = fa + ba * (1 - fa);
+        if (a === 0) return [0, 0, 0, 0];
+        return [
+          (f[0] * fa + b[0] * ba * (1 - fa)) / a,
+          (f[1] * fa + b[1] * ba * (1 - fa)) / a,
+          (f[2] * fa + b[2] * ba * (1 - fa)) / a,
+          a * 255,
+        ];
+      }
+      function pageIsDark() {
+        const r = document.documentElement;
+        const rb = toRgba(getComputedStyle(r).backgroundColor);
+        const bb = r.body
+          ? toRgba(getComputedStyle(r.body).backgroundColor)
+          : [0, 0, 0, 0];
+        const [rr, gg, bb_, a] = compositeRgba(bb, rb);
+        if (a > 0)
+          return (0.2126 * rr + 0.7152 * gg + 0.0722 * bb_) / 255 < 0.5;
+        const cs = getComputedStyle(r).colorScheme;
+        if (cs.includes("dark") && !cs.includes("light")) return true;
+        if (cs.includes("light") && !cs.includes("dark")) return false;
+        return darkQuery.matches;
+      }
+      const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({
+        el,
+        src: el.textContent,
+      }));
+      let applied,
+        rendering = false,
+        queued = false;
+      function queueRender() {
+        queued = true;
+        if (!rendering) void render();
+      }
+      async function render() {
+        rendering = true;
+        try {
+          while (queued) {
+            queued = false;
+            const theme = pageIsDark() ? "dark" : "default";
+            if (theme === applied) continue;
+            mermaid.initialize({
+              startOnLoad: false,
+              theme,
+              securityLevel: "strict",
+            });
+            for (const { el, src } of diagrams) {
+              el.removeAttribute("data-processed");
+              el.textContent = src;
+            }
+            try {
+              await mermaid.run({ nodes: diagrams.map((d) => d.el) });
+            } catch (e) {
+              console.error(e);
+              return;
+            }
+            applied = theme;
+          }
+        } finally {
+          rendering = false;
+          if (queued) queueRender();
+        }
+      }
+      if (document.readyState === "complete") queueRender();
+      else window.addEventListener("load", queueRender, { once: true });
+      const obs = new MutationObserver(queueRender);
+      for (const el of [document.documentElement, document.body])
+        if (el)
+          obs.observe(el, {
+            attributes: true,
+            attributeFilter: ["data-theme", "class", "style"],
+          });
+      document.addEventListener("change", queueRender, true);
+      darkQuery.addEventListener("change", queueRender);
+    </script>
+  </head>
+  <body class="bg-base-200 text-base-content min-h-screen">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+      <header class="mb-8">
+        <div class="flex items-center gap-3 flex-wrap">
+          <h1 class="text-3xl font-bold">Streaming Trading Data Platform</h1>
+          <span class="badge badge-primary">project_design.md</span>
+          <span class="badge badge-outline">scaffold</span>
+        </div>
+        <p class="muted mt-2 text-sm">
+          Turns live + historical NSE market data into real-time, feature-rich
+          data the trade execution engine reads. Macro design only — nothing
+          built yet. Phase 4.1 (Design &amp; architecture) closed. Companion
+          files: <code>ROADMAP.md</code> (process),
+          <code>STATUS.md</code> (status).
+        </p>
+      </header>
+
+      <!-- TOP SAFETY CALLOUTS -->
+      <section class="mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="alert alert-error">
+          <span>⛔</span>
+          <div class="text-sm">
+            <strong>Order path safe-halts.</strong> On uncertain state (stale
+            signal, duplicate-order risk, missed fill, checkpoint failure) the
+            system <strong>stops placing NEW orders</strong> and alerts.
+            Existing positions are babysat, but no new risk is taken until
+            cleared. No auto-recovery into placing orders.
+          </div>
+        </div>
+        <div class="alert alert-warning">
+          <span>⚡</span>
+          <div class="text-sm">
+            <strong>OpenAlgo must be push-driven.</strong> The tens-of-ms
+            tick→instruction budget excludes the broker REST call (~100–300ms).
+            Hitting it requires OpenAlgo to be event/push-driven, not a polling
+            KV reader. Mechanism (KV push vs change-log tail) is a deferred
+            execution decision.
+          </div>
+        </div>
+      </section>
+
+      <!-- PURPOSE + BOUNDARIES -->
+      <section class="mb-10">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h2 class="card-title text-lg">Purpose</h2>
+              <p class="text-sm muted">
+                Bring live + historical data together and compute features on
+                the fly — instead of pre-baking Parquet. Today's chart tool only
+                reads historical Parquet; this adds the live path.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h2 class="card-title text-lg">Boundaries</h2>
+              <ul class="text-sm muted list-disc list-inside space-y-1">
+                <li>In: full NSE (EQ, FO options/futures, index quotes)</li>
+                <li>Out: BSE, currency, commodity</li>
+                <li>Chart tool + alerts deferred to 4.7</li>
+                <li>Order placement in scope (→ broker → exchange)</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TWO-TIER STORAGE -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-1">Two-tier storage model</h2>
+        <p class="muted text-sm mb-4">
+          One live source of truth by day; a continuous, durable historical
+          tier. Lake writes are continuous, not an EOD batch.
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Live — Fluss log</h3>
+              <p class="text-sm muted">
+                Single source of truth during the day. Short retention; tiers
+                out continuously.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Lake — Iceberg on S3</h3>
+              <p class="text-sm muted">
+                Cold/historical tier. Continuous tiering via
+                <code>table.datalake.freshness</code> (~5–10 min). Read after
+                EOD.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Old Parquet</h3>
+              <p class="text-sm muted">
+                One-time backfill into the Iceberg lake, then retired. Single
+                history store going forward.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DATA PATH -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-1">Data path (decided)</h2>
+        <p class="muted text-sm mb-4">
+          One live source of truth (Fluss log) + continuous lake tier (Iceberg
+          on S3). Two Flink jobs split by responsibility.
+        </p>
+        <div class="card card-border bg-base-100 p-4">
+          <pre class="mermaid">
+flowchart TD
+  WS["Broker WS: Zerodha Kite<br />(market data)"] -->|Fluss Java client| RAW["raw_table_1 (log)<br />trades + L1 BBO"]
+  WS2["Broker postback<br />(order fills)"] -->|Fluss Java client| FILLS["Fills_table (log)"]
+  RAW -->|read ticks| SIG["Flink: signal job<br />ticks → features → CEP"]
+  SIG -->|candles| FEAT["Feature tables (log)"]
+  SIG -->|instructions| KV["Trade_management_table (KV)"]
+  FILLS -->|lifecycle| KV
+  KV -->|read instructions| OA["OpenAlgo<br />(dumb executor)"]
+  OA -->|place order| BRK["Broker → Exchange"]
+  KV -->|babysitting read| BABY["Flink: babysitter job<br />fills → trim/re-entry/exit"]
+  BABY -->|babysitting instructions| KV
+  RAW -.->|tier ~5-10min| LAKE[("Lake tier<br />Iceberg on S3")]
+  FEAT -.->|tier| LAKE
+  OBS["OpenObserve"] -. watches .- WS
+  OBS -. watches .- SIG
+  OBS -. watches .- FILLS
+  OBS -. watches .- BABY
+        </pre>
+        </div>
+      </section>
+
+      <!-- COMPONENTS -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-4">Components</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">
+                Ingestor <span class="badge badge-accent badge-soft">new</span>
+              </h3>
+              <p class="text-sm muted">
+                Zerodha Kite WS → Fluss Java client → <code>raw_table_1</code>.
+                Direct WS, single broker.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">Flink: signal job</h3>
+              <p class="text-sm muted">
+                Ticks → features → stateful + CEP → instructions (KV) + feature
+                tables (log). Exactly-once.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">Flink: babysitter job</h3>
+              <p class="text-sm muted">
+                Reads fills + state → trim / re-entry / exit → KV. Position
+                management.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">
+                Fill-capture
+                <span class="badge badge-accent badge-soft">new</span>
+              </h3>
+              <p class="text-sm muted">
+                Broker postback → <code>Fills_table</code> + KV lifecycle.
+                Bypasses OpenAlgo.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">Fluss</h3>
+              <p class="text-sm muted">
+                Bus + storage: raw, fills, feature logs, KV, + Iceberg/S3 lake
+                tier.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">
+                Feature tables <span class="badge badge-soft">log</span>
+              </h3>
+              <p class="text-sm muted">
+                Append-only Fluss <strong>log</strong> (not KV). Each closed
+                candle = one row; full history, replayable, tiers to lake.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">OpenAlgo</h3>
+              <p class="text-sm muted">
+                Dumb executor. Reads KV, places orders. No strategy, no fills.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">OpenObserve</h3>
+              <p class="text-sm muted">
+                Logs, metrics, traces across all components.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">Docker</h3>
+              <p class="text-sm muted">
+                Runtime wrapper — runs everything in containers.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">Lake tier</h3>
+              <p class="text-sm muted">
+                Iceberg on S3. Continuous tiering ~5–10 min. Old Parquet
+                backfilled then retired.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100 comp-card">
+            <div class="card-body">
+              <h3 class="card-title text-base">
+                <code>raw_table_1</code>
+                <span class="badge badge-soft">macro</span>
+              </h3>
+              <p class="text-sm muted">
+                One unified append-only log: trades + L1 BBO, split by
+                <code>tick_type</code>. Describes any NSE instrument
+                (EQ/FO/future/index). Schema deferred.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- KEY DECISIONS -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-4">Key decisions (4.1 — closed)</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Fluss is both bus and storage; lake tier = remote durable
+              store.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Ingestion is direct broker WS → Fluss; OpenAlgo is consumer, not
+              source.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Strategy in Flink via stateful operators + CEP, split across 2
+              jobs.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Fills captured independently; OpenAlgo never touches fills.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Signal job consumes in-flight feature stream, not raw ticks /
+              feature tables.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >Initial compute = candles only; 250+ features deferred to
+              evolution.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              ><code>raw_table_1</code> = one unified log (TRADE | QUOTE),
+              bucketed by instrument_token.</span
+            >
+          </div>
+          <div class="alert alert-soft">
+            <span>●</span
+            ><span class="text-sm"
+              >OpenAlgo read-only on KV; all writes from Flink +
+              fill-capture.</span
+            >
+          </div>
+        </div>
+      </section>
+
+      <!-- KV MODEL -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-1">
+          KV writer coordination — resolved
+        </h2>
+        <p class="muted text-sm mb-4">
+          <code>Trade_management_table</code> keyed by order ID, written by 3
+          producers. Fluss partial-update merges per-column;
+          <strong>column ownership</strong> removes the conflict.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="table table-zebra bg-base-100">
+            <thead>
+              <tr>
+                <th>Writer</th>
+                <th>Owns (columns)</th>
+                <th>Writes via</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <span class="badge badge-primary badge-soft">Signal job</span>
+                </td>
+                <td class="font-mono text-sm">
+                  entry, exit, position_size, trimming
+                </td>
+                <td>Flink</td>
+              </tr>
+              <tr>
+                <td>
+                  <span class="badge badge-secondary badge-soft"
+                    >Babysitter job</span
+                  >
+                </td>
+                <td class="font-mono text-sm">
+                  re_entry, exit_override, trim_adj
+                </td>
+                <td>Flink</td>
+              </tr>
+              <tr>
+                <td>
+                  <span class="badge badge-accent badge-soft"
+                    >Fill-capture</span
+                  >
+                </td>
+                <td class="font-mono text-sm">status, fill_qty, fill_price</td>
+                <td>Fluss Java client</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="alert alert-warning mt-4">
+          <span>⚠</span>
+          <div class="text-sm">
+            <strong>Caveat:</strong> Java-client writers (fill-capture) are not
+            exactly-once by default — must be idempotent on retry. Column
+            ownership makes re-sends safe.
+          </div>
+        </div>
+      </section>
+
+      <!-- NFRs -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-4">NFRs</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Throughput</h3>
+              <p class="text-sm muted">
+                Full NSE: ~5k–20k instruments, peak ~10k–50k ticks/sec. L1-only
+                caps per-tick size.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Failure posture</h3>
+              <p class="text-sm muted">
+                <strong>Data path</strong> auto-recovers.
+                <strong>Order path</strong> safe-halts — no new orders on
+                uncertain state.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base">Latency</h3>
+              <p class="text-sm muted">
+                Tens of ms tick→instruction-emitted (excl. broker REST
+                ~100–300ms). Implies OpenAlgo push-driven.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- OBSERVABILITY SPLIT -->
+      <section class="mb-10">
+        <h2 class="text-xl font-bold mb-4">Observability scope</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base text-success">
+                In scope (operational / SLA)
+              </h3>
+              <ul class="text-sm muted list-disc list-inside space-y-1">
+                <li>Infra health + SLA pipeline metrics</li>
+                <li>Open positions, fill counts, notional exposure</li>
+                <li>Per-order fill-vs-signal deviation</li>
+              </ul>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-base text-error">
+                Out of scope (business)
+              </h3>
+              <ul class="text-sm muted list-disc list-inside space-y-1">
+                <li>P&amp;L, win rate</li>
+                <li>Aggregated slippage cost</li>
+                <li>Strategy performance — revisit 4.7</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEFERRED -->
+      <section class="mb-6">
+        <h2 class="text-xl font-bold mb-4">Deferred detailed-pass work</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-sm">Ingestion</h3>
+              <p class="text-sm muted">
+                <code>raw_table_1</code> schema, bucketing, delivery semantics,
+                WS reconnect &amp; gap handling.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-sm">Compute</h3>
+              <p class="text-sm muted">
+                Candle window(s), event-time/watermarking, feature schema,
+                idempotency/dedup.
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-sm">Observability</h3>
+              <p class="text-sm muted">
+                SLA metric list, SLO targets, alert thresholds, dashboards (→
+                4.5).
+              </p>
+            </div>
+          </div>
+          <div class="card card-border bg-base-100">
+            <div class="card-body">
+              <h3 class="card-title text-sm">Execution</h3>
+              <p class="text-sm muted">
+                OpenAlgo push mechanism (KV push vs change-log tail),
+                Java-client idempotency.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="text-xs muted mt-8 border-t border-base-300 pt-4">
+        Source: <code>project_design.md</code> · visualized via Lavish · Phase
+        4.1 closed. Verify against the design file before implementation.
+      </footer>
+    </div>
+  </body>
+</html>

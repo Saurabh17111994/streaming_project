@@ -1,0 +1,90 @@
+# 02.6 — Action Capture and Position Projection
+
+## Purpose and readiness
+
+Action Capture independently consumes the evidence-approved broker postback stream, preserves immutable postback evidence, correlates broker events to Executor mappings, updates order-lifecycle state without regression, quarantines ambiguity, and drives a separate fill-derived position projection.
+
+Broker fields, ordering, replay, timestamps, and reference echo behavior are evidence-gated. No `postback_seq` or broker event ID is assumed.
+
+## REQ-AC-001: Evidence-gated postback intake
+
+Platform and Execution teams SHALL provide official artifacts or sandbox captures proving endpoint, authentication, payload schema, status vocabulary, timestamp semantics, replay behavior, and available identities. Unknown schema/status versions are preserved and quarantined; they are not guessed.
+
+Original postback bytes/text and a payload hash SHALL be retained in immutable audit storage with decoder/schema version.
+
+## REQ-AC-002: Postback identity
+
+Each received postback SHALL receive a platform `postback_event_id` and versioned `postback_fingerprint`. If the broker later proves a stable event/sequence ID, it may be stored as evidence but does not replace platform identity without a new contract.
+
+Duplicate handling is bounded and best-effort. Immutable audit may contain repeated deliveries; logical projections SHALL be idempotent under the tested fingerprint/version and state-transition rules.
+
+## REQ-AC-003: Correlation
+
+Action Capture SHALL correlate in this order:
+
+1. Verified `broker_order_id` mapping in `Order_Correlation`.
+2. Verified echoed `client_order_ref` mapped to one `instruction_id`/attempt.
+3. Evidence-approved reconciliation query.
+
+It SHALL never infer a mapping from symbol, quantity, timestamp proximity, or overloaded `order_id` alone. Missing/ambiguous correlation writes `Postback_Quarantine`, halts affected new order flow, and alerts Executor/operations.
+
+## REQ-AC-004: Immutable postback/fill audit
+
+`Fills_table` (or its reconciled replacement name) SHALL append one immutable platform event per received delivery containing:
+
+- `postback_event_id` and fingerprint/version
+- `instruction_id`, `client_order_ref`, `broker_order_id`, and `execution_attempt_id` when correlated
+- `trade_context_id` and `position_id` when available
+- Broker status and verified quantities/prices
+- Broker event timestamp when verified, receive/ingest timestamps
+- Original payload and payload hash
+- Schema/decoder version
+- Correlation state and quarantine reason
+
+No LOG-table PK uniqueness is claimed. Logical duplicates are explicit and auditable.
+
+## REQ-AC-005: Order lifecycle projection
+
+Action Capture owns `Order_Lifecycle` KV keyed by `broker_order_id` and containing correlated platform IDs. States include at minimum `PENDING`, `PARTIAL`, `FILLED`, `CANCELLED`, `REJECTED`, and `UNKNOWN`, subject to broker status mapping evidence.
+
+Each projection update carries source event identity, source timestamp, source receive timestamp, state version, cumulative quantity, average fill price, and pending quantity when verified.
+
+An older or lower-precedence postback SHALL not regress a terminal or more advanced state. The exact precedence/version rule is explicit and tested. Conflicting evidence moves the order to `UNKNOWN`, quarantines the event, and halts affected order flow.
+
+## REQ-AC-006: Independent-write consistency
+
+Immutable audit append, lifecycle projection, position projection, and quarantine writes are independent unless a pinned connector test proves a transaction boundary. Recovery SHALL therefore use a durable projection/reconciliation protocol:
+
+1. Persist immutable event or a durable pending record.
+2. Apply lifecycle projection idempotently.
+3. Apply position projection idempotently for fill-bearing events.
+4. Mark projection completion with source event/version.
+5. Scan and retry incomplete projections after restart.
+
+Partial completion, duplicate LOG rows, and projection lag are observable. No cross-table atomicity claim is permitted without evidence.
+
+## REQ-AC-007: Position projection
+
+A fill-derived projector SHALL maintain `Positions` KV keyed by `position_id`. `trade_context_id` groups related orders. `position_id` is minted when the first correlated fill opens exposure.
+
+The projection records instrument, side, open/closed/cumulative quantities, average entry/exit values, `FLAT|OPEN|REDUCING|CLOSED|UNKNOWN` state, source event/version, and timestamps. Conflicting or uncorrelated fills produce `UNKNOWN` and halt affected actions.
+
+Order lifecycle and position lifecycle remain separate aggregates.
+
+## REQ-AC-008: Rejected/cancelled/unknown behavior
+
+Rejected and cancelled broker orders are recorded in immutable audit and lifecycle state. They participate in reservation release only after unique correlation and terminal-state reconciliation. Unknown/unrecognized states remain `UNKNOWN`; they do not silently release risk capacity.
+
+## REQ-AC-009: Backpressure and readiness
+
+Exact Fluss client internals are evidence-gated. The service SHALL bound memory and pending writes, expose projection lag and incomplete work, and become not ready on broker disconnection, schema mismatch, Fluss unavailability, unresolved projection backlog above policy, or correlation invariant failure.
+
+## REQ-AC-010: Observability and acceptance
+
+Metrics include postbacks/bytes, duplicates, correlation success/quarantine, lifecycle transitions/rejections, stale/regressive events, projection lag/backlog, positions by state, independent-write failures, replay/recovery, readiness, and clock offset.
+
+Tests SHALL cover duplicate and out-of-order postbacks, no-sequence behavior, missing/ambiguous references, terminal-state regression, independent-write crash windows, restart projection recovery, rejected/cancelled/unknown handling, first-fill position creation, partial fills, multi-order trade contexts, and long-term audit reconstruction.
+
+
+
+> 
