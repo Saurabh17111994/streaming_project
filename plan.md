@@ -817,7 +817,7 @@ item complete until its required integration/evidence test passes.
 - [x] Verify source DDL and Java discontinuity mapping agree.
 - [ ] Verify Action Capture quarantine remains untouched.
 - [ ] Verify ingestion quarantine migration approval.
-- [ ] Create implementation branch or worktree.
+- [x] Create implementation branch or worktree.
 
 ## Subscription planner
 
@@ -1171,9 +1171,9 @@ item complete until its required integration/evidence test passes.
 - [x] Verify no credentials in logs.
 - [ ] Verify no raw packet bytes in logs.
 - [x] Verify artifact hashes.
-- [ ] Verify image has no secrets.
-- [ ] Verify rollback artifact.
-- [ ] Publish release manifest.
+- [x] Verify image has no secrets.
+- [x] Verify rollback artifact.
+- [x] Publish release manifest.
 - [ ] Obtain production approval.
 
 # Production Ingestion Hardening Amendments
@@ -1369,13 +1369,13 @@ Phase 6A — Safety, quality, and resource integrity
 
 ## Production-hardening completion checks
 
-- [ ] Slot failure suppresses only assigned instruments.
-- [ ] No observed tick is accepted as subscription acknowledgement.
+- [x] Slot failure suppresses only assigned instruments.
+- [x] No observed tick is accepted as subscription acknowledgement.
 - [x] Production timestamp-freshness values are evidence-backed.
   (User-supplied 2026-08-01: 5000/2000 — see tracker.)
-- [ ] Stale data cannot create a trade decision.
+- [x] Stale data cannot create a trade decision.
 - [ ] Reconnect testing proves no socket, child-process, thread, or goroutine leak.
-- [ ] Secret redaction is tested at both Go and Java boundaries.
+- [x] Secret redaction is tested at both Go and Java boundaries.
 - [ ] Subscription headroom is observable and alerted.
 
 # Completeness Audit

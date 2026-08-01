@@ -1,0 +1,52 @@
+{
+  "release_id": "rel-ingestion-phase9-hardening-20260801",
+  "status": "EVIDENCE_GATED",
+  "source_commit": "462b85752b317426253344816c9327b509237e26",
+  "source_branch": "feature/ingestion-phase9-hardening",
+  "created_utc": "2026-08-01T17:30:00Z",
+  "image": {
+    "name": "arrow-ingestion",
+    "tag": "phase9-hardening",
+    "image_id": "sha256:e7ce67889d68ca79f48bf41e53d08e2843ae15b71d6bee2d16f53b0d1fd0bf8b",
+    "build_context": "code/ (Maven reactor root)",
+    "dockerfile": "code/02_services/01_ingestion/Dockerfile"
+  },
+  "artifacts": {
+    "go_bridge_binary": {
+      "path": "code/02_services/01_ingestion/go-bridge/arrow-bridge",
+      "sha256": "f945c3328435e95aebc8a0359864607e20cc595bc86975030824603e061b53c8"
+    },
+    "ingestion_jar": {
+      "path": "code/02_services/01_ingestion/target/ingestion.jar",
+      "sha256": "95c5ad93d7a02fb729df8d66c32006e73ae67dd4ed8fcf3579e4d8ee0a1196c6"
+    },
+    "dockerfile": {
+      "path": "code/02_services/01_ingestion/Dockerfile",
+      "sha256": "bcb4cb8eecb53c348e55ea86986833cc1dc979d17746e0e7f7574323e6591688"
+    }
+  },
+  "self_contained_deps": {
+    "go_arrow_sdk": "code/02_services/01_ingestion/go-bridge/third_party/go-arrow (in-repo, relative replace)",
+    "maven_reactor": "code/pom.xml + code/common + ingestion module"
+  },
+  "secret_scan": {
+    "status": "PASS",
+    "image_filesystem": "no credential values found",
+    "jar": "no credential values found",
+    "go_binary": "no credential values found (only env var names / sanitizer regexes, no values)",
+    "build_context": "excluded via code/.dockerignore and 01_ingestion/.dockerignore"
+  },
+  "rollback": {
+    "previous_approved_commit": "a97245c (main, pre-hardening)",
+    "rollback_artifact": "rebuild image from a97245c tree; no prior image was ever published",
+    "note": "source was not version-controlled before this release; a97245c tracks only 4 ingestion files. Rollback for source = restore from this commit 462b857 and rebuild."
+  },
+  "gate_evidence": {
+    "go_tests": "PASS (12.5s full suite)",
+    "java_tests": "PASS (98 tests, 0 failures)",
+    "fake_broker": "PASS",
+    "fault_injection": "PASS",
+    "seven_hour_soak": "NOT_RUN (requires real broker on a market day)",
+    "production_approval": "NOT_APPROVED"
+  }
+}
