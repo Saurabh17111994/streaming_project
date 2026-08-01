@@ -11,21 +11,26 @@ Arrow market-data stream
   → ingestion
   → Fluss raw_table_1 LOG
   → Signal Flink job
-      ├─ candles, candidates, in-operator ranking
+      ├─ candles (keyed by instrument_token)
+      ├─ candidates (keyed by instrument_token)
+      ├─ repartition by portfolio_id
+      ├─ in-operator ranking and reservations
       └─ immutable Trade_Decisions
           → Executor durable gate
-          → OpenAlgo
+          → Arrow REST (POST /order/regular)
           → broker
 
 Arrow postback stream
   → action-capture
-      ├─ Fills_table LOG
+      ├─ Fills LOG
       ├─ Order_Lifecycle KV
       ├─ Positions KV
+      ├─ Postback_Projection_Ledger
       └─ Postback_Quarantine LOG
           → Babysitter Flink job (MVP zero actions)
 
-Fluss immutable events → verified EOD Iceberg/S3
+Safety: Signal/Action Capture/platform/operators → Safety_Halt_Requests → Executor
+Fluss immutable events → EOD controller → verified Iceberg/S3
 All services → OpenObserve
 ```
 
@@ -37,8 +42,8 @@ All services → OpenObserve
 | Flink control/workers | Run the Signal and Babysitter jobs |
 | Ingestion | Evidence-approved market stream decode and raw append |
 | Action Capture/position projector | Postback evidence, correlation, lifecycle, fill-derived positions |
-| Executor | Durable gate, attempts, mappings, reconciliation, fencing, OpenAlgo calls |
-| OpenAlgo | Broker REST adapter only |
+| EOD controller | Manifest creation, verification, retry/backoff, retention extension |
+| Executor | Durable gate, attempts, mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls |
 | OpenObserve | Logs, metrics, traces, alerts |
 | Operators/reconciliation control | Authenticated gate reconciliation and two-person approval |
 
@@ -49,9 +54,10 @@ The Signal job contains Compute, Business Logic, and Ranking. Ranking is not a s
 The deployment must provision or reconcile these logical tables before readiness:
 
 - Market: `raw_table_1`, `feature_candles_15s`, `suspected_discontinuities`, `instruments`
-- Strategy: `Signal_Candidates`, `Ranking_Results`, immutable `Trade_Decisions`
-- Postback/position: `Fills_table`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine`
-- Execution: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`
+- Strategy: `Signal_Candidates`, `Ranking_Results`, immutable `Trade_Decisions`, `Portfolio_Reservations`
+- Postback/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine` (no `Postback_Projection_Ledger` in MVP)
+- Execution: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`
+- EOD: EOD controller durable manifest state
 - Future only: `Position_Actions`
 
 Every table has an explicit schema version, owner, retention policy, writer/column ownership, and tested DDL. Startup does not enable order placement merely because a container is healthy.
@@ -68,8 +74,9 @@ Production requirements include:
 - Durable replicated Fluss volumes
 - Encrypted Iceberg/audit storage
 - Swarm secrets and least-privilege identities
-- Encrypted overlay/TLS-protected cross-host transport where supported
-- Executor single-owner fencing per account/order partition
+- Encrypted overlay/TLS-protected cross-host transport mandatory for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, money-moving/state traffic)
+- Executor single-owner fencing per `execution_partition_id`
+- EOD controller service or scheduled job owning manifest lifecycle and retention extension
 - Explicit resource, placement, health, restart, update, rollback, and shutdown policies
 
 ## Readiness sequence
@@ -79,11 +86,12 @@ Services may start concurrently, but production readiness is dependency-driven:
 1. S3 checkpoint/lake access and secrets validate.
 2. Fluss quorum, replication, tablets, and required schemas are healthy.
 3. Flink control/workers are healthy.
-4. Signal and Babysitter jobs run and checkpoint.
-5. Ingestion and Action Capture pass protocol/schema and subscription checks.
-6. Executor validates durable state, mappings, changelog continuity, OpenAlgo reachability, and starts `HALTED`.
-7. Reconciliation completes.
-8. Two distinct authorized operators approve the same gate epoch/evidence hash before `ENABLED`.
+4. EOD controller state is durable and manifests from previous trading dates are verified or retryable.
+5. Signal and Babysitter jobs run and checkpoint.
+6. Ingestion and Action Capture pass protocol/schema and subscription checks.
+7. Executor validates durable state, mappings, changelog continuity, safety-halt health, Arrow REST reachability, and starts `HALTED`.
+8. Reconciliation completes.
+9. Two distinct authorized operators approve the same gate epoch/evidence hash before `ENABLED`.
 
 Liveness, readiness, job health, trading readiness, and durability readiness are separate health dimensions.
 
@@ -91,10 +99,8 @@ Liveness, readiness, job health, trading readiness, and durability readiness are
 
 The production-like environment must test:
 
-- 75,000 ticks/s for a full session with trigger-tick-to-instruction p99 below 100 ms
-- 112,500 ticks/s for at least 30 minutes
-- 150,000 ticks/s for at least 60 minutes
-- One workload VM loss at the normal baseline
+- variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session with trigger-tick-to-instruction p99 below 100 ms
+- One workload VM loss at the per-instrument production rate
 - Data-path recovery under 30 seconds for accepted scenarios
 - Safe-halt under five seconds
 - Full-volume EOD manifest verification under 30 minutes target

@@ -22,13 +22,13 @@ Separate least-privilege identities are required for:
 - Ingestion and market-data append
 - Signal and Babysitter Flink jobs
 - Action Capture and projection writes
-- Executor state, gate control, and OpenAlgo access
+- Executor state, gate control, and Arrow REST access
 - Fluss administration
 - S3 checkpoint/lake access
 - OpenObserve telemetry
 - Authenticated operators
 
-Credential rotation and revocation covers broker/Arrow, OpenAlgo, S3, OpenObserve, TLS material, Fluss access, and operator identities. Expiry or revocation sets affected readiness false and alerts operations.
+Credential rotation and revocation covers broker/Arrow, S3, OpenObserve, TLS material, Fluss access, and operator identities. Expiry or revocation sets affected readiness false and alerts operations.
 
 ## Order-path safety controls
 
@@ -46,16 +46,16 @@ Every call validates the current gate epoch. Before a call, the Executor durably
 
 Resumption requires broker order reconciliation, fill/position reconciliation, changelog continuity, signal/checkpoint health, resolution of unknown attempts and reservations, and two distinct authenticated operators approving the same epoch and evidence hash. Automatic resume and unaudited bypass are prohibited.
 
-One fenced Executor owns each account/order partition. Leadership loss, durable-state loss, identity mismatch, unauthorized control, or security incident halts submissions.
+One fenced Executor owns each `execution_partition_id`. Leadership loss, durable-state loss, fencing-token mismatch, network partition, or stale ownership halts submissions.
 
 ## Data protection
 
 - Original broker packets and postback payloads are retained for evidence but are never written to ordinary logs.
 - Credentials, tokens, raw payloads, and unnecessary account identifiers are redacted from logs and traces.
 - Fluss volumes, S3 checkpoints, Iceberg/lake data, and money-moving audit are encrypted at rest.
-- Production cross-host traffic uses encrypted overlay/TLS-protected transport where supported.
-- Broker and OpenAlgo communication uses the evidence-approved secure transport.
-- Seven-year money-moving audit retention is encrypted, role-restricted, and itself access-audited.
+- Production cross-host traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
+- Broker and Arrow REST communication uses the evidence-approved secure transport.
+- Seven-year money-moving audit retention is encrypted with WORM/Object Lock immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval target under 15 minutes from cold storage, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact mechanisms remain evidence-gated but the controls are architecturally mandatory.
 
 The exact encryption modes, keys, rotation cadence, and legal retention/deletion policy require deployment and compliance evidence.
 
@@ -67,14 +67,13 @@ The exact encryption modes, keys, rotation cadence, and legal retention/deletion
 | Signal job | Write candles, candidates, rankings, immutable instructions | Broker calls or fill authority |
 | Action Capture | Append postback audit; project lifecycle/positions | Strategy or order submission |
 | Babysitter | Read positions; emit zero actions in MVP | Direct broker calls or lifecycle mutation |
-| Executor | Gate, attempts, mappings, reconciliation, OpenAlgo | Strategy mutation or authoritative fill capture |
-| OpenAlgo | Broker REST adaptation | Gate decisions or Fluss consumption |
+| Executor | Gate, attempts, mappings, reconciliation, safety-halt consumption, fencing, Arrow REST | Strategy mutation or authoritative fill capture |
 | Observability | Receive telemetry and alerts | Authorize orders or mutate execution state |
-| Operator | Authenticated reconcile/approve according to gate epoch | Unilateral or unaudited resume |
+| Operator | Authenticated reconcile/approve according to gate epoch; publish safety-halt requests | Unilateral or unaudited resume |
 
 ## Security monitoring and response
 
-Required signals include authentication failures, credential age/expiry, secret exposure, redaction failures, TLS failures, unauthorized or mismatched approvals, gate transitions, fencing events, anomalous OpenAlgo responses, audit access, and compromised-credential recovery.
+Required signals include authentication failures, credential age/expiry, secret exposure, redaction failures, TLS failures, unauthorized or mismatched approvals, gate transitions, fencing events, anomalous Arrow REST responses, audit access, and compromised-credential recovery.
 
 Security incidents halt affected order flow, preserve evidence, rotate/revoke credentials, and require reconciliation plus two-person approval before resumption.
 

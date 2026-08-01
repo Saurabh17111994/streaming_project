@@ -1,0 +1,10 @@
+# Build-context hygiene for the reactor-root context (code/):
+# keep credentials, logs, and build artifacts out of the Docker build context.
+**/.env
+**/.env.*
+**/logs/
+**/target/
+**/dependency-reduced-pom.xml
+**/*.log
+.git/
+**/node_modules/

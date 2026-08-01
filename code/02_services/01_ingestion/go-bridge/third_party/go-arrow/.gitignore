@@ -1,0 +1,7 @@
+go.sum
+.env
+Makefile
+
+
+examples/*
+*.log

@@ -2,42 +2,101 @@
 
 Risks and assumptions are actionable records, not passive prose. Every open item needs an owner, validation evidence, and a decision or mitigation before the affected production capability is accepted.
 
+---
+
+## ID namespacing
+
+| Namespace | Scope | Defined in |
+| --- | --- | --- |
+| `ASM-001`–`ASM-999` | Project-level assumption | This register only |
+| `RISK-001`–`RISK-999` | Project-level risk | This register only |
+| `ASM-ING-*`, `ASM-STOR-*`, `ASM-CMP-*`, `ASM-BL-*`, `ASM-RNK-*` | Domain-scoped assumptions | Individual functional requirement files |
+| `ASM-NFR-*`, `ASM-DATA-*`, `ASM-IF-*`, `ASM-OPS-*`, `ASM-EXE-*`, `ASM-PF-*` | Cross-cutting assumptions | Non-functional, data, interface, ops, executor, platform requirement files |
+
+Domain-scoped and cross-cutting assumption IDs are defined in their owning requirement files and SHALL NOT be redefined here. Project-level IDs (`ASM-*`, `RISK-*`) are defined only in this register. Other documents SHALL reference project-level IDs by name without redefining them.
+
+---
+
+## Evidence levels
+
+Every validation claim SHALL use exactly one of these evidence levels:
+
+| Level | Name | Meaning | May close a risk? |
+| --- | --- | --- | --- |
+| 1 | **Documented by vendor** | Official spec, API doc, or vendor communication describes the behavior | No — insufficient alone for runtime risks |
+| 2 | **Observed in capture** | Behavior observed in one or more real sessions or packet captures | No — may close documentation-level assumptions only |
+| 3 | **Tested in sandbox** | Intentional test in a controlled non-production environment exercises the behavior | Yes — when test covers all required conditions |
+| 4 | **Validated in production-like environment** | Reproduced under production workload, topology, versions, and failure modes | Yes — definitive |
+
+A vendor document (Level 1) SHALL NOT alone close a runtime-behavior risk. A risk marked as mitigated with only Level 1 or Level 2 evidence SHALL remain open for a production-validation gate unless an explicit risk acceptance is recorded.
+
+---
+
 ## Open risks
 
-| ID | Severity | Risk | Owner | Trigger / evidence required | Mitigation or acceptance condition | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| RISK-001 | Critical | Arrow exposes no stable tick sequence/event ID; fingerprint dedup can collapse identical legitimate ticks or miss semantically duplicate packets. | Ingestion | Captured packet corpus and broker protocol confirmation | Quantify false-positive/false-negative rate; version the fingerprint and TTL; accept bounded best-effort semantics | Open |
-| RISK-002 | Critical | Broker accepts an order but Executor crashes before recording acknowledgement. | Execution | Fault injection between REST response and durable state update | Durable attempt ledger, broker reconciliation before retry, broker idempotency key if available | Open |
-| RISK-003 | Critical | The order path does not halt consistently during uncertain state. | Platform + Execution | Safe-halt chaos test | Durable gate enforced before every broker call; halt within 5 seconds; explicit resume checks | Open |
-| RISK-004 | High | `client_order_ref` may not fit or be echoed reliably in Arrow's 16-character `remarks`. | Execution + Action Capture | Broker sandbox round-trip test | Collision-tested encoding plus durable `client_order_ref ↔ instruction_id ↔ broker_order_id` mapping | Open |
-| RISK-005 | High | EOD offload failure races short Fluss retention. | Storage | Failed/offline S3 test spanning EOD | Multi-day raw retention buffer, verified commit manifest, retries and pre-expiry alert | Open |
-| RISK-006 | High | Shared checkpoint storage is a production single point of failure. | Platform | Loss of checkpoint host/share | Redundant durable checkpoint storage or explicit reduced-HA acceptance | Open |
-| RISK-007 | High | The normal production workload is 75,000 ticks/s, and lower test rates could under-size the cluster or falsely indicate readiness. | Performance | Captured full-session and market-open workload | Size for 75,000/s sustained; pass 112,500/s burst and 150,000/s stress/headroom tests | Open |
-| RISK-008 | High | Fluss connector semantics may not provide atomic visibility across all LOG and KV outputs. | Compute + Storage | Version-specific connector test | Document per-table visibility and design consumers for partial visibility if cross-table atomicity is unavailable | Open |
-| RISK-009 | Medium | Swarm overlay latency may violate the decision-path p99 target. | Platform | Production-like multi-VM benchmark | Placement optimization and measured p99 under load | Open |
-| RISK-010 | Medium | Three Fluss/Flink nodes may not tolerate one VM loss as configured. | Platform | Per-node chaos matrix | Set replication/quorum/placement explicitly and prove one-node tolerance | Open |
-| RISK-011 | Critical | Current physical DDLs encode superseded identities, sequence assumptions, ownership, and retention and cannot be safely applied. | Platform + Storage | Pinned Fluss/Flink version and schema-parity suite | Generate replacement clean-break DDLs from reconciled requirements; keep existing SQL blocked until all DDL tests pass | Open |
-| RISK-012 | High | Two-person gate resume and Executor fencing may be bypassed by incomplete identity/access-control implementation. | Platform + Execution | Authorization, concurrency, and adversarial control tests | Distinct authenticated approvals bound to epoch/evidence hash; immutable audit; one fenced active Executor per account/order partition | Open |
-| RISK-013 | High | Seven-year money-moving audit retention may not satisfy final legal/regulatory policy or deletion obligations. | Platform + Compliance | Legal/policy review | Encrypt, restrict and audit access; confirm retention/deletion policy before live-money release | Open |
+| ID | Severity | Risk | Owner | Trigger / evidence required | Mitigation or acceptance condition | Current status | Status date | Previous status | Evidence reference |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| RISK-001 | Critical | Arrow exposes no stable tick sequence/event ID; fingerprint dedup can collapse identical legitimate ticks or miss semantically duplicate packets. | Ingestion | Captured packet corpus and broker protocol confirmation (Level 1+2 complete; Level 3 pending) | Quantify false-positive/false-negative rate; version the fingerprint and TTL; accept bounded best-effort semantics | Open | 2026-07-23 | — | Arrow binary protocol confirmed (Level 1); LTP/LTPC/Quote/Full 4-mode capture analysis pending (Level 2) |
+| RISK-002 | Critical | Broker accepts an order but Executor crashes before recording acknowledgement. | Execution | Fault injection between REST response and durable state update (Level 3) | Durable attempt ledger, broker reconciliation before retry, broker idempotency key if available | Open | 2026-07-23 | — | — |
+| RISK-003 | Critical | The order path does not halt consistently during uncertain state. | Platform + Execution | Safe-halt chaos test (Level 3) | Durable gate enforced before every broker call; halt within 5 seconds; explicit resume checks | Open | 2026-07-23 | — | — |
+| RISK-004 | Critical | `client_order_ref` too long for Arrow `remarks` field (max 16 chars). | Execution + Action Capture | Arrow API documentation | Risk retired — Arrow REST docs confirm `remarks` is max 16 chars and echoed in REST responses and WS order updates | Closed | 2026-07-23 | Open | Arrow REST API spec (Level 1); DEC-012 |
+| RISK-005 | High | EOD offload failure races short Fluss retention. | Storage | Failed/offline S3 test spanning EOD (Level 3) | Multi-day raw retention buffer, verified commit manifest, retries and pre-expiry alert | Open | 2026-07-23 | — | — |
+| RISK-006 | High | Shared checkpoint storage is a production single point of failure. | Platform | Loss of checkpoint host/share (Level 3) | Redundant durable checkpoint storage or explicit reduced-HA acceptance | Open | 2026-07-23 | — | — |
+| RISK-007 | Medium (deferred) | Variable broker arrivals can exceed the 60,000 ticks/s average baseline up to the 90,000 ticks/s capacity peak; unmeasured cluster capacity could under-size the cluster or falsely indicate readiness. | Performance | `PERF-PROD-60000-001` / `PERF-PROD-90000-001` campaigns are deferred to the 3,000-instrument phase. The current testing phase validates the 1,024-instrument / single-connection configuration. | Reassess before the premium-tier 3,000-instrument phase | Open (deferred) | 2026-07-31 | — | — |
+| RISK-008 | High | Fluss connector semantics may not provide atomic visibility across all LOG and KV outputs. | Compute + Storage | Version-specific connector test (Level 3) | Document per-table visibility and design consumers for partial visibility if cross-table atomicity is unavailable | Open | 2026-07-23 | — | — |
+| RISK-009 | Medium | Swarm overlay latency may violate the decision-path p99 target. | Platform | Production-like multi-VM benchmark (Level 3+) | Placement optimization and measured p99 under load | Open | 2026-07-23 | — | — |
+| RISK-010 | Medium | Three Fluss/Flink nodes may not tolerate one VM loss as configured. | Platform | `FAIL-VM-LOSS-60000-001` per-node chaos matrix (Level 3) | Set replication/quorum/placement explicitly and prove one-node tolerance | Open | 2026-07-23 | — | — |
+| RISK-011 | Critical | Current physical DDLs encode superseded identities, sequence assumptions, ownership, and retention and cannot be safely applied. Needs regeneration against pinned Fluss 0.9 + Flink 2.2. | Platform + Storage | Pinned-version DDL apply and parity suite (Level 3) | Generate clean-break DDLs from reconciled logical schemas. Fluss 0.9 features (BYTES, partial_update, changelog images) are confirmed (Level 2). | Mitigated | 2026-07-23 | Open | Fluss 0.9.0 feature confirmation (Level 2); DDL generation unblocked. Full DDL parity suite pending (Level 3). |
+| RISK-012 | High | Two-person gate resume and Executor fencing may be bypassed by incomplete identity/access-control implementation. | Platform + Execution | Authorization, concurrency, and adversarial control tests (Level 3) | Distinct authenticated approvals bound to epoch/evidence hash; immutable audit; one fenced active Executor per account/order partition | Open | 2026-07-23 | — | — |
+| RISK-013 | High | Seven-year money-moving audit retention may not satisfy final legal/regulatory policy or deletion obligations. | Platform + Compliance | Legal/policy review (Level 1) | Encrypt, restrict and audit access; confirm retention/deletion policy before live-money release | Open | 2026-07-23 | — | — |
+| RISK-014 | High | Seven-day SSD capacity for 3,000 instruments under the 90,000 ticks/s peak may exceed the 500 GB per-VM allocation, including replication, checkpoints, and the selected slow-Fluss buffer policy. | Storage + Platform | Baseline and peak capacity models, including `STOR-7DAY-90000-001` (Level 3) | Measure projected data volume at both profiles; add warning, critical, and stop thresholds; do not guess byte values; ensure retention ceiling does not trigger unsafe expiry | Open | 2026-07-29 | — | — |
+| RISK-015 | Low (resolved) | The slow-Fluss policy may not operate as designed under production conditions. | Ingestion + Platform | Resolved by capacity: Fluss ingests up to 1-2M ticks/s vs platform peak 90K ticks/s. Bounded pending-append limits remain as defensive backpressure. | No buffer or pause mechanism required; monitor pending-append limits as the capacity-fault bound | Closed | 2026-07-31 | — | — |
+| RISK-016 | Medium | The per-instrument freshness threshold may be misconfigured — too sensitive (false STALE during normal quiet periods) or too loose (trading on stale data). | Platform + Data Quality | `EVIDENCE-GATE-FRESHNESS-001` broker-message freshness, trade-tick freshness, quote freshness, and exchange/session behaviour evidence (Level 3) | Define signal type and threshold from evidence; version the freshness state; scope halts to affected instruments only; do not guess a numeric threshold | Open | 2026-07-23 | — | — |
+| RISK-017 | Medium | Conditional Executor auto-resume may either fail to auto-resume when safe (operational delay) or auto-resume when unsafe (duplicate order risk). | Execution | `REC-EXEC-SAFE-AUTO-001` restart scenarios with complete and incomplete proof sets (Level 3) | Prove all seven conditions are necessary; prove auto-resume is blocked when any condition is missing; audit every auto-resume event | Open | 2026-07-23 | — | — |
+
+---
 
 ## Assumptions requiring validation
 
-| ID | Assumption | Owner | Validation method | Status |
+| ID | Assumption | Owner | Validation method | Current status | Status date | Previous status | Evidence level | Evidence reference |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ASM-001 | TCP preserves order within each Arrow WebSocket connection, but the feed has no usable sequence number. | Ingestion | Protocol review and capture analysis | Validated | 2026-07-23 | Partially confirmed | Level 2 | Arrow binary protocol: all 4 modes (LTP/LTPC/Quote/Full) confirmed. No packet/event ID in any mode. DEC-012 updated. |
+| ASM-002 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value. | Action Capture | REST API docs + WebSocket order-updates spec review; sandbox order round-trip (Level 3 pending) | Partially validated | 2026-07-23 | To verify end-to-end | Level 1 | Order update WS objects include `exchangeOrderID`, `orderStatus`, `reportType`, `fillShares`, `averagePrice`, and echoed `remarks`. End-to-end round-trip evidence (Level 3) pending. |
+| ASM-005 | Four VMs can sustain the variable 60,000 ticks/s average baseline and safely bound/recover at the 90,000 ticks/s peak while one HA VM is unavailable. | Platform | Baseline/peak production-like load plus node-loss tests (Level 4) | To verify | 2026-07-29 | — | — | — |
+| ASM-006 | S3 `ap-south-1` can complete verified EOD offload within 30 minutes. | Storage | Full-volume offload test (Level 3+) | To verify | 2026-07-23 | — | — | — |
+| ASM-008 | The selected Fluss version supports the required binary payload type, KV state tables, changelog behavior, replication, retention extension, and lake properties. | Storage | Pinned-version DDL and integration suite (v0.9.0) | Validated | 2026-07-23 | To verify | Level 2 | Fluss 0.9.0 confirms: `BYTES` ✅, KV+partial_update ✅, FULL changelog ✅, `$changelog` virtual tables ✅, replication ✅, retention extension ✅, Iceberg lake tiering ✅, ARRAY/MAP/ROW ✅. Full integration suite (Level 3) pending. |
+
+---
+
+## Status history
+
+Historical statuses for IDs that have changed. These are not active records.
+
+| ID | Previous status | Previous status date | New status | Status date | Reason |
+| --- | --- | --- | --- | --- | --- |
+| RISK-004 | Open | (prior) | Closed | 2026-07-23 | `remarks` field max length confirmed per Arrow API spec; DEC-012 |
+| RISK-011 | Open | (prior) | Mitigated | 2026-07-23 | Fluss 0.9 + Flink 2.2 versions pinned; DDL generation unblocked |
+| ASM-001 | Partially confirmed | (prior) | Validated | 2026-07-23 | 4-mode protocol analysis complete; no packet/event ID found |
+| ASM-002 | To verify end-to-end | (prior) | Partially validated | 2026-07-23 | API docs + WS spec reviewed; sandbox round-trip pending |
+| ASM-008 | To verify | (prior) | Validated | 2026-07-23 | Fluss 0.9.0 feature confirmation complete |
+
+---
+
+## Superseded decisions and assumptions
+
+Items removed from active tables because the architecture or technology they reference is no longer part of the system. These are preserved for audit traceability only and SHALL NOT be treated as active constraints.
+
+| ID | Description | Status | Superseded date | Reason |
 | --- | --- | --- | --- | --- |
-| ASM-001 | TCP preserves order within each Arrow WebSocket connection, but the feed has no usable sequence number. | Ingestion | Protocol review and capture analysis | Partially confirmed |
-| ASM-002 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value. | Action Capture | Sandbox order round trip | To verify end-to-end |
-| ASM-003 | The custom Arrow decoder can remain compatible with protocol evolution. | Ingestion | Golden packet corpus and schema-version tests | To verify |
-| ASM-004 | Fluss `partial_update` and FULL changelog behavior match the pinned server/client version. | Storage | Integration test against pinned Fluss version | To verify |
-| ASM-005 | Four VMs can sustain the normal production baseline of 75,000 ticks/s, plus 112,500/s burst load, while one HA VM is unavailable. | Platform | Production-like load plus node-loss test | To verify |
-| ASM-006 | S3 `ap-south-1` can complete verified EOD offload within 30 minutes. | Storage | Full-volume offload test | To verify |
-| ASM-007 | OpenAlgo exposes deterministic order-submission responses needed for reconciliation. | Execution | API and failure-mode test | To verify |
-| ASM-008 | The selected Fluss version supports the required binary payload type, KV state tables, changelog behavior, replication, retention extension, and lake properties. | Storage | Pinned-version DDL and integration suite | To verify |
-| ASM-009 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | Platform | Production-like deployment and node-loss/security tests | To verify |
-| ASM-010 | Seven-year audit retention is acceptable for the applicable live-money jurisdiction and account model. | Platform + Compliance | Legal/policy review | To verify |
+| ASM-007 | ~~OpenAlgo exposes deterministic order-submission responses needed for reconciliation.~~ | Obsolete | 2026-07-23 | OpenAlgo removed from architecture (DEC-006 revised). Arrow REST `POST /order/regular` returns `{status:"success", data:{orderNo, requestTime}}`. Reconciliation via `GET /user/orders`, `/user/trades`, `/user/positions` (DEC-023). |
+
+---
 
 ## Review cadence
 
 - Critical open risks block live-money production acceptance.
 - High risks require mitigation evidence or explicit risk acceptance before production.
 - Update this register when evidence changes; do not duplicate stale assumptions in the charter.
-- Link test evidence or issue IDs in the status field when available.
+- Link test evidence or issue IDs in the evidence reference column when available.
+- When a risk or assumption status changes: update the row in the active table, then append an entry to Status history. Do not create a duplicate row.
+- Every evidence claim in the Status field SHALL use the four-tier evidence model. Level 1 (Documented by vendor) alone is insufficient to close a runtime risk.

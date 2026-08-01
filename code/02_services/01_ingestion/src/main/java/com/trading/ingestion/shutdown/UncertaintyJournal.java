@@ -1,0 +1,153 @@
+package com.trading.ingestion.shutdown;
+
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Persists ingestion uncertainty counters to a local journal file before
+ * shutdown so they survive process restart.
+ *
+ * <p>Format: one JSON line per shutdown event (append-only).
+ * On restart, the last entry can be read to resume counter baselines.
+ *
+ * <p>Journal path: {@code /data/ingestion/uncertainty-journal.jsonl}
+ * (configurable via {@code UNCERTAINTY_JOURNAL_PATH} env).
+ *
+ * <p>Dossier reference: {@code docs/08_implementation/03-ingestion.md} §J3, I10.
+ */
+public final class UncertaintyJournal {
+
+    private static final Logger LOG = LoggerFactory.getLogger(UncertaintyJournal.class);
+    private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT;
+
+    private final Path journalPath;
+
+    public UncertaintyJournal() {
+        String envPath = System.getenv("UNCERTAINTY_JOURNAL_PATH");
+        String explicit = envPath != null && !envPath.isBlank()
+                ? envPath
+                : defaultJournalPath();
+        this.journalPath = Paths.get(explicit);
+    }
+
+    /** Local development default; the container/compose override uses /data/ingestion. */
+    static String defaultJournalPath() {
+        String containerPath = System.getenv("UNCERTAINTY_JOURNAL_DIR");
+        if (containerPath != null && !containerPath.isBlank()) {
+            return containerPath + "/uncertainty-journal.jsonl";
+        }
+        String home = System.getenv().getOrDefault("HOME", "");
+        if (home.isBlank() || System.getenv().containsKey("INGESTION_CONTAINER")) {
+            return "/data/ingestion/uncertainty-journal.jsonl";
+        }
+        return home + "/.local/state/trading-platform/ingestion/uncertainty-journal.jsonl";
+    }
+
+    public UncertaintyJournal(Path path) {
+        this.journalPath = path;
+    }
+
+    /**
+     * Validate that the journal parent directory exists (creating it if
+     * possible) and is writable. Returns true if the journal can be written.
+     */
+    public boolean ensureWritable() {
+        Path parent = journalPath.getParent();
+        if (parent == null) {
+            LOG.error("uncertainty-journal: no parent directory for {}", journalPath);
+            return false;
+        }
+        try {
+            Files.createDirectories(parent);
+            if (!Files.isWritable(parent)) {
+                LOG.error("uncertainty-journal: parent directory not writable: {}", parent);
+                return false;
+            }
+            LOG.info("uncertainty-journal: path OK ({})", journalPath);
+            return true;
+        } catch (IOException e) {
+            LOG.error("uncertainty-journal: cannot prepare directory {}: {}", parent, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Write a shutdown entry with cumulative counters.
+     * Creates parent directories and the journal file if they don't exist.
+     */
+    public void write(Entry entry) {
+        try {
+            Files.createDirectories(journalPath.getParent());
+            String line = entry.toJson() + "\n";
+
+            Files.write(journalPath,
+                    line.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+
+            LOG.info("uncertainty-journal: written (entries={}, path={})",
+                    Files.lines(journalPath).count(), journalPath);
+
+        } catch (IOException e) {
+            LOG.error("uncertainty-journal: write failed (path={})", journalPath, e);
+        }
+    }
+
+    /** Immutable journal entry — one per shutdown. */
+    public static final class Entry {
+        public final String instanceId;
+        public final Instant shutdownTime;
+        public final long totalAccepted;
+        public final long totalAppended;
+        public final long totalFailed;
+        public final long totalRejected;
+        public final long totalBytesAccepted;
+        public final String shutdownReason;
+
+        public Entry(String instanceId,
+                     Instant shutdownTime,
+                     long totalAccepted,
+                     long totalAppended,
+                     long totalFailed,
+                     long totalRejected,
+                     long totalBytesAccepted,
+                     String shutdownReason) {
+            this.instanceId = instanceId;
+            this.shutdownTime = shutdownTime;
+            this.totalAccepted = totalAccepted;
+            this.totalAppended = totalAppended;
+            this.totalFailed = totalFailed;
+            this.totalRejected = totalRejected;
+            this.totalBytesAccepted = totalBytesAccepted;
+            this.shutdownReason = shutdownReason;
+        }
+
+        String toJson() {
+            return String.format(
+                    "{\"instance\":\"%s\",\"shutdown_time\":\"%s\","
+                            + "\"total_accepted\":%d,\"total_appended\":%d,"
+                            + "\"total_failed\":%d,\"total_rejected\":%d,"
+                            + "\"total_bytes_accepted\":%d,"
+                            + "\"reason\":\"%s\"}",
+                    escape(instanceId),
+                    ISO.format(shutdownTime),
+                    totalAccepted, totalAppended,
+                    totalFailed, totalRejected,
+                    totalBytesAccepted,
+                    escape(shutdownReason));
+        }
+
+        private static String escape(String s) {
+            if (s == null) return "";
+            return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
+    }
+}

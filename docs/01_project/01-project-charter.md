@@ -11,7 +11,7 @@
 
 ## Purpose
 
-The Streaming Trading Data Platform ingests live Arrow Trade market data, computes features and signals with Apache Flink, stores live events in Apache Fluss, executes approved instructions through OpenAlgo, and preserves eligible history in Apache Iceberg on S3.
+The Streaming Trading Data Platform ingests live Arrow Trade market data via a binary WebSocket (`wss://ds.arrow.trade`), computes features and signals with Apache Flink, stores live events in Apache Fluss, executes approved instructions through Arrow's native REST API (`https://edge.arrow.trade`), captures postbacks via Arrow's order-updates WebSocket (`wss://order-updates.arrow.trade`), and preserves eligible history in Apache Iceberg on S3.
 
 The platform separates the **data path** from the **order path**:
 
@@ -20,7 +20,7 @@ The platform separates the **data path** from the **order path**:
 
 ## Goals
 
-1. Ingest the supported NSE and MCX market-data scope.
+1. Ingest the supported NSE, NFO, MCX, and INDEX market-data scope via Arrow's binary WebSocket protocol.
 2. Build event-time OHLCV candles in Flink.
 3. Detect signals on forming bars and rank active setups in the same Flink job.
 4. Deliver only selected winners to a push-driven executor.
@@ -31,13 +31,14 @@ The platform separates the **data path** from the **order path**:
 
 ## In scope for MVP
 
-- Arrow market-data ingestion
+- Arrow market-data ingestion (binary protocol: LTP/LTPC/Quote/Full modes)
+- Single Arrow Trade account; NSE, NFO, MCX, and INDEX segments
 - Fluss raw and feature LOG tables
-- Flink deduplication, event-time windows, candle computation
+- Flink 2.2.0 deduplication, event-time windows, candle computation
 - Stateful signal detection and in-operator ranking
 - `Signal_Candidates`, `Ranking_Results`, and `Trade_Decisions` outputs
-- Independent postback capture into `Fills_table`
-- Executor-to-OpenAlgo order handoff
+- Independent postback capture into `Fills` via `wss://order-updates.arrow.trade`
+- Executor-to-Arrow order handoff (`POST /order/regular`); no OpenAlgo layer
 - Babysitter wiring with no emitted actions
 - Operational logs, metrics, health checks, and alerts
 - EOD offload of eligible history to Iceberg/S3
@@ -45,7 +46,8 @@ The platform separates the **data path** from the **order path**:
 ## Non-goals for MVP
 
 - Multi-broker support
-- BSE and currency derivatives
+- BSE, BFO, NCD, and BCD derivatives and currency segments
+- OpenAlgo; the platform calls Arrow's REST and WebSocket APIs directly
 - Charting and end-user notification features
 - 250+ feature columns and pattern-feature libraries
 - Real-time gap reconciliation

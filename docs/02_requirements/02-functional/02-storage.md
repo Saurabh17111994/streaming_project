@@ -6,6 +6,61 @@ Fluss is the live streaming bus and operational storage layer. This requirement 
 
 No table definition may use an overloaded `order_id`, assume broker sequence IDs, or claim an atomic cross-table transaction without a pinned connector test.
 
+## Constraints
+
+- Fluss production topology SHALL use three-node replication/quorum across three workload VMs. Replica placement SHALL prevent co-location of a table's replicas on a single VM.
+- `order_id` SHALL NOT be used as a generic cross-domain identity. Each domain uses its own identity: `instruction_id`, `broker_order_id`, `execution_attempt_id`, `position_id`, `postback_event_id`, `candidate_id`.
+- `seq_no` is not a required column in any table. If retained for future evidence, it is nullable observational data and SHALL NOT support ordering, deduplication, or completeness guarantees.
+- `speculated` or exact gap-range columns SHALL NOT exist in quarantine or discontinuity tables unless broker protocol evidence proves the required sequence semantics.
+- Quarantine tables SHALL NOT be silently discarded and SHALL NOT become executable state for any downstream component.
+- Source retention SHALL NOT expire a trading day's data while its EOD manifest is unverified, retryable, or under reconciliation.
+- Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be encrypted at rest in the lake tier and retained for seven years.
+- Every logical table SHALL carry an explicit schema version and one writer owner. A table with no declared owner is not ready for implementation.
+- Partial-update merge semantics SHALL NOT be used across column groups where writers are not the declared and tested owner of every updated column.
+- Atomic cross-table visibility SHALL NOT be claimed without a version-pinned connector test that proves the specific behavior.
+
+## Assumptions
+
+| ID | Assumption | Source |
+| --- | --- | --- |
+| ASM-STOR-001 | Fluss `partial_update` and FULL changelog behavior match the pinned server/client version, and stale/out-of-order updates are rejected. | ASM-004 |
+| ASM-STOR-002 | The selected Fluss version supports BYTES payload, KV state tables, changelog images, three-node replication, retention extension, and lake tiering properties as specified in the DDLs. | ASM-008 |
+| ASM-STOR-003 | Four VMs can sustain the normal production baseline of 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average) with three-node Fluss replication/quorum while one HA VM is unavailable. | ASM-005, RISK-010 |
+| ASM-STOR-004 | S3 `ap-south-1` can complete verified EOD offload of a full trading day's data within 30 minutes. | ASM-006 |
+| ASM-STOR-005 | Docker Swarm encrypted overlay, TLS, and S3 checkpoint storage operate within the four-VM target. | ASM-009 |
+| ASM-STOR-006 | Fluss connector atomic visibility semantics are per-sink, not cross-sink. Consumers can tolerate partial visibility when reading multiple LOG and KV tables from the same checkpoint boundary. | RISK-008 |
+| ASM-STOR-007 | The pre-production clean break permits replacing all stale physical DDLs without preserving compatibility with old consumers. | RISK-011 |
+
+Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
+
+## Accepted Behaviors
+
+These behaviors are conscious trade-offs accepted by the platform:
+
+- **Pre-production clean break:** All physical DDLs may be replaced. Stale schemas, incompatible old consumer compatibility, and untested table definitions are not preserved.
+- **At-least-once LOG delivery:** LOG tables guarantee at-least-once append. Duplicate event rows may exist. Stronger deduplication is owned by the specific producer, not the storage layer.
+- **Late candles are discarded in MVP:** `feature_candles_15s` emits one final row per non-empty window. Records arriving after `window_end + allowed_lateness` are discarded and measured. Corrections to already-emitted candles are not written.
+- **Immutable instruction feed is Signal-owned:** `Trade_Decisions` contains no Executor-assigned fields, no mutable execution status, and no `broker_order_id`. Executor-owned state (`Execution_Attempts`, `Order_Correlation`) is separate.
+- **Operational projections are rebuildable, not permanently retained:** `Order_Lifecycle`, `Positions`, and other KV operational projections may have shorter live retention than their source audit logs, provided the source audit (`Fills`, `Execution_Audit`) enables complete rebuild.
+- **Partial-update KV is writer-colocated:** KV tables using `partial_update` assign every column group to one declared writer. Cross-writer, untested updates are rejected by stale-version guards.
+- **EOD offload blocks expiry:** Source retention for a trading day is extended automatically while the corresponding Iceberg manifest is unverified or retryable. The minimum live buffer is three complete trading days even after successful offload.
+
+## Out of Scope
+
+The following capabilities are explicitly NOT owned by Storage:
+
+- **Market data ingestion and broker connection management:** Owned by Ingestion.
+- **Candle computation, signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Broker order submission, execution, and Arrow REST integration:** Owned by the Executor.
+- **Postback capture, fill lifecycle, and position projection logic:** Owned by Action Capture.
+- **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
+- **EOD controller orchestration and manifest creation:** Owned by the EOD controller. Storage provides the data; the controller drives the offload process.
+- **Schema migration tooling and DDL application:** Owned by the schema lifecycle process (`docs/08_implementation/01-foundation.md`). Storage defines compatibility requirements; tooling applies them.
+- **Observability, alerting, and dashboard configuration:** Owned by the observability layer and operations.
+- **Multi-broker support:** Deferred; not in MVP scope.
+- **Kubernetes deployment:** Deferred. Production is Docker Swarm.
+- **Automatic live gap backfill:** Deferred; not in MVP scope.
+
 ## REQ-FLS-001: Production storage posture
 
 Production Fluss SHALL use three-node replication/quorum across the three workload VMs, with replica placement preventing co-location of a table's replicas on one VM. Loss of any one workload VM SHALL be tested at the normal workload.
@@ -28,16 +83,19 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | `feature_candles_15s`       | LOG                                   | Signal job                  | Final MVP candles                            |
 | `Signal_Candidates`         | LOG                                   | Business Logic              | Immutable candidate audit                    |
 | `Ranking_Results`           | LOG                                   | Signal job ranking operator | Immutable score/selection audit              |
-| `Trade_Decisions`           | LOG or KV as proven by implementation | Signal job                  | Immutable instructions; no Executor mutation |
+| `Trade_Decisions`           | LOG (DECIDED)                         | Signal job                  | Immutable instructions; no Executor fields    |
 | `Order_Lifecycle`           | KV                                    | Action Capture              | Broker-order lifecycle projection            |
 | `Positions`                 | KV                                    | Fill-derived projector      | Position lifecycle aggregate                 |
-| `Fills_table`               | LOG                                   | Action Capture              | Immutable postback/fill audit                |
+| `Fills`               | LOG                                   | Action Capture              | Immutable postback/fill audit                |
 | `Order_Correlation`         | KV                                    | Executor                    | Three-ID and attempt mappings                |
 | `Execution_Gate`            | KV                                    | Executor                    | Gate state and approvals                     |
 | `Execution_Attempts`        | KV                                    | Executor                    | Attempt state and request hash               |
 | `Execution_Audit`           | LOG                                   | Executor                    | Immutable execution and gate audit           |
 | `Position_Actions`          | LOG                                   | Babysitter after MVP        | Structured future position actions           |
 | `Postback_Quarantine`       | LOG                                   | Action Capture              | Uncorrelated/invalid postbacks               |
+| `Portfolio_Reservations`    | KV (EVIDENCE-GATED)                   | Signal job ranking operator | Reservation state per portfolio + instrument  |
+| `Postback_Projection_Ledger`| KV (EVIDENCE-GATED)                   | Action Capture              | Durable projection completion tracking        |
+| `Safety_Halt_Requests`      | LOG                                   | Authorized components        | Immutable safety-control events               |
 | `suspected_discontinuities` | LOG                                   | Ingestion                   | Non-sequence discontinuity evidence          |
 | `instruments`               | LOG/KV per tested DDL                 | Operators                   | Versioned instrument manifest                |
 
@@ -73,9 +131,11 @@ Ranking is written by the Signal job operator, not a separate Ranking job. Both 
 
 ## REQ-FLS-008: Immutable instruction feed
 
-`Trade_Decisions` SHALL contain immutable instruction records keyed by `instruction_id` or a tested equivalent. It SHALL contain the complete execution request, `client_order_ref` only after Executor assignment if the architecture chooses a two-stage feed, reservation state/version, expiry, and correlation fields needed for intake.
+`Trade_Decisions` SHALL be an immutable LOG table keyed by `instruction_id`. It SHALL contain the complete execution request: instrument, action, price, quantity, product, order type, strategy provenance, ranking provenance, reservation state/version, expiry, and correlation fields needed for intake.
 
-Executor SHALL NOT mutate strategy fields. If execution status is published, it is a separate execution-owned projection. The requirement does not assume KV partial-update on the instruction feed unless the connector test proves immutable event ordering and replay behavior.
+`Trade_Decisions` SHALL NOT contain `client_order_ref`, `broker_order_id`, mutable execution status, or any Executor-assigned field. Executor-owned attempt, reference, and mapping state belongs in `Execution_Attempts` and `Order_Correlation`. Executor SHALL NOT mutate any `Trade_Decisions` column.
+
+A repeated `instruction_id` with identical canonical content is duplicate evidence. The same identity with different content is a contract violation and SHALL be quarantined and audited (see REQ-FLS-015).
 
 ## REQ-FLS-009: Lifecycle, positions, and execution state
 
@@ -108,6 +168,28 @@ Every schema change requires:
 
 Pre-production clean break allows replacing stale schemas without preserving incompatible old consumers.
 
+## REQ-FLS-014: Scope, reservation, and projection state
+
+The logical model SHALL include the following additional state contracts before physical DDL is finalized:
+
+- `Portfolio_Reservations`: authoritative reservation state keyed by `portfolio_id` and `reservation_id`, with transition version, instruction/candidate identity, capacity class, state, expiry, and source evidence.
+- `Postback_Projection_Ledger`: durable projection workflow keyed by `postback_event_id`, with audit/lifecycle/position completion states, retries, errors, and disposition.
+- `Safety_Halt_Requests`: durable safety-control events keyed by `halt_request_id`, with scope, source, reason, detection time, evidence hash, and application status.
+
+The physical table kind, merge engine, changelog image, bucket configuration, and partial-update behavior remain evidence-gated until the pinned Fluss capability suite passes.
+
+Each state contract SHALL define one writer owner, readers, key, bounded growth, cleanup, retention, rebuild source, stale-update behavior, and acceptance tests.
+
+## REQ-FLS-015: Instruction feed enforcement
+
+A `Trade_Decisions` row with a repeated `instruction_id` but different canonical content is a schema contract violation. The offending row SHALL be identifiably quarantined as a separate enforcement event with source identity, content hash, and timestamp. The original immutable row is never mutated.
+
+Executor SHALL verify that every consumed `Trade_Decisions` row carries no Executor-assigned fields and SHALL halt the affected order flow on violation. The enforcement contract SHALL be tested with a pinned Fluss source replay (see AC-FLS-002).
+
+## REQ-FLS-016: Position and reservation scope
+
+`Positions`, `Portfolio_Reservations`, `Order_Lifecycle`, `Execution_Gate`, and `Execution_Attempts` SHALL carry `account_scope_id` and the applicable `portfolio_id` or `execution_partition_id`. Cross-scope reads/writes are prohibited unless an explicit reconciliation contract authorizes them.
+
 ## REQ-FLS-013: Acceptance
 
-Storage tests SHALL prove schema/DDL parity, three-node replication and one-VM loss, partial-update ownership, stale update rejection, immutable event behavior, checkpoint/sink recovery, quarantine rebuild, EOD manifest validation/retry, three-day retention safety, seven-year encrypted audit retrieval, and schema migration/rollback.
+Storage tests SHALL prove schema/DDL parity, three-node replication and one-VM loss, partial-update ownership, stale update rejection, immutable event behavior, checkpoint/sink recovery, quarantine rebuild, projection-ledger recovery, EOD manifest validation/retry, three-day retention safety, seven-year encrypted audit retrieval, scope isolation, and schema migration/rollback.

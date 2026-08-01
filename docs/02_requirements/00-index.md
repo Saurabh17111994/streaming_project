@@ -12,7 +12,7 @@
 
 ## Authority
 
-Use the repository authority order defined in [`../01_project/00-index.md`](../01_project/00-index.md): implementation and tests, active project decisions, DDLs, contracts, then detailed requirements. A requirement that depends on unverified Arrow, OpenAlgo, Flink, or Fluss behavior is an **evidence-gated requirement**, not an established fact.
+Use the repository authority order defined in [`../01_project/00-index.md`](../01_project/00-index.md): implementation and tests, active project decisions, DDLs, contracts, then detailed requirements. A requirement that depends on unverified Arrow, Flink, or Fluss behavior is an **evidence-gated requirement**, not an established fact.
 
 ## Production baseline
 
@@ -45,6 +45,9 @@ The requirements in this directory enforce these decisions:
 | 4     | [`04-data.md`](04-data.md)                           | Logical data model, identity, ownership, retention, and evolution |
 | 5     | [`05-interfaces.md`](05-interfaces.md)               | Component interfaces and delivery semantics                       |
 | 6     | [`06-operational.md`](06-operational.md)             | Deployment, startup, health, recovery, and release gates          |
+| 7     | [`07-requirement-authoring-template.md`](07-requirement-authoring-template.md) | Standard owner/state/failure/acceptance structure for requirements |
+| 8     | [`08-reading-guide.md`](08-reading-guide.md)          | Human/LLM navigation, canonical scope, timestamps, and safety vocabulary |
+| 9     | [`09-acceptance-matrix.md`](09-acceptance-matrix.md)  | Requirement-to-test traceability; 116 acceptance IDs across all domains  |
 
 ## Requirement conventions
 
@@ -59,8 +62,8 @@ The requirements in this directory enforce these decisions:
 Live-money order placement SHALL remain disabled until all of the following are complete:
 
 1. Critical risks in `../01_project/05-risks-and-assumptions.md` are closed with evidence.
-2. Official Arrow/OpenAlgo artifacts or sandbox captures prove required fields, limits, response semantics, and correlation behavior.
-3. Exact Flink, Fluss, Java, Python, broker SDK/protocol, and OpenAlgo versions are pinned.
+2. Official Arrow artifacts or sandbox captures prove required fields, limits, response semantics, and correlation behavior.
+3. Exact Flink, Fluss, Java, Python, broker SDK/protocol, and Arrow REST versions are pinned.
 4. Version-specific Flink/Fluss source, sink, changelog, partial-update, checkpoint, and replication tests pass.
 5. Crash-window tests prove no duplicate broker order under unknown submission outcomes.
 6. Safe-halt occurs within five seconds and requires successful reconciliation plus two-person approval to resume.
@@ -68,5 +71,3 @@ Live-money order placement SHALL remain disabled until all of the following are 
 8. Throughput, latency, recovery, offload, security, and observability acceptance gates pass.
 
 Paper or simulated trading may be used for validation, but it does not waive any live-money gate.
-
- 

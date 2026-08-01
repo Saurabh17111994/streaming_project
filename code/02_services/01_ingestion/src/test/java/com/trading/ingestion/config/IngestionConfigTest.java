@@ -1,0 +1,112 @@
+package com.trading.ingestion.config;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.Map;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * ING-UNIT-002: IngestionConfig — verifies constants, defaults, and
+ * internal consistency. Full validation against env vars is integration-tested.
+ */
+@DisplayName("ING-UNIT-002: IngestionConfig Validation")
+class IngestionConfigTest {
+
+    @Test
+    @DisplayName("MAX_PENDING_RECORDS = 10,000")
+    void maxPendingRecords() {
+        assertEquals(10_000L, IngestionConfig.MAX_PENDING_RECORDS);
+    }
+
+    @Test
+    @DisplayName("MAX_PENDING_BYTES = 64 MiB")
+    void maxPendingBytes() {
+        assertEquals(67_108_864L, IngestionConfig.MAX_PENDING_BYTES);
+    }
+
+    @Test
+    @DisplayName("WARNING_PERCENT = 80%")
+    void warningPercent() {
+        assertEquals(0.80, IngestionConfig.WARNING_PERCENT, 0.001);
+    }
+
+    @Test
+    @DisplayName("CLOCK_OFFSET_LIMIT_MS = 100ms")
+    void clockOffsetLimit() {
+        assertEquals(100L, IngestionConfig.CLOCK_OFFSET_LIMIT_MS);
+    }
+
+    @Test
+    @DisplayName("Constants are within safe ranges")
+    void constantsInSafeRanges() {
+        assertTrue(IngestionConfig.MAX_PENDING_RECORDS > 0, "Records limit > 0");
+        assertTrue(IngestionConfig.MAX_PENDING_RECORDS <= 1_000_000, "Records limit ≤ 1M");
+
+        assertTrue(IngestionConfig.MAX_PENDING_BYTES >= 1_048_576L, "Bytes limit ≥ 1 MiB");
+        assertTrue(IngestionConfig.MAX_PENDING_BYTES <= Long.MAX_VALUE, "Bytes limit finite");
+
+        assertTrue(IngestionConfig.WARNING_PERCENT > 0.0, "Warning percent > 0%");
+        assertTrue(IngestionConfig.WARNING_PERCENT < 1.0, "Warning percent < 100%");
+
+        assertTrue(IngestionConfig.CLOCK_OFFSET_LIMIT_MS >= 10L, "Clock offset ≥ 10ms");
+        assertTrue(IngestionConfig.CLOCK_OFFSET_LIMIT_MS <= 60_000L, "Clock offset ≤ 60s");
+    }
+
+    @Test
+    @DisplayName("HFT connection policy defaults match plan §IngestionConfig")
+    void hftPolicyDefaultsMatchPlan() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("ARROW_APP_ID", "test-app");
+        env.put("ARROW_APP_SECRET", "test-secret");
+        env.put("ARROW_TOKEN", "test-token");
+        env.put("FLUSS_BOOTSTRAP", "localhost:9123");
+        env.put("RAW_TABLE_NAME", "raw_table_1");
+        env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
+
+        IngestionConfig cfg = IngestionConfig.validateFrom(env);
+
+        assertEquals(1, cfg.arrowHftConnections, "ARROW_HFT_CONNECTIONS default = 1");
+        assertEquals(1024, cfg.arrowHftMaxTokensPerConnection, "max tokens/connection = 1024");
+        assertEquals(512, cfg.arrowHftMaxTokensPerRequest, "max tokens/request = 512");
+        assertEquals(3, cfg.arrowHftHeartbeatSeconds, "heartbeat = 3s");
+        assertEquals(15, cfg.arrowHftStallTimeoutSeconds, "stall timeout default = 15s");
+        assertEquals(10, cfg.arrowHftSubscriptionResponseTimeoutSeconds, "response timeout default = 10s");
+        assertEquals(1, cfg.arrowHftReconnectBaseSeconds, "reconnect base = 1s");
+        assertEquals(30, cfg.arrowHftReconnectMaxSeconds, "reconnect max = 30s");
+        assertEquals(3, cfg.arrowHftAuthRefreshAttempts, "auth refresh attempts = 3");
+        assertEquals(1, cfg.arrowHftMinActiveSlots, "min active slots = 1");
+        assertEquals(false, cfg.arrowHftMultiConnectionApproved, "multi-connection unapproved by default");
+        assertEquals(false, cfg.ingestionAllowDegraded, "degraded mode disabled by default");
+        assertEquals(false, cfg.allowRuntimeDdl, "runtime DDL disabled by default (read-only verifyTables)");
+
+        // Redacted config map exposes the values but never secrets.
+        Map<String, Object> map = cfg.toMap();
+        assertEquals(1, map.get("ARROW_HFT_CONNECTIONS"));
+        assertTrue(map.containsKey("ARROW_HFT_MAX_TOKENS_PER_CONNECTION"));
+        assertTrue(!map.get("ARROW_APP_SECRET").toString().contains("test-secret"));
+    }
+
+    @Test
+    @DisplayName("production rejects degraded mode and unapproved multi-connection")
+    void productionRejectsDegradedAndUnapprovedMulti() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("ARROW_APP_ID", "test-app");
+        env.put("ARROW_APP_SECRET", "test-secret");
+        env.put("ARROW_TOKEN", "test-token");
+        env.put("FLUSS_BOOTSTRAP", "localhost:9123");
+        env.put("RAW_TABLE_NAME", "raw_table_1");
+        env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
+        env.put("DEPLOY_ENV", "prod");
+        env.put("INGESTION_ALLOW_DEGRADED", "true");
+
+        try {
+            IngestionConfig.validateFrom(env);
+            org.junit.jupiter.api.Assertions.fail("production must reject INGESTION_ALLOW_DEGRADED=true");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("INGESTION_ALLOW_DEGRADED"));
+        }
+    }
+}

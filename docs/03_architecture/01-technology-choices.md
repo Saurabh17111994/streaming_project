@@ -2,7 +2,14 @@
 
 ## Status
 
-Technology choices are architectural targets, not evidence that a specific version or protocol has already been validated. Exact Flink, Fluss, Java, Python, broker protocol/SDK, OpenAlgo, OpenObserve, container image, and connector versions are release inputs and must be pinned before live-money enablement.
+Technology choices are architectural targets. The following versions are now **confirmed** (DEC-021, 2026-07-23):
+
+- **Fluss:** 0.9.0 (incubating)
+- **Flink:** 2.2.0
+- **Java:** 21
+- **Flink-Fluss connector:** `fluss-flink-2.2-0.9.1-incubating.jar`
+
+Arrow protocol evidence is available from the Go SDK (`github.com/arrow-trade/go-arrow`) and REST API docs (`docs.arrow.trade`). Exact container image digests remain deferred until build.
 
 ## Apache Fluss
 
@@ -14,9 +21,11 @@ Fluss is the live streaming bus and operational storage layer.
 - `partial_update` is permitted only with tested column ownership, stale-update rejection, and merge semantics.
 - No cross-table atomicity is assumed without a version-specific connector test.
 
-Required logical tables include `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills_table`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Postback_Quarantine`, `suspected_discontinuities`, and `instruments`. `Position_Actions` is future phase only.
+Required logical tables include `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills`, `Portfolio_Reservations`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`, `Postback_Quarantine`, `suspected_discontinuities`, and `instruments`. `Position_Actions` is future phase only.
 
-Fluss uses three-node replication/quorum across production workload VMs. The exact server/client release and DDL properties remain evidence-gated.
+**Confirmed version:** Fluss 0.9.0 (incubating). Features: `BYTES` column type, KV tables with `partial_update` and FULL changelog images, `$changelog` virtual tables for CDC/audit, Aggregation Merge Engine, Auto-Increment columns for dictionary tables, ARRAY/MAP/ROW/nested complex types, ALTER TABLE schema evolution (zero-copy append), Snapshot Leases for consumer-safe snapshots, Cluster Rebalance, Compacted LogFormat, Iceberg/Parquet/Lance lake formats, Azure Blob + ADLS Gen2 support, POJO Java client API. See [Fluss 0.9 release blog](https://fluss.apache.org/blog/releases/0.9/).
+
+The exact server/client release is now pinned rather than evidence-gated.
 
 ## Apache Flink
 
@@ -27,23 +36,37 @@ MVP has exactly two jobs:
 
 Flink managed state and Fluss sink guarantees are exactly-once only at the tested, version-pinned boundary. They do not make broker REST calls or independent projections exactly-once.
 
-Production checkpoints/savepoints use encrypted, versioned S3. The state backend, checkpoint interval, restart strategy, and connector versions are exact-version configuration rather than assumed defaults.
+**Confirmed version:** Flink 2.2.0 with Java 21 support (mature since 2.0). New in 2.2: VECTOR_SEARCH, Materialized Tables, Delta Joins, Balanced Tasks Scheduling. ⚠️ Flink 2.x has a significantly different DataStream API surface vs 1.x — existing 1.x code patterns must be migrated.
 
-## Ingestion implementation boundary
+Ingestion is one Java 21 service process from binary WebSocket decode through the supported Fluss 0.9 Java client append path. The Arrow market-data WebSocket (`wss://ds.arrow.trade`) uses a binary protocol with 4 modes (LTP 13B, LTPC 17B, Quote 93B, Full 241B), all big-endian integers, prices in **paise** (÷100 for rupees), timestamps in int32 epoch seconds. No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON `{"code":"sub","mode":"full","full":[tokens]}`. Heartbeat: client sends `PONG` text every 3s, read timeout 5s.
 
-Ingestion is one service process from broker decode through the supported Fluss Java client append path. The implementation language and SDK are evidence-gated: no unsupported Arrow SDK, packet format, compression mode, connection limit, or endpoint behavior may be treated as fact.
+**No OpenAlgo.** The Executor calls Arrow's native REST API directly. (DEC-006, 2026-07-23)
 
-The service preserves original packet bytes, payload hash, decoder/protocol version, normalized typed fields, timestamps, and versioned event fingerprint. It appends accepted packets even when a fingerprint has been seen; Compute owns bounded logical deduplication.
+## Executor and Arrow REST
 
-Unknown protocol versions and decode failures are quarantined with original evidence. No exact broker sequence or gap range is assumed.
+The Executor is the only component permitted to initiate money-moving calls. It calls Arrow's REST API directly:
 
-## Executor and OpenAlgo
+- `POST /order/regular` — place order. Request: `{exchange, symbol, quantity, transactionType: "B"/"S", order: "LMT"/"MKT", product: "I"/"C"/"M", price, validity: "DAY"/"IOC", remarks (max 16 chars), mpp (bool)}`. Response: `{status:"success", data:{orderNo, requestTime}}`.
+- `GET /user/orders` — order book (reconciliation).
+- `GET /user/trades` — trade book (fills).
+- `GET /user/positions` — current positions.
+- `GET /order/{id}` — single order detail with full lifecycle history.
+- `PATCH /order/regular/{id}` — modify order.
+- `DELETE /order/regular/{id}` — cancel order.
+- Auth: `appID` + `token` headers (token obtained from `/auth/app/authenticate-token`, 24hr expiry).
+- Rate limit: 10 req/sec per endpoint.
+- MKT orders: disabled by default; use `mpp:true` for upper-limit routing.
+- Order lifecycle: PENDING → OPEN → COMPLETE (filled) / CANCELLED / REJECTED. `reportType` gives finer detail.
 
-The Executor is the only component permitted to initiate money-moving OpenAlgo calls. OpenAlgo is a broker REST adapter, not a Fluss consumer, strategy engine, fill authority, or order-safety owner.
+Postbacks arrive via a separate WebSocket (`wss://order-updates.arrow.trade`) — see Action Capture.
 
-The Executor durably persists an attempt and deterministic client reference before a call. Timeout, disconnect, malformed response, crash window, or ambiguous response produces `UNKNOWN`, halts the gate, and requires reconciliation before retry. The request/response schema, timeout, retry classification, client-reference behavior, and broker identity fields are evidence-gated.
+The Executor durably persists an attempt and deterministic `client_order_ref` before a call. Timeout, disconnect, malformed response, crash window, or ambiguous response produces `UNKNOWN`, halts the gate, and requires reconciliation before retry.
 
-## OpenObserve
+## EOD controller
+
+The EOD controller is a named service or scheduled job that owns manifest creation, verification, retry/backoff, retention extension, expiry protection, storage-pressure alerts, and manual reconciliation. It is not the brokers, the Signal job, or the Executor.
+
+The controller persists durable state with restart/resume behavior. A trading day's source data cannot expire while its manifest is unverified, retryable, or under reconciliation. The controller emits critical alerts on verification failure, insufficient expiry margin, S3 unavailability, and storage pressure. The exact scheduler/runtime implementation remains evidence-gated.
 
 OpenObserve is the target backend for structured operational logs, metrics, traces where supported, health signals, and alerts. Correlation IDs and immutable local execution audit remain mandatory if telemetry delivery is unavailable.
 
@@ -61,7 +84,10 @@ Source retention is at least three complete trading days and extends while the r
 - Production uses a four-VM Docker Swarm: three workload/HA VMs and one observability VM.
 - Production images use immutable digests; `latest` and version ranges are prohibited.
 - Production secrets use Docker Swarm secrets and least-privilege service identities.
-- Production network traffic uses encrypted overlay/TLS-protected transport where supported.
+- Production network traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
+- MVP requires four mandatory alert groups with owner, threshold, routing, and acknowledgement: order safety, streaming health, storage safety, and security. Critical alerts have defined escalation, remediation, and closure evidence.
+- Every managed or durable state category must have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, and restore size/time for production readiness.
+- Seven-year audit retention requires WORM/Object Lock immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval SLA under 15 minutes from cold storage, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated.
 
 Compose is deliberately simpler, but it cannot prove production HA or live-money safety.
 

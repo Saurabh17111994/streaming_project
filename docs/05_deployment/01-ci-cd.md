@@ -16,7 +16,7 @@ Every releasable artifact has an immutable identity:
 - Flink and Fluss versions
 - Connector/plugin versions
 - Broker protocol/decoder version
-- OpenAlgo/OpenObserve versions
+- Arrow REST/OpenObserve versions
 - Container image digest
 - DDL/schema version
 - Strategy/ranking/configuration hash
@@ -73,7 +73,7 @@ Run against the exact pinned versions:
 - Schema and protocol version rejection
 - Savepoint/checkpoint restore
 - Upgrade and rollback compatibility
-- OpenAlgo/broker sandbox response and correlation behavior
+- Arrow REST/broker sandbox response and correlation behavior
 
 Failure of an evidence-gated integration keeps live-money readiness blocked.
 
@@ -81,9 +81,7 @@ Failure of an evidence-gated integration keeps live-money readiness blocked.
 
 Deploy immutable candidate artifacts to the production-like four-VM Swarm environment and run:
 
-- Full-session 75,000 ticks/s baseline
-- 112,500 ticks/s burst for at least 30 minutes
-- 150,000 ticks/s stress for at least 60 minutes
+- Full-session variable 60,000 ticks/s average baseline and 90,000 ticks/s peak baseline
 - One workload VM loss
 - Checkpoint and object-store failure exercises
 - Executor crash-window and duplicate-order tests
@@ -146,5 +144,5 @@ Money-moving execution evidence follows the seven-year encrypted audit policy. G
 
 - Release strategy: `./00-release-strategy.md`
 - Runtime contract: `../04_contracts/09-platform-runtime.md`
-- Test strategy: `../07_testing/00-test-strategy.md`
+- Test strategy: `../08_implementation/11-testing-and-release.md`
 - Operational requirements: `../02_requirements/06-operational.md`

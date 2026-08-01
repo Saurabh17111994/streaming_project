@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" shutdownHook="disable">
+  <!--
+    Log4j2 configuration for the trading platform ingestion service.
+
+    Two appenders:
+      1. Console — human-readable, always on stderr (for startup debugging)
+      2. File   — JSON structured log matching OpenObserve contract, rolling daily + 64 MB
+
+    SLF4J bridge: log4j-slf4j-impl 2.25.4 → Log4j2 2.25.4
+    Same version the Fluss server uses.
+  -->
+
+  <Properties>
+    <Property name="LOG_DIR">${sys:log.dir:-logs}</Property>
+    <Property name="HOST">${env:HOSTNAME:-${env:COMPUTERNAME:-unknown}}</Property>
+    <Property name="ENV">${env:DEPLOY_ENV:-dev}</Property>
+    <Property name="VM_ID">${env:VM_ID:-vm0}</Property>
+
+    <!-- Console pattern: compact, timestamp, thread, level, logger, message -->
+    <Property name="CONSOLE_PATTERN">%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} %equals{%mdc{correlation_id}}{}{}%equals{%mdc{correlation_id}}{ - cid=}{}%mdc{correlation_id}%ex{short} - %msg%n</Property>
+  </Properties>
+
+  <Appenders>
+    <!-- ================================================================ -->
+    <!-- Console — human-readable, always active, prints startup errors    -->
+    <!-- ================================================================ -->
+    <Console name="CONSOLE" target="SYSTEM_ERR">
+      <PatternLayout pattern="${CONSOLE_PATTERN}"/>
+    </Console>
+
+    <!-- ================================================================ -->
+    <!-- File — JSON structured log, rolling daily + size-based           -->
+    <!-- Matches the OpenObserve contract: docs/04_contracts/openobserve.md -->
+    <!-- ================================================================ -->
+    <RollingFile name="JSON_FILE"
+                 fileName="${LOG_DIR}/ingestion.json"
+                 filePattern="${LOG_DIR}/ingestion-%d{yyyy-MM-dd}-%i.json.gz"
+                 immediateFlush="true">
+      <JsonLayout compact="true" eventEol="true" properties="true"
+                  includeStacktrace="true" stacktraceAsString="true"/>
+      <Policies>
+        <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+        <SizeBasedTriggeringPolicy size="64 MB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="30">
+        <Delete basePath="${LOG_DIR}" maxDepth="1">
+          <IfFileName glob="ingestion-*.json.gz"/>
+          <IfLastModified age="30d"/>
+        </Delete>
+      </DefaultRolloverStrategy>
+    </RollingFile>
+  </Appenders>
+
+  <Loggers>
+    <!-- Fluss internals are noisy; keep at WARN unless debugging -->
+    <Logger name="org.apache.fluss" level="WARN"/>
+    <Logger name="org.apache.fluss.client" level="INFO"/>
+
+    <!-- Shaded Netty from Fluss — very noisy at INFO -->
+    <Logger name="org.apache.fluss.shaded.netty4" level="WARN"/>
+
+    <!-- Application loggers -->
+    <Logger name="com.trading" level="INFO"/>
+
+    <Root level="INFO">
+      <AppenderRef ref="CONSOLE"/>
+      <AppenderRef ref="JSON_FILE"/>
+    </Root>
+  </Loggers>
+</Configuration>

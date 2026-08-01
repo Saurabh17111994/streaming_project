@@ -1,6 +1,6 @@
 # Ingestion — implementation handoff
 
-> **Status:** implementation not started. Use the implementation dossier at [`../../../docs/08_implementation/components/01-ingestion.md`](../../../docs/08_implementation/components/01-ingestion.md) as the build contract.
+> **Status:** implementation substantially in-progress (Phase 2; 140/155 tasks ✅, 90%). Use the implementation dossier at [`../../../docs/08_implementation/03-ingestion.md`](../../../docs/08_implementation/03-ingestion.md) as the build contract.
 >
 > **Live money:** disabled. Broker protocol, decoder, credentials, limits, and exact versions remain evidence-gated.
 
@@ -17,23 +17,104 @@ Connection/subscription/heartbeat/time evidence
   → suspected_discontinuities
 ```
 
-The current architecture does **not** assume Zerodha/Kite, `seq_no`, exact sequence gaps, or a verified broker event ID. Use the explicit placeholders and evidence workflow in the dossier until the broker protocol is approved.
+The current architecture does **not** assume Arrow Trade, `seq_no`, exact sequence gaps, or a verified broker event ID. Use the explicit placeholders and evidence workflow in the dossier until the broker protocol is approved.
 
 ## Implementation checklist
 
-- [ ] Pin broker protocol/decoder and Fluss client versions.
+### Config & validation
+
+- [x] IngestionConfig validates all required keys at startup — `IngestionConfig.java` (294 lines)
+- [x] Reject startup if `INGESTION_MAX_BATCH_RECORDS != 1` or `INGESTION_MAX_BATCH_WAIT_MS != 0`
+- [x] Reject startup if backpressure/memory/timing keys out of range
+- [x] Production never falls back to demo credentials
+
+### Go arrow-bridge
+
+- [x] Go bridge binary — `go-bridge/main.go` (~220 lines)
+- [x] Arrow Go SDK (`go-arrow`) via local replace directive — HFT + standard WebSocket
+- [x] NDJSON stdout output matching `TickPacket`/`GoTick` schema
+- [x] Auth: AutoLogin (user+pass+TOTP) or static `ARROW_TOKEN`
+- [x] Subscription: configurable token set via `ARROW_INSTRUMENT_TOKENS` env
+- [x] Graceful shutdown via SIGINT/SIGTERM
+- [ ] Pin broker protocol/decoder and Fluss client versions. _(go-arrow SDK is a local checkout; version pin TBD)_
 - [ ] Build golden packet corpus and byte/hash fixtures.
-- [ ] Implement manifest loading and subscription completeness checks.
-- [ ] Implement decode, normalize, validity, packet preservation, and fingerprint modules.
-- [ ] Implement bounded append/retry/backpressure behavior.
-- [ ] Implement suspected-discontinuity and quarantine evidence.
-- [ ] Implement liveness/readiness/telemetry.
-- [ ] Pass ingestion unit, integration, failure, and workload tests.
+
+### Java ingestion pipeline
+
+- [x] Main pipeline — `IngestionService.java` (518 lines)
+- [x] Go bridge lifecycle: launched as subprocess via `ProcessBuilder`, stdout → NDJSON, stderr → SLF4J
+- [x] Bridge crash → `BRIDGE_CRASH` discontinuity, epoch bump, non-zero exit
+- [x] Broker disconnect → frame staleness detection, auto-restore on next frame
+- [x] Subscription completeness → 30s startup check verifies all manifest tokens seen
+- [x] Slow-Fluss backpressure → controlled pause at 90%, resume at 50% pending
+- [x] Parse NDJSON → `GoTick` (Jackson, 25 fields)
+- [x] Instrument resolution via `InstrumentManifestLoader`; missing → quarantine; manifest enforcement (version + count + fingerprint validation) ✓ SCH-22
+- [x] Validity classification — `ValidityClassification`: VALID_TRADE / VALID_NON_TRADE / INVALID_VALUES
+- [x] Invalid values → quarantine, not appended
+- [x] Fingerprint — `FingerprintBuilder.java`: versioned SHA-256 (connection_epoch | token | ts | type | price | qty | bid | ask)
+- [x] SHA-256 payload hash for raw JSON bytes
+- [x] `TickPacket` builder — full normalized typed fields + provenance
+- [x] `RawTick` model — raw payload + payload hash + decoder provenance
+- [ ] Implement manifest loading and subscription completeness checks. _(loader with fingerprint validation exists via `ManifestResult.isManifestApproved()`; CSV parsing + 3000-instrument production manifest blocked on Arrow REST evidence TO_BE_VERIFIED)_
+
+### Fluss append
+
+- [x] Real Fluss 0.9.1 client — `FlussClientAdapter.java` (199 lines)
+- [x] `RealFlussRowConverter` → 28-column `GenericRow` matching `raw_table_1` DDL
+- [x] `FlussRowConverter` interface — separates Fluss from business logic
+- [x] `RawTickWriter.java` — per-tick individual append (no batching) + fingerprint idempotency cache + retry loop with linear backoff (up to 3 attempts) + UNCERTAIN outcome on timeout
+- [x] `AppendTracker.java` — atomic bounded counters (10k records / 64MB)
+- [x] 80% warning → readiness false, warning event
+- [x] 100% → halt, readiness false, critical event, acknowledged-loss record
+- [x] Counters decrease only after append completes (success or fail)
+- [x] Per-append timing: receive time, append-start, append-ack
+- [x] `RetryClassifier` — retry / fatal classification for append failures
+- [x] Drain on shutdown with 30s deadline
+- [x] No compression in ingestion→Fluss path
+
+### Discontinuity & quarantine
+
+- [x] `QuarantineWriter` — preserve unsupported/malformed packets with reason
+- [x] `DiscontinuityWriter` — connection/subscription/heartbeat/time-jump evidence
+- [x] Last tick snapshot tracking for discontinuity context
+
+### Health & shutdown
+
+- [x] `HealthProbe.java` — liveness, readiness (5 dimensions: Fluss, tracker, broker, subscription, clock)
+- [x] Broker disconnect detection — frame staleness (15s) → `brokerConnected=false`; auto-restores on next frame
+- [x] Subscription completeness check — 30s startup window, verifies all manifest tokens seen at least once
+- [x] Slow-Fluss controlled pause — chosen over SSD buffer; pauses ingestion at 90% pending, resumes at 50%
+- [x] `NtpClockChecker.java` — NTP clock offset validation
+- [x] `UncertaintyJournal.java` — persist cumulative counters on shutdown to JSONL
+- [x] Shutdown: stop reads, drain pending, persist uncertainty, close clients
+
+### Observability
+
+- [x] `OtlpMetricsEmitter.java` — tick rate, append latency, bridge connected, pending records/bytes, readiness
+- [x] Structured logs with instance/version/correlation IDs
+- [x] Redaction of credentials and raw payloads
+
+### Build & deployment
+
+- [x] Multi-stage Dockerfile — Go 1.24 → Maven 3.9 → JRE 17
+- [x] `docker-entrypoint.sh` — validates bridge binary, launches Java
+- [x] Container build wiring (Dockerfile composes both go-bridge and Java JAR)
+
+### Tests (code exists, not yet executed)
+
+- [x] `IngestionConfigTest` — constant ranges and internal consistency
+- [x] `AppendTrackerTest` — 80%/100% backpressure behaviour
+- [x] `FingerprintBuilderTest` — canonical form and determinism
+- [x] `ConfigAndHashTest` — cross-module consistency
+- [x] `IngestionServiceTest` — pipeline unit tests
+- [x] `ValidityClassificationTest` — classification logic
+- [x] `UncertaintyJournalTest` — journal write/read round-trip
+- [ ] Pass ingestion unit, integration, failure, and workload tests. _(tests not yet run — no Maven/JUnit in environment)_
 
 ## References
 
 - Requirements: `../../../docs/02_requirements/02-functional/01-ingestion.md`
 - Contract: `../../../docs/04_contracts/01-ingestion.md`
-- Implementation dossier: `../../../docs/08_implementation/components/01-ingestion.md`
-- Cross-cutting invariants: `../../../docs/08_implementation/04-cross-cutting-invariants.md`
-- Version matrix: `../../../docs/08_implementation/02-version-compatibility.md`
+- Implementation dossier: `../../../docs/08_implementation/03-ingestion.md`
+- Cross-cutting invariants: `../../../docs/08_implementation/01-foundation.md`
+- Version matrix: `../../../docs/08_implementation/01-foundation.md`

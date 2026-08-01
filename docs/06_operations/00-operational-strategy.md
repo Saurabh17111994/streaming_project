@@ -10,7 +10,7 @@ This document defines the operating model for the Phase 4.2 platform. It follows
 - `../03_architecture/platform-architecture.md`
 - `../04_contracts/09-platform-runtime.md`
 
-The platform is blocked for live-money operation until all evidence-gated release criteria pass. Exact endpoint paths, probe commands, alert thresholds, connector metrics, and version-specific CLI syntax are configuration/implementation inputs and must not be invented here.
+The platform is blocked for live-money operation until all evidence-gated release criteria pass. Exact endpoint paths, probe commands, and version-specific CLI syntax are configuration/implementation inputs and must not be invented here. The authoritative health definitions, dashboard panels, alert rules, and thresholds are in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md).
 
 ## Operating environments
 
@@ -32,23 +32,15 @@ Services may start concurrently. Readiness is dependency-driven, not determined 
 4. Deploy the Signal and Babysitter Flink jobs from pinned artifacts; confirm running and checkpointing.
 5. Verify Ingestion protocol/decoder compatibility, instrument manifest, required subscriptions, append acknowledgements, clock offset, and telemetry.
 6. Verify Action Capture postback schema/protocol, correlation dependencies, projection readiness, and telemetry.
-7. Start Executor with gate `HALTED`; verify durable execution state, identity mappings, changelog continuity, OpenAlgo contract/readiness, fencing, and telemetry.
+7. Start Executor with gate `HALTED`; verify durable execution state, identity mappings, changelog continuity, Arrow REST contract/readiness, fencing, and telemetry.
 8. Reconcile broker orders, fills, positions, attempts, reservations, and incomplete projections.
 9. Require two distinct authenticated operators to approve the same gate epoch/evidence hash before `ENABLED`.
 
 A process may be live while not ready. Startup never automatically enables order placement.
 
-## Health dimensions
+## Health during operation
 
-Every service and dashboard separates:
-
-- **Liveness:** process/event loop responds.
-- **Readiness:** mandatory dependencies and data flow are available.
-- **Job health:** required Flink job is running and checkpointing.
-- **Trading readiness:** Executor gate is `ENABLED`, state is known, and reconciliation is clean.
-- **Durability readiness:** replication, checkpointing, offload, retention, and recovery posture pass.
-
-The Executor may be process-healthy while trading is halted. OpenObserve cannot authorize orders.
+Use the health dimensions and dashboard/alert definitions in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md). The Executor may be process-healthy while trading is halted. OpenObserve cannot authorize orders.
 
 ## Ownership during operation
 
@@ -93,7 +85,6 @@ Operations records UTC timestamps, workload, software/configuration versions, ga
 ## References
 
 - Runbooks: `./01-runbooks.md`
-- SLO dashboards: `./02-slo-dashboards.md`
-- Alerts: `./03-alert-configuration.md`
+- Observability, dashboards, alerts, and thresholds: `../08_implementation/10-observability.md`
 - DR: `./04-dr-plan.md`
 - Maintenance: `./05-maintenance.md`

@@ -30,7 +30,7 @@ It SHALL never infer a mapping from symbol, quantity, timestamp proximity, or ov
 
 ## REQ-AC-004: Immutable postback/fill audit
 
-`Fills_table` (or its reconciled replacement name) SHALL append one immutable platform event per received delivery containing:
+`Fills` (or its reconciled replacement name) SHALL append one immutable platform event per received delivery containing:
 
 - `postback_event_id` and fingerprint/version
 - `instruction_id`, `client_order_ref`, `broker_order_id`, and `execution_attempt_id` when correlated
@@ -79,12 +79,29 @@ Rejected and cancelled broker orders are recorded in immutable audit and lifecyc
 
 Exact Fluss client internals are evidence-gated. The service SHALL bound memory and pending writes, expose projection lag and incomplete work, and become not ready on broker disconnection, schema mismatch, Fluss unavailability, unresolved projection backlog above policy, or correlation invariant failure.
 
+## REQ-AC-011: Durable projection ledger
+
+Action Capture SHALL persist a durable projection ledger keyed by `postback_event_id`, or an explicitly approved equivalent inbox/outbox. The ledger SHALL record:
+
+- `RECEIVED`
+- `AUDIT_WRITTEN`
+- `LIFECYCLE_APPLIED`
+- `POSITION_APPLIED_OR_NOT_REQUIRED`
+- `COMPLETE`
+- `UNKNOWN`
+
+Each transition includes source version, expected prior state, timestamps, retry count, next retry time, error/disposition, and schema version. Restart SHALL scan non-complete records and resume idempotently. A duplicate immutable audit row SHALL not create a duplicate lifecycle or position effect.
+
+## REQ-AC-012: Position and lifecycle arithmetic
+
+The position projector SHALL define account/instrument/side uniqueness, position minting, scale-in, scale-out, re-entry, closure, correction/bust, quantity underflow, price precision, rounding, fee treatment, and impossible-fill behavior. A re-entry after a closed position SHALL use a new `position_id` unless an approved versioned rule states otherwise.
+
+## REQ-AC-013: Evidence-based lifecycle precedence
+
+When broker sequence/version evidence is unavailable, lifecycle projection SHALL use an explicit tested combination of cumulative quantities, terminal-state precedence, verified broker event time when available, platform receive time as non-authoritative evidence, and conflict handling. Synthetic ordering SHALL not be described as broker ordering.
+
 ## REQ-AC-010: Observability and acceptance
 
-Metrics include postbacks/bytes, duplicates, correlation success/quarantine, lifecycle transitions/rejections, stale/regressive events, projection lag/backlog, positions by state, independent-write failures, replay/recovery, readiness, and clock offset.
+Metrics include postbacks/bytes, duplicates, correlation success/quarantine, lifecycle transitions/rejections, stale/regressive events, projection lag/backlog, positions by state, independent-write failures, ledger states, replay/recovery, readiness, and clock offset.
 
-Tests SHALL cover duplicate and out-of-order postbacks, no-sequence behavior, missing/ambiguous references, terminal-state regression, independent-write crash windows, restart projection recovery, rejected/cancelled/unknown handling, first-fill position creation, partial fills, multi-order trade contexts, and long-term audit reconstruction.
-
-
-
-> 
+Tests SHALL cover duplicate and out-of-order postbacks, no-sequence behavior, missing/ambiguous references, terminal-state regression, independent-write crash windows, restart projection recovery, rejected/cancelled/unknown handling, first-fill position creation, partial fills, multi-order trade contexts, position arithmetic/correction behavior, and long-term audit reconstruction.

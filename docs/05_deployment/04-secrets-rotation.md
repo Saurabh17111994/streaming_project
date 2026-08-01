@@ -2,7 +2,7 @@
 
 ## Scope
 
-This runbook covers broker/Arrow, OpenAlgo, Fluss, S3, OpenObserve, TLS, Swarm, and operator credentials. Exact secret names, providers, and rotation APIs are deployment-specific and must be verified against the pinned release.
+This runbook covers broker/Arrow, Fluss, S3, OpenObserve, TLS, Swarm, and operator credentials. Exact secret names, providers, and rotation APIs are deployment-specific and must be verified against the pinned release.
 
 ## Storage rules
 
@@ -22,7 +22,7 @@ This runbook covers broker/Arrow, OpenAlgo, Fluss, S3, OpenObserve, TLS, Swarm, 
 ## Rotation procedure
 
 1. Open a change record with secret owner, affected services, expiry, dependencies, rollback credential, and validation plan.
-2. Confirm the order gate is `HALTED` for any rotation affecting the order path, broker, OpenAlgo, Executor, Fluss, S3, or operator authorization.
+2. Confirm the order gate is `HALTED` for any rotation affecting the order path, broker, Arrow REST, Executor, Fluss, S3, or operator authorization.
 3. Create the replacement credential with the minimum required scope.
 4. Store it in the production secret mechanism under a versioned identity.
 5. Roll or reload only services that can safely reload credentials; use controlled restart where required.
@@ -37,7 +37,7 @@ This runbook covers broker/Arrow, OpenAlgo, Fluss, S3, OpenObserve, TLS, Swarm, 
 | --- | --- | --- |
 | Arrow/broker market-data | Ingestion | Subscription, decode, reconnect, readiness |
 | Arrow/broker postback | Action Capture | Intake, status parsing, correlation |
-| OpenAlgo/broker execution | Executor/OpenAlgo | Request authorization, response, reconciliation |
+| Arrow REST/broker execution | Executor/Arrow REST | Request authorization, response, reconciliation |
 | Fluss client/admin | Ingestion, Flink, Action Capture, Executor, operators | Least privilege, table scope, revocation |
 | S3 checkpoint/lake | Flink, offload, recovery operators | Read/write scope, encryption, manifest operations |
 | OpenObserve | Services/operators | Telemetry only; cannot authorize orders |
@@ -47,7 +47,7 @@ This runbook covers broker/Arrow, OpenAlgo, Fluss, S3, OpenObserve, TLS, Swarm, 
 ## Failure behavior
 
 - Expired or revoked credential: affected service becomes not ready, emits a critical alert, and stops affected processing according to its contract.
-- Executor/OpenAlgo credential uncertainty: gate `HALTED`; no blind retry.
+- Executor/Arrow REST credential uncertainty: gate `HALTED`; no blind retry.
 - S3 credential failure: checkpoint/offload readiness fails; retain source data and do not claim recovery or EOD verification.
 - Fluss credential failure: stop unsafe writes/reads, preserve uncertainty, and reconcile before resuming.
 - Observability credential failure: buffer durable audit where supported; telemetry readiness fails and the live-money gate remains blocked if acceptance evidence is unavailable.

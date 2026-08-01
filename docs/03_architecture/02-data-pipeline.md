@@ -14,21 +14,22 @@ Arrow market-data stream
   → Signal Flink job
       ├─ eligible-trade filtering
       ├─ bounded best-effort fingerprint deduplication
-      ├─ 15-second event-time candle state
+      ├─ 15-second event-time candle state (keyed by instrument_token)
       ├─ final feature_candles_15s LOG
       ├─ forming-bar typed in-process handoff
-      ├─ Business Logic candidate detection
+      ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
-      ├─ in-operator Ranking
+      ├─ in-operator Ranking (repartitioned by portfolio_id; single partition with MVP's one portfolio)
+      ├─ Portfolio_Reservations management
       ├─ Ranking_Results LOG
       └─ immutable Trade_Decisions
   → Executor
       ├─ verify immutable instruction and reservation
       ├─ verify durable gate state/epoch
       ├─ persist execution_attempt_id, request hash, client_order_ref
-      ├─ fence one active owner per account/order partition
-      └─ call OpenAlgo only while ENABLED
-  → OpenAlgo REST adapter
+      ├─ fence one active owner per execution_partition_id
+      └─ call Arrow REST only while ENABLED
+  → Arrow REST (POST /order/regular)
   → broker
 ```
 
@@ -56,7 +57,7 @@ MVP reservation defaults are:
 
 A same winner with unchanged executable parameters creates audit only. Changed parameters create a new immutable `instruction_id` after prior disposition. Uncertain lifecycle or reservation state suppresses publication.
 
-`Trade_Decisions` is an immutable instruction feed. Its physical LOG-or-KV representation remains implementation- and connector-proven; the Executor never mutates strategy fields.
+`Trade_Decisions` is an immutable LOG table (DECIDED). Executor never mutates strategy fields. Execution state belongs in `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`.
 
 ## Broker postback and position path
 
@@ -67,10 +68,14 @@ Arrow broker postback stream
       ├─ assign postback_event_id and bounded fingerprint
       ├─ correlate by broker_order_id mapping,
       │  verified echoed client_order_ref, or approved reconciliation
-      ├─ append immutable Fills_table event
+      ├─ record Postback_Projection_Ledger step
+      ├─ append immutable Fills event
       ├─ update Order_Lifecycle KV
       ├─ update fill-derived Positions KV
       └─ quarantine missing, ambiguous, or invalid correlation
+  → Restart scanner
+      ├─ scan incomplete Postback_Projection_Ledger records
+      └─ resume idempotently from last completed step
   → Babysitter Flink job
       ├─ consume versioned Positions changelog
       ├─ checkpoint observation state
@@ -98,7 +103,10 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Trade_Decisions` | Immutable feed | Signal job | Executor | Replay/reconciliation buffer; audit-linked |
-| `Fills_table` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
+| `Portfolio_Reservations` | KV/logical state | Signal job | Executor/reconciliation | Active + rebuild window |
+| `Postback_Projection_Ledger` | KV | Action Capture | Recovery scanner | Incomplete + recovery window |
+| `Safety_Halt_Requests` | LOG/control | Authorized components | Executor | Safety/reconciliation window |
+| `Fills` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
 | `Order_Lifecycle` | KV | Action Capture | Executor/operations | Current state; rebuildable |
 | `Positions` | KV | Position projector | Babysitter/Executor | Current state; rebuildable |
 | `Execution_Gate` | KV | Executor | Executor/control plane | Current state plus immutable audit |
@@ -120,18 +128,22 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | Flink managed state/sinks | Exactly-once only where pinned tests prove it |
 | Multiple Fluss outputs | Partial visibility unless tested otherwise |
 | Instruction/action → Executor | At-least-once with durable identity/request-hash guard |
-| Executor → OpenAlgo/broker | At-least-once or unknown; reconcile before retry |
+| Executor → Arrow REST / broker | At-least-once or unknown; reconcile before retry |
 | Postback projections | At-least-once input and idempotent/versioned projection |
 
 ## Live-to-lake flow
 
-Eligible immutable event tables offload at EOD to encrypted Iceberg/S3. Every offload produces a manifest with source range, counts, bytes, schema versions, hashes/checksums, commit identifier, verification status, and retries.
+Eligible immutable event tables offload at EOD to encrypted Iceberg/S3. The EOD controller — a named service or scheduled job — owns manifest creation, verification, retry/backoff, retention extension, expiry protection, and manual reconciliation.
 
-A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years.
+Every offload produces a manifest with source range, counts, bytes, schema versions, hashes/checksums, commit identifier, verification status, and retries.
+
+A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated.
 
 ## Safe-halt coupling
 
-The Signal job, Action Capture, projections, and observability do not place orders directly. They expose uncertainty to the Executor. Unknown broker outcome, duplicate risk, stale reservation, missing correlation, changelog discontinuity, checkpoint failure affecting order correctness, unresolved fill, failed reconciliation, unauthorized action, or security incident transitions the gate to `HALTED` and blocks new calls within five seconds.
+The Signal job, Action Capture, projections, and observability do not place orders directly. They publish durable `Safety_Halt_Requests` to the Executor, which consumes them idempotently, validates scope/source/version, applies or rejects the halt, increments the gate epoch, and writes immutable audit evidence.
+
+Unknown broker outcome, duplicate risk, stale reservation, missing correlation, changelog discontinuity, checkpoint failure affecting order correctness, unresolved fill, failed reconciliation, unauthorized action, or security incident transitions the gate to `HALTED` and blocks new calls within five seconds. Executor also independently detects stale mandatory health if the halt-request stream is unavailable.
 
 ## References
 

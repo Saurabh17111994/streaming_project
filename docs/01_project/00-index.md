@@ -26,12 +26,17 @@ An active project decision is not implementation proof. After a decision changes
 
 A project-layer statement must link to the lower-level source that makes it implementable. A summary must not silently redefine a schema or protocol.
 
-## Current status
+## Project status
 
-- Phase 4.1 design and architecture: closed
-- Phase 4.2 MVP: active target
-- Core unresolved risks are recorded in [Risks and assumptions](./05-risks-and-assumptions.md)
-- The previous monolithic design is retained as a compatibility redirect: [project-design.md](./project-design.md)
+| Phase | Status | Date |
+| --- | --- | --- |
+| Phase 4.1 — Design and architecture | Design closed | 2026-07-23 |
+| Phase 4.2 — MVP implementation | Implementation active | 2026-07-23 |
+| Runtime validation | Runtime validation pending | — |
+| Live-money placement | Live-money blocked | — |
+
+Core unresolved risks are recorded in [Risks and assumptions](./05-risks-and-assumptions.md).
+The previous monolithic design is retained as a compatibility redirect: [project-design.md](./project-design.md).
 
 ## Scope of this revision
 

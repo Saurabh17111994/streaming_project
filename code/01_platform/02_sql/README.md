@@ -2,7 +2,7 @@
 
 > **Status:** logical schemas are reconciled to current decisions, but the SQL is not approved for runtime application until the pinned Fluss/Flink capability suite passes.
 >
-> **Implementation contract:** [`../../../docs/08_implementation/03-schema-lifecycle.md`](../../../docs/08_implementation/03-schema-lifecycle.md)
+> **Implementation contract:** [`../../../docs/08_implementation/01-foundation.md`](../../../docs/08_implementation/01-foundation.md)
 
 ## Current DDL set
 
@@ -11,7 +11,7 @@
 | `01_catalog.sql` | Fluss catalog and `trading` database |
 | `02_raw_table_1.sql` | Immutable raw packet/tick LOG |
 | `03_feature_candles_15s.sql` | Final 15-second candle LOG |
-| `04_fills_table.sql` | Immutable broker postback/fill LOG |
+| `04_fills.sql` | Immutable broker postback/fill LOG |
 | `05_order_lifecycle.sql` | Broker-order lifecycle KV |
 | `06_positions.sql` | Fill-derived position KV |
 | `07_signal_candidates.sql` | Immutable candidate audit LOG |
@@ -24,6 +24,9 @@
 | `14_order_correlation.sql` | Identity mapping KV |
 | `15_execution_audit.sql` | Immutable execution/safety audit LOG |
 | `16_postback_quarantine.sql` | Immutable ambiguous/invalid postback LOG |
+| `17_portfolio_reservations.sql` | Portfolio-capacity reservation KV |
+| `18_postback_projection_ledger.sql` | Projection progress and recovery KV |
+| `19_safety_halt_requests.sql` | Immutable safety-halt request LOG |
 
 ## Validation required before application
 
@@ -51,5 +54,5 @@
 - Logical data contract: `../../../docs/02_requirements/04-data.md`
 - Storage requirements: `../../../docs/02_requirements/02-functional/02-storage.md`
 - Storage contract: `../../../docs/04_contracts/02-storage.md`
-- Schema lifecycle: `../../../docs/08_implementation/03-schema-lifecycle.md`
-- Compatibility matrix: `../../../docs/08_implementation/02-version-compatibility.md`
+- Schema lifecycle: `../../../docs/08_implementation/01-foundation.md`
+- Compatibility matrix: `../../../docs/08_implementation/01-foundation.md`

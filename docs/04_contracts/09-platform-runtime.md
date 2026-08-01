@@ -6,21 +6,23 @@ Local development/integration uses Docker Compose. Production uses Docker Swarm 
 
 ## Production requirements
 
-- Exact image digests and Java/Python/Flink/Fluss/OpenAlgo/protocol versions; no `latest`.
+- Exact image digests and Java/Python/Flink/Fluss/Arrow REST/protocol versions; no `latest`.
 - Three-node Fluss replication/quorum with anti-co-location.
 - Flink checkpoints/savepoints in encrypted S3.
-- Encrypted Swarm overlay/TLS-protected cross-host traffic.
+- Mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - Docker Swarm secrets and least-privilege service identities.
 - Durable volumes and encrypted seven-year audit/lake storage.
-- Executor fencing: one active owner per account/order partition.
+- Executor fencing: one active owner per `execution_partition_id`.
+- EOD controller service or scheduled job owning manifest lifecycle, retention extension, and storage-pressure alerts.
+- N+1 resource budget: per-VM CPU, memory, network, disk, Flink slots, Fluss capacity, checkpoint bandwidth, and catch-up rate documented; post-loss validation at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak.
 
 ## Readiness
 
-Fluss quorum/schemas, Flink jobs/checkpoints, broker subscriptions/schema, Executor durable state/changelog/OpenAlgo, observability, and gate state are checked independently. Startup never auto-enables order placement.
+Fluss quorum/schemas, Flink jobs/checkpoints, broker subscriptions/schema, Executor durable state/changelog/Arrow REST, observability, and gate state are checked independently. Startup never auto-enables order placement.
 
 ## Capacity and failure gates
 
-Pass 75,000 ticks/s full session, 112,500 for 30 minutes, 150,000 for 60 minutes, one workload VM loss at normal rate, data recovery <30 seconds, safe-halt <5 seconds, decision p99 <100 ms, and EOD manifest <30 minutes target.
+Pass variable 60,000 ticks/s average baseline and 90,000 ticks/s peak full session (20 ticks/s/instrument average), one workload VM loss at per-instrument production rate, data recovery <30 seconds, safe-halt <5 seconds, decision p99 <100 ms, and EOD manifest <30 minutes target.
 
 ## Security and rollout
 
@@ -28,7 +30,7 @@ Money-moving deployments begin halted and require reconciliation/two-person enab
 
 ## Requirement traceability
 
-- Functional: `REQ-PF-001` through `REQ-PF-010`
+- Functional: `REQ-PF-001` through `REQ-PF-012`
 - Cross-cutting: `03-non-functional.md` §§3.1–3.8; `04-data.md` §§4.1, 4.3, 4.6–4.7; `05-interfaces.md` §§5.1–5.11; `06-operational.md` §§6.1–6.10
 
 See `../02_requirements/02-functional/09-platform-runtime.md` and `../02_requirements/06-operational.md`.

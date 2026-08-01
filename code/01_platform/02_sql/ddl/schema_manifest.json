@@ -1,0 +1,165 @@
+{
+  "schema_manifest_version": "1",
+  "tables": [
+    {
+      "table_name": "raw_table_1",
+      "ddl_path": "02_raw_table_1.sql",
+      "ddl_sha256": "a8120af7dd6d965d56fad33c1be370d4e260e8d8ea7a2fc47ae3eacf9539a1b1",
+      "table_kind": "LOG",
+      "bucket_key": "instrument_token",
+      "primary_key": null
+    },
+    {
+      "table_name": "feature_candles_15s",
+      "ddl_path": "03_feature_candles_15s.sql",
+      "ddl_sha256": "efc58bf3930509abd0695a976b71b7947616eb5cd63eab7ab9a53355e773dc28",
+      "table_kind": "LOG",
+      "bucket_key": "instrument_token",
+      "primary_key": null
+    },
+    {
+      "table_name": "forming_bar",
+      "ddl_path": "04_forming_bar.sql",
+      "ddl_sha256": "e557ff69d3350d6333985ef4d079b8cdac9b90f555f60b415ce1b0ecefecd201",
+      "table_kind": "KV",
+      "primary_key": "instrument_token",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Signal_Candidates",
+      "ddl_path": "05_signal_candidates.sql",
+      "ddl_sha256": "8be49a9248c8cf5ed402a725c8d07e8fdb560bc48d88e1a25ddbee68435ab82c",
+      "table_kind": "LOG",
+      "bucket_key": "instrument_token",
+      "primary_key": null
+    },
+    {
+      "table_name": "Ranking_Results",
+      "ddl_path": "06_ranking_results.sql",
+      "ddl_sha256": "e46716f8b6913c8086b496446833137851f3ac3926c20c75464a80074cb2f562",
+      "table_kind": "LOG",
+      "bucket_key": "candidate_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "Trade_Decisions",
+      "ddl_path": "07_trade_decisions.sql",
+      "ddl_sha256": "666ba5e48d38eb64df154d18e98d77a0bc9eab8a854b2b22c2073ce7511621b6",
+      "table_kind": "LOG",
+      "bucket_key": "instruction_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "Fills",
+      "ddl_path": "08_fills.sql",
+      "ddl_sha256": "b56e3b94c8008bb4ea17016cac6bd46384d2e816692e93f217e15816127d6027",
+      "table_kind": "LOG",
+      "bucket_key": "postback_event_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "Order_Lifecycle",
+      "ddl_path": "09_order_lifecycle.sql",
+      "ddl_sha256": "0768b2f89f6ff336190b263c6678f16381ea837e330d270e144729ebe9a27835",
+      "table_kind": "KV",
+      "primary_key": "broker_order_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Positions",
+      "ddl_path": "10_positions.sql",
+      "ddl_sha256": "04e06a16d0c9da20958efcd510b0ebe13c1828e1cf3817d2652040184a4ad43f",
+      "table_kind": "KV",
+      "primary_key": "position_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Execution_Gate",
+      "ddl_path": "11_execution_gate.sql",
+      "ddl_sha256": "5ed3fa9f0677386ff7d78411f7c5248b4927bf2c68f7a305ff9dc329bed3bc3a",
+      "table_kind": "KV",
+      "primary_key": "execution_partition_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Execution_Attempts",
+      "ddl_path": "12_execution_attempts.sql",
+      "ddl_sha256": "c556fc277aff1e6b5f2bf4eb900a96a1b7116082e0d2b3e1b9228e442c757438",
+      "table_kind": "KV",
+      "primary_key": "execution_attempt_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Order_Correlation",
+      "ddl_path": "13_order_correlation.sql",
+      "ddl_sha256": "a10adfe8361b280cd35c850e93f141b1144406e98a7b681bd6c4d171f1236236",
+      "table_kind": "KV",
+      "primary_key": "instruction_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Execution_Audit",
+      "ddl_path": "14_execution_audit.sql",
+      "ddl_sha256": "c1c114086ce1b5beae6deecc5293e0bfb2beb98842f2a039e90b8e28b1a16135",
+      "table_kind": "LOG",
+      "bucket_key": "audit_event_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "Portfolio_Reservations",
+      "ddl_path": "15_portfolio_reservations.sql",
+      "ddl_sha256": "e9a41b674552c98a41394a7151cd6ecadbb6497240c197275b3200cafd45a307",
+      "table_kind": "KV",
+      "primary_key": "reservation_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Postback_Quarantine",
+      "ddl_path": "16_postback_quarantine.sql",
+      "ddl_sha256": "4d8e74b66419b23b485b6ec8c122412c7466309509effa0f6f715975dfae9dee",
+      "table_kind": "LOG",
+      "bucket_key": "quarantine_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "Postback_Projection_Ledger",
+      "ddl_path": "17_postback_projection_ledger.sql",
+      "ddl_sha256": "f3cf61c8826c34fa5c8b5ef464d1fec6fa4707a7ad37c735daa3f6aeb3549342",
+      "table_kind": "KV",
+      "primary_key": "postback_event_id",
+      "bucket_key": null
+    },
+    {
+      "table_name": "Safety_Halt_Requests",
+      "ddl_path": "18_safety_halt_requests.sql",
+      "ddl_sha256": "12808e6e877cc4f714c9aeb11f1e9f1a691ad52bdab301a75b0403f0986e9a0e",
+      "table_kind": "LOG",
+      "bucket_key": "halt_request_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "suspected_discontinuities",
+      "ddl_path": "19_suspected_discontinuities.sql",
+      "ddl_sha256": "1de0e01f4decc28c7222fb4395cad4d0232dfab86f48b05baa85f67eb643d759",
+      "table_kind": "LOG",
+      "bucket_key": "discontinuity_id",
+      "primary_key": null
+    },
+    {
+      "table_name": "instruments",
+      "ddl_path": "20_instruments.sql",
+      "ddl_sha256": "bc00bcf02998a16e320de42233d59c63e16f25102dce30e796449f9caef0f5e7",
+      "table_kind": "KV",
+      "primary_key": "instrument_token",
+      "bucket_key": null
+    },
+    {
+      "table_name": "ingestion_quarantine",
+      "ddl_path": "21_ingestion_quarantine.sql",
+      "ddl_sha256": "f8444c436fc6acc3027697488502f878dbcd8fc24f9a8db73e94e310dba55114",
+      "table_kind": "LOG",
+      "bucket_key": "quarantine_id",
+      "primary_key": null
+    }
+  ]
+}

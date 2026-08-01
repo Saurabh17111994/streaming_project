@@ -4,8 +4,8 @@
 
 Real-time market-data → feature → trade-execution pipeline:
 broker ticks → **Fluss** (streaming bus + storage) → **Flink** (features + strategy) →
-trade instructions → **OpenAlgo** (dumb executor) → broker → exchange.
-Fills are captured independently by a separate service.
+trade instructions → **Executor** → **Arrow REST API** (`POST /order/regular`) → broker.
+Fills are captured independently by a separate Action Capture service.
 
 > Repository layout follows a **Spec-Driven Development (SDD)** structure.
 > This README is a discoverability map — see each directory's docs for detail.
@@ -17,49 +17,39 @@ Fills are captured independently by a separate service.
 ```text
 streaming_project/
 ├── docs/        long-lived documentation — what the system IS
-├── specs/       active implementation planning — what we're BUILDING
 ├── code/        production implementation — what is BUILT
 ├── Makefile     common dev commands (make up / down / ddl / build)
-└── CLAUDE.md    agent instructions (symlink)
+└── CLAUDE.md    agent instructions
 ```
 
 ### `docs/` — reference documentation
 
 Stable, long-lived. Read these to understand the system.
 
-**Read in numbered order, 01 → 08:** project → requirements → architecture → contracts → deployment → operations → testing → implementation dossiers.
+**Read in numbered order, 01 → 09:** project → requirements → architecture → contracts → deployment → operations → testing → implementation dossiers → data gaps.
 
 | Directory | Contents | Read when |
 | ----------- | ---------- | ----------- |
-| `01_project/` | `project-design.md` — macro design, boundaries, closed decisions | First read |
-| `02_requirements/` | 6-layer requirements (context, functional per-segment, NFRs, data, interfaces, operational) | Designing/implementing any component |
-| `03_architecture/` | Architecture overview, technology choices, data pipeline, networking, security, platform topology | Understanding the system shape |
-| `04_contracts/` | One build-ready contract per atomic segment (ingestion, storage, compute, business-logic, babysitter, action-capture, executor, observability, platform-runtime) | Implementing a segment |
-| `05_deployment/` | Release strategy, CI/CD, environments, rollback, secrets rotation | Deploying |
-| `06_operations/` | Operational strategy, runbooks, SLO dashboards, alert config, DR plan, maintenance | Running in production |
-| `07_testing/` | Test strategy, unit, integration, throughput, data-quality, chaos tests | Writing/running tests |
-| `08_implementation/` | Implementation dossiers, state machines, config placeholders, test IDs, release evidence | Before changing production code |
-
-### `specs/` — active planning
-
-The *work in progress*. Separate from stable reference docs.
-
-| File | Purpose |
-|------|---------|
-| `roadmap.md` | Build phases 4.1 → 4.7 (process) |
-| `status.md` | Current focus & open decisions (working status only) |
-
-> **Active implementation planning:** `plan.md` is the master checklist. Use `docs/08_implementation/` for implementation-ready dossiers before changing `code/`. This documentation-first workflow keeps requirements, schemas, interfaces, tests, operations, and release evidence aligned before production code is written.
+| [`01_project/`](docs/01_project/) | Project charter, system context, quality targets, decisions, risks, delivery scope | First read |
+| [`02_requirements/`](docs/02_requirements/) | Functional (per-segment), non-functional, data, interfaces, operational requirements | Designing/implementing any component |
+| [`03_architecture/`](docs/03_architecture/) | Architecture overview, technology choices, data pipeline, networking, security, platform topology | Understanding the system shape |
+| [`04_contracts/`](docs/04_contracts/) | One build-ready contract per atomic segment | Implementing a segment |
+| [`05_deployment/`](docs/05_deployment/) | Release strategy, CI/CD, environments, rollback, secrets rotation | Deploying |
+| [`06_operations/`](docs/06_operations/) | Operational strategy, runbooks, DR plan, maintenance | Running in production |
+| [`08_implementation/`](docs/08_implementation/) | Implementation dossiers, complete testing rules, test IDs, state machines, config placeholders, and release evidence | Before changing production code or writing tests |
+| [`09_data_gaps.md`](docs/09_data_gaps.md) | Operational input register for known data gaps, discontinuities, and reconciliation items | During live operations |
 
 ### `docs/08_implementation/` — implementation-ready dossiers
 
 This is the bridge between stable requirements/contracts and production code. It defines internal module boundaries, state machines, schemas, configuration placeholders, failure behavior, observability, test IDs, and release evidence. These documents do not claim that implementation or runtime validation already exists.
 
-Read `docs/08_implementation/00-index.md` first.
+Read [`docs/08_implementation/00-start-here.md`](docs/08_implementation/00-start-here.md) first.
+
+> **Active implementation planning:** [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md) is the master implementation checklist. Use the corresponding component dossier before writing code. This documentation-first workflow keeps requirements, schemas, interfaces, tests, operations, and release evidence aligned before production code is written.
 
 ### `code/` — production implementation
 
-Code is not yet implemented. The service directories currently contain scaffolding and entry-point placeholders. Use the corresponding `docs/08_implementation/components/` dossier before writing code.
+Code is not yet implemented. The service directories currently contain scaffolding and entry-point placeholders. Use the phase-by-phase [`implementation guide`](docs/08_implementation/00-start-here.md) before writing code.
 
 ```text
 code/
@@ -71,10 +61,12 @@ code/
     ├── 01_ingestion/            ingestion scaffolding → raw_table_1
     ├── 02_compute/              Signal + Babysitter job scaffolding
     ├── 03_action_capture/       postback/lifecycle/position scaffolding
-    └── 04_executor/             Executor scaffold; starts disabled and halted
+    ├── 04_executor/             Executor scaffold; starts disabled and halted
+    ├── 05_mock_arrow/           Mock Arrow broker (per-instrument, deterministic)
+    └── 06_mock_openalgo/        Retained for compatibility; no longer active
 ```
 
-**Schema status:** `code/01_platform/02_sql/ddl/*.sql` contains reconciled proposals, but they are blocked from runtime application until the pinned Fluss/Flink compatibility and schema lifecycle tests pass. See `docs/08_implementation/03-schema-lifecycle.md`.
+**Schema status:** [`code/01_platform/02_sql/ddl/*.sql`](code/01_platform/02_sql/ddl/) contains reconciled proposals, but they are blocked from runtime application until the pinned Fluss/Flink compatibility and schema lifecycle tests pass. See [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md).
 
 ---
 
@@ -91,4 +83,14 @@ make down     # stop
 ## Status
 
 Phase 4.1 (Design & architecture) — **closed**.
-Phase 4.2 (MVP) — **next**. See `specs/status.md`.
+Phase 4.2 (MVP) — **Implementation active** (live-money blocked). See [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md).
+
+---
+
+## Superseded history
+
+The following were part of an earlier architecture phase and are no longer active:
+
+- **OpenAlgo executor layer** — removed. The platform calls Arrow's REST API (`https://edge.arrow.trade`) directly via the Executor service.
+- **`specs/` directory** — removed. Active planning content moved to `docs/08_implementation/`.
+- **Root `plan.md`** — removed. Content absorbed into [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md).

@@ -2,13 +2,78 @@
 
 ## Purpose and readiness
 
-Ingestion is the sole market-data entry point. It connects to the evidence-approved broker stream, preserves each original packet losslessly, maps verified fields into normalized typed columns, computes a versioned event fingerprint, and appends to Fluss.
+Ingestion is the sole market-data entry point. It connects to the evidence-approved broker stream, preserves each original packet losslessly, maps verified fields into normalized typed columns, computes a versioned event fingerprint, and appends to Fluss. The production workload has a variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) and a 90,000 ticks/s capacity peak (30 ticks/s/instrument maximum).
+
+**Tier-scoped deployment (current testing phase):** Arrow basic tier provides one WebSocket connection; premium tier provides three. The current testing phase runs on the basic tier with exactly **one HFT connection** and the approved **1,024-instrument manifest** `Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv` (unique tokens, quoted CSV). The full 3,000-instrument / 3-connection coverage remains the approved future production target and is **deferred** to a later phase, which requires the 3-socket capability evidence before activation. The implementation MUST accept a configured connection count and manifest path so the deferred phase is a configuration change, not a rewrite.
 
 Live-money readiness is blocked until Platform and Execution provide official protocol artifacts or captured packets and compatibility tests pass against the exact deployed decoder version.
 
+## Constraints
+
+- Ingestion SHALL NOT insert Kafka, ZeroMQ, Python, or any intermediate transport between the Go arrow-bridge (decode) and Fluss append. The process boundary is two colocated processes in one container (Go bridge + Java); stdin/stdout is the kernel pipe, not a transport.
+- Ingestion SHALL NOT silently drop a validly received packet. Every accepted or rejected packet SHALL produce audit evidence.
+- Ingestion SHALL NOT guess broker fields. Unknown packet versions are quarantined; unknown fields remain recoverable through `raw_payload`.
+- Ingestion SHALL NOT use ingestion time as event time. If no verified broker event timestamp exists, the packet SHALL be quarantined or marked invalid.
+- Ingestion SHALL NOT calculate exact missing sequence ranges unless future broker evidence proves a suitable sequence exists.
+- Ingestion SHALL NOT perform logical deduplication. Bounded fingerprint deduplication is owned by the Signal Flink job.
+- Ingestion SHALL NOT perform inline historical backfill in MVP.
+- Ingestion SHALL NOT log original packet bytes, credentials, or secrets.
+- Ingestion SHALL accept variable broker arrivals. It SHALL NOT require or infer a fixed 50 ms tick interval.
+- Synthetic workload profiles use a 20 ticks/s/instrument baseline average and SHALL enforce a 30 ticks/s/instrument maximum; live broker arrivals below or above the baseline are valid.
+- Ingestion SHALL NOT batch ticks. Each accepted tick SHALL be submitted immediately. `INGESTION_MAX_BATCH_RECORDS` SHALL be `1` and `INGESTION_MAX_BATCH_WAIT_MS` SHALL be `0`. Startup SHALL fail for any other values.
+- Application-level batching beyond a single tick is prohibited.
+- Ingestion SHALL maintain pending append counters in both records (`MAX_PENDING_APPEND_RECORDS=10000`) and bytes (`MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes × 0.10))`).
+- Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.
+- At 80% of either pending limit (`PENDING_APPEND_WARNING_PERCENT=80`), ingestion SHALL set readiness false and emit a warning event containing current records, current bytes, and both limits.
+- At 100% of either pending limit, ingestion SHALL stop broker reads/subscriptions, keep readiness false, emit a critical event, and preserve an acknowledged-loss/uncertainty record. Silently discarding data is prohibited.
+- Pending counters SHALL decrease only after the append completes, whether successful or failed.
+- Fluss append uncertainty SHALL NOT be described as lossless delivery. Every retry and timeout is counted and exposed.
+
+## Assumptions
+
+| ID | Assumption | Source |
+| --- | --- | --- |
+| ASM-ING-001 | TCP preserves order within each Arrow WebSocket connection, but the feed has no usable broker sequence number. | ASM-001 |
+| ASM-ING-002 | The official Arrow Go SDK decoder remains compatible with protocol evolution through its published release cycle. | ASM-003 |
+| ASM-ING-003 | The instrument manifest loaded at startup is authoritative and complete for the trading session. Runtime instrument changes require a controlled restart. | REQ-ING-004 |
+| ASM-ING-004 | The Fluss Java client's buffering, retry, and append-acknowledgement behavior matches the pinned client version. | REQ-ING-008, REQ-ING-012 |
+| ASM-ING-005 | Production hosts can maintain UTC clock offset within 100 ms. | REQ-ING-006 |
+| ASM-ING-006 | A single ingestion process instance can sustain the variable 60,000 ticks/s baseline and safely bound/recover at the 90,000 ticks/s peak. | REQ-ING-016, RISK-007 |
+
+Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
+
+## Accepted Behaviors
+
+These behaviors are conscious trade-offs accepted by the platform:
+
+- **At-least-once delivery:** The WebSocket-to-Fluss boundary is at-least-once. Retransmitted or replayed packets may produce duplicate raw rows. Logical deduplication belongs to the Signal Flink job.
+- **Best-effort fingerprinting:** The event fingerprint is not exact identity. Identical legitimate events may be collapsed, and some duplicates may pass. Metrics distinguish duplicate candidates, dedup hits, and estimated collision risk.
+- **No broker sequence assumption:** Ingestion cannot calculate exact missing tick counts or sequence gaps. Discontinuity records are suspected, not proven.
+- **Bounded memory with hard limit:** Under sustained backpressure, ingestion makes readiness false before memory exhaustion. Packets may be dropped only under an explicit acknowledged-loss policy with readiness impact.
+- **Partial subscription is not READY:** Unless an explicitly approved degraded mode exists, all configured instruments must be subscribed for readiness.
+- **Unknown outcomes are counted, not hidden:** Append timeouts, Fluss unavailability, and uncertain write outcomes increment uncertainty counters and affect readiness. They are never silently absorbed.
+- **Slow-Fluss policy:** Resolved by capacity. Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required. Bounded pending-append limits (10,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; reaching them indicates a platform-capacity fault, not a normal operating condition.
+
+## Out of Scope
+
+The following capabilities are explicitly NOT owned by Ingestion:
+
+- **Logical deduplication:** Owned by the Signal Flink job via bounded fingerprint state.
+- **Candle computation and OHLCV aggregation:** Owned by the Signal Flink job.
+- **Signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Broker order submission and execution:** Owned by the Executor.
+- **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
+- **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
+- **EOD offload to Iceberg/S3:** Owned by the EOD controller.
+- **Real-time gap reconciliation and automatic historical backfill:** Deferred; not in MVP scope.
+- **Multi-broker support:** Deferred; not in MVP scope.
+- **Runtime instrument manifest changes:** Deferred; a controlled restart applies a new manifest.
+- **BSE and currency derivatives:** Deferred; not in MVP scope.
+- **Premium-tier 3-connection / 3,000-instrument full coverage:** Deferred to a later phase; requires the 3-socket capability evidence from Arrow before activation. The current testing phase runs on basic tier (1 connection, 1,024-instrument manifest).
+
 ## REQ-ING-001: Process boundary
 
-Ingestion SHALL decode and write within one service process and SHALL use the supported Fluss Java client path. It SHALL NOT introduce Kafka, ZeroMQ, Python, or another transport between decode and Fluss.
+Ingestion SHALL decode through the official Arrow Go SDK (arrow-bridge subprocess) and write through the supported Fluss Java client path. Both processes SHALL run in the same container, connected by stdin/stdout. It SHALL NOT introduce Kafka, ZeroMQ, Python, or another transport between decode and Fluss.
 
 The decoder MAY use a verified first-party SDK. If no supported SDK exists, it SHALL implement only the documented/captured protocol and pass the golden packet corpus. Unknown packet versions SHALL be quarantined rather than guessed.
 
@@ -34,13 +99,20 @@ No identity is assumed to be broker-global. Reassignment of instruments to anoth
 
 ## REQ-ING-004: Instrument manifest
 
-Ingestion SHALL load an explicit, versioned active-instrument manifest from the `instruments` table at startup. Readiness requires:
+Ingestion SHALL load an explicit, versioned active-instrument manifest from CSV at startup. The approved manifest path for the current testing phase is `Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv` (1,024 unique NSE cash tokens, quoted CSV). The full 3,000-instrument manifest is the deferred production target. The manifest location may be a configurable path; the CSV format SHALL be the Arrow `GET /all` schema. Readiness requires:
 
-1. Table reachable.
+1. Manifest file reachable and parsable.
 2. Manifest version recorded.
 3. Configured minimum instrument count met.
-4. Every row validated for required routing fields.
-5. Subscription acknowledgements received for all required instruments.
+4. Every row validated for required routing fields (token, exchange, symbol, trading_symbol).
+5. Subscription acknowledgements received for all required instruments (via `wss://ds.arrow.trade` sub message).
+
+Market hours by exchange:
+
+- **NSE/NFO/INDEX:** 9:15 AM - 3:30 PM IST
+- **MCX:** 4:00 AM - 11:30 PM IST
+
+EOD offload timing: NSE after 4 PM IST, MCX after 11:30 PM IST.
 
 Runtime instrument changes are deferred; a controlled restart applies a new manifest.
 
@@ -159,7 +231,7 @@ Logs SHALL be structured and include service, instance, connection scope, protoc
 4. Reconnect/re-subscription tests prove manifest completeness.
 5. Duplicate/fingerprint tests document both false-positive and false-negative limits.
 6. Backpressure tests stay within configured memory and backlog bounds.
-7. Full-session 75,000 ticks/s, 30-minute 112,500 ticks/s burst, and 60-minute 150,000 ticks/s stress tests complete with defined loss accounting.
+7. Variable 60,000 ticks/s average-baseline and 90,000 ticks/s peak tests with defined loss accounting and no per-instrument rate above 30 ticks/s.
 8. Credential rotation, exhaustion, shutdown, clock-skew, and observability failure tests pass.
 
-## 
+##

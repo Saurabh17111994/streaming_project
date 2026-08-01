@@ -4,22 +4,24 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.trading</groupId>
-  <artifactId>action-capture</artifactId>
-  <version>0.1.0</version>
-  <packaging>jar</packaging>
+  <parent>
+    <groupId>com.trading</groupId>
+    <artifactId>trading-platform</artifactId>
+    <version>0.1.0</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
 
-  <properties>
-    <maven.compiler.release>17</maven.compiler.release>
-    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <fluss.version>0.8.0</fluss.version>
-  </properties>
+  <artifactId>action-capture</artifactId>
+  <packaging>jar</packaging>
 
   <dependencies>
     <dependency>
       <groupId>org.apache.fluss</groupId>
       <artifactId>fluss-client</artifactId>
-      <version>${fluss.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.trading</groupId>
+      <artifactId>common</artifactId>
     </dependency>
   </dependencies>
 

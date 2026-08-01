@@ -5,16 +5,16 @@
 This document describes the target Phase 4.2 architecture. It is derived from:
 
 1. Executable implementation and tests
-2. Active decisions in `../01_project/04-decisions.md`
-3. Reconciled DDLs under `../../code/01_platform/02_sql/ddl/`
-4. Build contracts under `../04_contracts/`
-5. Requirements under `../02_requirements/`
+2. Active decisions in [04-decisions.md](../01_project/04-decisions.md)
+3. Reconciled DDLs under [code/01_platform/02_sql/ddl/](../../code/01_platform/02_sql/ddl/)
+4. Build contracts under [../04_contracts/](../04_contracts/)
+5. Requirements under [../02_requirements/](../02_requirements/)
 
-The architecture is **blocked for live-money use** until the evidence-gated Arrow/OpenAlgo protocols, exact software versions, Flink/Fluss connector semantics, DDLs, and acceptance tests pass. Unknown external behavior is not represented as an implementation fact.
+The architecture is **blocked for live-money use** until the evidence-gated Arrow protocols, exact software versions, Flink/Fluss connector semantics, DDLs, and acceptance tests pass. Unknown external behavior is not represented as an implementation fact.
 
 ## System purpose
 
-The platform ingests supported NSE and MCX market data, computes event-time 15-second candles and forming-bar signals in Apache Flink, ranks active setups in the same Signal job, publishes immutable instructions through Apache Fluss, and submits approved instructions through a durable Executor/OpenAlgo boundary.
+The platform ingests supported NSE and MCX market data, computes event-time 15-second candles and forming-bar signals in Apache Flink, ranks active setups in the same Signal job, publishes immutable instructions through Apache Fluss, and submits approved instructions through a durable Executor calling Arrow's REST API directly.
 
 It independently captures broker postbacks, builds order-lifecycle and fill-derived position state, runs a checkpointed Babysitter no-op in MVP, and offloads eligible immutable history to encrypted Iceberg/S3 storage.
 
@@ -40,18 +40,20 @@ Arrow market-data WebSocket
       ├─ event-time 15-second candle state
       ├─ forming-bar detection
       ├─ candidate audit
-      ├─ in-operator ranking and portfolio gates
+      ├─ in-operator ranking by portfolio_id
+      ├─ Portfolio_Reservations management
       ├─ Signal_Candidates LOG
       ├─ Ranking_Results LOG
       └─ immutable Trade_Decisions
           → Executor durable order gate
-          → OpenAlgo REST adapter
+          → Arrow REST (POST /order/regular)
           → broker
 
 Arrow broker postback stream
   → Action Capture
-      ├─ immutable Fills_table LOG
+      ├─ immutable Fills LOG
       ├─ Order_Lifecycle KV
+      ├─ Postback_Projection_Ledger
       ├─ correlation quarantine
       └─ fill-derived Positions KV
           ↕
@@ -59,7 +61,12 @@ Arrow broker postback stream
           → future structured Position_Actions
           → Executor gate
 
-Eligible immutable events → verified EOD Iceberg/S3 manifest
+Safety controls:
+  Signal/Action Capture/platform health/operators
+      → Safety_Halt_Requests
+      → Executor (idempotent scoped gate action)
+
+Eligible immutable events → EOD controller → verified Iceberg/S3 manifest
 All components → OpenObserve plus local durable execution audit
 ```
 
@@ -71,12 +78,13 @@ There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. 
 | --- | --- | --- |
 | Ingestion | Broker connection, decode, normalization, packet preservation, fingerprinting, discontinuity evidence | Candles, strategy, broker orders |
 | Fluss | Tables, DDL, distribution, replication, retention, changelog, lake tiering | Strategy rules and broker calls |
-| Signal Flink job | Dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions | OpenAlgo calls and authoritative fills |
-| Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine | Strategy and order submission |
-| Position projector | Fill-derived `Positions` aggregate | Raw order lifecycle authority |
+| Signal Flink job | Dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions | Arrow REST calls and authoritative fills |
+| Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine. Position projector runs in-process | Strategy and order submission |
+| Position projector | Fill-derived `Positions` aggregate (runs inside Action Capture process for MVP) | Raw order lifecycle authority |
 | Babysitter | Position observation; no-op in MVP; future structured actions | New entry signals, lifecycle authority, direct broker calls |
-| Executor | Durable gate, attempts, identity mappings, reconciliation, fencing, OpenAlgo calls | Strategy, ranking, authoritative fill capture |
-| OpenAlgo | Broker REST adapter | Fluss consumption and safety decisions |
+| Executor | Durable gate, attempts, identity mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls | Strategy, ranking, authoritative fill capture |
+| EOD controller | Manifest creation, verification, retry/backoff, retention extension, expiry protection. NSE offload after 4 PM IST, MCX after 11:30 PM IST | Broker connection or strategy decisions |
+| Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Operational telemetry and alert delivery | Trading decisions or durable execution evidence |
 
 ## Identity and state boundaries
@@ -92,6 +100,22 @@ The following identities remain distinct:
 - `position_id`: fill-derived exposure aggregate
 - `postback_event_id`: platform-captured postback delivery
 - `action_id`: future immutable structured position action
+- `reservation_id`: portfolio capacity reservation
+- `halt_request_id`: durable safety-halt request
+
+### Scope identities and isolation
+
+Three canonical scope identities enforce isolation across accounts, portfolios, and execution partitions:
+
+| Scope | Purpose | Carried by |
+| --- | --- | --- |
+| `account_scope_id` | Broker/account isolation boundary | Gates, attempts, mappings, positions, lifecycle, halt requests, audit |
+| `portfolio_id` | Ranking, reservation, and capacity boundary | Reservations, candidate evaluation, instruction context |
+| `execution_partition_id` | Fenced Executor ownership boundary | Execution gate, fencing token, attempt state |
+
+A missing, mismatched, stale, or unauthorized cross-scope operation fails closed and is audited. Scope isolation tests must prove that a halt, reservation, mapping, or fence in one scope cannot affect another.
+
+- **MVP (2026-07-23):** `portfolio_id` is singular (single account, one strategy). Candidates are repartitioned by `portfolio_id` before ranking; with one portfolio this produces a single partition operationally. Scope IDs remain in schema for future multi-portfolio use.
 
 `Order_Lifecycle` is keyed by `broker_order_id`. `Positions` is keyed by `position_id`. `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit` are separate Executor-owned state. A generic `order_id` is prohibited across domains.
 
@@ -100,16 +124,105 @@ The following identities remain distinct:
 | Environment | Topology | Purpose |
 | --- | --- | --- |
 | Local/integration | Docker Compose, single host | Development, deterministic tests, component integration |
-| Production | Docker Swarm, four VMs | Three workload/HA VMs plus one dedicated observability VM |
+| Production | Docker Swarm, four VMs | Three workload/HA VMs plus one dedicated observability VM. Each workload VM: 500 GB SSD starting allocation. Final CPU, RAM, SSD IOPS/throughput, and network bandwidth are `EVIDENCE-BLOCKED` until `PERF-PROD-60000-001` and `FAIL-VM-LOSS-60000-001` pass. |
 
-Compose is not evidence of production HA. Production must prove three-node Fluss replication/quorum, anti-co-location, encrypted S3 checkpoints, one-workload-VM loss tolerance, safe halt under five seconds, and data recovery under thirty seconds at the normal workload.
+Compose is not evidence of production HA. Production must prove three-node Fluss replication/quorum, anti-co-location (all three replicas of any critical Fluss/Flink role across separate VMs), encrypted S3 checkpoints, one-workload-VM loss tolerance, safe halt under five seconds, and data recovery under thirty seconds at 60,000 ticks/s (3,000 instruments). A cloud provider's uptime claim is not proof of application, broker-route, or order-path availability.
 
 ## Architecture references
 
-- Project context and ownership: `../01_project/02-system-context.md`
-- Quality targets and guarantees: `../01_project/03-quality-targets.md`
-- Active decisions: `../01_project/04-decisions.md`
-- Functional requirements: `../02_requirements/02-functional/`
-- Data and interfaces: `../02_requirements/04-data.md`, `../02_requirements/05-interfaces.md`
-- Operational requirements: `../02_requirements/06-operational.md`
-- Build contracts: `../04_contracts/00-index.md`
+- Project context and ownership: [02-system-context.md](../01_project/02-system-context.md)
+- Quality targets and guarantees: [03-quality-targets.md](../01_project/03-quality-targets.md)
+- Active decisions: [04-decisions.md](../01_project/04-decisions.md)
+- Functional requirements: [02_requirements/02-functional/](../02_requirements/02-functional/)
+- Data and interfaces: [04-data.md](../02_requirements/04-data.md), [05-interfaces.md](../02_requirements/05-interfaces.md)
+- Operational requirements: [06-operational.md](../02_requirements/06-operational.md)
+- Build contracts: [00-index.md](../04_contracts/00-index.md)
+
+## Recovery and durability architecture
+
+### RPO per durable boundary
+
+Recovery Point Objective is defined per boundary, not as a single platform claim:
+
+| Boundary | RPO target | Recovery source |
+| --- | --- | --- |
+| Raw accepted packets | Measured gap between last ack and broker stream position post-reconnect | Ingestion uncertainty counters |
+| Immutable instructions | Checkpoint-committed instructions not yet visible to Executor | Signal job checkpoint + Fluss replay |
+| Postback audit | Postbacks received but not durably appended | Action Capture pending buffer + broker replay |
+| Executor attempts/audit | Durable attempt state not yet reflected in audit LOG | `Execution_Attempts` KV + `Execution_Audit` LOG |
+| Projections (lifecycle/positions) | Projection ledger incomplete records | `Postback_Projection_Ledger` + immutable postback audit |
+| EOD data | Trading days with unverified or missing manifest | EOD controller manifest state + Fluss source retention |
+
+### Failure timeline model
+
+Every failure test records:
+
+1. Fault injection time
+2. Detector threshold and detection time
+3. Safety-gate block time (order path)
+4. Recovery start time
+5. Recovery completion time
+6. Source catch-up time (data path)
+7. Resume approval time (order path)
+
+Data-path recovery and order-path safe-halt are separate clocks. The five-second safe-halt target applies to the complete fault→gate-block interval including detection delay.
+
+## State capacity architecture
+
+Every managed and durable state category must have a defined capacity budget for production readiness:
+
+| State category | Cardinality bound | Serialized size/entry | Checkpoint contribution | Cleanup |
+| --- | --- | --- | --- | --- |
+| Fingerprint dedup | entries = rate × dedup_horizon | ~64 B fingerprint + metadata | Included in Signal checkpoint | TTL expiry |
+| Candle/forming-bar windows | instruments × (allowed_lateness + window_size) / window_size | Per-instrument window accumulator | Included in Signal checkpoint | Emit on finalization |
+| Active candidates | configurable max per instrument × instruments | Per-candidate record ~1 KB | Included in Signal checkpoint | Expiry, invalidation, instruction creation |
+| Portfolio reservations | max concurrent × portfolios | Per-reservation record ~512 B | Included in Signal checkpoint | Terminal state release |
+| Execution attempts | active + reconciliation window | Per-attempt record ~1 KB | N/A (KV durable state) | Reconciliation disposition |
+| Projection ledger | incomplete records | Per-ledger entry ~256 B | N/A (KV durable state) | Completion or manual disposition |
+| Postback quarantine | unresolved records | Per-quarantine entry ~2 KB | N/A (LOG durable state) | Manual disposition or expiry |
+| Suspected discontinuities | operational investigation window | Per-discontinuity ~512 B | N/A (LOG durable state) | Time-based cleanup |
+
+All bounds that depend on external configuration (instruments, portfolios, rate) must be workload-validated at the variable 60,000 ticks/s average baseline and the 90,000 ticks/s peak with every instrument capped at 30 ticks/s. State categories without a measured bound are evidence-gated until measurement.
+
+## Required logical state inventory
+
+The architecture mandates these logical tables before physical DDL generation:
+
+| Table | Type | Writer |
+| --- | --- | --- |
+| `raw_table_1` | LOG | Ingestion |
+| `feature_candles_15s` | LOG | Signal job |
+| `Signal_Candidates` | LOG | Signal job |
+| `Ranking_Results` | LOG | Signal job |
+| `Trade_Decisions` | Immutable feed | Signal job |
+| `Portfolio_Reservations` | KV/logical state | Signal job ranking/reservation operator |
+| `Fills` | LOG | Action Capture |
+| `Order_Lifecycle` | KV | Action Capture |
+| `Positions` | KV | Position projector |
+| `Postback_Projection_Ledger` | KV | Action Capture |
+| `Postback_Quarantine` | LOG | Action Capture |
+| `Execution_Gate` | KV | Executor |
+| `Execution_Attempts` | KV | Executor |
+| `Order_Correlation` | KV | Executor |
+| `Execution_Audit` | LOG | Executor |
+| `Safety_Halt_Requests` | LOG/control | Authorized components |
+| `suspected_discontinuities` | LOG | Ingestion |
+| `instruments` | Manifest | Operators |
+| `Position_Actions` | Future LOG | Babysitter (post-MVP) |
+
+## Architecture acceptance checklist
+
+Before architecture is considered implementation-ready:
+
+- [ ] All required tables appear in state inventory, pipeline diagrams, and ownership matrices.
+- [ ] `Portfolio_Reservations`, `Postback_Projection_Ledger`, and `Safety_Halt_Requests` appear consistently.
+- [ ] `account_scope_id`, `portfolio_id`, and `execution_partition_id` are defined and consistently used.
+- [ ] EOD controller has a named owner and durable restart behavior.
+- [ ] RPO is defined per boundary; failure timeline includes detection delay.
+- [ ] State capacity budgets exist or are evidence-gated for every category.
+- [ ] Seven-year audit controls are described or explicitly evidence-gated.
+- [ ] Transport encryption is mandatory for all sensitive paths.
+- [ ] No stale name (separate Ranking job, generic `order_id`, TLS "where supported") remains.
+- [ ] All relative Markdown links resolve.
+- [ ] MVP alert groups are owned and have defined response lifecycle.
+- [ ] Requirements-to-architecture traceability matrix is current.

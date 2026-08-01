@@ -14,7 +14,7 @@ Local Compose maintenance is not production procedure or HA evidence.
 4. Halt new money-moving calls and reconcile attempts, orders, fills, positions, reservations, mappings, and projections.
 5. Verify the target artifact/configuration is immutable and compatibility-tested.
 6. Apply the change with controlled Swarm update, restart, DDL, secret, network, or capacity procedure.
-7. Monitor liveness, readiness, job health, trading readiness, durability readiness, alerts, offsets, backlog, checkpoints, and storage.
+7. Monitor the required health, dashboard, and alert views in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md).
 8. Run targeted functional, recovery, security, and SLO checks.
 9. Keep gate halted until reconciliation and post-change verification pass.
 10. Require two distinct authenticated approvals for the same current epoch/evidence hash before enablement.
@@ -48,16 +48,7 @@ Use the secrets runbook and security tests. Verify least privilege, rotation/rev
 
 ## Routine checks
 
-Operations reviews at an approved cadence:
-
-- Fluss quorum, replicas, disk, and storage pressure
-- Flink jobs, checkpoints, restores, watermarks, backpressure, and state freshness
-- Ingestion subscriptions, append acknowledgements, clock offset, quarantine, and discontinuities
-- Action Capture correlation, projection backlog, lifecycle/position freshness, and quarantine
-- Executor gate, unknown attempts, reservations, mappings, fencing, changelog continuity, and approvals
-- EOD manifest verification, retry state, expiry margin, retention days, and S3 health
-- OpenObserve ingestion, alert ownership, dashboard health, and audit query access
-- Credential age, rotation status, image digests, vulnerabilities, and access logs
+At the approved cadence, review the required dashboard and alert views in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md), then follow the relevant runbook or maintenance procedure for any failed condition. Record the review outcome and evidence.
 
 ## Emergency maintenance
 

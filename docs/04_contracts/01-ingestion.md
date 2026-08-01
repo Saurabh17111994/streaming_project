@@ -2,14 +2,20 @@
 
 ## Boundary
 
-One service process consumes the evidence-approved broker stream, preserves original packet bytes, maps approved fields into typed columns, calculates a versioned bounded fingerprint, and appends to `raw_table_1` through the supported Fluss Java client.
+Two colocated processes in the same container consume the evidence-approved broker stream: a Go arrow-bridge (Arrow Go SDK for auth, WebSocket, binary decode, zstd decompression) pipes NDJSON to Java IngestionService (validate, fingerprint, Fluss append). Original packet bytes are preserved as raw_payload, approved fields are mapped into typed columns, a versioned bounded fingerprint is calculated, and each accepted tick is appended to `raw_table_1` individually through the supported Fluss Java client.
 
 ## Inputs
 
-- Versioned instrument manifest
-- Broker endpoint/auth/protocol artifacts approved by Platform and Execution
+- Versioned instrument manifest (loaded from Arrow `GET /all` or `GET /nse` CSV, refreshed daily 8 AM IST)
+- Arrow market-data WebSocket: `wss://ds.arrow.trade?appID=X&token=Y`
+- Binary protocol: 4 modes — LTP (13 bytes), LTPC (17 bytes), Quote (93 bytes), Full (241 bytes), all big-endian ints
+- Prices in **paise** (int32, ÷100 for rupees); timestamps in int32 epoch seconds (convert to UTC epoch ms)
+- Subscribe via JSON: `{"code":"sub","mode":"full","full":[tokens]}`
+- Heartbeat: client sends `PONG` text every 3s; read timeout 5s
+- Auth: token from `/auth/app/authenticate-token` (24hr TTL, refreshable)
 - Swarm secret references in production
-- Exact decoder and Fluss client versions
+- Exact go-arrow SDK version and Fluss 0.9.1-incubating Java client version
+- NDJSON tick schema (versioned contract between Go bridge stdout and Java stdin)
 
 ## Outputs
 
@@ -21,8 +27,8 @@ One service process consumes the evidence-approved broker stream, preserves orig
 
 - Broker-to-Fluss is at-least-once.
 - Raw events are not deduplicated at ingestion.
-- No broker sequence/event ID is assumed.
-- Original payload bytes are never replaced by canonical JSON.
+- Arrow provides no broker sequence/event ID — confirmed by Go SDK + REST docs. Fingerprint dedup (DEC-012) is correct.
+- Original binary payload bytes are never replaced by canonical JSON.
 - Memory/backlog are bounded; exact client internals remain version-gated.
 
 ## Failure behavior
@@ -31,7 +37,7 @@ Unsupported protocol, incomplete subscription, auth exhaustion, append uncertain
 
 ## Acceptance
 
-Golden packet decoding, byte round-trip/hash, typed normalization, reconnect/subscription completeness, fingerprint limitations, bounded backpressure, credential rotation, and the 75k/112.5k/150k workload tests must pass.
+Golden packet decoding, byte round-trip/hash, typed normalization, reconnect/subscription completeness, fingerprint limitations, bounded backpressure, credential rotation, the variable 60,000 ticks/s average baseline, and the 90,000 ticks/s peak-capacity workload tests must pass.
 
 ## Requirement traceability
 

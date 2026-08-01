@@ -20,7 +20,7 @@ The three workload VMs host:
 - Flink JobManager/TaskManager workload capacity according to the proven placement plan
 - Ingestion, Action Capture, Executor, and job deployment control as assigned by the Swarm stack
 
-Fluss replicas cannot co-locate on one workload VM. The placement plan must specify resources, update order, restart policy, shutdown grace, health checks, and persistent volume ownership.
+Fluss replicas cannot co-locate on one workload VM. All three replicas of any critical Fluss/Flink role SHALL be placed across separate workload VMs via anti-co-location constraints. The placement plan must specify resources, update order, restart policy, shutdown grace, health checks, and persistent volume ownership.
 
 ### Observability VM
 
@@ -34,7 +34,7 @@ Production readiness requires:
 - Docker Swarm secrets and least-privilege identities
 - Pinned immutable image digests and exact dependency versions
 - Version-reconciled Fluss schemas and connector configuration
-- Broker/OpenAlgo protocol evidence and valid credentials
+- Broker/Arrow REST protocol evidence and valid credentials
 - Fluss quorum/replication health
 - Signal and Babysitter jobs running and checkpointing
 - Executor durable state, fencing, changelog continuity, and known gate state
@@ -54,7 +54,7 @@ A healthy container is not sufficient for any higher readiness state.
 
 ## Local Compose expectations
 
-Local Compose may include one Fluss coordinator/tablet, Flink control/workers, ingestion, Action Capture, Executor, OpenAlgo, OpenObserve, and job submission components. It is intended for deterministic development and sandbox testing.
+Local Compose may include one Fluss coordinator/tablet, Flink control/workers, ingestion, Action Capture, Executor, OpenObserve, and job submission components. It is intended for deterministic development and sandbox testing.
 
 Local configuration:
 
@@ -71,7 +71,7 @@ Local configuration:
 3. Start Flink control/workers and verify checkpoint storage.
 4. Deploy Signal and Babysitter jobs from pinned artifacts.
 5. Verify ingestion manifest/subscriptions and Action Capture protocol readiness.
-6. Start Executor with gate `HALTED`; verify durable state, mappings, continuity, OpenAlgo, and telemetry.
+6. Start Executor with gate `HALTED`; verify durable state, mappings, continuity, Arrow REST, and telemetry.
 7. Complete reconciliation and verify all unknown attempts/reservations are resolved.
 8. Obtain two distinct authenticated approvals for the same evidence hash/epoch.
 9. Enable only the approved gate epoch.
@@ -80,7 +80,7 @@ Startup dependencies and health checks never automatically enable order placemen
 
 ## Failure and maintenance behavior
 
-- Loss of any workload VM is tested at 75,000 ticks/s.
+- Loss of any workload VM is tested at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak.
 - Fluss quorum degradation, checkpoint failure, changelog discontinuity, or uncertain Executor state halts new money-moving calls.
 - Broker/authentication failure makes affected services not ready and alerts operations.
 - Planned maintenance begins with the gate halted, drains or reconciles attempts, checkpoints jobs, and verifies durable state.
@@ -88,7 +88,7 @@ Startup dependencies and health checks never automatically enable order placemen
 
 ## Environment acceptance
 
-Acceptance must prove 75,000/112,500/150,000 workload profiles, one-VM loss, bounded backlog, checkpoint restore, data recovery under 30 seconds for accepted cases, safe-halt under five seconds, EOD manifest verification, security controls, and audit reconstruction.
+Acceptance must prove variable 60,000 ticks/s average baseline and 90,000 ticks/s peak profiles, one-VM loss, bounded backlog, checkpoint restore, data recovery under 30 seconds for accepted cases, safe-halt under five seconds, EOD manifest verification, security controls, and audit reconstruction.
 
 ## References
 

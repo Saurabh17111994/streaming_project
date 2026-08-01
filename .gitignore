@@ -4,6 +4,7 @@ build/
 dist/
 *.class
 *.jar
+dependency-reduced-pom.xml
 __pycache__/
 *.pyc
 .venv/
@@ -19,3 +20,4 @@ config/*.local.*
 .idea/
 .vscode/
 .DS_Store
+code/01_platform/01_docker/.env

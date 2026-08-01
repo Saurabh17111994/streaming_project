@@ -3,28 +3,30 @@
 ## Current topology
 
 ```text
-Arrow market-data WebSocket
-  → Ingestion
+Arrow market-data WebSocket (wss://ds.arrow.trade, binary)
+  → Ingestion (binary decoder, epoch-sec → epoch-ms, paise → rupees)
   → Fluss raw_table_1 LOG
   → Signal Flink job
-      ├─ event fingerprint deduplication
+      ├─ bounded fingerprint deduplication
       ├─ event-time candle state
       ├─ forming-bar signal detection
       ├─ in-operator ranking and portfolio gates
       ├─ Signal_Candidates LOG
       ├─ Ranking_Results LOG
-      └─ Trade_Decisions KV
+      └─ Trade_Decisions immutable feed
           → Executor / durable order gate
-          → OpenAlgo REST adapter
+          → Arrow REST (POST /order/regular)
           → Arrow broker
 
-Arrow order-postback stream
+Arrow order-updates WebSocket (wss://order-updates.arrow.trade, JSON)
   → Action Capture
-      ├─ Fills_table LOG
-      └─ order lifecycle state KV
+      ├─ Fills LOG
+      ├─ Order_Lifecycle KV
+      ├─ Positions KV (fill-derived)
+      └─ Postback_Quarantine LOG
           ↕
       Babysitter Flink job
-          → position-management action KV
+          → position-management action KV (future)
           → Executor
 
 Eligible LOG tables → EOD Iceberg/S3
@@ -40,8 +42,8 @@ All services → OpenObserve
 | Signal Flink job | Dedup, candles, forming-bar detection, candidate audit, ranking, winner output | Broker REST side effects, fill lifecycle |
 | Action Capture | Broker postback ingestion, immutable fill log, order lifecycle updates | Strategy, position decisions, order submission |
 | Babysitter Flink job | Post-entry position-management decisions | New entry signals, authoritative order lifecycle |
-| Executor | Changelog consumption, durable order gate, idempotency, reconciliation, OpenAlgo calls | Strategy ranking, fill-state authority |
-| OpenAlgo | Broker REST adapter | Fluss consumption, strategy, fill capture |
+| Executor | Changelog consumption, durable order gate, idempotency, reconciliation, Arrow REST calls (`POST /order/regular`) | Strategy ranking, fill-state authority |
+| Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Logs, metrics, traces, operational alerting | Trading decisions |
 
 ## Identity model

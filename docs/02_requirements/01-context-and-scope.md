@@ -2,7 +2,7 @@
 
 ## 1.1 Purpose
 
-The Streaming Trading Data Platform ingests live market data, computes event-time candles and forming-bar signals with Apache Flink, stores streaming events and operational state in Apache Fluss, submits approved immutable instructions through an Executor/OpenAlgo boundary, captures broker postbacks independently, and preserves eligible history in encrypted Apache Iceberg/S3 storage.
+The Streaming Trading Data Platform ingests live market data, computes event-time candles and forming-bar signals with Apache Flink, stores streaming events and operational state in Apache Fluss, submits approved immutable instructions through the Executor via Arrow's REST API, captures broker postbacks independently, and preserves eligible history in encrypted Apache Iceberg/S3 storage.
 
 The system has two distinct safety postures:
 
@@ -18,8 +18,7 @@ The system has two distinct safety postures:
 | Signal Flink job     | Dedup state, event-time candles, forming-bar detection, candidates, scoring, ranking, portfolio reservations, immutable instructions                         | Broker REST calls, authoritative fill capture                |
 | Action Capture       | Broker postback intake, immutable postback audit, order-lifecycle projection, identity correlation quarantine                                                | Strategy, ranking, broker submission                         |
 | Babysitter Flink job | Position-management evaluation; no-op in MVP; future structured actions                                                                                      | New entry strategy, lifecycle authority, direct broker calls |
-| Executor             | Changelog intake, durable order gate, attempt ledger, ID mapping, reconciliation, controlled execution state, OpenAlgo calls                                 | Strategy scoring, authoritative fill capture                 |
-| OpenAlgo             | Broker REST adapter                                                                                                                                          | Fluss consumption, strategy, fill capture, gate decisions    |
+| Executor             | Changelog intake, durable order gate, attempt ledger, ID mapping, reconciliation, controlled execution state, Arrow REST calls                             | Strategy scoring, authoritative fill capture                 |
 | Position state       | Correlated fill-derived position aggregate                                                                                                                   | Raw order lifecycle authority                                |
 | OpenObserve          | Operational logs, metrics, traces, alert delivery                                                                                                            | Trading decisions                                            |
 
@@ -37,7 +36,7 @@ Arrow market-data stream
       ├─ portfolio reservation gate
       └─ immutable Trade_Decisions instruction
           → Executor durable order gate
-          → OpenAlgo REST adapter
+          → Arrow REST
           → broker
 
 Arrow broker postback stream
@@ -49,7 +48,7 @@ Arrow broker postback stream
               ↕
           Babysitter Flink job (MVP no-op)
               → structured position action
-              → Executor gate and OpenAlgo
+              → Executor gate and Arrow REST
 
 Eligible immutable events → EOD Iceberg/S3
 All components → OpenObserve
@@ -65,7 +64,7 @@ The following identities SHALL remain distinct:
 | ---------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
 | `instruction_id`       | Signal job                              | Immutable platform decision; changed parameters create a new instruction           |
 | `client_order_ref`     | Executor                                | Deterministic broker-facing reference; length and echo behavior are evidence-gated |
-| `broker_order_id`      | Broker/OpenAlgo response                | Broker-authoritative order identity                                                |
+| `broker_order_id`      | Broker/Arrow REST response                | Broker-authoritative order identity                                                |
 | `trade_context_id`     | Signal/position projection              | Groups an entry and its related child orders                                       |
 | `position_id`          | Position projection when exposure opens | Stable position aggregate for fills, trim, exit, and re-entry relationships        |
 | `execution_attempt_id` | Executor                                | One durable attempt to submit one instruction or structured position action        |
@@ -83,7 +82,7 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 - Event-time 15-second candles with configurable watermark and allowed lateness
 - Forming-bar signal detection and in-operator ranking
 - Immutable candidate, ranking, and instruction records
-- Durable Executor gate, attempt ledger, identity mapping, reconciliation, and OpenAlgo handoff
+- Durable Executor gate, attempt ledger, identity mapping, reconciliation, and Arrow REST handoff
 - Independent postback capture and order-lifecycle projection
 - Separate position projection
 - Checkpointed Babysitter no-op
@@ -102,17 +101,33 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 - Automatic gap backfill during live ingestion
 - Automatic resumption of money-moving calls after uncertain state
 
+## 1.7 Implementation clarification: scope identities
+
+Every instruction, reservation, attempt, correlation mapping, lifecycle record, position, gate, and audit event SHALL carry the applicable scope:
+
+- `account_scope_id`: broker/account isolation boundary.
+- `portfolio_id`: ranking, reservation, and capacity boundary.
+- `execution_partition_id`: Executor fencing boundary when one account has multiple execution partitions.
+
+A missing or mismatched scope is a contract violation. Scope isolation SHALL be tested so that a halt, reservation, mapping, or fence in one scope cannot affect another.
+
+## 1.8 Implementation clarification: safety posture
+
+Component health SHALL be separate from trading readiness. A data-path component MAY continue bounded evidence capture during an observability degradation when durable storage and local buffering remain healthy. The Executor SHALL halt new money-moving calls when mandatory execution audit, safety control, fencing, reconciliation, or continuity evidence is unavailable.
+
+## 1.9 Implementation clarification: requirement proof
+
+Every mandatory requirement SHALL link to an acceptance ID, owner, evidence artifact, workload or fixture, and binary threshold. An evidence-gated requirement remains blocked until the exact external behavior and version are proven.
+
 ## 1.6 Evidence-gated dependencies
 
 Platform and Execution teams SHALL provide and test:
 
 - Arrow market-data packet corpus and protocol documentation
 - Arrow postback fields, ordering, replay, and identity behavior
-- OpenAlgo request/response/error contract
+- Arrow REST request/response/error contract
 - Broker-facing `client_order_ref` length and echo behavior
-- Exact Flink, Fluss, Java, Python, SDK, and OpenAlgo versions
+- Exact Flink, Fluss, Java, Python, SDK, and Arrow REST versions
 - Version-specific connector semantics for checkpoints, sinks, changelogs, partial updates, replication, and recovery
 
 Until evidence passes, the relevant capability remains blocked for live-money use.
-
- 

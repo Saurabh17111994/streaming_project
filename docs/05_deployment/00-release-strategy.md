@@ -33,8 +33,8 @@ MVP Phase 4.2 includes:
 - Forming-bar Business Logic and immutable candidate audit
 - In-operator Ranking and immutable ranking audit
 - Portfolio reservation gates and immutable `Trade_Decisions`
-- Durable Executor gate, attempts, mappings, reconciliation, fencing, and OpenAlgo handoff
-- Independent postback capture, `Fills_table`, `Order_Lifecycle`, and fill-derived `Positions`
+- Durable Executor gate, attempts, mappings, reconciliation, fencing, and Arrow REST handoff
+- Independent postback capture, `Fills`, `Order_Lifecycle`, and fill-derived `Positions`
 - Checkpointed Babysitter job that emits zero actions
 - Operational logs, metrics, health, alerts, and durable execution audit
 - Verified EOD Iceberg/S3 offload with retention safety buffer
@@ -50,7 +50,7 @@ Before implementation is accepted:
 
 1. Approve Arrow packet/postback artifacts or captured sandbox corpus.
 2. Prove required broker identities, status values, timestamps, reference echo, limits, and response behavior.
-3. Pin immutable versions/digests for Flink, Fluss, Java, Python, connectors, broker protocol/SDK, OpenAlgo, OpenObserve, and project images.
+3. Pin immutable versions/digests for Flink, Fluss, Java, Python, connectors, broker protocol/SDK, Arrow REST, OpenObserve, and project images.
 4. Record the version matrix and compatibility classification.
 
 Unknown external behavior remains a blocker and is never filled with a plausible value.
@@ -70,9 +70,8 @@ Use Compose to validate:
 
 Use the four-VM Swarm topology to validate:
 
-- 75,000 ticks/s for a full session
-- 112,500 ticks/s for at least 30 minutes
-- 150,000 ticks/s for at least 60 minutes
+- variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session
+- One workload VM loss at the per-instrument production rate
 - p50/p95/p99 SLO reporting with exact workload/version context
 - One workload VM loss at the normal baseline
 - S3 checkpoint/savepoint recovery
@@ -104,7 +103,7 @@ Live-money deployment requires all of the following:
 - Unknown outcomes halt within five seconds and cannot retry automatically
 - Restart with unverifiable Executor state defaults to `HALTED`
 - Fencing prevents concurrent active Executors
-- 75,000/112,500/150,000 workload tests pass
+- variable 60,000 ticks/s average-baseline and 90,000 ticks/s peak workload tests passes
 - One-workload-VM failure posture is proven
 - Data recovery target under 30 seconds is met for accepted scenarios
 - EOD offload and three-day retention safety are proven

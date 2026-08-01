@@ -2,13 +2,11 @@
 # Docker Compose — Trading_project platform runtime (Phase 4.2 MVP topology)
 #
 # Services: fluss (coordinator + tablet), flink (jobmanager + taskmanager),
-# ingestion, action-capture, compute, executor, openobserve.
+# ingestion, action-capture, compute, executor, otel-collector, openobserve.
 #
-# NOTE: image tags are placeholders. Pin concrete versions before first run
-# (see 01_platform/03_fluss/FLUSS_VERSIONS.md). OpenAlgo runs as the repurposed execution
-# engine (dumb executor) — its container is the upstream OpenAlgo image with an
-# executor adapter mounted in. Secrets are NOT committed; copy 01_platform/01_docker/.env.example
-# to 01_platform/01_docker/.env and fill values locally.
+# Direct Arrow Trade integration — no intermediate OpenAlgo or Kite layer.
+# Secrets are NOT committed; copy .env.example to .env and fill values locally.
+# EXECUTION_ENABLED must remain false in .env.example.
 # =============================================================================
 
 x-fluss-common: &fluss-common
@@ -40,90 +38,156 @@ volumes:
   openobserve-data:
 
 services:
+  # ---- ZooKeeper: metadata store for Fluss -----------------------------
+  zookeeper:
+    restart: always
+    image: zookeeper:3.9.2
+    networks: [trading-net]
+    ports: ["2181:2181"]
+
   # ---- Fluss: streaming bus + storage + lake tier -------------------------
   fluss-coordinator:
     <<: *fluss-common
-    image: ${FLUSS_IMAGE:-fluss/fluss:latest}
-    command: ["coordinator"]
+    image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
+    command: ["coordinatorServer"]
+    depends_on: [zookeeper]
     ports: ["9123:9123"]
     volumes: [fluss-data:/data]
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      FLUSS_COORDINATOR_HOST: fluss-coordinator
+      FLUSS_TABLET_HOST: fluss-tablet
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://fluss-coordinator:0, CLIENT://fluss-coordinator:9123
+        advertised.listeners: CLIENT://localhost:9123
+        internal.listener.name: INTERNAL
+        remote.data.dir: /tmp/fluss/remote-data
 
   fluss-tablet:
     <<: *fluss-common
-    image: ${FLUSS_IMAGE:-fluss/fluss:latest}
-    command: ["tablet"]
+    image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
+    command: ["tabletServer"]
     depends_on: [fluss-coordinator]
+    ports: ["9124:9123"]
     volumes: [fluss-data:/data]
-    # Lake tiering requires S3 creds (see 01_platform/01_docker/.env.example).
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      FLUSS_COORDINATOR_HOST: fluss-coordinator
+      FLUSS_TABLET_HOST: fluss-tablet
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://fluss-tablet:0, CLIENT://fluss-tablet:9123
+        advertised.listeners: CLIENT://localhost:9124
+        internal.listener.name: INTERNAL
+        tablet-server.id: 0
+        kv.snapshot.interval: 0s
+        data.dir: /tmp/fluss/data
+        remote.data.dir: /tmp/fluss/remote-data
+    # Lake tiering requires S3 creds (see .env.example).
 
   # ---- Flink: compute (feature + signal + babysitter jobs) -----------------
   flink-jobmanager:
     <<: *flink-common
-    image: ${FLINK_IMAGE:-flink:latest}
+    image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
     command: ["jobmanager"]
     ports: ["8081:8081"]
     volumes: [flink-checkpoints:/checkpoints]
 
   flink-taskmanager:
     <<: *flink-common
-    image: ${FLINK_IMAGE:-flink:latest}
+    image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
     command: ["taskmanager"]
     depends_on: [flink-jobmanager]
     volumes: [flink-checkpoints:/checkpoints]
 
   # ---- Services -----------------------------------------------------------
+  #
+  # PHASE 1: Fluss + ingestion are active.
+  # All other services commented out — uncomment as each phase is built.
+
   ingestion:
     <<: *fluss-common
-    build: { context: ../../02_services/01_ingestion, dockerfile: Dockerfile }
+    build:
+      context: ../../02_services/01_ingestion
+      dockerfile: Dockerfile
     depends_on: [fluss-coordinator, fluss-tablet]
     environment:
-      KITE_API_KEY: ${KITE_API_KEY}
-      KITE_ACCESS_TOKEN: ${KITE_ACCESS_TOKEN}
-      KITE_WS_URL: ${KITE_WS_URL}
-
-  action-capture:
-    <<: *fluss-common
-    build: { context: ../../02_services/03_action_capture, dockerfile: Dockerfile }
-    depends_on: [fluss-coordinator, fluss-tablet]
-    environment:
-      KITE_API_KEY: ${KITE_API_KEY}
-      KITE_API_SECRET: ${KITE_API_SECRET}
-      KITE_POSTBACK_URL: ${KITE_POSTBACK_URL}
-
-  compute:
-    <<: *flink-common
-    build: { context: ../../02_services/02_compute, dockerfile: Dockerfile }
-    depends_on: [flink-jobmanager, flink-taskmanager]
-    volumes: [flink-checkpoints:/checkpoints]
-    # Submits feature-compute, signal-strategy, babysitter jobs on start.
-
-  executor:
-    <<: *fluss-common
-    build: { context: ../../02_services/04_executor, dockerfile: Dockerfile }
-    depends_on: [fluss-coordinator, fluss-tablet]
-    environment:
-      OPENALGO_BASE_URL: ${OPENALGO_BASE_URL:-http://openalgo:5000}
-      OPENALGO_API_KEY: ${OPENALGO_API_KEY}
+      ARROW_APP_ID: ${ARROW_APP_ID}
+      ARROW_APP_SECRET: ${ARROW_APP_SECRET}
+      ARROW_USER_ID: ${ARROW_USER_ID}
+      ARROW_PASSWORD: ${ARROW_PASSWORD}
+      ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
+      ARROW_USE_STANDARD: ${ARROW_USE_STANDARD:-false}
+      ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      FLUSS_BOOTSTRAP_SERVERS: fluss-coordinator:9123
+      INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
+      READINESS_FILE_PATH: /tmp/ingestion.ready
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ingestion.ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - ${HOME:-/home/saurabh}/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY.csv:/instruments/NSE_CM_EQUITY.csv:ro
 
-  openalgo:
-    <<: *fluss-common
-    image: ${OPENALGO_IMAGE:-openalgo/openalgo:latest}
-    ports: ["5000:5000"]
-    environment:
-      OPENALGO_API_KEY: ${OPENALGO_API_KEY}
-    # Order-execution ONLY. NOT on the ingest path: the ingestion reuses OpenAlgo's
-    # broker-plumbing code in-process (Python decode -> Java Fluss-client writer) and does
-    # NOT connect to this container's :8765 tick proxy. This container is reached only by
-    # executor over :5000 REST to place orders.
+  # ── Disabled services (uncomment as each phase is built) ────────────────
+  #
+  # action-capture:
+  #   <<: *fluss-common
+  #   build:
+  #     context: ../../02_services/03_action_capture
+  #     dockerfile: Dockerfile
+  #   depends_on: [fluss-coordinator, fluss-tablet]
+  #   environment:
+  #     ARROW_ORDER_UPDATES_URL: ${ARROW_ORDER_UPDATES_URL}
+  #     ARROW_APP_ID: ${ARROW_APP_ID}
+  #     ARROW_TOKEN: ${ARROW_TOKEN}
+  #
+  # compute:
+  #   <<: *flink-common
+  #   build:
+  #     context: ../../02_services/02_compute
+  #     dockerfile: Dockerfile
+  #   depends_on: [flink-jobmanager, flink-taskmanager]
+  #   volumes: [flink-checkpoints:/checkpoints]
+  #
+  # executor:
+  #   <<: *fluss-common
+  #   build:
+  #     context: ../../02_services/04_executor
+  #     dockerfile: Dockerfile
+  #   depends_on: [fluss-coordinator, fluss-tablet]
+  #   environment:
+  #     ARROW_REST_URL: ${ARROW_REST_URL}
+  #     ARROW_APP_ID: ${ARROW_APP_ID}
+  #     ARROW_TOKEN: ${ARROW_TOKEN}
+  #     EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
+  #     FLUSS_BOOTSTRAP: fluss-coordinator:9123
 
-  # ---- Observability ------------------------------------------------------
-  openobserve:
-    <<: *fluss-common
-    image: ${OPENOBSERVE_IMAGE:-openobserve/openobserve:latest}
-    restart: unless-stopped
-    ports: ["5080:5080"]
-    environment:
-      ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@example.com}
-      ZO_ROOT_USER_PASSWORD: ${O2_PASSWORD}
-    volumes: [openobserve-data:/data]
+  # ---- Observability (disabled for Phase 1) -------------------------------
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:0.123.0
+  #   restart: unless-stopped
+  #   networks: [trading-net]
+  #   command: ["--config=/etc/otel-collector-config.yaml"]
+  #   ports:
+  #     - "4317:4317"
+  #     - "4318:4318"
+  #   volumes:
+  #     - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+  #   environment:
+  #     O2_AUTH_BASIC: ${O2_AUTH_BASIC}
+  #   depends_on: [openobserve]
+  #
+  # openobserve:
+  #   <<: *fluss-common
+  #   image: ${OPENOBSERVE_IMAGE:?set OPENOBSERVE_IMAGE to an immutable digest}
+  #   restart: unless-stopped
+  #   ports: ["5080:5080"]
+  #   environment:
+  #     ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@example.com}
+  #     ZO_ROOT_USER_PASSWORD: ${O2_PASSWORD}
+  #   volumes: [openobserve-data:/data]

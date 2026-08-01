@@ -4,7 +4,7 @@
 
 Babysitter is the second Flink job and is a strict no-op in MVP. It consumes the versioned `Positions` changelog, validates continuity/schema, checkpoints observation state to S3, emits metrics, and produces zero actions for every input.
 
-Order lifecycle is not position lifecycle. Babysitter does not read/write a generic trade-management row and never calls OpenAlgo.
+Order lifecycle is not position lifecycle. Babysitter does not read/write a generic trade-management row and never calls Arrow REST.
 
 ## Future boundary
 

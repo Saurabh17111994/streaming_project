@@ -4,6 +4,51 @@
 
 Observability proves data correctness, order safety, recovery, storage durability, security, and release gates. OpenObserve is the target backend, but correlation IDs and local durable audit remain mandatory if backend delivery is temporarily unavailable.
 
+## Constraints
+
+- Every SHALL-level metric, alert, and log field SHALL be emitted as structured JSON with schema version. Prose-only observability descriptions are not sufficient for production acceptance.
+- Secrets, tokens, original payload bytes, and unnecessary account identifiers SHALL be redacted from logs and metrics. Secret exposure in observability is a security incident.
+- OpenObserve outage SHALL NOT authorize orders, erase durable execution audit, or suppress safety-halt alerts. Executor SHALL halt new money-moving calls when mandatory execution audit or safety-control acknowledgement is unavailable.
+- `HALTED` may be process-healthy but trading-not-ready. Dashboards and health checks SHALL distinguish process liveness, component readiness, job health, and trading readiness as separate dimensions.
+- Alert thresholds SHALL be versioned configuration, not prose-only placeholders. Every alert carries condition, detection time, affected scope, gate impact, evidence link, severity, and acknowledgement state.
+- High-cardinality labels (per-instrument, per-order) SHALL use bounded aggregation, sampling, or structured logs with retention policy. Uncontrolled label cardinality is a production defect.
+- Only explicitly required operator/UI/API endpoints are exposed. Internal RPC, checkpoint, and service ports are not publicly exposed.
+- S3 checkpoints, Fluss data volumes, and audit storage SHALL be encrypted at rest. Local named volumes are not production durability.
+
+## Assumptions
+
+| ID | Assumption | Source |
+| --- | --- | --- |
+| ASM-OBS-001 | OpenObserve supports the required structured JSON ingestion, metric aggregation, alert rule evaluation, and role-based access control at the MVP scale. | REQ-OBS-001, REQ-OBS-003 |
+| ASM-OBS-002 | Flink and Fluss emit sufficient metrics (checkpoint duration/size, watermark lag, consumer lag, replica health, disk pressure) through their versioned metric reporters. | REQ-OBS-002 |
+| ASM-OBS-003 | S3 `ap-south-1` can complete verified EOD offload within 30 minutes, and observability can detect and alert on offload failure before retention expiry. | ASM-006 |
+| ASM-OBS-004 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement operate within the four-VM target. | ASM-009 |
+
+Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
+
+## Accepted Behaviors
+
+These behaviors are conscious trade-offs accepted by the platform:
+
+- **OpenObserve is best-effort, not critical-path for order safety:** Executor halts independently when audit or safety-control delivery is unavailable. Observability backend failure does not silently authorize orders.
+- **Distributed tracing is not assumed for Flink/Fluss:** Trace propagation is used where supported but not required for MVP. Correlation IDs and audit IDs are mandatory regardless.
+- **High-cardinality metrics are bounded:** Per-instrument and per-order details use aggregation, sampling, or structured logs rather than unbounded metric label sets.
+- **Health is multidimensional:** A single green/gray/red indicator cannot represent the platform. Dashboards SHALL separate liveness, readiness, job health, and trading readiness.
+- **Local audit survives backend outage:** Local durable execution audit and evidence capture continue during OpenObserve unavailability. Backend recovery does not retroactively create missing audit records.
+
+## Out of Scope
+
+The following capabilities are explicitly NOT owned by Observability:
+
+- **Candle computation, signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Broker order submission, execution, and gate management:** Owned by the Executor.
+- **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
+- **Market data ingestion and broker connection management:** Owned by Ingestion.
+- **EOD controller orchestration and manifest creation:** Owned by the EOD controller.
+- **Schema lifecycle management and DDL application:** Owned by the schema lifecycle process.
+- **Business analytics (P&L, win rate, trader dashboards):** Deferred; not in MVP scope.
+- **End-user trading alerts and notifications:** Deferred; not in MVP scope (operational alerts remain in scope).
+
 ## REQ-OBS-001: Platform signals
 
 All components SHALL emit structured JSON logs, metrics, health state, and correlation IDs. Distributed tracing is used where supported; it is not assumed that Flink or Fluss propagates trace headers without version evidence.
@@ -33,7 +78,7 @@ Required common fields: `timestamp` UTC RFC3339, `service`, `instance_id`, `leve
 - reconciliation duration/result
 - two-person approvals/denials/unauthorized attempts
 - changelog lag/continuity
-- OpenAlgo request latency/status and broker response classification
+- Arrow REST request latency/status and broker response classification
 
 ### Storage and operations
 
@@ -83,4 +128,6 @@ Money-moving logs, gate transitions, attempts, mappings, postback evidence, reco
 
 Tests SHALL prove metric emission, redaction, cardinality limits, alert delivery/acknowledgement, backend outage buffering, health-state transitions, safe-halt alerts, offload expiry alerts, unauthorized control alerts, and reconstruction of each live-money acceptance gate from observability/audit evidence.
 
-# 
+## REQ-OBS-008: Component-specific observability degradation
+
+OpenObserve outage SHALL not erase durable execution audit or authorize orders. Ingestion and Action Capture MAY continue bounded evidence capture when durable source/audit writes, local buffering, and readiness policy remain healthy. Executor SHALL halt new money-moving calls when mandatory execution audit, safety-control acknowledgement, or alert visibility is unavailable. Each component SHALL expose its degraded reason and buffer bounds.

@@ -1,6 +1,6 @@
 # Action Capture — implementation handoff
 
-> **Status:** implementation not started. Use the implementation dossier at [`../../../docs/08_implementation/components/03-action-capture.md`](../../../docs/08_implementation/components/03-action-capture.md).
+> **Status:** implementation not started. Use the implementation dossier at [`../../../docs/08_implementation/05-action-capture.md`](../../../docs/08_implementation/05-action-capture.md).
 >
 > **Live money:** disabled until postback identity, correlation, projection, and reconciliation evidence passes.
 
@@ -10,12 +10,12 @@
 Evidence-approved broker postback stream
   → original payload + hash + postback_event_id/fingerprint
   → verified correlation or Postback_Quarantine
-  → Fills_table immutable append
+  → Fills immutable append
   → Order_Lifecycle projection
   → fill-derived Positions projection
 ```
 
-The current architecture does **not** assume Kite, `order_id`, `postback_seq`, or proximity-based correlation. Order lifecycle and position lifecycle are separate aggregates.
+The current architecture does **not** assume Arrow Trade, `order_id`, `postback_seq`, or proximity-based correlation. Order lifecycle and position lifecycle are separate aggregates.
 
 ## Implementation checklist
 
@@ -33,5 +33,5 @@ The current architecture does **not** assume Kite, `order_id`, `postback_seq`, o
 
 - Requirements: `../../../docs/02_requirements/02-functional/06-action-capture.md`
 - Contract: `../../../docs/04_contracts/06-action-capture.md`
-- Implementation dossier: `../../../docs/08_implementation/components/03-action-capture.md`
-- Schema lifecycle: `../../../docs/08_implementation/03-schema-lifecycle.md`
+- Implementation dossier: `../../../docs/08_implementation/05-action-capture.md`
+- Schema lifecycle: `../../../docs/08_implementation/01-foundation.md`

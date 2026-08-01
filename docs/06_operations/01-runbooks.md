@@ -13,6 +13,22 @@ Every critical runbook records:
 - Verification and closure evidence
 - Escalation path
 
+Use this template:
+
+```text
+runbook_id/title
+scope and severity
+preconditions and safety posture
+signals and evidence queries
+immediate containment / gate action
+diagnostic sequence
+reconciliation steps
+recovery procedure
+validation and closure evidence
+escalation and owner
+rollback / abort criteria
+```
+
 Commands and API paths are version-specific implementation details. Validate them against the deployed release before execution.
 
 ## Gate halt
@@ -33,7 +49,7 @@ Existing positions may remain monitored, but no new money-moving call is permitt
 
 ## Gate reconciliation and resume
 
-1. Reconcile broker orders and OpenAlgo responses.
+1. Reconcile broker orders and Arrow REST responses.
 2. Reconcile fills, order lifecycle, and positions.
 3. Verify `instruction_id` ↔ `execution_attempt_id` ↔ `client_order_ref` ↔ `broker_order_id` mappings.
 4. Resolve every `UNKNOWN` attempt and reservation through evidence-backed disposition.
@@ -126,4 +142,4 @@ Automatic resume and approval reuse across epochs are prohibited.
 - Operational requirements: `../02_requirements/06-operational.md`
 - Executor contract: `../04_contracts/07-executor.md`
 - Rollback and recovery: `../05_deployment/03-rollback.md`
-- Alert configuration: `./03-alert-configuration.md`
+- Alert definitions and thresholds: `../08_implementation/10-observability.md`

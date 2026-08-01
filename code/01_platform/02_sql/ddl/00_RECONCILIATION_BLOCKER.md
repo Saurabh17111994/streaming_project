@@ -23,7 +23,7 @@ The requirements documents have been reconciled to the active decisions (DEC-001
 1. `01_catalog.sql` — catalog + database bootstrap
 2. `02_raw_table_1.sql` — unified tick log
 3. `03_feature_candles_15s.sql` — candle log
-4. `04_fills_table.sql` — immutable fill event log
+4. `04_fills.sql` — immutable fill event log
 5. `05_order_lifecycle.sql` — broker-order lifecycle KV
 6. `06_positions.sql` — position aggregate KV
 7. `07_signal_candidates.sql` — signal audit log
@@ -36,13 +36,16 @@ The requirements documents have been reconciled to the active decisions (DEC-001
 14. `14_order_correlation.sql` — three-ID correlation KV
 15. `15_execution_audit.sql` — immutable execution audit LOG
 16. `16_postback_quarantine.sql` — postback quarantine LOG
+17. `17_portfolio_reservations.sql` — portfolio-capacity reservation KV
+18. `18_postback_projection_ledger.sql` — projection recovery KV
+19. `19_safety_halt_requests.sql` — immutable safety-halt request LOG
 
 ## Why application is still blocked
 
 Exact Fluss server/client/connector versions are not yet pinned. The generated SQL requires version-specific proof for:
 
 - `BYTES` column type for raw payloads
-- LOG/KV table capabilities across all 16 tables
+- LOG/KV table capabilities across all 19 tables
 - `partial_update` merge engine and `changelog.image = 'FULL'`
 - Retention extension while EOD unverified
 - Lake-tier properties for Iceberg/S3

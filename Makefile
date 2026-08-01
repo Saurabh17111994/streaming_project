@@ -2,13 +2,14 @@
 # Run from the repo root: make <target>
 
 COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
+MVN := mvn
 
 .PHONY: help env ddl up down logs build clean
 
 help:
 	@echo "Targets:"
 	@echo "  env    copy code/01_platform/01_docker/.env.example to code/01_platform/01_docker/.env, then add secrets"
-	@echo "  ddl    apply sql/ddl/*.sql to Fluss - requires Fluss up"
+	@echo "  ddl    validate + emit schema manifest; apply gated on pinned versions + evidence"
 	@echo "  up     docker compose up -d, full stack"
 	@echo "  down   docker compose down"
 	@echo "  logs   tail compose logs"
@@ -20,21 +21,9 @@ env:
 	@echo "Created code/01_platform/01_docker/.env — edit it with real secrets."
 
 ddl:
-	@echo "Apply SQL DDL to Fluss - run against the Flink SQL client or Fluss CLI:"
-	@for f in code/01_platform/02_sql/ddl/01_catalog.sql \
-	          code/01_platform/02_sql/ddl/02_raw_table_1.sql \
-	          code/01_platform/02_sql/ddl/03_feature_candles_15s.sql \
-	          code/01_platform/02_sql/ddl/04_fills_table.sql \
-	          code/01_platform/02_sql/ddl/05_trade_management_table.sql \
-	          code/01_platform/02_sql/ddl/06_gaps.sql \
-	          code/01_platform/02_sql/ddl/07_signal_candidates.sql \
-	          code/01_platform/02_sql/ddl/08_ranking_results.sql \
-	          code/01_platform/02_sql/ddl/09_trade_decisions.sql \
-	          code/01_platform/02_sql/ddl/11_instruments.sql; do \
-		echo "  -> $$f"; \
-	done
-	@echo "Tip: flink-sql-client -Dflink.sql-client.execution.result-mode=table \
-		-e code/01_platform/02_sql/ddl/01_catalog.sql -e code/01_platform/02_sql/ddl/02_raw_table_1.sql ..."
+	@python3 code/01_platform/04_scripts/ddl_apply.py \
+		$(if $(APPLY),--apply-verified,) $(if $(EVIDENCE),--matrix-evidence $(EVIDENCE),)
+	@echo "(DDL application is blocked until reconciliation blocker exit criteria are met.)"
 
 up:
 	$(COMPOSE) up -d
@@ -46,7 +35,20 @@ logs:
 	$(COMPOSE) logs -f
 
 build:
-	$(COMPOSE) build
+	cd code && $(MVN) -o -q package -pl 02_services/01_ingestion -am -DskipTests
+
+# Fail the build if Apache Flink CEP (Complex Event Processing) is referenced.
+# Project rule: no CEP dependency in the MVP order path.
+cep-check:
+	@bash code/01_platform/04_scripts/cep_guard.sh .
+
+# Run all unit tests (common + ingestion modules, offline mode).
+test:
+	cd code && $(MVN) -o -q test -pl common,02_services/01_ingestion
+
+# Run only the ingestion module tests.
+test-ingestion:
+	cd code && $(MVN) -o -q test -pl 02_services/01_ingestion -am
 
 clean:
 	$(COMPOSE) down -v

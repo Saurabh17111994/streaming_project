@@ -1,0 +1,333 @@
+# version_matrix.yaml — DRAFT (proposed, NOT verified)
+#
+# Canonical version compatibility matrix for the Flink+Fluss trading
+# platform. Boundaries/owners mirror 01-foundation.md#version-matrix.
+#
+# IMPORTANT — read before trusting any version here:
+#   * proposed_version values are CANDIDATE versions for verification.
+#   * They are NOT verified pins. Every row's compatibility_class is
+#     UNKNOWN until the capability tests in 11-testing-and-release.md
+#     run and pass.
+#   * versions.pin (consumed by `make ddl`) still holds TO_BE_PINNED
+#     placeholders, so the DDL gate stays blocked until verified.
+#   * Populate result / observed_behavior / limitations / date only
+#     from an approved artifact, lockfile, sandbox capture, or test.
+#
+# Classes: COMPATIBLE | COMPATIBLE_WITH_LIMITATION | INCOMPATIBLE |
+#          UNKNOWN | NOT_APPLICABLE
+
+matrix_metadata:
+  schema_version: 1
+  verification_state: DRAFT_UNVERIFIED
+  description: >-
+    Proposed version compatibility matrix. Values are candidates for
+    verification, not verified pins. Classification must move from
+    UNKNOWN to COMPATIBLE via capability tests before live-money.
+  generated_from: docs/08_implementation/01-foundation.md#version-matrix
+  capability_evidence_doc: docs/08_implementation/11-testing-and-release.md
+
+boundaries:
+  - compatibility_id: VM-JAVA-001
+    boundary: Java runtime
+    proposed_version: "17.0.19"
+    evidence_source: >-
+      Eclipse Temurin 17.0.19 (Adoptium, May 2026); Flink 2.2
+      requires Java 17
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Capture running JVM version from pinned base image; assert equals
+      matrix; verify Flink 2.2 / Fluss 0.9.1 client JVM compatibility.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-PYTHON-002
+    boundary: Python runtime
+    proposed_version: "3.11.9"
+    evidence_source: "Runtime image / build record (to be captured)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Capture Python version from Executor/mock image; assert equals
+      matrix.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: OPEN
+
+  - compatibility_id: VM-FLINK-SRV-003
+    boundary: Flink server/image
+    proposed_version: "2.2.1"
+    evidence_source: "Apache Flink 2.2.1 release (flink.apache.org, May 2026)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Pin Flink image by digest; run state backend, checkpoint,
+      savepoint, rescale compatibility tests.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-FLINK-API-004
+    boundary: Flink Java API
+    proposed_version: "2.2.1"
+    evidence_source: "Apache Flink 2.2.1 dependency (Maven Central)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Lock flink-clients / flink-streaming deps; assert API equals
+      server; compile Signal/Action Capture/Executor against it.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-FLUSS-SRV-005
+    boundary: Fluss server
+    proposed_version: "0.9.1-incubating"
+    evidence_source: >-
+      Apache Fluss 0.9.1-incubating release
+      (github.com/apache/fluss, 2026) — official Docker image
+      apache/fluss:0.9.1-incubating
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Pin Fluss server by digest; run LOG/KV table, partial_update,
+      FULL changelog, replication/failover tests.
+    source_artifact: >-
+      docker-compose up (zookeeper + fluss-coordinator + fluss-tablet,
+      apache/fluss:0.9.1-incubating); coordinator leader registered,
+      tablet server 0 registered; raw_table_1 created (table id 18,
+      16 buckets, bucket leadership on tablet).
+    fixture: Docker Compose local Fluss (1 tablet), 2026-07-31
+    scenario: >-
+      Integration tests against live Docker Fluss cluster:
+      FlussAppendAckTest (100 appends) + NoBatchingTest (1000 appends) +
+      CompatFlussIntegrationTest (BYTES round-trip, LOG append-only,
+      KV upsert/lookup, partial_update merge, stale-write retention,
+      clean-break replay).
+    result: COMPATIBLE (append/ack/no-batching/BYTES/LOG/KV/partial_update)
+    observed_behavior: >-
+      100 appends acked with 0 uncertain, 0 duplicates;
+      1000 ticks -> 1000 individual appends (no application batching);
+      BYTES column round-trips byte-identical; LOG append-only readable;
+      KV upsert+lookup works; partial_update merges targeted column while
+      preserving others; last-write-wins retained; clean-break rebuild
+      converges to latest state.
+    limitations: >-
+      Local single-tablet evidence. Replication/failover, checkpoint/restore,
+      FULL changelog image, and 7-year lake reconstruction remain UNKNOWN
+      (need multi-node + tiered storage).
+    date: 2026-07-31
+    status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
+
+  - compatibility_id: VM-FLUSS-CLI-006
+    boundary: Fluss Java client
+    proposed_version: "0.9.1-incubating"
+    evidence_source: "Apache Fluss 0.9.1-incubating client (Maven Central)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Lock fluss-client dep; assert client equals server; exercise
+      BYTES/VARBINARY, routing key, bucket key.
+    source_artifact: >-
+      fluss-client-0.9.1-incubating.jar from Maven Central, installed to
+      local .m2 (API surface verified identical to prior local
+      0.9-SNAPSHOT build: ConnectionFactory, AppendWriter, GenericRow,
+      BinaryString, TablePath).
+    fixture: >-
+      Java 21 test JVM, ingestion module, --add-opens java.nio;
+      Docker Compose Fluss 0.9.1-incubating server
+    scenario: >-
+      FlussAppendAckTest + NoBatchingTest + CompatFlussIntegrationTest
+      compiled and ran against the official client jar and live Docker
+      Fluss cluster.
+    result: >-
+      COMPATIBLE (append/ack/no-batching/BYTES/LOG/KV/partial_update
+      via official client)
+    observed_behavior: >-
+      Official 0.9.1-incubating client connects to coordinator 9123,
+      routes to tablet 9124, appends 100 + 1000 rows to raw_table_1
+      with ack timestamps; BYTES/STRING columns round-trip; KV
+      upsert/lookup/partial_update work; no API breakage vs local
+      SNAPSHOT build.
+    limitations: >-
+      Compile + append/ack/no-batching/BYTES/LOG/KV/partial_update.
+      Routing/bucket-key stress, connector checkpoint, and replication
+      behavior not yet exercised.
+    date: 2026-07-31
+    status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
+
+  - compatibility_id: VM-FLUSS-CONN-007
+    boundary: Fluss Flink connector
+    proposed_version: "fluss-flink-2.2:0.9.1-incubating"
+    evidence_source: >-
+      Apache Fluss fluss-flink-2.2 0.9.1-incubating
+      (Maven Central)
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Lock fluss-flink-2.2 connector dep; assert matches Flink 2.2 +
+      server; run connector checkpoint/restore test.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-BROKER-MKT-008
+    boundary: Broker market protocol
+    proposed_version: >-
+      Arrow WebSocket market data: ds.arrow.trade (big-endian binary,
+      modes ltp/ltpc/quote/full) + socket.arrow.trade (zstd LE binary,
+      mandatory 8 Jul 2026, modes ltpc/full)
+    evidence_source: >-
+      docs.arrow.trade/rest-api/market-data + hft-stream; go-arrow
+      streams.go + hft_stream.go (symbol/token join = Token int32)
+    compatibility_class: UNKNOWN
+    evidence_owner: Ingestion
+    evidence_method: >-
+      Build versioned broker packet corpus (both feeds); assert decoder
+      handles identity (Token), timestamps, status, limits, reconnect,
+      replay, echo. Verify full-mode byte size (249 docs vs 241 SDK).
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-BROKER-PBK-009
+    boundary: Broker postback protocol
+    proposed_version: >-
+      Arrow order-updates WebSocket JSON (order-updates.arrow.trade);
+      shape mirrors OrderDetails (id, orderStatus, reportType, fills,
+      remarks=client_order_ref, token)
+    evidence_source: >-
+      go-arrow streams.go OrderStream; rest-api/orders order-book /
+      trade-book schema
+    compatibility_class: UNKNOWN
+    evidence_owner: Action Capture
+    evidence_method: >-
+      Build versioned postback corpus; assert capture handles event
+      identity, timestamps, status, replay, client-reference echo.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-ARROW-010
+    boundary: Arrow REST API
+    proposed_version: >-
+      Arrow REST API (edge.arrow.trade): POST /order/regular + auth
+      (appID/token, SHA256 token exchange, 24h token)
+    evidence_source: >-
+      rest-api/orders + authentication + response-structure;
+      go-arrow orders.go / constants.go
+    compatibility_class: UNKNOWN
+    evidence_owner: Execution
+    evidence_method: >-
+      Sandbox Arrow REST: assert request schema, auth, timeout,
+      response, broker identity (orderNo), idempotency/retry (remarks
+      = client_order_ref, max 16 chars).
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-OPENOBS-011
+    boundary: OpenObserve ingestion
+    proposed_version: "v0.91.5-amd64 (public.ecr.aws/zinclabs/openobserve)"
+    evidence_source: "docs/04_contracts/openobserve.md (self-hosted spec)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Operations
+    evidence_method: >-
+      Runtime test: assert OTLP telemetry delivery via otel-collector:4317,
+      basic-auth redaction, structured-JSON log contract, trading_alerts
+      stream from AlertThresholds, and that OpenObserve outage cannot
+      authorize orders or erase audit.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-IMAGES-012
+    boundary: Base images
+    proposed_version: >-
+      eclipse-temurin:17.0.19_9-jdk | flink:2.2.1-scala_2.12-java17 |
+      apache/fluss:0.9.1-incubating
+    evidence_source: "Registry digest / SBOM (to be captured)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Pin every image by registry digest + SBOM; CI rejects latest /
+      mutable tags / unpinned deps.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
+  - compatibility_id: VM-PERF-001
+    boundary: Mock-broker socket throughput (local loopback)
+    proposed_version: "60,000 ticks/s baseline (ING-PERF-001)"
+    evidence_source: "PerfBaselineTest (ingestion module, integration-tagged)"
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Sustained tick emission over a loopback socket for 10s with a
+      draining reader; assert >=95% of target TPS and zero wire loss.
+    source_artifact: >-
+      Fixed PerfBaselineTest harness (reader thread drains the socket;
+      previous harness stalled at 2.4k tps because nothing consumed bytes).
+    fixture: Local JVM loopback socket, mock-arrow producer, 2026-07-31
+    scenario: 10s at 60,000 ticks/s target; count emitted vs received
+    result: COMPATIBLE (59,221 ticks/s sustained, 0 wire loss)
+    observed_behavior: >-
+      emitted=592,214 received=592,214 over 10s = 59,221 ticks/s, 0 loss,
+      0 reader errors; >=95% of the 60k target sustained.
+    limitations: >-
+      Mock-broker loopback only — measures socket transport, not Fluss
+      ingestion capacity nor the real broker. The 90,000 ticks/s peak and
+      production Fluss throughput need the multi-node E2E perf campaign.
+    date: 2026-07-31
+    status: PARTIAL_EVIDENCE_LOOPBACK_60K

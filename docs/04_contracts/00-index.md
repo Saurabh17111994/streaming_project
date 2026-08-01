@@ -4,7 +4,7 @@ These contracts translate the production requirements into implementation bounda
 
 ## Status
 
-All contracts are **blocked for live-money release** until exact Arrow/OpenAlgo/Flink/Fluss versions and protocol evidence pass. The platform is pre-production, so stale schemas and contracts are replaced as a clean break.
+All contracts are **blocked for live-money release** until exact Arrow/Flink/Fluss versions and protocol evidence pass. The platform is pre-production, so stale schemas and contracts are replaced as a clean break.
 
 ## Contract reconciliation rule
 
@@ -22,16 +22,22 @@ Cross-cutting requirements apply to every contract:
 | Segment | Contract | Mandatory boundary |
 | --- | --- | --- |
 | Ingestion | `01-ingestion.md` | Original packet bytes + typed fields + bounded fingerprint |
-| Storage | `02-storage.md` | Three-node Fluss, reconciled schemas, retention/offload gate |
-| Compute | `03-compute.md` | Final 15-second candles and tested checkpoint boundary |
-| Business Logic | `04-business-logic.md` | Forming-bar candidates, reservations, immutable instructions |
+| Storage | `02-storage.md` | Fluss schemas incl. reservations, ledger, halt; EOD controller; retention/offload gate |
+| Compute | `03-compute.md` | Final candles, dedup horizon, typed handoff, tested checkpoint boundary |
+| Business Logic | `04-business-logic.md` | Instrument-keyed detection → portfolio-keyed ranking/reservation; immutable instructions |
 | Babysitter | `05-babysitter.md` | Separate checkpointed no-op in MVP |
-| Action Capture | `06-action-capture.md` | Immutable postbacks, lifecycle and position projections |
-| Executor | `07-executor.md` | Durable gate, attempts, mappings, reconciliation, OpenAlgo |
+| Action Capture | `06-action-capture.md` | Immutable postbacks, projection ledger recovery, lifecycle and position projections |
+| Executor | `07-executor.md` | Durable gate, attempts, mappings, fencing, halt consumption, reconciliation, Arrow REST |
 | Observability | `08-observability.md` | Proof of every safety/release gate |
 | Platform | `09-platform-runtime.md` | Compose local, four-VM Swarm production |
 | Ranking | `10-ranking.md` | Pure in-operator scoring/selection; no separate job |
 
-The identity model is `candidate_id`, `instruction_id`, `execution_attempt_id`, `client_order_ref`, `broker_order_id`, `trade_context_id`, `position_id`, `postback_event_id`, and future `action_id`. Generic `order_id` is prohibited across domain boundaries.
+The identity model is:
+
+- Event/entity identities: `candidate_id`, `instruction_id`, `execution_attempt_id`, `client_order_ref`, `broker_order_id`, `trade_context_id`, `position_id`, `postback_event_id`, and future `action_id`.
+- Scope identities: `account_scope_id` (broker/account isolation), `portfolio_id` (ranking/reservation/capacity boundary), `execution_partition_id` (fenced Executor ownership).
+- Control identities: `reservation_id` (portfolio capacity reservation), `halt_request_id` (durable safety-halt request).
+
+Generic `order_id` is prohibited across domain boundaries.
 
 Every contract must define its owner, inputs, outputs, state/identity rules, delivery guarantee, failure behavior, observability, and acceptance evidence. Exact external protocol values, connector semantics, and unsupported DDL properties remain evidence-gated until pinned tests pass.

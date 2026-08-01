@@ -9,15 +9,65 @@
 
 Compose behavior SHALL not be presented as proof of production HA.
 
+## Constraints
+
+- Production manifests SHALL pin exact immutable image versions/digests. `latest`, version ranges, and unpinned tags are prohibited.
+- Production SHALL use Docker Swarm secrets with least-privilege service identities. Secrets SHALL NOT be embedded in images, stack files, logs, command lines, or environment dumps.
+- TLS or an equivalent authenticated encrypted transport SHALL be mandatory for broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic. "Where supported" is not sufficient.
+- Flink checkpoints/savepoints SHALL use encrypted, versioned S3 storage. Local volumes are not production checkpoint durability.
+- Fluss data volumes SHALL be durable per workload node with tested replication/recovery. Three-node replication/quorum SHALL prevent replica co-location on a single VM.
+- Money-moving audit records SHALL be encrypted at rest in the lake tier and retained for seven years per the data requirements.
+- Only explicitly required operator/UI/API endpoints SHALL be exposed through controlled ingress/firewall rules. Internal RPC, checkpoint, and service ports SHALL NOT be publicly exposed.
+- The observability VM SHALL NOT be required for order-safety correctness. Loss of the observability VM SHALL NOT authorize orders or erase execution audit.
+- Schema-breaking clean-break migrations are allowed only before live-money release and require destructive-change approval and reset/replay plan.
+
+## Assumptions
+
+| ID | Assumption | Source |
+| --- | --- | --- |
+| ASM-PF-001 | Four VMs can sustain the normal production baseline of 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average) while one HA VM is unavailable. | ASM-005, RISK-010 |
+| ASM-PF-002 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | ASM-009 |
+| ASM-PF-003 | S3 `ap-south-1` can complete verified EOD offload of a full trading day within 30 minutes. | ASM-006 |
+| ASM-PF-004 | Loss of any one workload VM at normal load is detected and the safe-halt completes within five seconds. | REQ-PF-002, RISK-003 |
+| ASM-PF-005 | Fluss data recovery under 30 seconds after a clean VM restart is achievable at the normal workload. | REQ-PF-002 |
+| ASM-PF-006 | Docker Swarm provides a fencing/leadership mechanism sufficient for single-active-owner enforcement per `execution_partition_id`. | ASM-005, REQ-EXE-008, REQ-PF-006 |
+
+Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
+
+## Accepted Behaviors
+
+These behaviors are conscious trade-offs accepted by the platform:
+
+- **Compose is not production HA:** Local Docker Compose proves component integration and deterministic tests. It does not prove production replication, quorum, TLS, secret management, or VM-loss tolerance.
+- **Observability VM is not critical-path:** The observability VM hosts OpenObserve. Its loss does not halt orders or erase audit. However, Executor independently halts when mandatory execution audit delivery is unavailable.
+- **New order placement is disabled at startup:** Infrastructure services may start concurrently, but new orders wait for the full readiness chain: schemas, replication, running/checkpointing jobs, explicitly enabled gate, valid broker credentials, and healthy observability.
+- **Rollback defaults to halted:** Money-moving changes begin with the gate halted, reconciliation complete, and controlled enablement. Rollback preserves schema/state readability and defaults to halted when uncertain.
+- **Pre-production clean break:** Schema-breaking migrations are permitted before live money. After go-live, schema changes follow the compatibility, replay, and rollback contract.
+
+## Out of Scope
+
+The following capabilities are explicitly NOT owned by Platform/Runtime:
+
+- **Market data ingestion, broker connection, and packet decoding:** Owned by Ingestion.
+- **Candle computation, signal detection, strategy evaluation, ranking, and instruction publication:** Owned by the Signal Flink job.
+- **Broker order submission, execution, and gate management:** Owned by the Executor.
+- **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
+- **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
+- **EOD controller orchestration and manifest creation:** Owned by the EOD controller.
+- **Observability backend, dashboard, and alert configuration:** Owned by the observability layer and operations.
+- **Kubernetes deployment:** Deferred. Production is Docker Swarm.
+- **Multi-broker or multi-region deployment:** Deferred; not in MVP scope.
+- **Automatic live-gap backfill or historical replay:** Deferred; not in MVP scope.
+
 ## REQ-PF-001: Exact versions
 
-Production manifests SHALL pin exact immutable image versions/digests for Fluss, Flink, OpenAlgo, OpenObserve, and all project services. `latest` and version ranges are prohibited. Exact Java, Python, protocol/SDK, connector, and plugin versions are release inputs.
+Production manifests SHALL pin exact immutable image versions/digests for Fluss, Flink, Arrow REST, OpenObserve, and all project services. `latest` and version ranges are prohibited. Exact Java, Python, protocol/SDK, connector, and plugin versions are release inputs.
 
 ## REQ-PF-002: Production Swarm placement
 
 The three workload VMs SHALL host Fluss replicas/quorum and Flink workload capacity with constraints preventing replica co-location. The observability VM SHALL not be required for order-safety correctness. Placement, resources, update order, restart policy, health checks, and rollback are explicit in the stack definition.
 
-Loss of any one workload VM SHALL be tested at 75,000 ticks/s. The test proves replica/quorum behavior, Flink recovery from S3 checkpoints, bounded backlog, data recovery under 30 seconds, and safe order halt under five seconds.
+Loss of any one workload VM SHALL be tested at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average). The test proves replica/quorum behavior, Flink recovery from S3 checkpoints, bounded backlog, data recovery under 30 seconds, and safe order halt under five seconds.
 
 ## REQ-PF-003: Networking
 
@@ -27,7 +77,7 @@ Local Compose uses an isolated bridge. Production uses encrypted Swarm overlay n
 
 Local development may use ignored `.env` files. Production SHALL use Docker Swarm secrets with least-privilege service identities. Secrets are not embedded in images, stack files, logs, command lines, or environment dumps.
 
-Rotation/revocation procedures cover broker credentials, OpenAlgo keys, S3 credentials, OpenObserve credentials, TLS material, and operator identities. Rotation tests include expired/revoked credentials and confirm alerting/readiness behavior.
+Rotation/revocation procedures cover broker credentials, Arrow REST keys, S3 credentials, OpenObserve credentials, TLS material, and operator identities. Rotation tests include expired/revoked credentials and confirm alerting/readiness behavior.
 
 ## REQ-PF-005: Persistent storage
 
@@ -40,7 +90,7 @@ Local named volumes are not production durability.
 
 ## REQ-PF-006: Service topology
 
-Required deployables are Fluss coordinator/quorum and tablets, Flink control/workers, Ingestion, Signal/Babysitter job submitter, Action Capture/position projector, Executor, OpenAlgo, and OpenObserve. Executor supports fencing/single active owner for each account/order partition.
+Required deployables are Fluss coordinator/quorum and tablets, Flink control/workers, Ingestion, Signal/Babysitter job submitter, Action Capture/position projector, Executor, and OpenObserve. Executor supports fencing/single active owner for each account/order partition.
 
 ## REQ-PF-007: Startup and readiness
 
@@ -50,7 +100,7 @@ Infrastructure may start concurrently, but services become ready only after depe
 - Fluss quorum and replication are healthy.
 - Signal and Babysitter jobs are running/checkpointing.
 - Executor state is durable and gate is explicitly enabled through approved process.
-- Broker/OpenAlgo contracts and credentials are valid.
+- Broker/Arrow REST contracts and credentials are valid.
 - Changelog continuity and observability are healthy.
 
 Startup dependency declarations alone do not satisfy readiness.
@@ -65,19 +115,21 @@ Schema-breaking clean-break migrations are allowed only before live-money releas
 
 The production-like Swarm environment SHALL pass:
 
-1. 75,000 ticks/s for a full session with decision p99 <100 ms.
-2. 112,500 ticks/s for at least 30 minutes.
-3. 150,000 ticks/s for at least 60 minutes with bounded saturation/recovery.
-4. One workload VM loss at normal load.
-5. EOD full-volume manifest verification under 30 minutes target.
-6. No duplicate broker order in crash-window injection.
+1. variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session with decision p99 <100 ms.
+2. One workload VM loss at the per-instrument production rate.
+3. EOD full-volume manifest verification under 30 minutes target.
+4. No duplicate broker order in crash-window injection.
 
 ## REQ-PF-010: Security acceptance
 
 Tests cover network exposure, TLS, secret scanning/redaction, rotation/revocation, least privilege, unauthorized gate/resume attempts, encrypted storage, audit access, image pinning/SBOM/vulnerability policy, and recovery from a compromised credential.
 
+## REQ-PF-011: N+1 resource and recovery budget
 
+The production-like Swarm environment SHALL document per-VM CPU, memory, network, disk, Flink slots, Fluss tablet/quorum capacity, checkpoint bandwidth, and catch-up service rate. After loss of any one workload VM, the remaining placement SHALL sustain the declared 90,000 ticks/s peak profile within the declared backlog, checkpoint, durability, and recovery thresholds.
 
-> 
+The one-VM test SHALL report detection, safe halt, job restore, source catch-up, steady-state recovery, Fluss re-replication, and maximum backlog separately.
 
- 
+## REQ-PF-012: Sensitive transport encryption
+
+TLS or an equivalent authenticated encrypted transport SHALL be mandatory for broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic. Exceptions require explicit scope, data classification, isolation, risk owner, expiry, and approval; “where supported” is not sufficient for production readiness.
