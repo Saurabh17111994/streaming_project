@@ -116,9 +116,21 @@ export FLUSS_BOOTSTRAP_SERVERS="$FLUSS_BOOTSTRAP"
 export RAW_TABLE_NAME="${RAW_TABLE_NAME:-raw_table_1}"
 export ARROW_BRIDGE_BIN="$BRIDGE_DIR/arrow-bridge"
 export ARROW_INSTRUMENT_MANIFEST="$MANIFEST"
+# Java loader reads INSTRUMENT_MANIFEST_PATH (not ARROW_INSTRUMENT_MANIFEST);
+# export both so the pipeline can start.
+export INSTRUMENT_MANIFEST_PATH="$MANIFEST"
 export ARROW_USE_STANDARD="${ARROW_USE_STANDARD:-false}"
 export ARROW_HFT_LATENCY_MS="${ARROW_HFT_LATENCY_MS:-50}"
 export NTP_SERVER="${NTP_SERVER:-ntp.ubuntu.com,time.google.com,in.pool.ntp.org}"
+# Timestamp-freshness evidence-gated values (plan B3; user-approved 2026-08-01:
+# ARROW_MAX_EVENT_AGE_MS=5000 / ARROW_MAX_FUTURE_EVENT_SKEW_MS=2000). Required by
+# IngestionConfig at startup — no code default, so must be exported here.
+export ARROW_MAX_EVENT_AGE_MS="${ARROW_MAX_EVENT_AGE_MS:-5000}"
+export ARROW_MAX_FUTURE_EVENT_SKEW_MS="${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}"
 export ALLOW_RUNTIME_DDL
 mkdir -p "$LOG_DIR"
-java -jar "$JAVA_DIR/target/ingestion.jar" 2>&1 | tee "$LOG_DIR/ingestion.log"
+# --add-opens required by the Fluss client's shaded Arrow (MemoryUtil touches
+# java.nio internals on JDK 17+). Same flag the pom's surefire and
+# run-ingestion-full.sh use.
+java --add-opens=java.base/java.nio=ALL-UNNAMED \
+	-jar "$JAVA_DIR/target/ingestion.jar" 2>&1 | tee "$LOG_DIR/ingestion.log"
