@@ -401,6 +401,8 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 				}
 			case <-ctx.Done():
 				return
+			case <-epochStop:
+				return
 			}
 		}
 	}()
@@ -417,6 +419,8 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 					return
 				}
 			case <-ctx.Done():
+				return
+			case <-epochStop:
 				return
 			}
 		}
