@@ -15,9 +15,14 @@ if [[ ! "$LIMIT" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-if ! (exec 3<>/dev/tcp/127.0.0.1/9123) 2>/dev/null; then
-  cat >&2 <<'EOF'
-Local Fluss is not running on localhost:9123.
+# R-273: honor FLUSS_BOOTSTRAP (falling back to localhost:9123) so the
+# pre-flight probe checks the same endpoint the viewer will actually use.
+FLUSS_BOOTSTRAP="${FLUSS_BOOTSTRAP:-localhost:9123}"
+FLUSS_HOST="${FLUSS_BOOTSTRAP%%:*}"
+FLUSS_PORT="${FLUSS_BOOTSTRAP##*:}"
+if ! (exec 3<>/dev/tcp/"$FLUSS_HOST"/"$FLUSS_PORT") 2>/dev/null; then
+  cat >&2 <<EOF
+Local Fluss is not running on $FLUSS_BOOTSTRAP.
 Start the local cluster first, then run this command again.
 EOF
   exit 1

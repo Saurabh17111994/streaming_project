@@ -59,7 +59,8 @@ services:
       FLUSS_TABLET_HOST: fluss-tablet
       FLUSS_PROPERTIES: |
         zookeeper.address: zookeeper:2181
-        bind.listeners: INTERNAL://fluss-coordinator:0, CLIENT://fluss-coordinator:9123
+        bind.listeners: INTERNAL://fluss-coordinator:0,
+          CLIENT://fluss-coordinator:9123
         advertised.listeners: CLIENT://localhost:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
@@ -109,8 +110,11 @@ services:
   ingestion:
     <<: *fluss-common
     build:
-      context: ../../02_services/01_ingestion
-      dockerfile: Dockerfile
+      # The Dockerfile COPYs the parent POM, the common module, and the
+      # ingestion module, so the build context MUST be the Maven reactor
+      # root (code/ = ../.. from 01_docker/), not the ingestion directory.
+      context: ../..
+      dockerfile: 02_services/01_ingestion/Dockerfile
     depends_on: [fluss-coordinator, fluss-tablet]
     environment:
       ARROW_APP_ID: ${ARROW_APP_ID}
@@ -121,8 +125,13 @@ services:
       ARROW_USE_STANDARD: ${ARROW_USE_STANDARD:-false}
       ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
-      FLUSS_BOOTSTRAP_SERVERS: fluss-coordinator:9123
       INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
+      ARROW_INSTRUMENT_MANIFEST: /instruments/NSE_CM_EQUITY.csv
+      # IngestionConfig treats these as required (no code default) — the
+      # container must pass them or the Java service exits at startup.
+      RAW_TABLE_NAME: ${RAW_TABLE_NAME:-raw_table_1}
+      ARROW_MAX_EVENT_AGE_MS: ${ARROW_MAX_EVENT_AGE_MS:-5000}
+      ARROW_MAX_FUTURE_EVENT_SKEW_MS: ${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}
       READINESS_FILE_PATH: /tmp/ingestion.ready
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/ingestion.ready"]

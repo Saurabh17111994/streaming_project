@@ -19,7 +19,10 @@
 set -euo pipefail
 
 # ── Config (edit these, or override via env when you run the script) ──────────
-PROJECT_ROOT="${PROJECT_ROOT:-/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/streaming_project}"
+# R-132: derive PROJECT_ROOT from the script location (repo root) — portable
+# to any checkout; keep the absolute path only as an env override.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$SCRIPT_DIR}"
 CODE_DIR="${CODE_DIR:-$PROJECT_ROOT/code}"
 COMPOSE_DIR="${COMPOSE_DIR:-$CODE_DIR/01_platform/01_docker}"
 COMPOSE_FILE="${COMPOSE_FILE:-$COMPOSE_DIR/docker-compose.yml}"
@@ -31,11 +34,26 @@ DDL_DIR="${DDL_DIR:-$CODE_DIR/01_platform/02_sql/ddl}"
 FLUSS_BOOTSTRAP="${FLUSS_BOOTSTRAP:-localhost:9123}"
 ALLOW_RUNTIME_DDL="${ALLOW_RUNTIME_DDL:-true}"   # local dev only; production must be false
 GO_FLAGS="${GO_FLAGS:-}"                          # e.g. GO_FLAGS=-tags=netgo
-MVN_FLAGS="${MVN_FLAGS:--o}"                      # -o = offline (use cached deps)
+# R-228: default to ONLINE maven (a fresh machine has an empty ~/.m2 and
+# `-o` fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
+MVN_FLAGS="${MVN_FLAGS:-}"
 LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs}"
 
 log()  { printf '\033[1;36m[start-all]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[start-all] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# R-228: tool preflight — a missing tool must fail with an actionable message.
+for tool in java go mvn docker awk; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		die "required tool '$tool' not found on PATH"
+	fi
+done
+[ -d "$CODE_DIR" ] || die "CODE_DIR not found: $CODE_DIR"
+
+# R-132: validate the manifest explicitly (the default filename contains a space).
+if [ ! -f "$MANIFEST" ]; then
+	die "instrument manifest not found: $MANIFEST (set ARROW_INSTRUMENT_MANIFEST)"
+fi
 
 # ── 1. Arrow credentials ───────────────────────────────────────────────────────
 # Preferred source: ~/.env.arrow (git-ignored, outside the repo).
@@ -48,9 +66,14 @@ if [ -f "$SECRETS_FILE" ]; then
 	source "$SECRETS_FILE"
 	log "credentials from $SECRETS_FILE"
 elif [ -f "$COMPOSE_DIR/.env" ]; then
-	# Extract only ARROW_* assignments, eval each with proper quoting.
+	# R-052 (security): extract ARROW_* assignments WITHOUT eval. `export
+	# "$key=$value"` is a single quoted assignment argument — the shell never
+	# re-evaluates the value, so shell metacharacters in secrets stay inert.
 	while IFS= read -r line; do
-		eval "export ${line?}"
+		key="${line%%=*}"
+		value="${line#*=}"
+		[ -n "$key" ] || continue
+		export "$key=$value"
 	done < <(awk -F= '/^ARROW_[A-Z_]+=/ {print $1 "=" substr($0, index($0,"=")+1)}' "$COMPOSE_DIR/.env")
 	log "no $SECRETS_FILE — using ARROW_* credentials from $COMPOSE_DIR/.env"
 else
@@ -78,14 +101,19 @@ export ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN ARROW_USER_ID ARROW_PASSWORD AR
 log "credentials OK (from $SECRETS_FILE)"
 
 # ── 2. Start Fluss core if not running ────────────────────────────────────────
-if ! nc -z "${FLUSS_BOOTSTRAP%:*}" "${FLUSS_BOOTSTRAP##*:}" 2>/dev/null; then
+# R-167: use bash's /dev/tcp instead of `nc` (not installed everywhere).
+fluss_up() {
+	(exec 3<>"/dev/tcp/${FLUSS_BOOTSTRAP%:*}/${FLUSS_BOOTSTRAP##*:}") 2>/dev/null
+}
+
+if ! fluss_up; then
 	log "Fluss not running — starting zookeeper + coordinator + tablet..."
 	# The .env supplies FLUSS_IMAGE etc.; fail loudly if it's missing.
 	[ -f "$COMPOSE_DIR/.env" ] || die "missing $COMPOSE_DIR/.env (copy from Arrow_broker/.env and fill in FLUSS_IMAGE)"
 	( cd "$COMPOSE_DIR" && docker compose up -d zookeeper fluss-coordinator fluss-tablet )
 	log "waiting for Fluss coordinator on $FLUSS_BOOTSTRAP..."
 	for i in $(seq 1 30); do
-		if nc -z "${FLUSS_BOOTSTRAP%:*}" "${FLUSS_BOOTSTRAP##*:}" 2>/dev/null; then break; fi
+		if fluss_up; then break; fi
 		sleep 2
 		[ "$i" = 30 ] && die "Fluss did not come up on $FLUSS_BOOTSTRAP after 60s — check docker compose logs"
 	done

@@ -2,9 +2,11 @@
 # Run from the repo root: make <target>
 
 COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
-MVN := mvn
+# R-143: default to ONLINE maven (a fresh checkout has an empty ~/.m2 and -o
+# fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
+MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion
 
 help:
 	@echo "Targets:"
@@ -15,9 +17,14 @@ help:
 	@echo "  logs   tail compose logs"
 	@echo "  build  build all service images"
 	@echo "  clean  stop stack + remove volumes"
+	@echo "  cep-check   fail if Flink CEP is referenced (project policy)"
+	@echo "  test        run unit tests (common + ingestion)"
+	@echo "  test-ingestion  run only the ingestion module tests"
 
 env:
-	@if [ ! -f code/01_platform/01_docker/.env ]; then cp code/01_platform/01_docker/.env.example code/01_platform/01_docker/.env; fi
+	@if [ ! -f code/01_platform/01_docker/.env ]; then \
+		cp code/01_platform/01_docker/.env.example code/01_platform/01_docker/.env; \
+	fi
 	@echo "Created code/01_platform/01_docker/.env — edit it with real secrets."
 
 ddl:
@@ -35,20 +42,20 @@ logs:
 	$(COMPOSE) logs -f
 
 build:
-	cd code && $(MVN) -o -q package -pl 02_services/01_ingestion -am -DskipTests
+	cd code && $(MVN) -q package -pl 02_services/01_ingestion -am -DskipTests
 
 # Fail the build if Apache Flink CEP (Complex Event Processing) is referenced.
 # Project rule: no CEP dependency in the MVP order path.
 cep-check:
 	@bash code/01_platform/04_scripts/cep_guard.sh .
 
-# Run all unit tests (common + ingestion modules, offline mode).
+# Run all unit tests (common + ingestion modules).
 test:
-	cd code && $(MVN) -o -q test -pl common,02_services/01_ingestion
+	cd code && $(MVN) -q test -pl common,02_services/01_ingestion
 
 # Run only the ingestion module tests.
 test-ingestion:
-	cd code && $(MVN) -o -q test -pl 02_services/01_ingestion -am
+	cd code && $(MVN) -q test -pl 02_services/01_ingestion -am
 
 clean:
 	$(COMPOSE) down -v

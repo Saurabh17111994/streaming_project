@@ -41,10 +41,30 @@ def fail(msg: str) -> None:
     sys.stderr.write(f"FAIL: {msg}\n")
 
 
+def _as_str(row, key):
+    """Return a trimmed string for a YAML value, coercing non-string scalars
+    (YAML parses `2.2` as float, `2024-01-01` as date, `true` as bool — R-093)."""
+    v = row.get(key)
+    return str(v).strip() if v is not None else ""
+
+
 def verify(path: Path) -> int:
     errors = 0
-    with path.open(encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # R-092: malformed YAML must fail with a clear message, not a traceback.
+        fail(f"cannot parse {path}: {exc}")
+        return 1
+
+    if doc is None:
+        # R-092: empty or comment-only file parses to None.
+        fail(f"{path} is empty (no YAML document)")
+        return 1
+    if not isinstance(doc, dict):
+        fail(f"{path}: top-level YAML must be a mapping, got {type(doc).__name__}")
+        return 1
 
     boundaries = doc.get("boundaries")
     if not isinstance(boundaries, list) or not boundaries:
@@ -52,11 +72,16 @@ def verify(path: Path) -> int:
         return 1
 
     for row in boundaries:
-        cid = row.get("compatibility_id", "<no-id>")
-        version = (row.get("proposed_version") or "").strip()
-        owner = (row.get("evidence_owner") or "").strip()
-        method = (row.get("evidence_method") or "").strip()
-        cls = (row.get("compatibility_class") or "").strip().upper()
+        if not isinstance(row, dict):
+            # R-093: a non-mapping row must be flagged, not crash the validator.
+            fail(f"matrix row is not a mapping: {row!r}")
+            errors += 1
+            continue
+        cid = _as_str(row, "compatibility_id") or "<no-id>"
+        version = _as_str(row, "proposed_version")
+        owner = _as_str(row, "evidence_owner")
+        method = _as_str(row, "evidence_method")
+        cls = _as_str(row, "compatibility_class").upper()
 
         if not version:
             fail(f"{cid}: proposed_version is empty (must be pinned)")

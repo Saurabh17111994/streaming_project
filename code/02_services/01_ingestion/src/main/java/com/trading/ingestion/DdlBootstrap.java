@@ -1,6 +1,7 @@
 package com.trading.ingestion;
 
 import java.util.List;
+import java.util.Map;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -13,13 +14,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * One-time DDL bootstrap. Creates the {@code default} database and all
- * 19 platform tables with correct bucket routing. Fluss infers the
- * column schema from the first {@code AppendWriter.append(GenericRow)}
- * call, so we only need table existence + bucket distribution.
+ * DDL bootstrap and read-only schema verification for the platform tables.
  *
- * <p>Idempotent — skips already-existing resources.
- * Call once at ingestion startup; blocks until all tables confirmed.
+ * <p><b>Create-only, never destructive.</b> This class never drops, alters,
+ * or recreates an existing table: schema reconciliation is owned by the
+ * offline DDL gate ({@code ddl_apply.py} / {@code schema_manifest.json}), not
+ * by a runtime bootstrap. A column-count heuristic must never decide to drop
+ * DDL-provisioned state.
+ *
+ * <p>Two entry points:
+ * <ul>
+ *   <li>{@link #verifyTables(String)} — read-only. Confirms the default
+ *       database exists and every expected table exists. For the tables this
+ *       service actually writes ({@link #OWNED_TABLES}) it additionally checks
+ *       the exact DDL column count, so a schema drift is caught at startup.
+ *       Other platform tables are existence-checked only — their owning
+ *       services are not built yet, so their in-code placeholder schemas must
+ *       not be compared by column count.</li>
+ *   <li>{@link #ensureTables(String)} — local-development only. Creates any
+ *       missing table with its bucket routing. Idempotent; never touches
+ *       existing tables.</li>
+ * </ul>
  */
 public final class DdlBootstrap {
 
@@ -29,10 +44,13 @@ public final class DdlBootstrap {
 
     /**
      * Read-only verification that the default database and all expected tables
-     * exist with the expected column count. Never creates, drops, or alters
-     * anything. This is the default production start path.
+     * exist. For the tables this service owns (writes) the exact DDL column
+     * count is verified; for the remaining platform tables only existence is
+     * checked. Never creates, drops, or alters anything. This is the default
+     * production start path.
      *
-     * @return true if every expected table exists with the expected column count
+     * @return true if the database exists, every expected table exists, and
+     *         every owned table has the expected column count
      */
     public static boolean verifyTables(String bootstrapServers) {
         Configuration conf = new Configuration();
@@ -49,20 +67,26 @@ public final class DdlBootstrap {
             }
 
             int ok = 0, missing = 0, schemaMismatch = 0;
-            for (var entry : ALL_TABLES.entrySet()) {
+            for (Map.Entry<String, TableDescriptor> entry : ALL_TABLES.entrySet()) {
                 String name = entry.getKey();
                 TableDescriptor td = entry.getValue();
                 TablePath path = TablePath.of("default", name);
 
                 try {
                     org.apache.fluss.metadata.TableInfo ti = c.getTable(path).getTableInfo();
-                    int existingCols = ti.getRowType().getFieldCount();
-                    int expectedCols = td.getSchema().getColumns().size();
-                    if (existingCols != expectedCols) {
-                        LOG.error("ddl-bootstrap: default.{} has {} cols, expected {} — schema mismatch",
-                                name, existingCols, expectedCols);
-                        schemaMismatch++;
+                    if (OWNED_TABLES.contains(name)) {
+                        int existingCols = ti.getRowType().getFieldCount();
+                        int expectedCols = td.getSchema().getColumns().size();
+                        if (existingCols != expectedCols) {
+                            LOG.error("ddl-bootstrap: default.{} has {} cols, expected {} — schema mismatch",
+                                    name, existingCols, expectedCols);
+                            schemaMismatch++;
+                        } else {
+                            ok++;
+                        }
                     } else {
+                        // Not owned by this service yet — existence is enough;
+                        // column layout is the owning service's contract.
                         ok++;
                     }
                 } catch (Exception e) {
@@ -92,8 +116,14 @@ public final class DdlBootstrap {
 
     /**
      * Ensure all platform tables exist on the given Fluss cluster.
-     * MUTATES: creates or drops/recreates tables. Only for local development.
-     * Returns true if successful.
+     *
+     * <p><b>Create-only:</b> existing tables are never dropped or recreated,
+     * even when their column count differs from the in-code schema — schema
+     * reconciliation belongs to the offline DDL gate. Intended for local
+     * development; production should apply the DDLs out-of-band and start
+     * through {@link #verifyTables(String)}.
+     *
+     * @return true if every table exists (created or already present)
      */
     public static boolean ensureTables(String bootstrapServers) {
         Configuration conf = new Configuration();
@@ -107,41 +137,23 @@ public final class DdlBootstrap {
             ensureDatabase(admin, "default");
 
             int ok = 0, failed = 0;
-            for (var entry : ALL_TABLES.entrySet()) {
+            for (Map.Entry<String, TableDescriptor> entry : ALL_TABLES.entrySet()) {
                 String name = entry.getKey();
                 TableDescriptor td = entry.getValue();
                 TablePath path = TablePath.of("default", name);
 
                 try {
+                    if (admin.tableExists(path).get()) {
+                        LOG.debug("ddl-bootstrap: default.{} already exists", name);
+                        ok++;
+                        continue;
+                    }
                     admin.createTable(path, td, false).get();
-                    LOG.info("ddl-bootstrap: ✓ default.{}", name);
+                    LOG.info("ddl-bootstrap: ✓ default.{} created", name);
                     ok++;
                 } catch (Exception e) {
-                    String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-                    if (msg.contains("already exist")) {
-                        // Table exists. Check column count — drop + recreate if schema mismatch.
-                        try {
-                            org.apache.fluss.metadata.TableInfo ti = c.getTable(path).getTableInfo();
-                            int existingCols = ti.getRowType().getFieldCount();
-                            int expectedCols = td.getSchema().getColumns().size();
-                            if (existingCols != expectedCols) {
-                                LOG.warn("ddl-bootstrap: default.{} has {} cols, expected {} — dropping and recreating",
-                                        name, existingCols, expectedCols);
-                                admin.dropTable(path, false).get();
-                                admin.createTable(path, td, false).get();
-                                LOG.info("ddl-bootstrap: ✓ default.{} recreated with {} cols", name, expectedCols);
-                            } else {
-                                LOG.debug("ddl-bootstrap: default.{} already exists ({} cols)", name, existingCols);
-                            }
-                            ok++;
-                        } catch (Exception inner) {
-                            LOG.warn("ddl-bootstrap: default.{} already exists, skip schema check: {}", name, inner.getMessage());
-                            ok++;
-                        }
-                    } else {
-                        LOG.error("ddl-bootstrap: ✗ default.{} — {}", name, e.getMessage());
-                        failed++;
-                    }
+                    LOG.error("ddl-bootstrap: ✗ default.{} — {}", name, e.getMessage());
+                    failed++;
                 }
             }
 
@@ -169,6 +181,14 @@ public final class DdlBootstrap {
     }
 
     // ── Table registry: name → descriptor (bucket routing only) ──────
+
+    /**
+     * Tables this service writes and therefore verifies by exact column count
+     * against the DDL. All other tables are existence-checked only until their
+     * owning service is built.
+     */
+    private static final List<String> OWNED_TABLES =
+            List.of("raw_table_1", "suspected_discontinuities", "ingestion_quarantine");
 
     /** Full 28-column schema for raw_table_1 matching the DDL. */
     private static final Schema RAW_TABLE_1_SCHEMA = Schema.newBuilder()
@@ -202,44 +222,49 @@ public final class DdlBootstrap {
             .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
             .build();
 
-    /** Full 18-column schema for Postback_Quarantine matching QuarantineWriter. */
+    /** Full 13-column schema for Postback_Quarantine matching DDL 16. */
     private static final Schema POSTBACK_QUARANTINE_SCHEMA = Schema.newBuilder()
             .column("quarantine_id", org.apache.fluss.types.DataTypes.STRING())
             .column("postback_event_id", org.apache.fluss.types.DataTypes.STRING())
             .column("reason", org.apache.fluss.types.DataTypes.STRING())
+            .column("original_payload", org.apache.fluss.types.DataTypes.BYTES())
+            .column("payload_hash", org.apache.fluss.types.DataTypes.STRING())
             .column("broker_order_id", org.apache.fluss.types.DataTypes.STRING())
-            .column("client_order_ref", org.apache.fluss.types.DataTypes.STRING())
-            .column("broker_status", org.apache.fluss.types.DataTypes.STRING())
-            .column("broker_timestamp", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("instruction_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("correlation_attempt", org.apache.fluss.types.DataTypes.STRING())
+            .column("disposition", org.apache.fluss.types.DataTypes.STRING())
+            .column("disposition_reason", org.apache.fluss.types.DataTypes.STRING())
+            .column("quarantined_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("disposition_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .build();
+
+    /** Full 11-column schema for suspected_discontinuities matching DDL 19. */
+    private static final Schema DISCONTINUITY_SCHEMA = Schema.newBuilder()
+            .column("discontinuity_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("source", org.apache.fluss.types.DataTypes.STRING())
+            .column("reason", org.apache.fluss.types.DataTypes.STRING())
+            .column("connection_epoch", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("last_tick_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("last_tick_fingerprint", org.apache.fluss.types.DataTypes.STRING())
+            .column("last_tick_token", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("last_tick_exchange", org.apache.fluss.types.DataTypes.STRING())
+            .column("last_tick_symbol", org.apache.fluss.types.DataTypes.STRING())
+            .column("detected_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .build();
+
+    /** Full 10-column schema for ingestion_quarantine matching DDL 21 and QuarantineWriter. */
+    private static final Schema INGESTION_QUARANTINE_SCHEMA = Schema.newBuilder()
+            .column("quarantine_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("reason", org.apache.fluss.types.DataTypes.STRING())
             .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
             .column("exchange", org.apache.fluss.types.DataTypes.STRING())
             .column("symbol", org.apache.fluss.types.DataTypes.STRING())
             .column("raw_payload", org.apache.fluss.types.DataTypes.BYTES())
             .column("payload_hash", org.apache.fluss.types.DataTypes.STRING())
             .column("detected_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("status", org.apache.fluss.types.DataTypes.STRING())
-            .column("resolution_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("resolution_note", org.apache.fluss.types.DataTypes.STRING())
-            .column("operator_identity", org.apache.fluss.types.DataTypes.STRING())
-            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
-            .build();
-
-    /** Full 15-column schema for suspected_discontinuities matching DiscontinuityWriter. */
-    private static final Schema DISCONTINUITY_SCHEMA = Schema.newBuilder()
-            .column("discontinuity_id", org.apache.fluss.types.DataTypes.STRING())
-            .column("connection_id", org.apache.fluss.types.DataTypes.STRING())
-            .column("connection_epoch", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
-            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
-            .column("reason", org.apache.fluss.types.DataTypes.STRING())
-            .column("before_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("after_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("before_fingerprint", org.apache.fluss.types.DataTypes.STRING())
-            .column("after_fingerprint", org.apache.fluss.types.DataTypes.STRING())
-            .column("detected_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("status", org.apache.fluss.types.DataTypes.STRING())
-            .column("note", org.apache.fluss.types.DataTypes.STRING())
+            .column("detail", org.apache.fluss.types.DataTypes.STRING())
             .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
             .build();
 
@@ -268,8 +293,12 @@ public final class DdlBootstrap {
             .column("contract_version", org.apache.fluss.types.DataTypes.INT())
             .build();
 
-    // Minimal schema for other platform tables (not yet accessed by services).
-    // Each table's schema will be expanded when the owning service is built.
+    /**
+     * Minimal placeholder schema for platform tables whose owning service is
+     * not built yet. These tables are only existence-checked at runtime — the
+     * full DDL (applied by the offline DDL gate) is authoritative for their
+     * column layout.
+     */
     private static final Schema MINIMAL_SCHEMA = Schema.newBuilder()
             .column("instrument_token", org.apache.fluss.types.DataTypes.STRING())
             .column("execution_partition_id", org.apache.fluss.types.DataTypes.STRING())
@@ -294,48 +323,60 @@ public final class DdlBootstrap {
                 .build();
     }
 
-    private static final java.util.Map<String, TableDescriptor> ALL_TABLES =
-            java.util.Map.ofEntries(
-                    java.util.Map.entry("raw_table_1",
+    /** Package-private accessor for tests (schema-agreement guard). */
+    static Map<String, TableDescriptor> tableRegistry() {
+        return ALL_TABLES;
+    }
+
+    /** Package-private accessor for tests. */
+    static List<String> ownedTables() {
+        return OWNED_TABLES;
+    }
+
+    private static final Map<String, TableDescriptor> ALL_TABLES =
+            Map.ofEntries(
+                    Map.entry("raw_table_1",
                             TableDescriptor.builder()
                                     .schema(RAW_TABLE_1_SCHEMA)
                                     .distributedBy(16, "instrument_token")
                                     .build()),
-                    java.util.Map.entry("feature_candles_15s",
+                    Map.entry("feature_candles_15s",
                             logTable("instrument_token")),
-                    java.util.Map.entry("Signal_Candidates",
+                    Map.entry("Signal_Candidates",
                             logTable("instrument_token")),
-                    java.util.Map.entry("Ranking_Results",
+                    Map.entry("Ranking_Results",
                             logTable("execution_partition_id")),
-                    java.util.Map.entry("Trade_Decisions",
+                    Map.entry("Trade_Decisions",
                             logTable("execution_partition_id")),
-                    java.util.Map.entry("Fills",
+                    Map.entry("Fills",
                             logTable("portfolio_id")),
-                    java.util.Map.entry("Execution_Audit",
+                    Map.entry("Execution_Audit",
                             logTable("execution_partition_id")),
-                    java.util.Map.entry("Postback_Quarantine",
+                    Map.entry("Postback_Quarantine",
                             TableDescriptor.builder().schema(POSTBACK_QUARANTINE_SCHEMA).distributedBy(8, "quarantine_id").build()),
-                    java.util.Map.entry("Safety_Halt_Requests",
+                    Map.entry("Safety_Halt_Requests",
                             TableDescriptor.builder().schema(SAFETY_HALT_SCHEMA).distributedBy(4, "halt_request_id").build()),
-                    java.util.Map.entry("suspected_discontinuities",
+                    Map.entry("suspected_discontinuities",
                             TableDescriptor.builder().schema(DISCONTINUITY_SCHEMA).distributedBy(4, "discontinuity_id").build()),
-                    java.util.Map.entry("forming_bar",
+                    Map.entry("ingestion_quarantine",
+                            TableDescriptor.builder().schema(INGESTION_QUARANTINE_SCHEMA).distributedBy(8, "quarantine_id").build()),
+                    Map.entry("forming_bar",
                             kvTable("instrument_token")),
-                    java.util.Map.entry("Order_Lifecycle",
+                    Map.entry("Order_Lifecycle",
                             kvTable("broker_order_id")),
-                    java.util.Map.entry("Positions",
+                    Map.entry("Positions",
                             kvTable("portfolio_id")),
-                    java.util.Map.entry("Execution_Gate",
+                    Map.entry("Execution_Gate",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "execution_partition_id").build()),
-                    java.util.Map.entry("Execution_Attempts",
+                    Map.entry("Execution_Attempts",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "instruction_id").build()),
-                    java.util.Map.entry("Order_Correlation",
+                    Map.entry("Order_Correlation",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "client_order_ref").build()),
-                    java.util.Map.entry("Portfolio_Reservations",
+                    Map.entry("Portfolio_Reservations",
                             kvTable("portfolio_id")),
-                    java.util.Map.entry("Postback_Projection_Ledger",
+                    Map.entry("Postback_Projection_Ledger",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "broker_order_id").build()),
-                    java.util.Map.entry("instruments",
+                    Map.entry("instruments",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "instrument_token").build())
             );
 }

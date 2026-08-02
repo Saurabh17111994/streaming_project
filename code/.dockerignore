@@ -6,5 +6,5 @@
 **/target/
 **/dependency-reduced-pom.xml
 **/*.log
-.git/
+**/.git/
 **/node_modules/

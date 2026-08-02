@@ -16,7 +16,11 @@ if [[ -z "$MANIFEST_PATH" || ! -r "$MANIFEST_PATH" ]]; then
 	echo "ingestion: FATAL — readable instrument manifest is required: ${MANIFEST_PATH:-<unset>}" >&2
 	exit 2
 fi
+# Normalize: both names resolve to the same manifest so the Go bridge
+# (ARROW_INSTRUMENT_MANIFEST) and the Java loader (INSTRUMENT_MANIFEST_PATH)
+# can never load different snapshots.
 export ARROW_INSTRUMENT_MANIFEST="$MANIFEST_PATH"
+export INSTRUMENT_MANIFEST_PATH="$MANIFEST_PATH"
 
 # Validate Go bridge binary (D6) — still checked for early failure
 BRIDGE_BIN="${ARROW_BRIDGE_BIN:-/app/arrow-bridge}"
@@ -35,4 +39,7 @@ fi
 export ARROW_BRIDGE_BIN="$BRIDGE_BIN"
 
 MAIN_CLASS="${INGESTION_MAIN_CLASS:-com.trading.ingestion.IngestionService}"
-exec java -cp /app/ingestion.jar "${MAIN_CLASS}"
+# --add-opens is required by the Fluss client's shaded Arrow (MemoryUtil
+# touches java.nio internals on JDK 17+) — must match the host launchers and
+# surefire so container behaviour equals the verified host run path.
+exec java --add-opens=java.base/java.nio=ALL-UNNAMED -cp /app/ingestion.jar "${MAIN_CLASS}"

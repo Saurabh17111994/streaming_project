@@ -10,6 +10,13 @@ set -euo pipefail
 
 ROOT="${1:-.}"
 
+# R-091: a nonexistent/typo'd scan root silently matches nothing and the
+# guard would "pass" without scanning anything. Fail loudly instead.
+if [ ! -d "$ROOT" ]; then
+	echo "ERROR: scan root '$ROOT' is not a directory — refusing to run (the guard would scan nothing)." >&2
+	exit 1
+fi
+
 HITS="$(grep -rEn \
 	--exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules \
 	--include=pom.xml --include='*.java' --include='*.scala' \

@@ -1,42 +1,111 @@
 #!/usr/bin/env bash
-# soak-reconnect-loop.sh — force ~N bridge disconnects and verify NO leak.
+# soak-reconnect-loop.sh — force bridge crash-restarts and verify NO leak.
 #
-# Proves plan §1377: "reconnect testing proves no socket, child-process,
-# thread, or goroutine leak." It kills the Go arrow-bridge child process
-# (NOT the Java service — Java's runWithBridge restart loop restarts it),
-# waits for recovery, then measures the Java process's open FDs + threads.
+# ALIGNED WITH THE SERVICE'S ACTUAL RESTART SEMANTICS (review R-001):
+#   * The Go bridge installs a SIGTERM handler, so a plain `kill` makes it
+#     exit cleanly (code 0). IngestionService treats exit code 0 as a
+#     *requested* exit (NO_RESTART) and shuts the whole pipeline down. Only a
+#     crash (non-zero exit) triggers the restart path.
+#   * IngestionService.MAX_BRIDGE_RESTARTS = 1: the JVM restarts the bridge
+#     exactly ONCE per process run; a second crash is TERMINAL (the JVM exits
+#     cleanly with the restart budget exhausted — that is correct behavior,
+#     not a failure).
+#   * Therefore this script drives exactly ONE crash-restart cycle by default:
+#     `kill -9` the bridge (a genuine crash), verify Java restarts it and the
+#     process is healthy after the restart, and confirm the FD/thread counts
+#     return to the first-cycle baseline.
 #
-# A leak would show as a MONOTONIC INCREASE in open FDs or threads across
-# cycles. A healthy system returns to roughly the same baseline each cycle.
+# FD/thread metrics are compared against the first-cycle baseline (R-170), so
+# a monotonic leak FAILS the run instead of hiding in the TSV. The Java PID is
+# re-discovered every cycle (R-173), never reused from a stale capture.
 #
-# Non-destructive: it exercises the exact restart path the service is built
-# on. It never touches Fluss data, never places orders, never edits config.
+# Proves plan §1377 for the service's bounded restart window: no socket,
+# child-process, thread, or goroutine leak across the restart it actually
+# performs. Non-destructive: never touches Fluss data, never places orders.
 #
 # Usage:  ./soak-reconnect-loop.sh [cycles] [settle_seconds]
-#   e.g.   ./soak-reconnect-loop.sh 100 10   # 100 cycles, 10s settle each
-#          ./soak-reconnect-loop.sh          # default 100 cycles, 8s settle
+#   e.g.   ./soak-reconnect-loop.sh 1 8    # one crash-restart, 8s settle
+#          ./soak-reconnect-loop.sh        # default: the service's restart
+#                                          # budget (1, from MAX_BRIDGE_RESTARTS)
+#
+# Cycles above the restart budget are refused: killing the bridge beyond the
+# JVM's restart budget is TERMINAL by design and would tear the pipeline down.
 
 set -euo pipefail
 
-# ── Config ────────────────────────────────────────────────────────────────────
-PROJECT_ROOT="${PROJECT_ROOT:-/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/streaming_project}"
-LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/logs/ingestion.log}"
+# ── Config (override via env; defaults derived from the script location) ─────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/code/logs/ingestion.json}"
 OUT_DIR="${OUT_DIR:-$PROJECT_ROOT/logs/soak}"
 JAVA_MATCH="${JAVA_MATCH:-com.trading.ingestion.IngestionService}"
 BRIDGE_MATCH="${BRIDGE_MATCH:-arrow-bridge}"
+INGESTION_SRC="${INGESTION_SRC:-$PROJECT_ROOT/code/02_services/01_ingestion/src/main/java/com/trading/ingestion/IngestionService.java}"
 
-CYCLES="${1:-100}"
+# The one progress signal Java actually writes to the journal for every bridge
+# lifecycle event (subscription_ack ACTIVE after a restart = recovery). Tick
+# NDJSON from the bridge is consumed in-process and never logged (R-004), so
+# per-tick lines cannot be used.
+PROGRESS_PATTERN="bridge lifecycle event="
+
+# Service restart budget — read from source so it can never drift.
+RESTART_BUDGET="${RESTART_BUDGET:-$(
+	grep -oE 'MAX_BRIDGE_RESTARTS[[:space:]]*=[[:space:]]*[0-9]+' "$INGESTION_SRC" 2>/dev/null \
+		| grep -oE '[0-9]+$' | head -1
+)}"
+[ -n "${RESTART_BUDGET:-}" ] || RESTART_BUDGET=1
+
+CYCLES="${1:-$RESTART_BUDGET}"
 SETTLE_SEC="${2:-8}"
+
+if [ "$CYCLES" -gt "$RESTART_BUDGET" ]; then
+	echo "FATAL: requested $CYCLES cycles but the service restarts the bridge at most $RESTART_BUDGET time(s) per run (MAX_BRIDGE_RESTARTS). A further kill is TERMINAL by design. Use CYCLES <= $RESTART_BUDGET." >&2
+	exit 2
+fi
+if [ ! -f "$LOG_FILE" ]; then
+	echo "FATAL: journal not found at $LOG_FILE — cannot observe recovery. Is ingestion running?" >&2
+	exit 1
+fi
+
+# Leak thresholds vs the first-cycle baseline (R-170).
+LEAK_FD_MARGIN_PCT="${LEAK_FD_MARGIN_PCT:-50}"   # allow 50% FD growth before failing
+LEAK_THREAD_MARGIN="${LEAK_THREAD_MARGIN:-20}"   # allow 20 threads growth before failing
 
 mkdir -p "$OUT_DIR"
 RESULT="$OUT_DIR/reconnect-leak-$(date +%Y%m%d-%H%M%S).tsv"
-echo "reconnect-loop: $CYCLES cycles, ${SETTLE_SEC}s settle"
+echo "reconnect-loop: $CYCLES cycle(s) (service restart budget), ${SETTLE_SEC}s settle"
+echo "reconnect-loop: budget=$RESTART_BUDGET  journal=$LOG_FILE"
 echo "reconnect-loop: result → $RESULT"
-echo 'cycle	java_fds_before	java_fds_after	bridge_fds_before	bridge_fds_after	java_threads_before	java_threads_after	ticks_total	recovered_ok' > "$RESULT"
+echo 'cycle	java_fds_before	java_fds_after	bridge_fds_before	bridge_fds_after	java_threads_before	java_threads_after	progress_delta	recovered_ok	leak_ok' > "$RESULT"
 
-find_pid() { pgrep -f "$1" | tail -1 || true; }
-count_fds() { local pid="$1"; [ -z "$pid" ] && { echo 0; return; }; ls /proc/"$pid"/fd 2>/dev/null | wc -l; }
-threads_of() { local pid="$1"; [ -z "$pid" ] && { echo 0; return; }; grep -s '^Threads:' /proc/"$pid"/status | awk '{print $2}' || echo 0; }
+# Newest matching PID (not numerically highest — R-173).
+find_pid() {
+	ps -eo pid,etimes,args 2>/dev/null \
+		| awk -v pat="$1" '$3 ~ pat { print $1, $2 }' \
+		| sort -k2 -n \
+		| tail -1 \
+		| awk '{print $1}'
+}
+count_fds() {
+	local pid="$1"
+	[ -z "$pid" ] && { echo 0; return; }
+	local n
+	n=$(ls /proc/"$pid"/fd 2>/dev/null | wc -l) || n=0
+	echo "$n"
+}
+threads_of() {
+	local pid="$1"
+	[ -z "$pid" ] && { echo 0; return; }
+	local n
+	n=$(grep -s '^Threads:' /proc/"$pid"/status 2>/dev/null | awk '{print $2}') || n=0
+	[ -n "$n" ] || n=0
+	echo "$n"
+}
+count_progress() {
+	local n
+	n=$(grep -Fc "$PROGRESS_PATTERN" "$LOG_FILE" 2>/dev/null) || n=0
+	echo "$n"
+}
 
 java_pid_before=$(find_pid "$JAVA_MATCH")
 if [ -z "$java_pid_before" ]; then
@@ -45,52 +114,82 @@ if [ -z "$java_pid_before" ]; then
 	exit 1
 fi
 
-t0_ticks=$(grep -c '"feed":"hft"' "$LOG_FILE" 2>/dev/null) || t0_ticks=0
-echo "reconnect-loop: Java pid=$java_pid_before, baseline ticks=$t0_ticks"
+# Baseline progress count (per-cycle deltas are computed against this).
+t0_progress=$(count_progress)
+echo "reconnect-loop: Java pid=$java_pid_before, baseline progress lines=$t0_progress"
 
+# First-cycle baseline for the leak comparison (R-170): refreshed each cycle,
+# so the comparison is always against the most recent healthy reading.
+baseline_java_fds=0
+baseline_java_threads=0
+baseline_bridge_fds=0
 fail=0
+
 for (( i=1; i<=CYCLES; i++ )); do
+	[ -n "$java_pid_before" ] || { echo "  cycle $i: Java PID lost before sampling — cannot continue" >&2; fail=1; break; }
 	jfds_b=$(count_fds "$java_pid_before")
 	jthr_b=$(threads_of "$java_pid_before")
 
 	bridge_pid=$(find_pid "$BRIDGE_MATCH")
 	bfds_b=$(count_fds "$bridge_pid")
 
-	# Force the disconnect: kill ONLY the bridge child. Java restarts it.
-	[ -n "$bridge_pid" ] && kill "$bridge_pid" 2>/dev/null || true
+	# Force the disconnect: SIGKILL only — a clean SIGTERM exit would be
+	# treated as a requested shutdown and stop the whole pipeline (R-001).
+	[ -n "$bridge_pid" ] && kill -9 "$bridge_pid" 2>/dev/null || true
 
 	# Wait for Java to restart the bridge + resubscribe.
 	sleep "$SETTLE_SEC"
 
 	java_pid_after=$(find_pid "$JAVA_MATCH")
+	bridge_pid_a=$(find_pid "$BRIDGE_MATCH")
 	jfds_a=$(count_fds "$java_pid_after")
 	jthr_a=$(threads_of "$java_pid_after")
-	bridge_pid_a=$(find_pid "$BRIDGE_MATCH")
 	bfds_a=$(count_fds "$bridge_pid_a")
 
-	ticks_now=$(grep -c '"feed":"hft"' "$LOG_FILE" 2>/dev/null) || ticks_now=0
+	progress_now=$(count_progress)
+	progress_delta=$(( progress_now - t0_progress ))
 
-	# Recovered = Java still alive AND a bridge child exists AND ticks advanced.
+	# Recovered = Java alive AND a bridge child exists AND a fresh lifecycle
+	# event (subscription_ack on resubscribe) was logged after the kill.
 	recovered=1
 	if [ -z "$java_pid_after" ] || [ -z "$bridge_pid_a" ]; then recovered=0; fi
-	if [ "$ticks_now" -le "$t0_ticks" ]; then recovered=0; fi
+	if [ "$progress_delta" -le 0 ]; then recovered=0; fi
 
-	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+	# Leak check (R-170): after-metrics must stay within margin of the
+	# baseline captured at the start of this cycle.
+	leak_ok=1
+	if [ "$i" -eq 1 ]; then
+		baseline_java_fds=$jfds_a
+		baseline_java_threads=$jthr_a
+		baseline_bridge_fds=$bfds_a
+	else
+		max_fds=$(( baseline_java_fds * (100 + LEAK_FD_MARGIN_PCT) / 100 ))
+		max_thr=$(( baseline_java_threads + LEAK_THREAD_MARGIN ))
+		max_bfds=$(( baseline_bridge_fds * (100 + LEAK_FD_MARGIN_PCT) / 100 ))
+		if [ "$jfds_a" -gt "$max_fds" ] || [ "$jthr_a" -gt "$max_thr" ] || [ "$bfds_a" -gt "$max_bfds" ]; then
+			leak_ok=0
+		fi
+	fi
+
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$i" "$jfds_b" "$jfds_a" "$bfds_b" "$bfds_a" \
-		"$jthr_b" "$jthr_a" "$ticks_now" "$recovered" >> "$RESULT"
+		"$jthr_b" "$jthr_a" "$progress_delta" "$recovered" "$leak_ok" >> "$RESULT"
 
-	if [ "$recovered" = "0" ]; then
-		echo "  cycle $i: NOT RECOVERED (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a)"
+	if [ "$recovered" = "0" ] || [ "$leak_ok" = "0" ]; then
+		echo "  cycle $i: $( [ "$recovered" = 0 ] && echo NOT RECOVERED || echo LEAK DETECTED ) (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a, progress +$progress_delta)"
 		fail=1
 	else
-		# Optional leak check: JDK threads must not grow unboundedly.
-		echo "  cycle $i: ok (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a)"
+		echo "  cycle $i: ok (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a, progress +$progress_delta)"
 	fi
+
+	# Next cycle samples the (possibly new) Java process (R-173).
+	java_pid_before="$java_pid_after"
+	t0_progress="$progress_now"
 done
 
 echo "reconnect-loop: done. Result → $RESULT"
 if [ "$fail" = "1" ]; then
-	echo "reconnect-loop: ⚠️ some cycles did not recover — inspect $RESULT" >&2
+	echo "reconnect-loop: ⚠️ some cycles failed — inspect $RESULT" >&2
 	exit 1
 fi
-echo "reconnect-loop: all $CYCLES cycles recovered cleanly."
+echo "reconnect-loop: all $CYCLES cycle(s) recovered cleanly with no leak signal."

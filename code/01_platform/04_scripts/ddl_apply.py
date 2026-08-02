@@ -106,16 +106,24 @@ def parse_table_name(ddl_text):
 
 
 def load_existing_manifest():
-    """Return (manifest_dict_or_None, raw_json_string_or_None)."""
+    """Return the committed schema_manifest.json as a dict, or None if absent/unreadable."""
     if not os.path.exists(MANIFEST_PATH):
-        return None, None
+        return None
     try:
         with open(MANIFEST_PATH, encoding="utf-8") as fh:
             raw = fh.read()
-        return json.loads(raw), raw
+        manifest = json.loads(raw)
+        # R-147: normalize the structure so a malformed-but-valid-JSON
+        # manifest fails with the clear DDL-contract diagnostic, not a
+        # KeyError/TypeError deep in diff_manifests.
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("tables"), list):
+            raise RuntimeError(
+                f"{MANIFEST_PATH} has no 'tables' list — malformed manifest structure"
+            )
+        return manifest
     except (OSError, json.JSONDecodeError) as exc:
         print(f"WARNING: cannot parse existing manifest ({exc}); treating as absent")
-        return None, None
+        return None
 
 
 def compute_manifest_entries():
@@ -185,13 +193,13 @@ def diff_manifests(existing, computed):
     for path in sorted(set(existing_entries) | set(computed_entries)):
         e = existing_entries.get(path)
         c = computed_entries.get(path)
-        if e is None:
+        if e is None and c is not None:
             diffs.append(f"  + ADDED:   {path} ({c['table_name']})")
-        elif c is None:
+        elif c is None and e is not None:
             diffs.append(f"  - REMOVED: {path} ({e['table_name']})")
-        elif e["ddl_sha256"] != c["ddl_sha256"]:
+        elif e is not None and c is not None and e["ddl_sha256"] != c["ddl_sha256"]:
             diffs.append(f"  ~ CHANGED: {path} ({c['table_name']}) checksum differs")
-        elif e.get("table_kind") != c.get("table_kind"):
+        elif e is not None and c is not None and e.get("table_kind") != c.get("table_kind"):
             diffs.append(
                 f"  ~ KIND:    {path} ({c['table_name']}) "
                 f"{e.get('table_kind')} -> {c.get('table_kind')}"
@@ -230,8 +238,11 @@ def main():
         entries = compute_manifest_entries()
         computed = {"schema_manifest_version": "1", "tables": entries}
 
-        # --- Manifest staleness detection ---
-        existing, _existing_raw = load_existing_manifest()
+        # --- Manifest staleness detection (R-014: never return before the
+        # apply step runs — a synced manifest must still reach the gated
+        # apply/refusal handling below) ---
+        existing = load_existing_manifest()
+        needs_write = False
         if existing is not None:
             diffs = diff_manifests(existing, computed)
             if diffs:
@@ -248,21 +259,27 @@ def main():
                     )
                     return 5
                 print("--force: regenerating schema_manifest.json despite drift.")
+                needs_write = True
             else:
                 print("Manifest is current; no DDL drift detected.")
-                print(f"{MANIFEST_PATH} unchanged ({len(entries)} tables).")
-                return 0
+        else:
+            needs_write = True
 
         # Write the (new or force-accepted) manifest.
-        out_path = MANIFEST_PATH
-        try:
-            with open(out_path, "w", encoding="utf-8") as fh:
-                json.dump(computed, fh, indent=2)
-        except OSError as exc:
-            print(f"cannot write {out_path}: {exc}")
-            return 2
-        print(f"Wrote {out_path} ({len(entries)} tables).")
+        if needs_write:
+            try:
+                with open(MANIFEST_PATH, "w", encoding="utf-8") as fh:
+                    json.dump(computed, fh, indent=2)
+            except OSError as exc:
+                print(f"cannot write {MANIFEST_PATH}: {exc}")
+                return 2
+            print(f"Wrote {MANIFEST_PATH} ({len(entries)} tables).")
+        else:
+            print(f"{MANIFEST_PATH} unchanged ({len(entries)} tables).")
 
+        # --- Gated apply (R-014): runs, or is refused, regardless of drift
+        # state. A caller that passes --apply-verified in the synced state
+        # must reach this code, never a silent early return. ---
         if args.apply_verified:
             if not args.matrix_evidence:
                 print(
@@ -281,7 +298,10 @@ def main():
             "exit criteria are met."
         )
         return 0
-    except RuntimeError as exc:
+    except (RuntimeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        # R-147: malformed manifests, non-UTF-8 DDLs, and structurally-wrong
+        # entries must surface as the clear DDL-contract diagnostic instead of
+        # a raw traceback from a safety-gate script.
         print(f"DDL contract error: {exc}")
         return 2
 

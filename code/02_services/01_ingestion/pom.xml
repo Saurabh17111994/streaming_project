@@ -15,6 +15,16 @@
   <packaging>jar</packaging>
 
   <dependencies>
+    <!-- slf4j-api declared FIRST so it precedes the Fluss client on the test
+         classpath — the Fluss client bundles slf4j-api 1.7 classes inside its
+         own jar, and if those win the classpath the 2.x ServiceLoader provider
+         (log4j-slf4j2-impl) is never consulted and logging silently goes NOP.
+         Version comes from the parent (slf4j 2.0.9). -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+
     <!-- Apache Fluss Java client — version from parent -->
     <dependency>
       <groupId>org.apache.fluss</groupId>
@@ -33,10 +43,13 @@
       <artifactId>common</artifactId>
     </dependency>
 
-    <!-- Logging: SLF4J (API 2.0.9) → Log4j2 2.25.4 (same version Fluss server uses) -->
+    <!-- Logging: SLF4J API 2.0.9 → Log4j2 2.25.4 via the SLF4J 2.x binding
+         (log4j-slf4j2-impl). The 1.7 binding (log4j-slf4j-impl) does not
+         implement the org.slf4j.spi.SLF4JServiceProvider SPI that SLF4J 2.x
+         discovers, so logging would silently fall back to NOP — R-025. -->
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-slf4j-impl</artifactId>
+      <artifactId>log4j-slf4j2-impl</artifactId>
       <version>2.25.4</version>
     </dependency>
     <dependency>
@@ -76,6 +89,10 @@
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.trading.ingestion.IngestionService</mainClass>
                 </transformer>
+                <!-- R-060: merge META-INF/services provider files (Fluss client,
+                     Arrow) and Log4j2 plugin metadata instead of last-wins, so
+                     ServiceLoader-based providers survive shading. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
             </configuration>
           </execution>

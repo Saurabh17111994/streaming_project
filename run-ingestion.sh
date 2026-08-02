@@ -25,6 +25,11 @@ if [ ! -f "$SECRETS_FILE" ]; then
 	echo "Create it from the template in the header of run-ingestion.sh (chmod 600)." >&2
 	exit 1
 fi
+# R-135: owner-only check — permissive umasks leak Arrow credentials.
+if [ "$(stat -c '%a' "$SECRETS_FILE" 2>/dev/null)" != "600" ]; then
+	echo "ingestion: FATAL — $SECRETS_FILE is not owner-only (mode $(stat -c '%a' "$SECRETS_FILE" 2>/dev/null || echo '?')). Run: chmod 600 \"$SECRETS_FILE\"" >&2
+	exit 1
+fi
 
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
@@ -43,4 +48,7 @@ export ARROW_HFT_LATENCY_MS=50
 export FLUSS_BOOTSTRAP=localhost:9123
 export FLUSS_BOOTSTRAP_SERVERS=localhost:9123
 
-exec /home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/streaming_project/code/run-ingestion-full.sh
+# R-053: derive the chained launcher from this script's own location so the
+# script is portable (any checkout, any user).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/code/run-ingestion-full.sh"

@@ -3,8 +3,10 @@
 # Pulls Arrow credentials from ~/.env.arrow (see run-ingestion.sh header).
 set -euo pipefail
 
-REPO_ROOT="/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/streaming_project"
-CODE_DIR="$REPO_ROOT/code"
+# R-165: derive paths from the script location; keep env overrides.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+CODE_DIR="${CODE_DIR:-$REPO_ROOT/code}"
 
 # ---- Preflight: required tooling -------------------------------------------
 JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}java"
@@ -29,6 +31,11 @@ if [ ! -f "$SECRETS_FILE" ]; then
 	echo "Create it from the template in run-ingestion.sh (chmod 600)." >&2
 	exit 1
 fi
+# R-212: the secrets file must be owner-only — permissive umasks leak creds.
+if [ "$(stat -c '%a' "$SECRETS_FILE" 2>/dev/null)" != "600" ]; then
+	echo "ingestion: FATAL — $SECRETS_FILE is not owner-only (mode $(stat -c '%a' "$SECRETS_FILE" 2>/dev/null || echo '?')). Run: chmod 600 \"$SECRETS_FILE\"" >&2
+	exit 1
+fi
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
 : "${ARROW_APP_ID:?ARROW_APP_ID must be set in $SECRETS_FILE}"
@@ -49,12 +56,21 @@ export ARROW_BRIDGE_BIN="$CODE_DIR/02_services/01_ingestion/go-bridge/arrow-brid
 # Default NTP list: servers reachable from this network (pool.ntp.org is
 # unreachable on this host). Tried in order until one answers.
 export NTP_SERVER="${NTP_SERVER:-ntp.ubuntu.com,time.google.com,in.pool.ntp.org}"
-export ARROW_INSTRUMENT_MANIFEST="/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv"
+export ARROW_INSTRUMENT_MANIFEST="${ARROW_INSTRUMENT_MANIFEST:-/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv}"
 export INSTRUMENT_MANIFEST_PATH="$ARROW_INSTRUMENT_MANIFEST"
 # Approved current-phase manifest: exactly 1,024 instruments (plan: 1-connection /
 # 1,024-instrument phase). The token column is the 4th, unquoted numeric in both
 # files, so cut works; the Go bridge also reads ARROW_INSTRUMENT_MANIFEST directly.
-export ARROW_INSTRUMENT_TOKENS="$(cut -d',' -f4 "$ARROW_INSTRUMENT_MANIFEST" | tail -n +2 | paste -sd, -)"
+# R-081: validate the extracted count + strip CR (CRLF/BOM corruption must not
+# silently produce a wrong subscription set).
+TOKENS_CSV="$(cut -d',' -f4 "$ARROW_INSTRUMENT_MANIFEST" | tail -n +2 | sed 's/\r$//' | paste -sd, -)"
+TOKEN_COUNT="$(printf '%s' "$TOKENS_CSV" | tr ',' '\n' | grep -c . || true)"
+EXPECTED_TOKENS="${EXPECTED_TOKENS:-1024}"
+if [ "$TOKEN_COUNT" != "$EXPECTED_TOKENS" ]; then
+	echo "ingestion: FATAL — instrument token count $TOKEN_COUNT != expected $EXPECTED_TOKENS (manifest truncated or CRLF/BOM-corrupted): $ARROW_INSTRUMENT_MANIFEST" >&2
+	exit 1
+fi
+export ARROW_INSTRUMENT_TOKENS="$TOKENS_CSV"
 
 # ---- Timestamp-freshness evidence-gated values (plan B3) ---------------------
 # User-approved production values (2026-08-01). Override via env only if feed
@@ -126,6 +142,15 @@ cleanup_stale_bridges() {
 }
 cleanup_stale_bridges
 
+# R-080: a leftover IngestionService JVM (e.g. from a killed launcher whose
+# tee-PID bug orphaned it) would double-write to Fluss. Refuse to start
+# instead of silently creating a duplicate ingestion.
+EXISTING_JAVA="$(pgrep -f 'com.trading.ingestion.IngestionService' 2>/dev/null || true)"
+if [ -n "$EXISTING_JAVA" ]; then
+	echo "ingestion: FATAL — IngestionService already running (pid(s): $EXISTING_JAVA). Refusing to start a duplicate (double-write risk). Stop it first." >&2
+	exit 1
+fi
+
 # Forward termination signals so the bridge gets cleaned up by Java.
 trap 'echo "ingestion: received SIGTERM, forwarding"; kill -TERM "$PID" 2>/dev/null || true' TERM INT
 
@@ -138,12 +163,14 @@ cleanup_on_exit() {
 }
 trap cleanup_on_exit EXIT
 
+# R-049: run the JVM through a process substitution so $! is the JVM's PID
+# (not tee's). wait/traps then signal the real JVM and its child arrow-bridge.
 "$JAVA_BIN" --add-opens=java.base/java.nio=ALL-UNNAMED \
 	-Dorg.slf4j.simpleLogger.defaultLogLevel=info \
 	-Dorg.slf4j.simpleLogger.showDateTime=true \
 	-Dorg.slf4j.simpleLogger.logFile=System.err \
 	-cp "$JAR" \
-	com.trading.ingestion.IngestionService 2>&1 | tee -a "$RUN_LOG" &
+	com.trading.ingestion.IngestionService > >(tee -a "$RUN_LOG") 2>&1 &
 PID=$!
 wait "$PID"
 EXIT=$?
