@@ -32,8 +32,9 @@ func (c *Client) GetBasketMargin(req BasketMarginRequest) (map[string]any, error
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface the server's errorMessage/errorCode, not a bare status.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("basket margin failed with status: %s", result.Status)
+		return nil, apiError("basket margin", result.Status, resp)
 	}
 	if result.Data == nil {
 		return map[string]any{}, nil
@@ -56,8 +57,9 @@ func (c *Client) GetGreeks(tokens []int) (json.RawMessage, error) {
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface errorMessage/errorCode.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("greeks retrieval failed with status: %s", result.Status)
+		return nil, apiError("greeks", result.Status, resp)
 	}
 	return result.Data, nil
 }
@@ -82,8 +84,9 @@ func (c *Client) GetOptionChain(req OptionChainRequest) (json.RawMessage, error)
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface errorMessage/errorCode.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("option chain retrieval failed with status: %s", result.Status)
+		return nil, apiError("option chain", result.Status, resp)
 	}
 	return result.Data, nil
 }
@@ -103,8 +106,9 @@ func (c *Client) GetAllOptionChainSymbols() (OptionChainSymbolsByCategory, error
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface errorMessage/errorCode.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("option chain symbols retrieval failed with status: %s", result.Status)
+		return nil, apiError("option chain symbols", result.Status, resp)
 	}
 	if result.Data == nil {
 		return OptionChainSymbolsByCategory{}, nil
@@ -114,7 +118,7 @@ func (c *Client) GetAllOptionChainSymbols() (OptionChainSymbolsByCategory, error
 
 // HolidaysData is the object under "data" for GET /info/holidays.
 type HolidaysData struct {
-	Holidays           map[string]string    `json:"holidays"`
+	Holidays           map[string]string          `json:"holidays"`
 	SpecialTradingDays map[string]json.RawMessage `json:"specialTradingDays"`
 }
 
@@ -127,8 +131,9 @@ func (c *Client) GetHolidays() (*HolidaysData, error) {
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface errorMessage/errorCode.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("holiday retrieval failed with status: %s", result.Status)
+		return nil, apiError("holidays", result.Status, resp)
 	}
 	return &result.Data, nil
 }
@@ -142,8 +147,9 @@ func (c *Client) GetIndexList() ([]map[string]any, error) {
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
+	// R-282: surface errorMessage/errorCode.
 	if result.Status != "success" {
-		return nil, fmt.Errorf("index list retrieval failed with status: %s", result.Status)
+		return nil, apiError("index list", result.Status, resp)
 	}
 	return result.Data, nil
 }
@@ -159,10 +165,13 @@ const (
 )
 
 func (c *Client) GetInstrumentsCSV(segment InstrumentSegment) (string, error) {
-	path := "/" + strings.ToLower(string(segment))
-	if segment == "" {
-		path = "/all"
+	// R-189: path-escape the segment — interpolating raw input into the URL
+	// path could inject unexpected segments.
+	seg := strings.ToLower(string(segment))
+	if seg == "" {
+		seg = "all"
 	}
+	path := "/" + url.PathEscape(seg)
 	resp, err := c.request(path, "GET", nil)
 	if err != nil {
 		return "", err
@@ -186,17 +195,47 @@ func (c *Client) GetInstruments(segment InstrumentSegment) ([][]string, error) {
 // that means the exchange/token pair is not recognised (wrong segment or expired derivatives token), not a client-side parse error.
 // See https://docs.arrow.trade/rest-api/historical-candle-data/
 func (c *Client) GetCandleData(exchange Exchange, token, interval, fromTimestamp, toTimestamp string, oi bool) (json.RawMessage, error) {
-	base := "https://historical-api.arrow.trade"
+	// R-104: honor the configurable historical base URL like every other
+	// method honors BaseURL — the endpoint was previously hardcoded to the
+	// production host, bypassing config entirely.
+	base := c.Config.HistoricalBaseURL
 	q := url.Values{}
 	q.Set("from", fromTimestamp)
 	q.Set("to", toTimestamp)
 	if oi {
 		q.Set("oi", "1")
 	}
-	endpoint := fmt.Sprintf("%s/candle/%s/%s/%s?%s", base, strings.ToLower(string(exchange)), token, interval, q.Encode())
+	// R-189: path-escape exchange/token/interval.
+	endpoint := fmt.Sprintf("%s/candle/%s/%s/%s?%s", base,
+		url.PathEscape(strings.ToLower(string(exchange))),
+		url.PathEscape(token), url.PathEscape(interval), q.Encode())
 	resp, err := c.rawRequestAuth(endpoint, "GET", nil)
 	if err != nil {
 		return nil, err
 	}
 	return json.RawMessage(bytes.TrimSpace(resp)), nil
+}
+
+// apiError builds a descriptive error for a non-success API response (R-282):
+// it parses the server's errorMessage/errorCode fields so operators see the
+// real rejection reason instead of a bare status string.
+func apiError(op, status string, resp []byte) error {
+	var envelope struct {
+		ErrorMessage string `json:"errorMessage"`
+		ErrorCode    string `json:"errorCode"`
+		Message      string `json:"message"`
+	}
+	_ = json.Unmarshal(resp, &envelope) // best-effort; keep the status on failure
+	msg := envelope.ErrorMessage
+	if msg == "" {
+		msg = envelope.Message
+	}
+	if msg == "" {
+		return fmt.Errorf("%s failed with status: %s", op, status)
+	}
+	if envelope.ErrorCode != "" {
+		return fmt.Errorf("%s failed with status: %s, code: %s, message: %s",
+			op, status, envelope.ErrorCode, msg)
+	}
+	return fmt.Errorf("%s failed with status: %s, message: %s", op, status, msg)
 }

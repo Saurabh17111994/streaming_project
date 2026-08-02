@@ -29,6 +29,32 @@ func TestHFTSlotValidationAndEpoch(t *testing.T) {
 	if slot.State() != SlotTerminal {
 		t.Fatal("close not idempotent")
 	}
+	// R-096: BeginConnect on a closed slot must not resurrect it or bump epoch.
+	if got := slot.BeginConnect(); got != 0 {
+		t.Fatalf("BeginConnect after Close: got epoch %d, want 0 (R-096)", got)
+	}
+	if slot.State() != SlotTerminal {
+		t.Fatalf("closed slot resurrected to %q (R-096)", slot.State())
+	}
+}
+
+func TestSilentSlotStallDetected(t *testing.T) {
+	// R-095: a slot that reaches ACTIVE but never receives a frame (lastFrame
+	// stays zero) must still be flagged stalled after StallTimeout.
+	assignment := SlotAssignment{SlotID: "hft-0", ConnectionID: "hft-0", Tokens: []int32{1}, Requests: [][]int32{{1}}}
+	slot, err := NewHFTSlot(assignment, SlotConfig{Mode: "full", LatencyMs: 50, Heartbeat: 3 * time.Second, StallTimeout: 15 * time.Second, ResponseTimeout: 10 * time.Second, MaxAuthRefreshes: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot.BeginConnect()
+	slot.SetState(SlotActive)
+	// No ObserveFrame ever called — the connection is completely silent.
+	if slot.Stalled(time.Now().Add(14 * time.Second)) {
+		t.Fatal("premature stall before timeout")
+	}
+	if !slot.Stalled(time.Now().Add(16 * time.Second)) {
+		t.Fatal("silent ACTIVE slot must be detected as stalled (R-095)")
+	}
 }
 
 func TestBackoffSequence(t *testing.T) {

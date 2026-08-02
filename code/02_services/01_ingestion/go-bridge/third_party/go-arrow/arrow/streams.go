@@ -109,8 +109,15 @@ func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick), onE
 			return
 		default:
 		}
+		// R-204: without a read deadline, canceling ctx could not unblock the
+		// blocking ReadMessage. A 30s deadline surfaces stalls, and cancellation
+		// exits cleanly within that window instead of hanging forever.
+		_ = s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		_, payload, err := s.conn.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			if onError != nil && !errors.Is(err, websocket.ErrCloseSent) {
 				onError(err)
 			}
@@ -173,6 +180,12 @@ func parseLTPC(data []byte) MarketTick {
 func parseQuote(data []byte) MarketTick {
 	tick := parseLTPC(data)
 	tick.Mode = StreamModeQuote
+	// R-203: parseLTPC computed NetChange from bytes 13:17 as if they were the
+	// close price — but in a quote frame those bytes are the LTQ field. Clear
+	// that polluted value and recompute from the real close (bytes 45:49)
+	// unconditionally: a zero close must yield zero NetChange, never a value
+	// derived from LTQ.
+	tick.NetChange = 0
 	tick.LTQ = beI32(data[13:17])
 	tick.AvgPrice = beI32(data[17:21])
 	tick.TotalBuyQuantity = beI64(data[21:29])
@@ -243,8 +256,13 @@ func (s *OrderStream) ReadUpdates(ctx context.Context, onUpdate func(map[string]
 			return
 		default:
 		}
+		// R-204: read deadline so ctx cancellation can unblock the blocking read.
+		_ = s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		mt, payload, err := s.conn.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			if onError != nil && !errors.Is(err, websocket.ErrCloseSent) {
 				onError(err)
 			}

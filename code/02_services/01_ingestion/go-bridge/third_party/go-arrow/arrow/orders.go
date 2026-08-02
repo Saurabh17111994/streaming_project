@@ -177,7 +177,15 @@ func (c *Client) PlaceOrder(orderType string, order OrderRequest) (*OrderRespons
 
 	if result.Status != "success" {
 		log.Error().Str("errorCode", result.ErrorCode).Str("message", result.Message).Msg("Order placement failed")
-		return nil, fmt.Errorf("order placement failed")
+		// R-105: preserve the broker rejection taxonomy — a bare "order placement
+		// failed" made it impossible to distinguish insufficient funds from
+		// invalid instrument etc.
+		if result.ErrorCode != "" {
+			return nil, fmt.Errorf("order placement failed (status=%s, code=%s, message=%s)",
+				result.Status, result.ErrorCode, result.Message)
+		}
+		return nil, fmt.Errorf("order placement failed (status=%s, message=%s)",
+			result.Status, result.Message)
 	}
 
 	c.debugf("Order placed successfully", func(e *zerolog.Event) {
@@ -220,7 +228,7 @@ func (c *Client) ModifyOrder(orderType, orderID string, order OrderRequest) (*Or
 	}
 
 	if result.Status != "success" {
-		return nil, fmt.Errorf("order modification failed")
+		return nil, fmt.Errorf("order modification failed (status=%s, message=%s)", result.Status, result.Message)
 	}
 
 	c.debugf("Order modified successfully", func(e *zerolog.Event) {

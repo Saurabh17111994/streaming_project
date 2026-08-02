@@ -81,6 +81,7 @@ type HFTSlot struct {
 	assignment SlotAssignment
 	config     SlotConfig
 	lastFrame  time.Time
+	connectAt  time.Time
 	closed     bool
 }
 
@@ -131,9 +132,15 @@ func validateRequestUnion(assignment SlotAssignment) error {
 func (s *HFTSlot) BeginConnect() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// R-096: a late/racing BeginConnect after Close() must not resurrect the
+	// slot or bump the epoch. Closed slots are terminal, forever.
+	if s.closed {
+		return 0
+	}
 	s.epoch++
 	s.state = SlotAuthenticating
 	s.lastFrame = time.Time{}
+	s.connectAt = time.Now()
 	return s.epoch
 }
 func (s *HFTSlot) SetState(state SlotState) {
@@ -149,7 +156,18 @@ func (s *HFTSlot) ObserveFrame(now time.Time) { s.mu.Lock(); defer s.mu.Unlock()
 func (s *HFTSlot) Stalled(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state == SlotActive && !s.lastFrame.IsZero() && now.Sub(s.lastFrame) > s.config.StallTimeout
+	if s.state != SlotActive {
+		return false
+	}
+	// R-095: a slot that reaches ACTIVE but never receives a single frame must
+	// still be detected as stalled. BeginConnect() resets lastFrame to zero,
+	// and the old guard required !IsZero() — a blind window that defeated
+	// stall detection for a completely silent connection. Compare against
+	// connectAt when no frame has ever arrived.
+	if s.lastFrame.IsZero() {
+		return now.Sub(s.connectAt) > s.config.StallTimeout
+	}
+	return now.Sub(s.lastFrame) > s.config.StallTimeout
 }
 func (s *HFTSlot) Close() {
 	s.mu.Lock()
@@ -160,7 +178,22 @@ func (s *HFTSlot) Close() {
 	s.closed = true
 	s.state = SlotTerminal
 }
-func (s *HFTSlot) Run(ctx context.Context) error { <-ctx.Done(); s.Close(); return nil }
+
+// Run drives the slot's lifecycle: it transitions the slot to AUTHENTICATING
+// (R-153 — the old implementation never connected, so any caller treating it
+// as the per-slot main loop would silently never subscribe), waits for ctx
+// cancellation, then closes the slot. The real per-epoch driver is
+// runHFTEpoch/runHFTSlot (supervisor.go); this is the passive lifecycle
+// watcher used where only state tracking is needed. Returns an error if the
+// slot is already closed.
+func (s *HFTSlot) Run(ctx context.Context) error {
+	if s.BeginConnect() == 0 {
+		return fmt.Errorf("slot is closed; cannot run")
+	}
+	<-ctx.Done()
+	s.Close()
+	return nil
+}
 
 func Backoff(attempt int) time.Duration {
 	if attempt < 0 {
@@ -170,10 +203,4 @@ func Backoff(attempt int) time.Duration {
 		return 30 * time.Second
 	}
 	return time.Second << attempt
-}
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

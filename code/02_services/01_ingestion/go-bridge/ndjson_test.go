@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestEmitterTickCarriesRawPayloadAndHash(t *testing.T) {
@@ -51,7 +52,7 @@ func TestEmitterTickCarriesRawPayloadAndHash(t *testing.T) {
 func TestEmitterOneLineAndRedaction(t *testing.T) {
 	var out bytes.Buffer
 	emitter := NewBridgeEmitter(&out)
-	if err := emitter.EmitEvent(BridgeEvent{Event: "auth_failure", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "AUTH_FAILED", Reason: "ARROW_TOKEN=secret"}); err != nil {
+	if err := emitter.EmitEvent(BridgeEvent{Event: "auth_failure", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "AUTH_FAILED", Reason: "ARROW_TOKEN=secret", ReceivedTsMs: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(out.String(), "\n") != 1 {
@@ -62,6 +63,62 @@ func TestEmitterOneLineAndRedaction(t *testing.T) {
 	}
 	if len(sanitizeDiagnostic(strings.Repeat("x", 600))) != 512 {
 		t.Fatal("diagnostic not bounded")
+	}
+}
+
+func TestEmitterValidatesEventsAtSource(t *testing.T) {
+	// R-097: EmitEvent must reject invalid events instead of writing them.
+	var out bytes.Buffer
+	emitter := NewBridgeEmitter(&out)
+	// Unknown event name → rejected.
+	if err := emitter.EmitEvent(BridgeEvent{Event: "not_a_real_event", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: time.Now().UnixMilli()}); err == nil {
+		t.Fatal("unknown event must be rejected (R-097)")
+	}
+	// Missing received_ts_ms → rejected.
+	if err := emitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE"}); err == nil {
+		t.Fatal("zero received_ts_ms must be rejected (R-097)")
+	}
+	// Nothing was written.
+	if out.Len() != 0 {
+		t.Fatalf("invalid events must not be written, got: %q", out.String())
+	}
+	// A valid event still passes.
+	if err := emitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: time.Now().UnixMilli()}); err != nil {
+		t.Fatalf("valid event rejected: %v", err)
+	}
+}
+
+func TestEmitterEmptyPayloadStillCarriesHash(t *testing.T) {
+	// R-186: an empty raw payload must still carry its real SHA-256 digest.
+	var out bytes.Buffer
+	emitter := NewBridgeEmitter(&out)
+	if err := emitter.EmitTick(Tick{Feed: "hft", Mode: "ltpc", Token: 1, TS: 1_000}, "c", "hft-0", 1, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := decoded["payload_hash"].(string)
+	// sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+	if hash != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Fatalf("empty payload must carry sha256(empty) digest, got %q (R-186)", hash)
+	}
+}
+
+func TestSanitizeDiagnosticPreservesUTF8(t *testing.T) {
+	// R-187: truncation must not split a multi-byte rune.
+	long := strings.Repeat("₹", 400) // 400 × 3 bytes = 1200 bytes
+	s := sanitizeDiagnostic(long)
+	if !strings.HasPrefix(s, "₹₹") {
+		t.Fatal("prefix lost")
+	}
+	// The result must be valid UTF-8 (no replacement chars from a split rune).
+	if !utf8.ValidString(s) {
+		t.Fatal("truncation split a rune (R-187)")
+	}
+	if len(s) > 512*3 {
+		t.Fatalf("not bounded: %d bytes", len(s))
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
@@ -41,7 +42,11 @@ type HFTDataStream struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
 	zstd bool
-	zdec *zstd.Decoder
+	// R-102: zdec is shared between the read goroutine (DecodeAll) and Close()
+	// (zdec.Close) — guard it so closing the stream cannot race an in-flight
+	// decode.
+	zdecMu sync.RWMutex
+	zdec   *zstd.Decoder
 }
 
 func (c *Client) ConnectHFTDataStream() (*HFTDataStream, error) {
@@ -78,14 +83,20 @@ func (s *HFTDataStream) Close() error {
 	if s == nil || s.conn == nil {
 		return nil
 	}
+	// R-102: take the write lock before closing the decoder so a concurrent
+	// decodeHFTPayload holding the read lock finishes first.
+	s.zdecMu.Lock()
 	if s.zdec != nil {
 		s.zdec.Close()
 		s.zdec = nil
 	}
+	s.zdecMu.Unlock()
 	return s.conn.Close()
 }
 
 func (s *HFTDataStream) decodeHFTPayload(payload []byte) ([]byte, error) {
+	s.zdecMu.RLock()
+	defer s.zdecMu.RUnlock()
 	if s == nil || !s.zstd || s.zdec == nil {
 		return payload, nil
 	}
@@ -286,6 +297,10 @@ func (s *HFTDataStream) writeJSON(v any) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// R-103: a wedged TCP connection must not block writes forever.
+	if err := s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
 	return s.conn.WriteMessage(websocket.TextMessage, b)
 }
 
@@ -294,6 +309,9 @@ func (s *HFTDataStream) writeJSON(v any) error {
 func (s *HFTDataStream) WriteText(payload string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
 	return s.conn.WriteMessage(websocket.TextMessage, []byte(payload))
 }
 
@@ -314,8 +332,17 @@ func (s *HFTDataStream) ReadHFTWithFrame(ctx context.Context, onLTP func(HFTLTPT
 			return
 		default:
 		}
+		// R-103: a wedged TCP connection previously blocked ReadMessage forever.
+		// A 30s read deadline surfaces dead connections as an error (reported
+		// through onError → epoch ends → watchdog/backoff), while healthy feeds
+		// refresh the deadline on every frame.
+		_ = s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		mt, payload, err := s.conn.ReadMessage()
 		if err != nil {
+			// R-103/R-204: cancellation must not surface as a spurious error.
+			if ctx.Err() != nil {
+				return
+			}
 			if onError != nil && !errors.Is(err, websocket.ErrCloseSent) {
 				onError(err)
 			}

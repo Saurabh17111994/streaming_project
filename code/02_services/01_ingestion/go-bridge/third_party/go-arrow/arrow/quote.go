@@ -45,9 +45,24 @@ type QuoteLTPResponse struct {
 	Status string     `json:"status"`
 }
 
+// validateInfoQuoteMode enforces the three allowed InfoQuoteMode values
+// (R-243) — Go does not enforce a string-const set at compile time, and an
+// unexpected mode interpolated into the URL path would 404 or worse.
+func validateInfoQuoteMode(mode InfoQuoteMode) error {
+	switch mode {
+	case InfoQuoteLTP, InfoQuoteFull, InfoQuoteOHLCV:
+		return nil
+	default:
+		return fmt.Errorf("invalid quote mode %q (must be ltp, full, or ohlcv)", string(mode))
+	}
+}
+
 // GetQuotes posts to /info/quotes/{mode} with a JSON array of {exchange, symbol} (no mode in body).
 func (c *Client) GetQuotes(instruments []QuoteInstrument, mode InfoQuoteMode) ([]map[string]any, error) {
-	endpoint := fmt.Sprintf("/info/quotes/%s", mode)
+	if err := validateInfoQuoteMode(mode); err != nil {
+		return nil, err
+	}
+	endpoint := fmt.Sprintf("/info/quotes/%s", string(mode))
 
 	payload, err := json.Marshal(instruments)
 	if err != nil {
@@ -70,12 +85,23 @@ func (c *Client) GetQuotes(instruments []QuoteInstrument, mode InfoQuoteMode) ([
 		return nil, err
 	}
 	if envelope.Status != "success" {
-		return nil, fmt.Errorf("quotes retrieval failed with status: %s", envelope.Status)
+		return nil, apiError("quotes", envelope.Status, resp)
+	}
+
+	// R-201: a `data: null` response (JSON null) previously unmarshalled into a
+	// nil slice returned with a nil error — indistinguishable from a genuine
+	// empty result. Return a non-nil empty slice so callers can tell "no
+	// quotes" apart from "no data at all".
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return []map[string]any{}, nil
 	}
 
 	var asSlice []map[string]any
 	if err := json.Unmarshal(envelope.Data, &asSlice); err == nil {
 		c.debugf("Quotes retrieved successfully", nil)
+		if asSlice == nil {
+			return []map[string]any{}, nil
+		}
 		return asSlice, nil
 	}
 	var one map[string]any
@@ -87,7 +113,10 @@ func (c *Client) GetQuotes(instruments []QuoteInstrument, mode InfoQuoteMode) ([
 
 // GetQuote posts to /info/quote/{mode} with {"symbol","exchange"}.
 func (c *Client) GetQuote(exchange Exchange, symbol string, mode InfoQuoteMode) (map[string]any, error) {
-	endpoint := fmt.Sprintf("/info/quote/%s", mode)
+	if err := validateInfoQuoteMode(mode); err != nil {
+		return nil, err
+	}
+	endpoint := fmt.Sprintf("/info/quote/%s", string(mode))
 	body := QuoteInstrument{Exchange: string(exchange), Symbol: symbol}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -106,7 +135,13 @@ func (c *Client) GetQuote(exchange Exchange, symbol string, mode InfoQuoteMode) 
 		return nil, err
 	}
 	if result.Status != "success" {
-		return nil, fmt.Errorf("quote retrieval failed with status: %s", result.Status)
+		return nil, apiError("quote", result.Status, resp)
+	}
+	// R-202: nil data (a `data: null` success) must not be returned as a nil
+	// map with a nil error — follow the package convention (GetBasketMargin /
+	// GetAllOptionChainSymbols) and return an empty map.
+	if result.Data == nil {
+		return map[string]any{}, nil
 	}
 	return result.Data, nil
 }

@@ -12,9 +12,12 @@ type TokenProvider interface {
 }
 
 type ArrowTokenProvider struct {
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	current   string
 	refreshFn func(context.Context) (string, error)
+	// refreshMu serializes refreshFn (R-139): only one network refresh runs at
+	// a time, while Current() readers never block on it.
+	refreshMu sync.Mutex
 }
 
 func NewArrowTokenProvider(initial string, refreshFn func(context.Context) (string, error)) (*ArrowTokenProvider, error) {
@@ -28,14 +31,19 @@ func NewArrowTokenProvider(initial string, refreshFn func(context.Context) (stri
 }
 
 func (p *ArrowTokenProvider) Current(context.Context) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.current, nil
 }
 
 func (p *ArrowTokenProvider) Refresh(ctx context.Context) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// R-139: refreshFn typically performs network I/O. The old code held the
+	// exclusive lock across it, blocking every Current() caller and queued
+	// Refresh callers for the whole refresh window. refreshMu serializes the
+	// network call (one refresh at a time) but Current() readers use RLock and
+	// never wait on it.
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -46,6 +54,8 @@ func (p *ArrowTokenProvider) Refresh(ctx context.Context) (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("refresh returned empty token")
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.current = token
 	return token, nil
 }

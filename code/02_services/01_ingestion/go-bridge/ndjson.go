@@ -68,6 +68,16 @@ func (e *BridgeEmitter) nextSeq(slotID string) uint64 {
 	return e.seqBySlot[slotID]
 }
 
+// resetSeq zeroes the per-slot tick sequence (R-185). The doc contract says
+// the counter "resets when a new connection epoch begins" — callers invoke it
+// at the start of each epoch so feed_sequence_local restarts after a reconnect
+// instead of growing for the process lifetime.
+func (e *BridgeEmitter) resetSeq(slotID string) {
+	e.seqMu.Lock()
+	defer e.seqMu.Unlock()
+	e.seqBySlot[slotID] = 0
+}
+
 func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint64, received time.Time, rawPayload []byte) error {
 	value := struct {
 		Tick
@@ -79,7 +89,7 @@ func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint
 		FeedSequenceLocal uint64 `json:"feed_sequence_local"`
 		ReceivedTsMs      int64  `json:"received_ts_ms"`
 		RawPayload        string `json:"raw_payload,omitempty"`
-		PayloadHash       string `json:"payload_hash,omitempty"`
+		PayloadHash       string `json:"payload_hash"`
 	}{
 		Tick: t, RecordType: "tick", ContractVersion: NDJSONContractVersion,
 		ConnectionID: connectionID, ConnectionEpoch: epoch, SlotID: slotID,
@@ -92,10 +102,9 @@ func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint
 }
 
 // sha256Hex returns the lowercase SHA-256 hex digest of b.
+// R-186: the empty-input special case was removed — an empty raw payload must
+// still carry its real digest (sha256 of ""), not be dropped via omitempty.
 func sha256Hex(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -104,6 +113,11 @@ func (e *BridgeEmitter) EmitEvent(event BridgeEvent) error {
 	event.RecordType = "bridge_event"
 	event.ContractVersion = NDJSONContractVersion
 	event.Reason = sanitizeDiagnostic(event.Reason)
+	// R-097: validateBridgeEvent was never invoked by production — EmitEvent
+	// wrote events without validation, so invalid events were emitted silently.
+	if err := validateBridgeEvent(event); err != nil {
+		return fmt.Errorf("bridge event rejected: %w", err)
+	}
 	return e.write(event)
 }
 
@@ -132,8 +146,14 @@ var bearerPattern = regexp.MustCompile(`(?i)\bBearer[=:\s]+[^\s,}]+`)
 func sanitizeDiagnostic(s string) string {
 	s = bearerPattern.ReplaceAllString(s, "Bearer=[REDACTED]")
 	s = secretPattern.ReplaceAllString(s, "$1=[REDACTED]")
+	// R-187: byte-boundary truncation could split a multi-byte UTF-8 rune,
+	// which json.Marshal would corrupt with U+FFFD. Truncate on a rune
+	// boundary instead.
 	if len(s) > 512 {
-		s = s[:512]
+		r := []rune(s)
+		if len(r) > 512 {
+			s = string(r[:512])
+		}
 	}
 	return strings.TrimSpace(s)
 }

@@ -4,7 +4,9 @@
 // It speaks the real wire format: JSON `sub` inbound, zstd-compressed binary
 // response + full-tick frames outbound, with an optional forced disconnect.
 //
-// Usage: FAKE_HFT_PORT=8899 FAKE_HFT_DISCONNECT_AFTER=1 go run -tags faketool faketool.go
+// Usage: go run -tags faketool main.go -port 8899 -disconnect-after 1
+// (the -port / -disconnect-after flags replace the historical
+// FAKE_HFT_PORT / FAKE_HFT_DISCONNECT_AFTER env vars, R-274).
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,7 +36,10 @@ func main() {
 	flag.Parse()
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	connections := 0
+	// R-094: each WebSocket handler runs in its own goroutine under net/http;
+	// the shared connection counter must be atomic or concurrent/reconnecting
+	// clients race on it.
+	var connections atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -41,8 +47,15 @@ func main() {
 			return
 		}
 		defer conn.Close()
-		connections++
-		idx := connections
+		idx := int(connections.Add(1))
+		// R-213: one zstd encoder per connection — constructing and closing a
+		// fresh encoder (table initialization included) per frame was wasteful.
+		enc, err := zstd.NewWriter(nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "zstd encoder init failed:", err)
+			return
+		}
+		defer enc.Close()
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
@@ -70,7 +83,7 @@ func main() {
 			resp[534] = 0
 			resp[535] = 1
 			binary.LittleEndian.PutUint16(resp[536:538], uint16(len(ids)))
-			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(resp)); err != nil {
+			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(enc, resp)); err != nil {
 				return
 			}
 			full := make([]byte, hftSizeFull)
@@ -78,7 +91,7 @@ func main() {
 			full[2] = hftPktFull
 			binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
 			binary.LittleEndian.PutUint32(full[8:12], 15050)
-			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(full)); err != nil {
+			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(enc, full)); err != nil {
 				return
 			}
 			if *disconnect > 0 && idx == *disconnect {
@@ -97,11 +110,6 @@ func main() {
 	}
 }
 
-func compressZstd(payload []byte) []byte {
-	enc, err := zstd.NewWriter(nil)
-	if err != nil {
-		panic(err)
-	}
-	defer enc.Close()
+func compressZstd(enc *zstd.Encoder, payload []byte) []byte {
 	return enc.EncodeAll(payload, nil)
 }

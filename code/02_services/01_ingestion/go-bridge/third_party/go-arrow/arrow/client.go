@@ -4,6 +4,7 @@ package arrow
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -18,6 +19,10 @@ type Config struct {
 	BaseURL      string // Base URL of the Arrow API.
 	RefreshToken string // Token used to refresh authentication when expired.
 	Debug        bool   // Enables verbose SDK debug logs when true.
+	// HistoricalBaseURL is the host for GET /candle endpoints (R-104). It is
+	// honored like BaseURL instead of being hardcoded, defaulting to the Arrow
+	// production historical host.
+	HistoricalBaseURL string
 }
 
 // Client is the main struct for interacting with the Arrow API.
@@ -40,11 +45,19 @@ type Client struct {
 func NewClient(appID, appSecret string) *Client {
 	return &Client{
 		Config: Config{
-			AppID:     appID,
-			AppSecret: appSecret,
-			BaseURL:   "https://edge.arrow.trade",
+			AppID:             appID,
+			AppSecret:         appSecret,
+			BaseURL:           "https://edge.arrow.trade",
+			HistoricalBaseURL: "https://historical-api.arrow.trade",
 		},
-		HTTPClient: &fasthttp.Client{},
+		HTTPClient: &fasthttp.Client{
+			// R-138: the client previously had no ReadTimeout/WriteTimeout — a
+			// stalled Arrow endpoint blocked the calling goroutine indefinitely
+			// (at startup this hung main inside AutoLogin/GetUserDetails).
+			ReadTimeout:         15 * time.Second,
+			WriteTimeout:        15 * time.Second,
+			MaxIdleConnDuration: 60 * time.Second,
+		},
 	}
 }
 
@@ -91,7 +104,12 @@ func (c *Client) request(endpoint string, method string, payload []byte) ([]byte
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	return resp.Body(), nil
+	// R-024 (critical): resp.Body() aliases the fasthttp response buffer that
+	// the deferred ReleaseResponse returns to the pool. Returning the slice
+	// directly would be a use-after-release as soon as this function returns.
+	// Copy the body so the caller owns the bytes.
+	body := append([]byte(nil), resp.Body()...)
+	return body, nil
 }
 
 // rawRequest sends an HTTP request to a fully specified URL and retrieves the response.
@@ -133,7 +151,8 @@ func (c *Client) rawRequest(url string, method string, payload []byte) ([]byte, 
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	return resp.Body(), nil
+	body := append([]byte(nil), resp.Body()...)
+	return body, nil
 }
 
 // rawRequestAuth is like rawRequest but sets appId and token headers (required by historical-api.arrow.trade).
@@ -165,7 +184,8 @@ func (c *Client) rawRequestAuth(fullURL string, method string, payload []byte) (
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	return resp.Body(), nil
+	body := append([]byte(nil), resp.Body()...)
+	return body, nil
 }
 
 // SetToken updates the authentication token dynamically.

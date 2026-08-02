@@ -48,6 +48,14 @@ func BuildSubscriptionPlan(tokens []int32, slots, connectionLimit, requestLimit 
 			return SubscriptionPlan{}, fmt.Errorf("duplicate token %d", ordered[i])
 		}
 	}
+	// R-188: validate the token value domain — a zero or negative int32 token
+	// would otherwise pass plan construction and fail only when the real
+	// SubscribeHFTTokens request reached the broker.
+	for _, t := range ordered {
+		if t <= 0 {
+			return SubscriptionPlan{}, fmt.Errorf("token %d is invalid (must be positive)", t)
+		}
+	}
 	plan := SubscriptionPlan{}
 	for i := 0; i < slots; i++ {
 		start := i * connectionLimit
@@ -69,10 +77,23 @@ func BuildSubscriptionPlan(tokens []int32, slots, connectionLimit, requestLimit 
 		plan.Slots = append(plan.Slots, assignment)
 	}
 	h := sha256.New()
+	// R-098: the fingerprint must cover the actual subscription topology — the
+	// per-slot Requests partitioning and the requestLimit parameter — not just
+	// SlotID/ConnectionID/Tokens. Two plans with identical token sets but
+	// different chunking now hash differently.
+	fmt.Fprintf(h, "requestLimit=%d|", requestLimit)
 	for _, slot := range plan.Slots {
 		fmt.Fprintf(h, "%s|%s|", slot.SlotID, slot.ConnectionID)
 		for _, token := range slot.Tokens {
 			fmt.Fprintf(h, "%d,", token)
+		}
+		fmt.Fprintf(h, "requests=")
+		for _, req := range slot.Requests {
+			fmt.Fprintf(h, "[")
+			for _, t := range req {
+				fmt.Fprintf(h, "%d,", t)
+			}
+			fmt.Fprintf(h, "]")
 		}
 	}
 	plan.Fingerprint = hex.EncodeToString(h.Sum(nil))

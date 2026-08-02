@@ -116,6 +116,15 @@ func runHFTSupervisorWithFactory(ctx context.Context, cancel context.CancelFunc,
 		wg.Add(1)
 		go func(i int, slot SlotAssignment) {
 			defer wg.Done()
+			// R-200: a panic in one slot's main flow must not take down the
+			// whole bridge — recover, record the slot as terminal, and let the
+			// supervisor aggregate.
+			defer func() {
+				if r := recover(); r != nil {
+					logf("HFT slot %s panicked: %v", slot.SlotID, r)
+					outcomes[i] = slotOutcome{slotID: slot.SlotID, terminal: true, reason: fmt.Sprintf("panic: %v", r)}
+				}
+			}()
 			outcomes[i] = runHFTSlotWithFactory(ctx, cancel, makeFactory(client, i), slot, latencyMs, responseTimeout, refreshAuth, logf)
 		}(i, slot)
 	}

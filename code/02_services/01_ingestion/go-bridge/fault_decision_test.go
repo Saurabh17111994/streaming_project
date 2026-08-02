@@ -13,6 +13,13 @@ func TestClassifyAuthRefresh(t *testing.T) {
 		t.Fatalf("no refresh fn: got %v, want authTerminalExhausted", got)
 	}
 
+	// R-023 regression: NO refresh function with a nil error (a token-only
+	// deployment where refreshAuth == nil keeps refreshErr nil) must be
+	// terminal — the old code returned authResumed and retried forever.
+	if got := classifyAuthRefresh(false, 0, nil); got != authTerminalExhausted {
+		t.Fatalf("no refresh fn, nil err (R-023): got %v, want authTerminalExhausted", got)
+	}
+
 	// Refresh succeeds → resume.
 	if got := classifyAuthRefresh(true, 0, nil); got != authResumed {
 		t.Fatalf("successful refresh: got %v, want authResumed", got)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -51,7 +50,6 @@ type Tick struct {
 	UpperLimit int32 `json:"upper_limit_paise,omitempty"`
 }
 
-var encoder = json.NewEncoder(os.Stdout)
 var bridgeEmitter = NewBridgeEmitter(os.Stdout)
 
 // maxDecodeErrorsPer10s is the decode-error burst threshold per slot (plan
@@ -199,7 +197,10 @@ func runHFT(ctx context.Context, cancel context.CancelFunc, client *arrow.Client
 	if len(plan.Slots) != 1 {
 		slot := plan.Slots[0]
 		logf("FATAL: this deployment is approved for exactly one Arrow HFT socket; planned=%d", len(plan.Slots))
-		_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "auth_failure", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: 0, State: string(SlotTerminal), Reason: "single_socket_policy_violation", ReceivedTsMs: time.Now().UnixMilli()})
+		// R-177: a deployment/policy violation is NOT a credential failure —
+		// emit disconnect (non-auth vocabulary) so alerting keyed on
+		// auth_failure does not fire for a non-credential condition.
+		_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "disconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: 1, State: string(SlotTerminal), Reason: "single_socket_policy_violation", ReceivedTsMs: time.Now().UnixMilli()})
 		cancel()
 		return
 	}
@@ -249,6 +250,9 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 	terminalAuthFailure := false
 	readCtx, stopRead := context.WithCancel(ctx)
 	defer stopRead()
+	// R-185: a new connection epoch begins — restart the per-slot tick
+	// sequence so feed_sequence_local does not grow across reconnects.
+	bridgeEmitter.resetSeq(slot.SlotID)
 
 	// onDecoded fires immediately before each LTP/full tick dispatch in the
 	// same read goroutine, so lastDecoded holds the exact decompressed packet
@@ -380,6 +384,9 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 	lastFrameNanos.Store(time.Now().UnixNano())
 	_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "subscription_ack", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotActive), AssignedTokens: len(tokens), AcknowledgedTokens: len(tokens), ReceivedTsMs: time.Now().UnixMilli()})
 
+	// R-059: heartbeat and watchdog goroutines must stop when the epoch ends
+	// (epochStop), not just on the process context — otherwise a dead epoch's
+	// goroutines keep writing to a closed stream and emit spurious events.
 	heartbeat := time.NewTicker(3 * time.Second)
 	defer heartbeat.Stop()
 	go func() {
@@ -486,12 +493,16 @@ const (
 // classifyAuthRefresh is a pure decision helper for the plan's bounded auth
 // refresh (3 attempts per slot failure episode). hasRefresh=false means no
 // refresh is possible → terminal. refreshErr != nil means this refresh failed.
+//
+// R-023: a nil refreshErr must NOT be treated as success when no refresh is
+// possible — a token-only deployment (refreshAuth == nil, so refreshErr stays
+// nil) previously looped "reconnect / authentication_refreshed" forever.
 func classifyAuthRefresh(hasRefresh bool, authRefreshes int, refreshErr error) authRefreshOutcome {
-	if refreshErr == nil {
-		return authResumed
-	}
 	if !hasRefresh || authRefreshes >= 3 {
 		return authTerminalExhausted
+	}
+	if refreshErr == nil {
+		return authResumed
 	}
 	// This attempt counted: the next check sees authRefreshes+1.
 	if authRefreshes+1 >= 3 {
@@ -592,7 +603,10 @@ func fromStandardTick(t arrow.MarketTick) Tick {
 }
 
 func emit(t Tick) {
-	if err := encoder.Encode(t); err != nil {
+	// R-058: standard-mode ticks and lifecycle events MUST share one stdout
+	// writer. The global encoder and bridgeEmitter were two independent
+	// writers — interleaved NDJSON lines corrupted ordering for Java.
+	if err := bridgeEmitter.write(t); err != nil {
 		fmt.Fprintf(os.Stderr, "arrow-bridge: stdout write error: %v\n", err)
 		os.Exit(1)
 	}
@@ -601,8 +615,11 @@ func emit(t Tick) {
 func envOrFatal(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
+		// R-175: a missing required env is a fatal config/startup failure —
+		// exit status 2 per the file's own contract, not 1 (unexpected
+		// supervisor failure).
 		fmt.Fprintf(os.Stderr, "arrow-bridge: missing required env: %s\n", key)
-		os.Exit(1)
+		os.Exit(exitFatalStart)
 	}
 	return v
 }
@@ -628,6 +645,12 @@ func parseTokensEnv(key string) []int32 {
 		n, err := strconv.Atoi(s)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "arrow-bridge: invalid token %q: %v\n", s, err)
+			continue
+		}
+		// R-176: a token outside the int32 range silently wrapped and negative
+		// values were accepted verbatim — both corrupt the subscription set.
+		if n <= 0 || int64(n) > int64(^uint32(0)>>1) {
+			fmt.Fprintf(os.Stderr, "arrow-bridge: token %d out of range (must be 1..%d); skipping\n", n, int64(^uint32(0)>>1))
 			continue
 		}
 		out = append(out, int32(n))
@@ -690,6 +713,12 @@ func loadTokensFromCSV(envKey, csvPath string) []int32 {
 		n, err := strconv.Atoi(tokenStr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "arrow-bridge: bad token at CSV line %d: %q\n", lineNum, tokenStr)
+			continue
+		}
+		// R-176: reject out-of-range/negative tokens instead of silently
+		// narrowing to int32.
+		if n <= 0 || int64(n) > int64(^uint32(0)>>1) {
+			fmt.Fprintf(os.Stderr, "arrow-bridge: token %d out of range at CSV line %d; skipping\n", n, lineNum)
 			continue
 		}
 		tokens = append(tokens, int32(n))

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ import (
 type fakeBrokerWire struct {
 	server       *httptest.Server
 	url          string
-	connections  int
+	connections  atomic.Int32   // R-094 class: the WS handler runs per-connection in its own goroutine
 	disconnect   map[int]bool   // connection indices to force-close after responding (1-based)
 	allInvalid   bool           // respond E_ALL_INVALID (terminal) instead of SUCCESS
 	tokenInvalid map[int32]bool // respond E_ALL_INVALID for subscriptions whose first token matches
@@ -49,8 +50,7 @@ func newFakeBrokerWire(t *testing.T, disconnectAt ...int) *fakeBrokerWire {
 			return
 		}
 		defer conn.Close()
-		f.connections++
-		connIdx := f.connections
+		connIdx := int(f.connections.Add(1))
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
@@ -234,8 +234,8 @@ func TestBridgeE2EFakeBrokerSubscribeTickAndReconnect(t *testing.T) {
 		t.Fatalf("expected reconnect BACKOFF, got %q\n%s", got, out.String())
 	}
 	// The reconnect loop must have started a second epoch (2+ connection attempts).
-	if fake.connections < 2 {
-		t.Fatalf("expected >=2 broker connections after reconnect, got %d", fake.connections)
+	if got := fake.connections.Load(); got < 2 {
+		t.Fatalf("expected >=2 broker connections after reconnect, got %d", got)
 	}
 }
 
@@ -348,8 +348,8 @@ func TestFakeBrokerForcedOneSlotDisconnect(t *testing.T) {
 		t.Fatalf("expected reconnect BACKOFF, got %q\n%s", got, out.String())
 	}
 	// The reconnect must have started a second connection for the forced slot.
-	if fake.connections < 3 { // conn1 (slot0) + conn2 (slot1) + conn3 (slot0 retry)
-		t.Fatalf("expected >=3 broker connections, got %d", fake.connections)
+	if fake.connections.Load() < 3 { // conn1 (slot0) + conn2 (slot1) + conn3 (slot0 retry)
+		t.Fatalf("expected >=3 broker connections, got %d", fake.connections.Load())
 	}
 }
 

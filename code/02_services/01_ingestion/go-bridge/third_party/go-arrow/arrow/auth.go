@@ -57,14 +57,23 @@ func GenerateChecksum(appID, appSecret, requestToken string) string {
 func (c *Client) Authenticate(requestToken string) (string, error) {
 	checksum := GenerateChecksum(c.Config.AppID, c.Config.AppSecret, requestToken)
 
-	payload := fmt.Sprintf(`{
-		"checkSum": "%s",
-		"checksum": "%s",
-		"token": "%s",
-		"appId": "%s"
-	}`, checksum, checksum, requestToken, c.Config.AppID)
+	// R-099: build the JSON body with json.Marshal — raw fmt.Sprintf
+	// interpolation produced invalid JSON when credentials contained quotes,
+	// backslashes, or control characters.
+	payloadBody := struct {
+		CheckSum string `json:"checkSum"`
+		Checksum string `json:"checksum"`
+		Token    string `json:"token"`
+		AppID    string `json:"appId"`
+	}{
+		CheckSum: checksum, Checksum: checksum, Token: requestToken, AppID: c.Config.AppID,
+	}
+	payload, err := json.Marshal(payloadBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal authenticate payload: %w", err)
+	}
 
-	responseBody, err := c.request("/auth/app/authenticate-token", "POST", []byte(payload))
+	responseBody, err := c.request("/auth/app/authenticate-token", "POST", payload)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to authenticate")
 		return "", err
@@ -76,8 +85,12 @@ func (c *Client) Authenticate(requestToken string) (string, error) {
 		return "", err
 	}
 
-	if authResponse.Status != "success" {
-		return "", fmt.Errorf("authentication failed: %s", authResponse.Status)
+	// R-100: a "success" status without a token is NOT a successful
+	// authentication — treat it as an error so callers never proceed with an
+	// empty credential.
+	if authResponse.Status != "success" || authResponse.Data.Token == "" {
+		return "", fmt.Errorf("authentication failed: status=%s token_empty=%t",
+			authResponse.Status, authResponse.Data.Token == "")
 	}
 
 	// Update client token after authentication
@@ -96,7 +109,10 @@ func (c *Client) Authenticate(requestToken string) (string, error) {
 //
 // This function prints a login URL and asks the user to enter the request token
 // to complete the authentication process.
-func (c *Client) Login() {
+//
+// R-239: returns an error so automated flows can branch on failure instead of
+// assuming the interactive login succeeded.
+func (c *Client) Login() error {
 	loginURL := fmt.Sprintf("https://app.arrow.trade/app/login?appId=%s", c.Config.AppID)
 	fmt.Println("Please visit the following URL to log in and retrieve your request token:")
 	fmt.Println(loginURL)
@@ -104,15 +120,18 @@ func (c *Client) Login() {
 
 	var requestToken string
 	fmt.Print("Enter Request Token: ")
-	fmt.Scanln(&requestToken)
-
-	_, err := c.Authenticate(requestToken)
+	_, err := fmt.Scanln(&requestToken)
 	if err != nil {
+		return fmt.Errorf("reading request token: %w", err)
+	}
+
+	if _, err := c.Authenticate(requestToken); err != nil {
 		log.Error().Err(err).Msg("Login authentication failed")
-		return
+		return err
 	}
 
 	fmt.Println("Authentication successful.")
+	return nil
 }
 
 // AutoLogin handles the entire authentication flow automatically using credentials.
@@ -131,17 +150,23 @@ func (c *Client) Login() {
 func (c *Client) AutoLogin(username, password, totpSecret string) error {
 	loginURL := "https://api.arrow.trade/auth/app/login"
 
-	// Step 1: Send Login Request
-	payload := fmt.Sprintf(`{
-		"userID": "%s",
-		"password": "%s",
-		"captchaValue": "",
-		"captchaID": null,
-		"appID": "%s",
-		"isAppLogin": true
-	}`, username, password, c.Config.AppID)
-
-	resp, err := c.rawRequest(loginURL, "POST", []byte(payload))
+	// Step 1: Send Login Request (R-099: json.Marshal, never raw interpolation)
+	loginBody := struct {
+		UserID       string `json:"userID"`
+		Password     string `json:"password"`
+		CaptchaValue string `json:"captchaValue"`
+		CaptchaID    any    `json:"captchaID"`
+		AppID        string `json:"appID"`
+		IsAppLogin   bool   `json:"isAppLogin"`
+	}{
+		UserID: username, Password: password, CaptchaID: nil,
+		AppID: c.Config.AppID, IsAppLogin: true,
+	}
+	loginPayload, err := json.Marshal(loginBody)
+	if err != nil {
+		return fmt.Errorf("marshal login payload: %w", err)
+	}
+	resp, err := c.rawRequest(loginURL, "POST", loginPayload)
 	if err != nil {
 		log.Error().Err(err).Msg("Login request failed")
 		return err
@@ -157,6 +182,10 @@ func (c *Client) AutoLogin(username, password, totpSecret string) error {
 		log.Error().Err(err).Msg("Failed to parse login response")
 		return err
 	}
+	// R-100: a missing requestId would send a broken 2FA request — fail fast.
+	if loginResp.Data.RequestID == "" {
+		return fmt.Errorf("auto-login: empty requestId from login response")
+	}
 
 	// Step 2: Generate TOTP Code
 	passcode, err := generateTOTP(totpSecret)
@@ -165,14 +194,19 @@ func (c *Client) AutoLogin(username, password, totpSecret string) error {
 		return err
 	}
 
-	// Step 3: Validate 2FA
-	totpPayload := fmt.Sprintf(`{
-		"code": "%s",
-		"requestId": "%s",
-		"userID": "%s"
-	}`, passcode, loginResp.Data.RequestID, username)
-
-	resp, err = c.rawRequest("https://edge.arrow.trade/auth/validate-2fa", "POST", []byte(totpPayload))
+	// Step 3: Validate 2FA (R-099: json.Marshal)
+	totpBody := struct {
+		Code      string `json:"code"`
+		RequestID string `json:"requestId"`
+		UserID    string `json:"userID"`
+	}{
+		Code: passcode, RequestID: loginResp.Data.RequestID, UserID: username,
+	}
+	totpPayload, err := json.Marshal(totpBody)
+	if err != nil {
+		return fmt.Errorf("marshal 2fa payload: %w", err)
+	}
+	resp, err = c.rawRequest("https://edge.arrow.trade/auth/validate-2fa", "POST", totpPayload)
 	if err != nil {
 		log.Error().Err(err).Msg("2FA validation failed")
 		return err
@@ -197,10 +231,14 @@ func (c *Client) AutoLogin(username, password, totpSecret string) error {
 	}
 
 	requestToken := parsedURL.Query().Get("request-token")
+	// R-100: never authenticate with an empty token — the old code silently
+	// proceeded and the Authenticate call failed opaquely.
+	if requestToken == "" {
+		return fmt.Errorf("auto-login: no request-token in redirect URL")
+	}
 
 	// Step 5: Authenticate and Get Access Token
-	_, err = c.Authenticate(requestToken)
-	if err != nil {
+	if _, err := c.Authenticate(requestToken); err != nil {
 		log.Error().Err(err).Msg("Authentication failed")
 		return err
 	}

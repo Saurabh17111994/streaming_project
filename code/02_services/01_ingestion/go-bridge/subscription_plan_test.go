@@ -31,6 +31,13 @@ func TestSubscriptionPlanBoundaries(t *testing.T) {
 	if _, err := BuildSubscriptionPlan([]int32{1, 1}, 1, 1024, 512); err == nil {
 		t.Fatal("expected duplicate rejection")
 	}
+	// R-188: zero and negative tokens must be rejected at plan construction.
+	if _, err := BuildSubscriptionPlan([]int32{0, 1}, 1, 1024, 512); err == nil {
+		t.Fatal("expected zero-token rejection (R-188)")
+	}
+	if _, err := BuildSubscriptionPlan([]int32{-5, 1}, 1, 1024, 512); err == nil {
+		t.Fatal("expected negative-token rejection (R-188)")
+	}
 }
 
 // ING-CAP-001 — 512 and 1024 manifests report exact capacity (request chunks

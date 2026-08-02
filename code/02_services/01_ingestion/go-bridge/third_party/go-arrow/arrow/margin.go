@@ -67,7 +67,24 @@ func (c *Client) GetMargin(order MarginRequest) (*MarginResponse, error) {
 		return nil, err
 	}
 	if result.Status != "success" {
-		return nil, fmt.Errorf("margin calculation failed with status: %s", result.Status)
+		// R-242: preserve the server's error detail — MarginResponse previously
+		// had no Message/ErrorCode field, so the returned error only contained
+		// the bare status string.
+		var detail struct {
+			ErrorMessage string `json:"errorMessage"`
+			ErrorCode    string `json:"errorCode"`
+			Message      string `json:"message"`
+		}
+		_ = json.Unmarshal(resp, &detail)
+		msg := detail.ErrorMessage
+		if msg == "" {
+			msg = detail.Message
+		}
+		if detail.ErrorCode != "" {
+			return nil, fmt.Errorf("margin calculation failed (status=%s, code=%s, message=%s)",
+				result.Status, detail.ErrorCode, msg)
+		}
+		return nil, fmt.Errorf("margin calculation failed (status=%s, message=%s)", result.Status, msg)
 	}
 
 	return &result, nil
