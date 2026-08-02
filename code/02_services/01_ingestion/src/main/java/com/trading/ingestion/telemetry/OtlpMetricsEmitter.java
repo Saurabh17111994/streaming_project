@@ -12,7 +12,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.DoubleAdder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,8 +21,8 @@ import org.slf4j.LoggerFactory;
  * {@code http://otel-collector:4318/v1/metrics} (HTTP OTLP).
  *
  * <p>Uses zero external dependencies — pure JDK HttpURLConnection + JSON.
- * Counters and histograms use {@link AtomicLong}; gauges use
- * {@link DoubleAdder}. A background thread flushes every 10 seconds.
+ * Counters use {@link AtomicLong}; gauges are volatile primitives. A background
+ * thread flushes every 10 seconds.
  *
  * <p>12 metrics per dossier:
  * <ol>
@@ -71,9 +70,14 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
     private final AtomicLong appendLatencyP50 = new AtomicLong(0);
     private final AtomicLong appendLatencyP90 = new AtomicLong(0);
     private final AtomicLong appendLatencyP99 = new AtomicLong(0);
-    // Simple percentile tracking: ring buffer
-    private final long[] latencyRing = new long[1024];
-    private volatile int latencyRingPos;
+    // Simple percentile tracking: wrapping ring buffer (R-065/R-179).
+    // All access is synchronized on LATENCY_LOCK: the recorder thread and the
+    // background flush thread share the array, and a plain read-check-then-write
+    // on the position could lose samples or read a torn position.
+    private static final int LATENCY_RING_SIZE = 1024;
+    private static final Object LATENCY_LOCK = new Object();
+    private final long[] latencyRing = new long[LATENCY_RING_SIZE];
+    private int latencyRecordPos; // next write slot (monotonic; masked into the ring)
 
     // ---- Gauges ----
     private volatile long pendingRecords;
@@ -138,9 +142,12 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     @Override
     public void close() {
-        closed = true;
+        // R-035: the final flush must run BEFORE the closed flag is set —
+        // flush() returns immediately when closed, so setting it first would
+        // silently discard up to 10s of buffered metrics on every shutdown.
         scheduler.shutdown();
         flush(); // final flush before shutdown
+        closed = true;
         LOG.info("otlp-metrics: closed");
     }
 
@@ -154,11 +161,11 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
     public void recordAppendLatencyMs(long latencyMs) {
         appendLatencyTotalMs.addAndGet(latencyMs);
         appendLatencyCount.incrementAndGet();
-        // Ring buffer for approximate percentiles
-        int pos = latencyRingPos;
-        if (pos < latencyRing.length) {
-            latencyRing[pos] = latencyMs;
-            latencyRingPos = pos + 1;
+        // R-065/R-179: thread-safe wrapping ring — never drops samples once
+        // full, and never races with the flush thread's percentile snapshot.
+        synchronized (LATENCY_LOCK) {
+            latencyRing[latencyRecordPos & (LATENCY_RING_SIZE - 1)] = latencyMs;
+            latencyRecordPos++;
         }
     }
 
@@ -169,6 +176,13 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
     public void setManifestVersion(long v) { manifestVersion = v; }
     public void incrementDecodeError(String reason) {
         decodeErrors.incrementAndGet();
+        // R-258: bounded reason map — beyond 32 distinct reasons everything
+        // aggregates into "other" so a long-running process cannot grow the
+        // map without bound.
+        if (decodeReasonCounters.size() >= 32 && !decodeReasonCounters.containsKey(reason)) {
+            decodeReasonCounters.computeIfAbsent("other", k -> new AtomicLong(0)).incrementAndGet();
+            return;
+        }
         decodeReasonCounters.computeIfAbsent(reason, k -> new AtomicLong(0)).incrementAndGet();
     }
     public void incrementFingerprint() { fingerprintCount.incrementAndGet(); }
@@ -238,12 +252,16 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
                 os.write(json.getBytes(StandardCharsets.UTF_8));
             }
 
+            // R-067: health must reflect the actual HTTP status — a rejected
+            // or malformed payload (>=400) is NOT a healthy export.
             int code = conn.getResponseCode();
             if (code >= 400) {
                 LOG.warn("otlp-metrics: flush HTTP {} (url={})", code, collectorUrl);
+                reportHealth(false);
+            } else {
+                reportHealth(true);
             }
             conn.disconnect();
-            reportHealth(true);
 
         } catch (Exception e) {
             LOG.debug("otlp-metrics: flush failed (collector may not be running): {}",
@@ -264,7 +282,7 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     // ---- JSON builder (minimal OTLP metrics format) ----
 
-    private String buildMetricsJson() {
+    String buildMetricsJson() {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         // Compute approximate percentiles from ring buffer
         computeLatencyPercentiles();
@@ -273,6 +291,7 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
         sb.append("{\"resourceMetrics\":[{\"resource\":{\"attributes\":[");
         appendAttr(sb, "service.name", serviceName);
         appendAttr(sb, "service.instance.id", instanceId);
+        sb.setLength(sb.length() - 1); // R-036: drop trailing comma after the last attribute
         sb.append("]},\"scopeMetrics\":[{\"scope\":{\"name\":\"ingestion\"},\"metrics\":[");
 
         // Counter: tick.throughput
@@ -280,6 +299,10 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
         appendSum(sb, "tick.bytes", "bytes", byteCount.get(), now);
         appendSum(sb, "bridge.reconnects", "reconnects", bridgeReconnects.get(), now);
         appendSum(sb, "decode.errors", "errors", decodeErrors.get(), now);
+        // R-258: emit the per-reason decode-error breakdown so the recorded
+        // state reaches the collector (previously write-only).
+        decodeReasonCounters.forEach((reason, counter) ->
+                appendReasonSum(sb, reason, counter.get(), now));
         appendSum(sb, "fingerprint.count", "fingerprints", fingerprintCount.get(), now);
         appendSum(sb, "append.acknowledged.loss", "records", acknowledgedLoss.get(), now);
         appendSum(sb, "heartbeat.failures", "failures", heartbeatFailures.get(), now);
@@ -338,40 +361,69 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
     }
 
     private void computeLatencyPercentiles() {
-        int count = Math.min(latencyRingPos, latencyRing.length);
-        if (count == 0) return;
-        // Copy and sort for percentiles
-        long[] sorted = new long[count];
-        System.arraycopy(latencyRing, 0, sorted, 0, count);
+        int count;
+        long[] sorted;
+        synchronized (LATENCY_LOCK) {
+            // Copy the LAST min(pos, ringSize) samples in arrival order, then
+            // reset the position so each 10s window covers exactly its own
+            // samples (R-065/R-179 — wrapping ring, no lost samples).
+            int n = Math.min(latencyRecordPos, LATENCY_RING_SIZE);
+            if (n == 0) return;
+            sorted = new long[n];
+            for (int i = 0; i < n; i++) {
+                sorted[i] = latencyRing[(latencyRecordPos - n + i) & (LATENCY_RING_SIZE - 1)];
+            }
+            count = n;
+            latencyRecordPos = 0;
+        }
         java.util.Arrays.sort(sorted);
         appendLatencyP50.set(sorted[count / 2]);                    // p50
         appendLatencyP90.set(sorted[(int) (count * 0.90)]);         // p90
         appendLatencyP99.set(sorted[(int) (count * 0.99)]);         // p99
-        // Reset ring buffer
-        latencyRingPos = 0;
     }
 
     private void appendSum(StringBuilder sb, String name, String unit, long value, long timeNanos) {
+        // R-036: OTLP protobuf-JSON sums require aggregationTemporality and
+        // isMonotonic; int64-as-string is legal for sums but we emit them as
+        // numbers for consistency.
         sb.append("{\"name\":\"").append(esc(name)).append("\",")
           .append("\"unit\":\"").append(esc(unit)).append("\",")
-          .append("\"sum\":{\"dataPoints\":[{\"asInt\":\"").append(value).append("\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_CUMULATIVE\",")
+          .append("\"isMonotonic\":true,")
+          .append("\"dataPoints\":[{\"asInt\":").append(value).append(",")
+          .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
+    }
+
+    /** Per-reason decode-error sum (R-258) — emitted so the breakdown reaches the collector. */
+    private void appendReasonSum(StringBuilder sb, String reason, long value, long timeNanos) {
+        sb.append("{\"name\":\"decode.errors.by_reason\",")
+          .append("\"unit\":\"errors\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_CUMULATIVE\",")
+          .append("\"isMonotonic\":true,")
+          .append("\"dataPoints\":[{\"asInt\":").append(value).append(",")
+          .append("\"attributes\":[{\"key\":\"reason\",\"value\":{\"stringValue\":\"")
+          .append(esc(reason)).append("\"}}],")
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
     }
 
     private void appendHistogram(StringBuilder sb, String name, String unit,
                                   long count, long sum, long p50, long p90, long p99,
                                   long timeNanos) {
+        // R-036: OTLP histograms require explicitBounds to be one element
+        // shorter than bucketCounts, and bucket totals to reconcile with count.
+        // We carry the whole sample in the first bucket over the [p50,p90,p99]
+        // bounds; p50/p90/p99 are preserved as data-point attributes.
         sb.append("{\"name\":\"").append(esc(name)).append("\",")
           .append("\"unit\":\"").append(esc(unit)).append("\",")
           .append("\"histogram\":{\"dataPoints\":[{")
-          .append("\"count\":\"").append(count).append("\",")
+          .append("\"count\":").append(count).append(",")
           .append("\"sum\":").append(sum).append(",")
-          .append("\"bucketCounts\":[\"0\",\"0\",\"0\",\"0\"],")
-          .append("\"explicitBounds\":[0,0,0,0],")
+          .append("\"bucketCounts\":[").append(count).append(",0,0,0],")
+          .append("\"explicitBounds\":[").append(p50).append(",").append(p90).append(",").append(p99).append("],")
           .append("\"attributes\":[{")
-          .append("\"key\":\"p50\",\"value\":{\"intValue\":\"").append(p50).append("\"}},")
-          .append("{\"key\":\"p90\",\"value\":{\"intValue\":\"").append(p90).append("\"}},")
-          .append("{\"key\":\"p99\",\"value\":{\"intValue\":\"").append(p99).append("\"}}")
+          .append("\"key\":\"p50\",\"value\":{\"intValue\":").append(p50).append("}},")
+          .append("{\"key\":\"p90\",\"value\":{\"intValue\":").append(p90).append("}},")
+          .append("{\"key\":\"p99\",\"value\":{\"intValue\":").append(p99).append("}}")
           .append("],")
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
     }
@@ -394,9 +446,11 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     private void appendGaugeDouble(StringBuilder sb, String name, String unit,
                                    double value, long timeNanos) {
+        // R-036: protobuf JSON requires double fields to be JSON numbers, not
+        // strings — asDouble must be unquoted.
         sb.append("{\"name\":\"").append(esc(name)).append("\",")
           .append("\"unit\":\"").append(esc(unit)).append("\",")
-          .append("\"gauge\":{\"dataPoints\":[{\"asDouble\":\"").append(value).append("\",")
+          .append("\"gauge\":{\"dataPoints\":[{\"asDouble\":").append(value).append(",")
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
     }
 
@@ -422,9 +476,10 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     private void appendGaugeDoubleLabeled(StringBuilder sb, String name, String unit,
                                           double value, String slotId, long timeNanos) {
+        // R-036: asDouble as a JSON number (protobuf-JSON compliance).
         sb.append("{\"name\":\"").append(esc(name)).append("\",")
           .append("\"unit\":\"").append(esc(unit)).append("\",")
-          .append("\"gauge\":{\"dataPoints\":[{\"asDouble\":\"").append(value).append("\",")
+          .append("\"gauge\":{\"dataPoints\":[{\"asDouble\":").append(value).append(",")
           .append("\"attributes\":[{\"key\":\"slot\",\"value\":{\"stringValue\":\"")
           .append(esc(slotId)).append("\"}}],")
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
@@ -437,6 +492,29 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     private static String esc(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        // R-066: escape backslash, double-quote, and ALL control characters
+        // (< 0x20) — an embedded \n/\t/\r in a reason string would otherwise
+        // produce invalid JSON and fail the entire 10s POST.
+        StringBuilder out = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                case '\b' -> out.append("\\b");
+                case '\f' -> out.append("\\f");
+                default -> {
+                    if (c < 0x20) {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        return out.toString();
     }
 }

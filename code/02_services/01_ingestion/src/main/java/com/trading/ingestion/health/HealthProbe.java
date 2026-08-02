@@ -77,7 +77,20 @@ public final class HealthProbe {
     public boolean isBrokerConnected() { return this.brokerConnected.get(); }
     public void setSubscriptionComplete(boolean complete) { this.subscriptionComplete.set(complete); }
     public boolean isSubscriptionComplete() { return this.subscriptionComplete.get(); }
-    public void setLastFrameReceived(long nanoTime) { this.lastFrameReceivedNanos = nanoTime; }
+    public void setLastFrameReceived(long nanoTime) {
+        this.lastFrameReceivedNanos = nanoTime;
+        // R-031: per-slot frame recency must reflect real frame flow. The Go
+        // bridge emits no periodic lifecycle events while a slot is healthy —
+        // ticks arrive as NDJSON lines that only hit this global setter. Refresh
+        // every ACTIVE slot's lastFrameNanos so isDataReady() does not flip
+        // false ~15s after the last ACTIVE event during steady-state.
+        long now = nanoTime;
+        slots.forEach((id, slot) -> {
+            if ("ACTIVE".equals(slot.state) && slot.lastFrameNanos > 0) {
+                slot.lastFrameNanos = now;
+            }
+        });
+    }
 
     /** OTLP collector reachability + last export success (plan: telemetry readiness). */
     public void setOtlpHealthy(boolean healthy) { this.otlpHealthy.set(healthy); }
@@ -134,6 +147,10 @@ public final class HealthProbe {
     }
 
     private boolean isFrameRecent() {
+        // R-178: System.nanoTime() has an arbitrary boot-time origin; 0 means
+        // "no frame ever received". A probe that has never seen a frame must
+        // not be reported as 'recent' merely because nanoTime() is still small.
+        if (lastFrameReceivedNanos == 0) return false;
         long ago = System.nanoTime() - lastFrameReceivedNanos;
         return ago < FRAME_STALE_TIMEOUT.toNanos();
     }
@@ -156,6 +173,7 @@ public final class HealthProbe {
         m.put("tracker_halted", tracker.isHalted());
         m.put("broker_connected", brokerConnected.get());
         m.put("subscription_complete", subscriptionComplete.get());
+        m.put("telemetry_ready", otlpHealthy.get());
         m.put("frame_recent", isFrameRecent());
         long offsetMs = clockChecker != null ? clockChecker.lastOffsetMs() : 0;
         boolean ok = isClockOk();

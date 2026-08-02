@@ -85,11 +85,33 @@ class UncertaintyJournalTest {
 
     @Test
     @DisplayName("ensureWritable creates parent directory")
-    void ensureWritableCreatesParent() throws Exception {
-        Path nested = tempDir.resolve("a/b/c/journal.jsonl");
+    void ensureWritableCreatesParent() throws Exception {        Path nested = tempDir.resolve("a/b/c/journal.jsonl");
         UncertaintyJournal journal = new UncertaintyJournal(nested);
         assertTrue(journal.ensureWritable(), "ensureWritable should succeed");
         assertTrue(java.nio.file.Files.isDirectory(tempDir.resolve("a/b/c")),
                 "parent directory should be created");
+    }
+
+    @Test
+    @DisplayName("Control characters are escaped so JSONL stays one line (R-194)")
+    void jsonEscapesControlCharacters() {
+        UncertaintyJournal.Entry entry = new UncertaintyJournal.Entry(
+                "instance", Instant.now(), 0, 0, 0, 0, 0, "crash reason\nsecond line\twith tab"
+        );
+        String json = entry.toJson();
+        assertTrue(!json.contains("\n"), "newline must be escaped — JSONL invariant (R-194)");
+        assertTrue(json.contains("\\t"), "tab escaped as \\t");
+    }
+
+    @Test
+    @DisplayName("Bare-filename journal path does not NPE (R-117)")
+    void bareFilenamePathDoesNotNpe() throws Exception {
+        // Simulate UNCERTAINTY_JOURNAL_PATH=journal.jsonl (no parent).
+        java.nio.file.Path cwd = java.nio.file.Paths.get("").toAbsolutePath();
+        UncertaintyJournal journal = new UncertaintyJournal(cwd.resolve("journal.jsonl"));
+        journal.write(new UncertaintyJournal.Entry("i", Instant.now(), 1, 1, 0, 0, 10, "x"));
+        assertTrue(java.nio.file.Files.exists(cwd.resolve("journal.jsonl")),
+                "write with bare filename must succeed (R-117)");
+        java.nio.file.Files.deleteIfExists(cwd.resolve("journal.jsonl"));
     }
 }

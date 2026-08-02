@@ -1,6 +1,7 @@
 package com.trading.ingestion.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -108,5 +109,49 @@ class IngestionConfigTest {
         } catch (IllegalStateException e) {
             assertTrue(e.getMessage().contains("INGESTION_ALLOW_DEGRADED"));
         }
+    }
+
+    @Test
+    @DisplayName("ARROW_MAX_EVENT_AGE_MS / SKEW reject 0 (R-114)")
+    void ageAndSkewMustBePositive() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("ARROW_APP_ID", "test-app");
+        env.put("ARROW_APP_SECRET", "test-secret");
+        env.put("ARROW_TOKEN", "test-token");
+        env.put("FLUSS_BOOTSTRAP", "localhost:9123");
+        env.put("RAW_TABLE_NAME", "raw_table_1");
+        env.put("ARROW_MAX_EVENT_AGE_MS", "0");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> IngestionConfig.validateFrom(env),
+                "ARROW_MAX_EVENT_AGE_MS=0 must be rejected (R-114)");
+        assertTrue(e.getMessage().contains("ARROW_MAX_EVENT_AGE_MS"), e.getMessage());
+
+        env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "0");
+        IllegalStateException e2 = assertThrows(IllegalStateException.class,
+                () -> IngestionConfig.validateFrom(env),
+                "ARROW_MAX_FUTURE_EVENT_SKEW_MS=0 must be rejected (R-114)");
+        assertTrue(e2.getMessage().contains("ARROW_MAX_FUTURE_EVENT_SKEW_MS"), e2.getMessage());
+    }
+
+    @Test
+    @DisplayName("MAX_PENDING_APPEND_BYTES below the 1 MiB floor is rejected once (R-156)")
+    void pendingBytesFloorEnforced() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("ARROW_APP_ID", "test-app");
+        env.put("ARROW_APP_SECRET", "test-secret");
+        env.put("ARROW_TOKEN", "test-token");
+        env.put("FLUSS_BOOTSTRAP", "localhost:9123");
+        env.put("RAW_TABLE_NAME", "raw_table_1");
+        env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
+        env.put("MAX_PENDING_APPEND_BYTES", "1024"); // below 1 MiB floor
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> IngestionConfig.validateFrom(env),
+                "MAX_PENDING_APPEND_BYTES below the 1 MiB floor must be rejected (R-156)");
+        assertTrue(e.getMessage().contains("MAX_PENDING_APPEND_BYTES"), e.getMessage());
     }
 }

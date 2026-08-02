@@ -202,7 +202,7 @@ public final class IngestionConfig {
         }
 
         // ---- Fingerprint & SDK version ----
-        b.goArrowSdkVersion = required(env, "GO_ARROW_SDK_VERSION", "0.0.0-local", errors);
+        b.goArrowSdkVersion = optionalWithFallback(env, "GO_ARROW_SDK_VERSION", "0.0.0-local");
 
         // ---- DDL & clock strictness ----
         b.allowRuntimeDdl = "true".equalsIgnoreCase(
@@ -212,15 +212,9 @@ public final class IngestionConfig {
         b.uncertaintyJournalPath = optional(env, "UNCERTAINTY_JOURNAL_PATH");
 
         // ---- Standard derived values ----
-        // Container memory for dynamic MAX_PENDING_BYTES (simple env override)
-        String dynamicBytes = env.get("MAX_PENDING_APPEND_BYTES");
-        if (dynamicBytes != null && !dynamicBytes.isBlank()) {
-            try {
-                b.maxPendingBytes = Long.parseLong(dynamicBytes);
-            } catch (NumberFormatException e) {
-                errors.add("MAX_PENDING_APPEND_BYTES must be a valid integer (bytes)");
-            }
-        }
+        // (MAX_PENDING_APPEND_BYTES is validated exactly once by the longRange
+        // call above — the duplicate block that re-parsed the env key and
+        // bypassed the 1 MiB floor was removed, R-156.)
 
         // ---- Fail if any errors ----
         if (!errors.isEmpty()) {
@@ -295,7 +289,9 @@ public final class IngestionConfig {
         }
         try {
             long parsed = Long.parseLong(value);
-            if (parsed < 0) errors.add(key + " must be non-negative");
+            // R-114: a 0 ms age/skew limit would quarantine every tick whose
+            // receive time differs by even 1ms — these limits must be positive.
+            if (parsed <= 0) errors.add(key + " must be positive (>0)");
             return parsed;
         } catch (NumberFormatException e) {
             errors.add(key + " must be an integer, got: " + value);
@@ -303,7 +299,16 @@ public final class IngestionConfig {
         }
     }
 
-    private static String required(Map<String, String> env, String key, String fallback, List<String> errors) {
+    /**
+     * Optional key with a plan default (R-226): the old "required-with-fallback"
+     * overload's {@code errors} parameter was never used — it always warned and
+     * returned the fallback, which misled maintainers into thinking
+     * {@code GO_ARROW_SDK_VERSION} is mandatory and that violations reach the
+     * error list. It is genuinely optional with a dev fallback while the SDK
+     * version pin is evidence-pending ({@code TO_BE_VERIFIED} in versions.pin);
+     * missing values log a warning.
+     */
+    private static String optionalWithFallback(Map<String, String> env, String key, String fallback) {
         String v = env.get(key);
         if (v == null || v.isBlank()) {
             LOG.warn("ingestion-config: {} not set; using fallback {}", key, fallback);
@@ -320,7 +325,7 @@ public final class IngestionConfig {
     private static int exactInt(Map<String, String> env, String key, int expected, List<String> errors) {
         String v = env.get(key);
         if (v == null || v.isBlank()) {
-            // Check both env and default
+            LOG.warn("ingestion-config: {} not set; using plan default {}", key, expected);
             return expected; // default matches expected
         }
         int parsed;
@@ -338,7 +343,10 @@ public final class IngestionConfig {
 
     private static int intRange(Map<String, String> env, String key, int defVal, int min, int max, List<String> errors) {
         String v = env.get(key);
-        if (v == null || v.isBlank()) return defVal;
+        if (v == null || v.isBlank()) {
+            LOG.warn("ingestion-config: {} not set; using default {}", key, defVal);
+            return defVal;
+        }
         int parsed;
         try {
             parsed = Integer.parseInt(v);
@@ -354,7 +362,10 @@ public final class IngestionConfig {
 
     private static long longRange(Map<String, String> env, String key, long defVal, long min, long max, List<String> errors) {
         String v = env.get(key);
-        if (v == null || v.isBlank()) return defVal;
+        if (v == null || v.isBlank()) {
+            LOG.warn("ingestion-config: {} not set; using default {}", key, defVal);
+            return defVal;
+        }
         long parsed;
         try {
             parsed = Long.parseLong(v);
@@ -371,7 +382,10 @@ public final class IngestionConfig {
     private static double doubleRange(Map<String, String> env, String key, double defVal, double min, double max,
                                        List<String> errors) {
         String v = env.get(key);
-        if (v == null || v.isBlank()) return defVal;
+        if (v == null || v.isBlank()) {
+            LOG.warn("ingestion-config: {} not set; using default {}", key, defVal);
+            return defVal;
+        }
         double parsed;
         try {
             parsed = Double.parseDouble(v);

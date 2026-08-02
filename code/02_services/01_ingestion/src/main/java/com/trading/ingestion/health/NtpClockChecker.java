@@ -40,6 +40,7 @@ public final class NtpClockChecker {
     private volatile long lastOffsetMs;
     private volatile Instant lastCheckTime;
     private volatile boolean lastCheckPassed;
+    private volatile boolean verified;
 
     /** @param ntpServer      NTP server hostname (e.g. "pool.ntp.org")
      *  @param offsetLimitMs  maximum allowed clock offset in millis */
@@ -87,6 +88,7 @@ public final class NtpClockChecker {
                 long offset = queryNtp(server);
                 lastOffsetMs = offset;
                 lastCheckTime = Instant.now();
+                verified = true;
                 boolean passed = Math.abs(offset) <= offsetLimitMs;
                 lastCheckPassed = passed;
 
@@ -106,24 +108,40 @@ public final class NtpClockChecker {
             // Strict mode: an unreachable time source is a failure.
             lastCheckPassed = false;
             lastOffsetMs = 0;
+            verified = false;
             LOG.error("ntp-clock: all servers unreachable and CLOCK_CHECK_REQUIRED=true — clock check FAILED");
             throw lastError != null ? lastError : new NtpException("all NTP servers unreachable", null);
         }
-        // Fallback: basic sanity check
+        // Fallback (R-032): FAIL-CLOSED. Without a real NTP response the offset
+        // is unverified — a clock skewed by hours would pass the old wall-clock
+        // sanity check and write wrong timestamps. Readiness now fails (clock
+        // unverified) unless an operator explicitly overrides, and the degraded
+        // state is surfaced via isVerified().
         long now = System.currentTimeMillis();
         if (now < MIN_WALL_CLOCK_EPOCH_MS) {
             lastCheckPassed = false;
+            lastOffsetMs = 0;
+            verified = false;
+            LOG.error("ntp-clock: wall clock before {} — clock check FAILED",
+                    Instant.ofEpochMilli(MIN_WALL_CLOCK_EPOCH_MS));
             throw lastError != null ? lastError : new NtpException("all NTP servers unreachable", null);
         }
         lastOffsetMs = 0;
-        lastCheckPassed = true;
-        LOG.warn("ntp-clock: all servers unreachable; falling back to wall-clock sanity check");
+        lastCheckPassed = false;   // fail-closed: unverified != within limit
+        verified = false;
+        LOG.error("ntp-clock: all servers unreachable and CLOCK_CHECK_REQUIRED=false — clock UNVERIFIED "
+                + "(fail-closed; readiness blocked until a server responds)");
         return 0;
     }
 
-    /** True if the last check passed (offset within limit or NTP unreachable with sane clock). */
+    /** True if the last check passed (offset within limit). Never true when unverified. */
     public boolean isWithinLimit() {
         return lastCheckPassed;
+    }
+
+    /** True if the last offset was verified against a real NTP server response. */
+    public boolean isVerified() {
+        return verified;
     }
 
     /** Offset in ms from last check. Positive = local ahead. */
@@ -148,6 +166,11 @@ public final class NtpClockChecker {
 
         // Build NTP request (SNTP client, version 4, mode 3)
         buffer[0] = (byte) (0x23); // LI=0, VN=4, Mode=3
+        // R-064: the client MUST set its transmit timestamp (bytes 40-47) so the
+        // server's origin timestamp can be validated against it.
+        long nowSeconds = System.currentTimeMillis() / 1000L + NTP_EPOCH_OFFSET;
+        writeUint32(buffer, 40, nowSeconds);
+        writeUint32(buffer, 44, 0); // fraction — 0 is acceptable for SNTP
 
         long sendNanos;
         long receiveNanos;
@@ -169,6 +192,11 @@ public final class NtpClockChecker {
             throw new NtpException("NTP query to " + host + " failed", e);
         }
 
+        // R-064: validate the datagram is a genuine NTP server response before
+        // trusting any timestamp: 48-byte packet, server mode (4), and the
+        // origin timestamp echoing our transmit timestamp.
+        validateResponse(buffer);
+
         // Parse NTP response
         // Transmit timestamp: bytes 40-47 (seconds + fraction)
         long transmitSeconds = readUint32(buffer, 40);
@@ -186,11 +214,53 @@ public final class NtpClockChecker {
         return localMillis - ntpMillis;
     }
 
+    /**
+     * Validate a received datagram is a genuine NTP server response (R-064):
+     * exactly {@link #NTP_PACKET_SIZE} bytes, LI/VN/Mode byte with server mode
+     * (bits 0-2 == 4), and the origin timestamp (bytes 24-31) echoing the
+     * client's transmit timestamp (bytes 40-47 of the request).
+     *
+     * <p>Package-private static for direct unit testing.
+     *
+     * @throws NtpException if any check fails
+     */
+    static void validateResponse(byte[] request, byte[] response) throws NtpException {
+        if (response == null || response.length != NTP_PACKET_SIZE) {
+            throw new NtpException("invalid NTP response: expected " + NTP_PACKET_SIZE
+                    + " bytes, got " + (response == null ? 0 : response.length), null);
+        }
+        int mode = response[0] & 0x07;
+        if (mode != 4) {
+            throw new NtpException("invalid NTP response: mode " + mode
+                    + " (expected 4 = server)", null);
+        }
+        // Server must echo our transmit timestamp in its origin timestamp.
+        if (request != null && request.length == NTP_PACKET_SIZE) {
+            long sentTx = readUint32(request, 40);
+            long echoedOrigin = readUint32(response, 24);
+            if (sentTx != 0 && echoedOrigin != sentTx) {
+                throw new NtpException("invalid NTP response: origin timestamp does not echo "
+                        + "the request transmit timestamp", null);
+            }
+        }
+    }
+
+    private static void validateResponse(byte[] response) throws NtpException {
+        validateResponse(null, response);
+    }
+
     private static long readUint32(byte[] buf, int offset) {
         return ((buf[offset] & 0xFFL) << 24)
                 | ((buf[offset + 1] & 0xFFL) << 16)
                 | ((buf[offset + 2] & 0xFFL) << 8)
                 | (buf[offset + 3] & 0xFFL);
+    }
+
+    private static void writeUint32(byte[] buf, int offset, long value) {
+        buf[offset] = (byte) (value >>> 24);
+        buf[offset + 1] = (byte) (value >>> 16);
+        buf[offset + 2] = (byte) (value >>> 8);
+        buf[offset + 3] = (byte) value;
     }
 
     // ---- Exception ----

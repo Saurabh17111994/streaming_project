@@ -1,6 +1,5 @@
 package com.trading.ingestion.shutdown;
 
-import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -8,6 +7,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +29,8 @@ public final class UncertaintyJournal {
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT;
 
     private final Path journalPath;
+    /** In-memory entry count (R-217) — avoids re-scanning the whole file per write. */
+    private final AtomicLong entryCount = new AtomicLong(0);
 
     public UncertaintyJournal() {
         String envPath = System.getenv("UNCERTAINTY_JOURNAL_PATH");
@@ -85,7 +87,12 @@ public final class UncertaintyJournal {
      */
     public void write(Entry entry) {
         try {
-            Files.createDirectories(journalPath.getParent());
+            // R-117: a bare filename (e.g. UNCERTAINTY_JOURNAL_PATH=journal.jsonl)
+            // has no parent — Files.createDirectories(null) would NPE. Guard it.
+            Path parent = journalPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             String line = entry.toJson() + "\n";
 
             Files.write(journalPath,
@@ -93,8 +100,8 @@ public final class UncertaintyJournal {
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
 
-            LOG.info("uncertainty-journal: written (entries={}, path={})",
-                    Files.lines(journalPath).count(), journalPath);
+            long count = entryCount.incrementAndGet();
+            LOG.info("uncertainty-journal: written (entries={}, path={})", count, journalPath);
 
         } catch (IOException e) {
             LOG.error("uncertainty-journal: write failed (path={})", journalPath, e);
@@ -147,7 +154,30 @@ public final class UncertaintyJournal {
 
         private static String escape(String s) {
             if (s == null) return "";
-            return s.replace("\\", "\\\\").replace("\"", "\\\"");
+            // R-194: escape control characters too — an embedded \n/\t/\r in
+            // instanceId or shutdownReason would break the JSONL invariant
+            // (an extra physical line, malformed JSON).
+            StringBuilder out = new StringBuilder(s.length() + 8);
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                switch (c) {
+                    case '\\' -> out.append("\\\\");
+                    case '"' -> out.append("\\\"");
+                    case '\n' -> out.append("\\n");
+                    case '\r' -> out.append("\\r");
+                    case '\t' -> out.append("\\t");
+                    case '\b' -> out.append("\\b");
+                    case '\f' -> out.append("\\f");
+                    default -> {
+                        if (c < 0x20) {
+                            out.append(String.format("\\u%04x", (int) c));
+                        } else {
+                            out.append(c);
+                        }
+                    }
+                }
+            }
+            return out.toString();
         }
     }
 }

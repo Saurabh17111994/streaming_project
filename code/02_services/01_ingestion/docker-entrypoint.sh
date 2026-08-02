@@ -42,4 +42,6 @@ MAIN_CLASS="${INGESTION_MAIN_CLASS:-com.trading.ingestion.IngestionService}"
 # --add-opens is required by the Fluss client's shaded Arrow (MemoryUtil
 # touches java.nio internals on JDK 17+) — must match the host launchers and
 # surefire so container behaviour equals the verified host run path.
-exec java --add-opens=java.base/java.nio=ALL-UNNAMED -cp /app/ingestion.jar "${MAIN_CLASS}"
+exec java --add-opens=java.base/java.nio=ALL-UNNAMED \
+    -Dlog.dir="${LOG_DIR:-/data/ingestion/logs}" \
+    -cp /app/ingestion.jar "${MAIN_CLASS}"

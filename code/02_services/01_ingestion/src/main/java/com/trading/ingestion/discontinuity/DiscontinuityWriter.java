@@ -1,7 +1,6 @@
 package com.trading.ingestion.discontinuity;
 
 import com.trading.ingestion.bridge.BridgeEvent;
-import com.trading.ingestion.model.DiscontinuityEvent;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;

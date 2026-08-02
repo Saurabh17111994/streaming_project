@@ -137,6 +137,9 @@ public final class AppendTracker {
 
     public long pendingRecords() { return pendingRecords.get(); }
     public long pendingBytes() { return pendingBytes.get(); }
+    /** The configured max pending records (R-109: consumers must use this, not a static). */
+    public long maxPendingRecords() { return maxPendingRecords; }
+    public long maxPendingBytes() { return maxPendingBytes; }
     public long totalAccepted() { return totalAccepted.get(); }
     public long totalAppended() { return totalAppended.get(); }
     public long totalFailed() { return totalFailed.get(); }

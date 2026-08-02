@@ -89,6 +89,15 @@ public final class IngestionService {
     private volatile boolean running;
     private volatile boolean subscriptionPaused;
     private volatile long lastFrameNanos;
+    private volatile long lastResourceRefreshNanos;
+
+    /** Watchdog for broker-staleness detection during feed outages (R-108). */
+    private final java.util.concurrent.ScheduledExecutorService stalenessWatchdog =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ingestion-staleness-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
 
     private final IngestionConfig config;
     private final NtpClockChecker clock;
@@ -135,7 +144,12 @@ public final class IngestionService {
         this.metrics = new OtlpMetricsEmitter(otelHost, instanceId);
         metrics.setHealthCallback(health::setOtlpHealthy);
         metrics.start();
-        metrics.setManifestVersion(1);
+        // R-245: report the actual manifest version, not a hardcoded 1. All
+        // instruments share the loaded manifest version (SCH-22).
+        long manifestVersion = instruments.stream()
+                .mapToLong(Instrument::manifestVersion)
+                .max().orElse(0L);
+        metrics.setManifestVersion(manifestVersion);
 
         // Quarantine + discontinuity writers (Phase 2b)
         this.quarantineWriter = new QuarantineWriter(config.flussBootstrap, instanceId);
@@ -160,6 +174,9 @@ public final class IngestionService {
             } else {
                 LOG.error("ingestion: backpressure critical — halting (pending={} records, {} bytes)", recs, byt);
             }
+            // R-246: keep the readiness marker in sync during silent degradation
+            // (backpressure/append failures) even when no bridge event arrives.
+            updateReadinessFile();
         });
     }
 
@@ -271,6 +288,25 @@ public final class IngestionService {
         LOG.info("ingestion: launching arrow-bridge (binary={}, instance={})",
                 bridgeBinary, instanceId);
 
+        // R-108: broker-staleness must be detected even while readLine() blocks
+        // during a genuine feed outage — the ING-1 inline check only runs after
+        // a new frame arrives. A watchdog thread evaluates staleness every 5s.
+        stalenessWatchdog.scheduleAtFixedRate(() -> {
+            if (!running) return;
+            long nowNanos = System.nanoTime();
+            long msSinceLastFrame = lastFrameNanos > 0
+                    ? java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(nowNanos - lastFrameNanos)
+                    : 0;
+            if (lastFrameNanos > 0 && msSinceLastFrame > FRAME_STALE_MS
+                    && health.isBrokerConnected()) {
+                LOG.warn("ingestion: broker data stale ({}ms since last frame) — marking disconnected",
+                        msSinceLastFrame);
+                health.setBrokerConnected(false);
+                metrics.setBridgeConnected(false);
+                updateReadinessFile();
+            }
+        }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
+
         // ---- Subscription completeness tracking (ING-2) ----
         java.util.Set<Long> seenTokens = java.util.concurrent.ConcurrentHashMap.newKeySet();
         long lastSubscriptionWarningNanos = System.nanoTime();
@@ -370,7 +406,10 @@ public final class IngestionService {
 
                         // ---- ING-3: Slow-Fluss controlled pause ----
                         long pendingRecs = tracker.pendingRecords();
-                        long maxRecs = AppendTracker.MAX_PENDING_RECORDS;
+                        // R-109: the pause threshold must use the CONFIGURED max pending
+                        // records (tracker.maxPendingRecords()), not the static 10,000 — a
+                        // smaller configured limit would never reach the 90% pause.
+                        long maxRecs = tracker.maxPendingRecords();
                         double pendingPct = (double) pendingRecs / maxRecs;
 
                         if (!subscriptionPaused && pendingPct >= SLOW_FLUSS_PAUSE_PERCENT) {
@@ -417,6 +456,12 @@ public final class IngestionService {
                     }
                     // Reset slot states to AUTHENTICATING for the fresh process.
                     health.resetSlotsToAuthenticating();
+                    // R-110: the fresh bridge process must re-establish
+                    // subscription completeness from zero — tokens seen by the
+                    // previous process must not count toward the new one.
+                    seenTokens.clear();
+                    health.setSubscriptionComplete(false);
+                    metrics.setBridgeConnected(false);
                     break;
                 case TERMINAL:
                     LOG.error("ingestion: bridge exited unexpectedly {} time(s) — terminal (exitCode={})",
@@ -713,15 +758,24 @@ public final class IngestionService {
             metrics.setIngestionReady(health.isReady());
             metrics.setBridgeConnected(true);
             refreshResourceMetrics();
+            // R-246: the readiness marker must track the tick-processing path
+            // too, not just bridge lifecycle events.
+            updateReadinessFile();
 
-            // Track last accepted tick for discontinuity evidence
-            lastTickSnapshot = new DiscontinuityWriter.LastTickSnapshot(
-                    gt.ts_ms,
-                    fp.hash(),
-                    gt.token,
-                    instr.exchange(),
-                    instr.tradingSymbol()
-            );
+            // R-111: lastTickSnapshot is discontinuity evidence — it must only
+            // reflect a tick that was actually persisted. REJECTED/TIMEOUT/
+            // UNCERTAIN/FAILED/FATAL ticks were not (or may not have been)
+            // appended; recording them would fabricate false "last accepted
+            // tick" evidence after a later bridge crash.
+            if (outcome.status() == RawTickWriter.Status.SUCCESS) {
+                lastTickSnapshot = new DiscontinuityWriter.LastTickSnapshot(
+                        gt.ts_ms,
+                        fp.hash(),
+                        gt.token,
+                        instr.exchange(),
+                        instr.tradingSymbol()
+                );
+            }
 
         } catch (JsonProcessingException e) {
             // Non-JSON line (e.g. Go bridge startup output). Silently skip —
@@ -909,6 +963,8 @@ public final class IngestionService {
             return;
         }
         running = false;
+        // Stop the staleness watchdog (R-108).
+        stalenessWatchdog.shutdownNow();
         if (readinessFile != null) {
             try { readinessFile.clear(); }
             catch (java.io.IOException e) { LOG.warn("ingestion: readiness marker clear failed: {}", sanitizeLog(e.getMessage())); }
@@ -1040,6 +1096,16 @@ public final class IngestionService {
      * lifecycle events. Bounded cost — called once per processed frame.
      */
     private void refreshResourceMetrics() {
+        // R-140: /proc + ThreadMXBean reads are expensive at HFT tick rates —
+        // throttle to at most one refresh every 5 seconds. The gauges are
+        // slow-moving resources; a 5s staleness is irrelevant.
+        long nowNanos = System.nanoTime();
+        if (lastResourceRefreshNanos != 0
+                && nowNanos - lastResourceRefreshNanos < 5_000_000_000L) {
+            return;
+        }
+        lastResourceRefreshNanos = nowNanos;
+
         long open = countOpenFds();
         long limit = readFdLimit();
         metrics.setProcessOpenFds(open);
@@ -1060,12 +1126,25 @@ public final class IngestionService {
         return -1L;
     }
 
-    /** Read the system FD limit from /proc/sys/fs/file-max (Linux); -1 on failure. */
+    /**
+     * Read the process's per-process RLIMIT_NOFILE soft limit from
+     * {@code /proc/self/limits} (R-192) — NOT the system-wide
+     * {@code /proc/sys/fs/file-max}, which made fd_usage_percent look near 0%
+     * even at the real cap. Returns -1 on non-Linux or failure.
+     */
     private static long readFdLimit() {
         try {
-            java.nio.file.Path p = java.nio.file.Paths.get("/proc/sys/fs/file-max");
-            if (java.nio.file.Files.isReadable(p)) {
-                return Long.parseLong(java.nio.file.Files.readString(p).trim());
+            java.nio.file.Path p = java.nio.file.Paths.get("/proc/self/limits");
+            if (!java.nio.file.Files.isReadable(p)) return -1L;
+            for (String line : java.nio.file.Files.readAllLines(p)) {
+                if (line.startsWith("Max open files")) {
+                    // Format: "Max open files  1024  1048576  files"
+                    //            [0]    [1]   [2]   [3]     [4]
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length >= 4 && !"unlimited".equals(parts[3])) {
+                        return Long.parseLong(parts[3]); // soft limit
+                    }
+                }
             }
         } catch (Exception ignore) { /* non-Linux or unreadable */ }
         return -1L;
