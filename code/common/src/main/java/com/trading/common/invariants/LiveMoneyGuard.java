@@ -1,6 +1,7 @@
-package common.invariants;
+package com.trading.common.invariants;
 
 import java.util.EnumSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -95,8 +96,21 @@ public final class LiveMoneyGuard {
             return new Builder();
         }
 
-        /** Builder for {@link LiveMoneyFacts}. */
+        /**
+         * Builder for {@link LiveMoneyFacts}.
+         *
+         * <p>R-072: all ten booleans default to {@code false}, so an omitted
+         * setter was indistinguishable from an explicit {@code false} — and
+         * since {@code evaluate} approves whenever the triggered set is empty,
+         * a caller who forgot to supply facts would silently approve live
+         * money. The builder now tracks exactly which conditions were set and
+         * {@link #build()} fails if any of the ten is missing.
+         */
         public static final class Builder {
+            private static final int ALL_SET =
+                    (1 << 10) - 1; // ten bits, one per condition
+
+            private int setMask;
             private boolean criticalRiskOpen;
             private boolean brokerIdentityUnverified;
             private boolean flussFlinkCapabilityUnverified;
@@ -109,56 +123,90 @@ public final class LiveMoneyGuard {
             private boolean eodAuditRetentionUnverified;
 
             public Builder criticalRiskOpen(boolean v) {
+                this.setMask |= (1 << 0);
                 this.criticalRiskOpen = v;
                 return this;
             }
 
             public Builder brokerIdentityUnverified(boolean v) {
+                this.setMask |= (1 << 1);
                 this.brokerIdentityUnverified = v;
                 return this;
             }
 
             public Builder flussFlinkCapabilityUnverified(boolean v) {
+                this.setMask |= (1 << 2);
                 this.flussFlinkCapabilityUnverified = v;
                 return this;
             }
 
             public Builder ddlRequirementsDisagree(boolean v) {
+                this.setMask |= (1 << 3);
                 this.ddlRequirementsDisagree = v;
                 return this;
             }
 
             public Builder executorStateInvalid(boolean v) {
+                this.setMask |= (1 << 4);
                 this.executorStateInvalid = v;
                 return this;
             }
 
             public Builder attemptOutcomeUnresolved(boolean v) {
+                this.setMask |= (1 << 5);
                 this.attemptOutcomeUnresolved = v;
                 return this;
             }
 
             public Builder changelogCheckpointUnknown(boolean v) {
+                this.setMask |= (1 << 6);
                 this.changelogCheckpointUnknown = v;
                 return this;
             }
 
             public Builder safeHaltResumeUnproven(boolean v) {
+                this.setMask |= (1 << 7);
                 this.safeHaltResumeUnproven = v;
                 return this;
             }
 
             public Builder observabilityUnavailable(boolean v) {
+                this.setMask |= (1 << 8);
                 this.observabilityUnavailable = v;
                 return this;
             }
 
             public Builder eodAuditRetentionUnverified(boolean v) {
+                this.setMask |= (1 << 9);
                 this.eodAuditRetentionUnverified = v;
                 return this;
             }
 
+            /** Returns a names list of conditions never explicitly set (R-072). */
+            String missingConditions() {
+                int missing = (~setMask) & ALL_SET;
+                StringBuilder sb = new StringBuilder();
+                if ((missing & (1 << 0)) != 0) sb.append("criticalRiskOpen ");
+                if ((missing & (1 << 1)) != 0) sb.append("brokerIdentityUnverified ");
+                if ((missing & (1 << 2)) != 0) sb.append("flussFlinkCapabilityUnverified ");
+                if ((missing & (1 << 3)) != 0) sb.append("ddlRequirementsDisagree ");
+                if ((missing & (1 << 4)) != 0) sb.append("executorStateInvalid ");
+                if ((missing & (1 << 5)) != 0) sb.append("attemptOutcomeUnresolved ");
+                if ((missing & (1 << 6)) != 0) sb.append("changelogCheckpointUnknown ");
+                if ((missing & (1 << 7)) != 0) sb.append("safeHaltResumeUnproven ");
+                if ((missing & (1 << 8)) != 0) sb.append("observabilityUnavailable ");
+                if ((missing & (1 << 9)) != 0) sb.append("eodAuditRetentionUnverified");
+                return sb.toString().trim();
+            }
+
             public LiveMoneyFacts build() {
+                String missing = missingConditions();
+                if (!missing.isEmpty()) {
+                    throw new IllegalStateException(
+                            "LiveMoneyFacts incomplete: conditions not explicitly "
+                            + "set: " + missing + " — every stop condition must be "
+                            + "stated explicitly (R-072)");
+                }
                 return new LiveMoneyFacts(
                         criticalRiskOpen,
                         brokerIdentityUnverified,
@@ -179,6 +227,9 @@ public final class LiveMoneyGuard {
      * condition is triggered.
      */
     public static LiveMoneyReadiness evaluate(LiveMoneyFacts facts) {
+        // R-181: fail fast with a descriptive message instead of an NPE from
+        // facts.triggered().
+        Objects.requireNonNull(facts, "facts");
         Set<LiveMoneyStopCondition> triggered = facts.triggered();
         return new LiveMoneyReadiness(triggered.isEmpty(), triggered);
     }
