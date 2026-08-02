@@ -1,4 +1,4 @@
-package common.workitem;
+package com.trading.common.workitem;
 
 /**
  * Work-item lifecycle states (01-foundation.md, "Work item lifecycle").

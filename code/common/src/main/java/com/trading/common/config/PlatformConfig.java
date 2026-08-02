@@ -22,7 +22,9 @@ public final class PlatformConfig {
 
     // ---- ingestion / workload profile ----
     public static final int BROKER_BASELINE_TICKS_PER_INSTRUMENT_PER_SEC = 20;
-    public static final int BROKER_MAX_TICKS_PER_INSTRUMENT_PER_SEC = 30;
+    /** R-263: single source of truth — delegates to FixedScope, no duplicate literal. */
+    public static final int BROKER_MAX_TICKS_PER_INSTRUMENT_PER_SEC =
+            FixedScope.MAX_TICKS_PER_INSTRUMENT_PER_SEC;
     public static final int INGESTION_MAX_BATCH_RECORDS = 1;
     public static final int INGESTION_MAX_BATCH_WAIT_MS = 0;
     public static final int MAX_PENDING_APPEND_RECORDS = 10000;
@@ -48,8 +50,17 @@ public final class PlatformConfig {
     /**
      * {@code MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes * 0.10))}.
      * Capped at 64 MiB so very large container limits do not over-buffer.
+     *
+     * <p>R-199: a non-positive container limit (unreadable cgroup surfaced as 0,
+     * or a misconfigured value) previously produced a <= 0 result from
+     * {@code Math.min} — silently disabling the byte ceiling. Fail fast instead.
      */
     public static long maxPendingAppendBytes(long containerMemoryLimitBytes) {
+        if (containerMemoryLimitBytes <= 0) {
+            throw new IllegalArgumentException(
+                    "containerMemoryLimitBytes must be positive, got: "
+                    + containerMemoryLimitBytes);
+        }
         long derived = (long) Math.floor(containerMemoryLimitBytes * 0.10);
         return Math.min(67_108_864L, derived);
     }
@@ -57,17 +68,34 @@ public final class PlatformConfig {
     /**
      * The two constants whose value is load-bearing for correctness; any other value must abort
      * startup rather than degrade silently.
+     *
+     * <p>R-127: the old checks compared compile-time constants against their own
+     * literals — dead code that could never trigger. This now validates the
+     * <em>runtime</em> values supplied via environment (the actual override
+     * vector a deploy could use), so the guard is real.
      */
     public static void validateStartup() {
-        if (DEDUP_TTL_MS != 300_000L) {
+        validateLoadBearing("DEDUP_TTL_MS", envLong("DEDUP_TTL_MS"), DEDUP_TTL_MS);
+        validateLoadBearing("CANDLE_WINDOW_MS", envLong("CANDLE_WINDOW_MS"), CANDLE_WINDOW_MS);
+    }
+
+    private static void validateLoadBearing(String key, Long runtimeValue, long pinned) {
+        if (runtimeValue != null && runtimeValue != pinned) {
             throw new IllegalStateException(
-                "DEDUP_TTL_MS must be 300000 (5 min); found " + DEDUP_TTL_MS
+                key + " must be " + pinned + "; found " + runtimeValue
                     + ". Refusing to start (docs/08_implementation/01-foundation.md L37).");
         }
-        if (CANDLE_WINDOW_MS != 15_000L) {
-            throw new IllegalStateException(
-                "CANDLE_WINDOW_MS must be 15000 (15 s); found " + CANDLE_WINDOW_MS
-                    + ". Refusing to start (docs/08_implementation/01-foundation.md L37).");
+    }
+
+    private static Long envLong(String key) {
+        String v = System.getenv(key);
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException(key + " must be a number, got: " + v);
         }
     }
 

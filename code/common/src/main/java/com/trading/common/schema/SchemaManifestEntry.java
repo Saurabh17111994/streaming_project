@@ -20,5 +20,8 @@ public class SchemaManifestEntry {
     @JsonProperty("lake_policy") public String lakePolicy;
     @JsonProperty("compatibility_class") public String compatibilityClass;
     @JsonProperty("validated_matrix") public String validatedMatrix;  // version matrix id
-    @JsonProperty("schema_state") public String schemaState;          // PROPOSED/APPROVED/...
+    // R-267: typed — the same package already defines SchemaState
+    // (PROPOSED/APPROVED/APPLYING/OBSERVED/REJECTED), whose values exactly
+    // match the old inline comment; a raw String accepted any typo.
+    @JsonProperty("schema_state") public SchemaState schemaState;
 }

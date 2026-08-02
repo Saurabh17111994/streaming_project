@@ -63,9 +63,13 @@ public final class GateTransitionValidator {
             long currentEpoch,
             long requestEpoch) {
 
-        // 1. Stale-epoch rejection — the request is for an old generation
+        // 1. Stale-epoch rejection — the request is for an old generation.
+        // R-076: the audit trail must record the ACTUAL current state as the
+        // from-state — the old code reported HALTED, which would make an
+        // operator believe the gate was already halted when it may have been
+        // ENABLED.
         if (requestEpoch < currentEpoch) {
-            return GateResult.rejected(GateState.HALTED, targetState,
+            return GateResult.rejected(currentState, targetState,
                     "stale epoch: request=" + requestEpoch + " < current=" + currentEpoch
                             + "; epoch mismatch may indicate a lost lease or delayed message");
         }
@@ -146,7 +150,10 @@ public final class GateTransitionValidator {
             case REJECTED -> LEGAL_TO_REJECTED;
             case UNKNOWN -> LEGAL_TO_UNKNOWN;
             case CANCELLED -> LEGAL_TO_CANCELLED;
-            default -> Set.of(from); // PREPARED has no incoming transitions defined
+            // R-044: PREPARED is the initial phase — no incoming transitions.
+            // The old `default -> Set.of(from)` made any from-state "legal"
+            // for a PREPARED target, which is never correct.
+            default -> Set.of();
         };
         return legalSources.contains(from);
     }

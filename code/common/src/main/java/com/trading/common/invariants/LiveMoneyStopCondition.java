@@ -1,4 +1,4 @@
-package common.invariants;
+package com.trading.common.invariants;
 
 /**
  * The ten documented live-money stop conditions (01-foundation.md,

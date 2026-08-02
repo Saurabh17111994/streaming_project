@@ -16,24 +16,39 @@ final class Json {
         private boolean first = true;
 
         Builder obj(java.util.function.Consumer<Builder> body) {
+            // R-045: the nested block is a VALUE in the enclosing container, so
+            // it must emit a separator first; the inner contents start fresh;
+            // and afterwards the enclosing container still needs separators.
+            sep();
             sb.append('{');
             first = true;
             body.accept(this);
             sb.append('}');
+            first = false;
             return this;
         }
 
         Builder arr(java.util.function.Consumer<Builder> body) {
+            sep();
             sb.append('[');
             first = true;
             body.accept(this);
             sb.append(']');
+            first = false;
             return this;
         }
 
         Builder kv(String k, String v) {
             sep();
-            sb.append('"').append(escape(k)).append("\":\"").append(escape(v)).append('"');
+            sb.append('"').append(escape(k)).append('"');
+            if (v == null) {
+                // R-077: a null value must serialize as JSON null, not the
+                // empty string escape(null) produces — absent attributes and
+                // empty strings are semantically different in telemetry.
+                sb.append(":null");
+            } else {
+                sb.append(":\"").append(escape(v)).append('"');
+            }
             return this;
         }
 
@@ -65,9 +80,13 @@ final class Json {
                 case '\n': o.append("\\n"); break;
                 case '\r': o.append("\\r"); break;
                 case '\t': o.append("\\t"); break;
+                case '\b': o.append("\\b"); break;
+                case '\f': o.append("\\f"); break;
                 default:
                     if (c < 0x20) {
-                        o.append(String.format("\\u%04x", (int) c));
+                        // R-218: hand-rolled hex, no per-char String.format.
+                        o.append("\\u");
+                        appendHex4(o, c);
                     } else {
                         o.append(c);
                     }
@@ -75,4 +94,13 @@ final class Json {
         }
         return o.toString();
     }
+
+    private static void appendHex4(StringBuilder o, int v) {
+        o.append(HEX[(v >>> 12) & 0xF]);
+        o.append(HEX[(v >>> 8) & 0xF]);
+        o.append(HEX[(v >>> 4) & 0xF]);
+        o.append(HEX[v & 0xF]);
+    }
+
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 }

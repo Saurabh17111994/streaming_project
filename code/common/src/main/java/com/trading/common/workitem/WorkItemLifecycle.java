@@ -1,4 +1,4 @@
-package common.workitem;
+package com.trading.common.workitem;
 
 import java.util.List;
 

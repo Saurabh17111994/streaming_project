@@ -3,6 +3,7 @@ package com.trading.common.arrow;
 import com.trading.common.identity.IdentityModel.BrokerOrderId;
 import com.trading.common.identity.IdentityModel.ClientOrderRef;
 import com.trading.common.identity.IdentityModel.InstrumentToken;
+import java.util.Locale;
 
 /** Arrow order-status vocabulary from rest-api/orders (order book / trade book). */
 public final class ArrowOrderStatus {
@@ -17,11 +18,31 @@ public final class ArrowOrderStatus {
         CANCELLED,
         REJECTED;
 
+        /**
+         * R-125: lenient, case-insensitive parse with common broker variants —
+         * the old strict {@code valueOf()} threw an unchecked exception for any
+         * spelling the broker actually emits (e.g. "FILLED" or "CANCELED").
+         * Truly unknown values still fail, but with a descriptive message.
+         */
         public static OrderStatus from(String s) {
-            if (s == null) {
-                throw new IllegalArgumentException("orderStatus is null");
+            if (s == null || s.isBlank()) {
+                throw new IllegalArgumentException("orderStatus is null or blank");
             }
-            return valueOf(s.trim().toUpperCase());
+            String v = s.trim().toUpperCase(Locale.ROOT);
+            switch (v) {
+                case "PENDING": return PENDING;
+                case "OPEN": return OPEN;
+                case "COMPLETE":
+                case "FILLED":
+                case "FILL": return COMPLETE;
+                case "CANCELLED":
+                case "CANCELED": return CANCELLED;
+                case "REJECTED": return REJECTED;
+                default:
+                    throw new IllegalArgumentException(
+                            "unknown orderStatus: " + s
+                            + " (expected one of PENDING, OPEN, COMPLETE, CANCELLED, REJECTED)");
+            }
         }
     }
 
@@ -31,7 +52,13 @@ public final class ArrowOrderStatus {
         PENDING_NEW("PendingNew"),
         FILL("Fill"),
         CANCELED("Canceled"),
-        REJECTED("Rejected");
+        REJECTED("Rejected"),
+        /**
+         * R-126: the broker's wire vocabulary is not exhaustively known — an
+         * unrecognized reportType must not throw (that would break the
+         * fill-detection path on any new event kind). Map it to UNKNOWN.
+         */
+        UNKNOWN("");
 
         private final String wire;
         ReportType(String wire) { this.wire = wire; }
@@ -39,16 +66,17 @@ public final class ArrowOrderStatus {
         public String wire() { return wire; }
 
         public static ReportType from(String s) {
-            if (s == null) {
-                throw new IllegalArgumentException("reportType is null");
+            if (s == null || s.isBlank()) {
+                return UNKNOWN;
             }
             String v = s.trim();
             for (ReportType r : values()) {
+                if (r == UNKNOWN) continue;
                 if (r.wire.equalsIgnoreCase(v) || r.name().equalsIgnoreCase(v)) {
                     return r;
                 }
             }
-            throw new IllegalArgumentException("unknown reportType: " + v);
+            return UNKNOWN;
         }
     }
 

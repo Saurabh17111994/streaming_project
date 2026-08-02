@@ -36,8 +36,11 @@ public final class BabysitterJob {
      */
     public static void main(String[] args) throws Exception {
         // Fail closed if anyone tries to override the action flag.
+        // R-286: trim the env value — ' false ' or 'false\n' from config-file
+        // exports previously triggered the guard spuriously.
         String envValue = System.getenv("POSITION_ACTIONS_ENABLED");
-        if (envValue != null && !"false".equalsIgnoreCase(envValue)) {
+        if (envValue != null
+                && !"false".equalsIgnoreCase(envValue.trim())) {
             throw new IllegalStateException(
                 "POSITION_ACTIONS_ENABLED must be false in MVP; got '" + envValue + "'"
             );
@@ -50,6 +53,20 @@ public final class BabysitterJob {
         StreamExecutionEnvironment env =
             StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
+
+        // R-120: Flink's StreamGraphGenerator rejects a topology with no
+        // operators ("No operators defined in streaming topology"). Wire a
+        // minimal marker source -> no-op map -> discard sink so the MVP job
+        // submits; the real Positions-changelog source replaces this per the
+        // implementation dossier.
+        env.fromElements(0L)
+                .map(value -> {
+                    // MVP no-op marker: never produces Position_Actions.
+                    return value;
+                })
+                .name("babysitter-mvp-marker")
+                .map(value -> (Void) null)
+                .name("babysitter-mvp-discard");
 
         // TODO: wire Positions changelog source, observation state,
         //   checkpointing, and zero-action emission per the implementation

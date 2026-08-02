@@ -24,18 +24,19 @@ class ArrowOrderUpdateTest {
     @Test
     void mapsPostbackIdentityAndFills() {
         // Sample postback (abridged) for orderNo 2600090001, token 26009.
-        ArrowOrderUpdate update = new ArrowOrderUpdate(
-            new BrokerOrderId("2600090001"),
-            new ClientOrderRef("INV20250721"),
-            new InstrumentToken(26009),
-            ArrowOrderStatus.OrderStatus.COMPLETE,
-            ArrowOrderStatus.ReportType.FILL,
-            "F1",            // fillId
-            10,             // fillQuantity
-            297510L,        // fillPrice paise
-            1_752_539_000L, // fillTime s
-            null,           // exchangeOrderId
-            null);          // rejectReason
+        // R-262: named-parameter builder (the old 11-param positional ctor
+        // made the three adjacent longs silently swappable).
+        ArrowOrderUpdate update = ArrowOrderUpdate.builder()
+            .brokerOrderId(new BrokerOrderId("2600090001"))
+            .clientOrderRef(new ClientOrderRef("INV20250721"))
+            .instrumentToken(new InstrumentToken(26009))
+            .status(ArrowOrderStatus.OrderStatus.COMPLETE)
+            .reportType(ArrowOrderStatus.ReportType.FILL)
+            .fillId("F1")
+            .fillQuantity(10)
+            .fillPrice(297510L)           // paise
+            .fillTime(1_752_539_000_000L) // epoch ms (R-172)
+            .build();
 
         assertThat(update.brokerOrderId()).isEqualTo(new BrokerOrderId("2600090001"));
         assertThat(update.clientOrderRef()).isEqualTo(new ClientOrderRef("INV20250721"));
@@ -47,13 +48,13 @@ class ArrowOrderUpdateTest {
 
     @Test
     void newAckHasNoFillYet() {
-        ArrowOrderUpdate ack = new ArrowOrderUpdate(
-            new BrokerOrderId("2600090002"),
-            new ClientOrderRef("INV20250722"),
-            new InstrumentToken(1594),
-            ArrowOrderStatus.OrderStatus.OPEN,
-            ArrowOrderStatus.ReportType.NEW_ACK,
-            null, 0, 0L, 0L, null, null);
+        ArrowOrderUpdate ack = ArrowOrderUpdate.builder()
+            .brokerOrderId(new BrokerOrderId("2600090002"))
+            .clientOrderRef(new ClientOrderRef("INV20250722"))
+            .instrumentToken(new InstrumentToken(1594))
+            .status(ArrowOrderStatus.OrderStatus.OPEN)
+            .reportType(ArrowOrderStatus.ReportType.NEW_ACK)
+            .build();
 
         assertThat(ack.reportType()).isEqualTo(ArrowOrderStatus.ReportType.NEW_ACK);
         assertThat(ack.fillQuantity()).isEqualTo(0);

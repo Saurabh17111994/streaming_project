@@ -24,18 +24,21 @@ public final class OtlpEmitter {
         Map<String, String> attrs = event.toAttributes();
         StringBuilder sb = new StringBuilder();
         sb.append("{\"resourceLogs\":[{\"resource\":{\"attributes\":[");
-        sb.append("{\"key\":\"service.name\",\"value\":{\"stringValue\":\"").append(event.service).append("\"}}");
+        // R-046/R-264: EVERY interpolated value AND key must be JSON-escaped.
+        sb.append("{\"key\":\"service.name\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(event.service)).append("\"}}");
         sb.append("]},\"scopeLogs\":[{\"scope\":{\"name\":\"trading.common\"},\"logRecords\":[{");
         sb.append("\"timeUnixNano\":\"").append(event.timestampMs * 1_000_000L).append("\",");
-        sb.append("\"severityText\":\"").append(event.level).append("\",");
-        sb.append("\"body\":{\"stringValue\":\"").append(event.message).append("\"},");
+        sb.append("\"severityText\":\"").append(escapeJson(event.level)).append("\",");
+        sb.append("\"body\":{\"stringValue\":\"").append(escapeJson(event.message)).append("\"},");
         sb.append("\"attributes\":[");
         boolean first = true;
         for (Map.Entry<String, String> e : attrs.entrySet()) {
             if (!first) sb.append(",");
             first = false;
-            sb.append("{\"key\":\"").append(e.getKey()).append("\",\"value\":{\"stringValue\":\"");
-            sb.append(escapeJson(e.getValue())).append("\"}}");
+            sb.append("{\"key\":\"").append(escapeJson(e.getKey()))
+              .append("\",\"value\":{\"stringValue\":\"")
+              .append(escapeJson(e.getValue())).append("\"}}");
         }
         sb.append("]}]}]}]}");
         return sb.toString();
@@ -47,35 +50,62 @@ public final class OtlpEmitter {
                                    String category, String message) {
         StringBuilder sb = new StringBuilder();
         sb.append("{\"resourceLogs\":[{\"resource\":{\"attributes\":[");
-        sb.append("{\"key\":\"service.name\",\"value\":{\"stringValue\":\"").append(service).append("\"}}");
+        sb.append("{\"key\":\"service.name\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(service)).append("\"}}");
         sb.append("]},\"scopeLogs\":[{\"scope\":{\"name\":\"trading.common\"},\"logRecords\":[{");
         sb.append("\"timeUnixNano\":\"").append(System.currentTimeMillis() * 1_000_000L).append("\",");
-        sb.append("\"severityText\":\"").append(category).append("\",");
-        sb.append("\"body\":{\"stringValue\":\"").append(message).append("\"},");
+        sb.append("\"severityText\":\"").append(escapeJson(category)).append("\",");
+        sb.append("\"body\":{\"stringValue\":\"").append(escapeJson(message)).append("\"},");
         sb.append("\"attributes\":[");
-        sb.append("{\"key\":\"stream\",\"value\":{\"stringValue\":\"trading_alerts\"}},");
-        sb.append("{\"key\":\"alert.name\",\"value\":{\"stringValue\":\"").append(alert.name()).append("\"}},");
-        sb.append("{\"key\":\"alert.condition\",\"value\":{\"stringValue\":\"").append(escapeJson(alert.condition)).append("\"}},");
-        sb.append("{\"key\":\"alert.category\",\"value\":{\"stringValue\":\"").append(category).append("\"}},");
-        sb.append("{\"key\":\"service\",\"value\":{\"stringValue\":\"").append(service).append("\"}},");
-        sb.append("{\"key\":\"host\",\"value\":{\"stringValue\":\"").append(host).append("\"}},");
-        sb.append("{\"key\":\"vm_id\",\"value\":{\"stringValue\":\"").append(vmId).append("\"}},");
-        sb.append("{\"key\":\"environment\",\"value\":{\"stringValue\":\"").append(environment).append("\"}},");
-        sb.append("{\"key\":\"correlation_id\",\"value\":{\"stringValue\":\"").append(correlationId).append("\"}}");
+        // R-265: use the stream constant so the stream name stays in sync.
+        sb.append("{\"key\":\"stream\",\"value\":{\"stringValue\":\"")
+          .append(TRADING_ALERTS_STREAM).append("\"}},");
+        sb.append("{\"key\":\"alert.name\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(alert.name())).append("\"}},");
+        sb.append("{\"key\":\"alert.condition\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(alert.condition)).append("\"}},");
+        sb.append("{\"key\":\"alert.category\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(category)).append("\"}},");
+        sb.append("{\"key\":\"service\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(service)).append("\"}},");
+        sb.append("{\"key\":\"host\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(host)).append("\"}},");
+        sb.append("{\"key\":\"vm_id\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(vmId)).append("\"}},");
+        sb.append("{\"key\":\"environment\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(environment)).append("\"}},");
+        sb.append("{\"key\":\"correlation_id\",\"value\":{\"stringValue\":\"")
+          .append(escapeJson(correlationId)).append("\"}}");
         sb.append("]}]}]}]}");
         return sb.toString();
     }
 
+    /**
+     * R-046/R-047/R-078: RFC 8259 escaping for every interpolated field —
+     * all control characters U+0000–U+001F (not just quote/backslash/newline/
+     * carriage-return) so a free-text message or alert condition can never
+     * produce an invalid JSON document.
+     */
     private static String escapeJson(String s) {
         if (s == null) return "";
         StringBuilder o = new StringBuilder(s.length() + 8);
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c == '"') o.append("\\\"");
-            else if (c == '\\') o.append("\\\\");
-            else if (c == '\n') o.append("\\n");
-            else if (c == '\r') o.append("\\r");
-            else o.append(c);
+            switch (c) {
+                case '"': o.append("\\\""); break;
+                case '\\': o.append("\\\\"); break;
+                case '\n': o.append("\\n"); break;
+                case '\r': o.append("\\r"); break;
+                case '\t': o.append("\\t"); break;
+                case '\b': o.append("\\b"); break;
+                case '\f': o.append("\\f"); break;
+                default:
+                    if (c < 0x20) {
+                        o.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        o.append(c);
+                    }
+            }
         }
         return o.toString();
     }

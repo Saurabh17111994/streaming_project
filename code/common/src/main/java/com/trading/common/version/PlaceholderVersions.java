@@ -19,16 +19,22 @@ public final class PlaceholderVersions {
     public static final String OPENALGO_API_CONTRACT_TO_BE_VERIFIED = "OPENALGO_API_CONTRACT_TO_BE_VERIFIED";
     public static final String SCHEMA_LIFECYCLE_TO_BE_VERIFIED = "SCHEMA_LIFECYCLE_TO_BE_VERIFIED";
 
-    /** A placeholder is any value that equals its own sentinel name. */
+    /**
+     * A placeholder is any value carrying the sentinel marker {@code _TO_BE_PINNED}
+     * or {@code _TO_BE_VERIFIED} (R-268).
+     *
+     * <p>The previous implementation compared against the constant <em>values</em>.
+     * But the class contract says each constant must be replaced by a pinned
+     * value before live money — the moment the constants are updated, an exact
+     * equality check against them silently stops matching and the gate opens.
+     * Matching the sentinel <em>shape</em> keeps working regardless of what the
+     * constants currently hold.
+     */
     public static boolean isPlaceholder(String value) {
         if (value == null) {
             return false;
         }
-        return value.equals(BROKER_MARKET_DATA_PROTOCOL_TO_BE_PINNED)
-            || value.equals(FLINK_VERSION_TO_BE_PINNED)
-            || value.equals(FLUSS_VERSION_TO_BE_PINNED)
-            || value.equals(ARROW_API_CONTRACT_TO_BE_VERIFIED)
-            || value.equals(OPENALGO_API_CONTRACT_TO_BE_VERIFIED)
-            || value.equals(SCHEMA_LIFECYCLE_TO_BE_VERIFIED);
+        String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return v.contains("_TO_BE_PINNED") || v.contains("TO_BE_VERIFIED");
     }
 }

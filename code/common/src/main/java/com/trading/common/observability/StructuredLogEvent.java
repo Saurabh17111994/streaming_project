@@ -103,16 +103,36 @@ public final class StructuredLogEvent {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof StructuredLogEvent)) return false;
-        StructuredLogEvent e = (StructuredLogEvent) o;
-        return timestampMs == e.timestampMs && Objects.equals(level, e.level)
-                && Objects.equals(service, e.service) && Objects.equals(message, e.message)
-                && Objects.equals(correlationId, e.correlationId);
+        if (!(o instanceof StructuredLogEvent e)) return false;
+        // R-266: equality covers the identity/correlation fields too — two
+        // records with the same level/message but different host, vm_id,
+        // trace_id or span_id are distinct log records.
+        return timestampMs == e.timestampMs
+                && Objects.equals(level, e.level)
+                && Objects.equals(service, e.service)
+                && Objects.equals(component, e.component)
+                && Objects.equals(subsystem, e.subsystem)
+                && Objects.equals(host, e.host)
+                && Objects.equals(vmId, e.vmId)
+                && Objects.equals(environment, e.environment)
+                && Objects.equals(correlationId, e.correlationId)
+                && Objects.equals(traceId, e.traceId)
+                && Objects.equals(spanId, e.spanId)
+                && Objects.equals(message, e.message)
+                && Objects.equals(symbol, e.symbol)
+                && Objects.equals(timeframe, e.timeframe)
+                && Objects.equals(strategy, e.strategy)
+                && Objects.equals(jobName, e.jobName)
+                && Objects.equals(taskName, e.taskName)
+                && Objects.equals(exception, e.exception)
+                && Objects.equals(stacktrace, e.stacktrace);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(timestampMs, level, service, message, correlationId);
+        return Objects.hash(timestampMs, level, service, component, subsystem,
+                host, vmId, environment, correlationId, traceId, spanId, message,
+                symbol, timeframe, strategy, jobName, taskName, exception, stacktrace);
     }
 
     /** Builder for {@link StructuredLogEvent}. */
@@ -162,8 +182,37 @@ public final class StructuredLogEvent {
         public Builder exception(String v) { this.exception = v; return this; }
         public Builder stacktrace(String v) { this.stacktrace = v; return this; }
 
+        /**
+         * R-130: the contract says 12 required fields — build() must not
+         * emit a record with any of them missing or blank.
+         */
         public StructuredLogEvent build() {
+            String missing = missingRequired();
+            if (!missing.isEmpty()) {
+                throw new IllegalStateException(
+                        "StructuredLogEvent missing required fields: " + missing);
+            }
             return new StructuredLogEvent(this);
+        }
+
+        private String missingRequired() {
+            StringBuilder sb = new StringBuilder();
+            if (isBlank(level)) sb.append("level ");
+            if (isBlank(service)) sb.append("service ");
+            if (isBlank(component)) sb.append("component ");
+            if (isBlank(subsystem)) sb.append("subsystem ");
+            if (isBlank(host)) sb.append("host ");
+            if (isBlank(vmId)) sb.append("vmId ");
+            if (isBlank(environment)) sb.append("environment ");
+            if (isBlank(correlationId)) sb.append("correlationId ");
+            if (isBlank(traceId)) sb.append("traceId ");
+            if (isBlank(spanId)) sb.append("spanId ");
+            if (isBlank(message)) sb.append("message ");
+            return sb.toString().trim();
+        }
+
+        private static boolean isBlank(String s) {
+            return s == null || s.isBlank();
         }
     }
 }

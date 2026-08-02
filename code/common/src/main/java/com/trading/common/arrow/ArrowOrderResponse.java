@@ -1,6 +1,7 @@
 package com.trading.common.arrow;
 
 import com.trading.common.identity.IdentityModel.BrokerOrderId;
+import java.util.Map;
 
 /**
  * Arrow {@code POST /order/regular} success response.
@@ -22,14 +23,33 @@ public final class ArrowOrderResponse {
     public BrokerOrderId brokerOrderId() { return brokerOrderId; }
     public long requestTime() { return requestTime; }
 
-    /** Parse a successful Arrow place response body (already JSON-decoded by caller). */
-    public static ArrowOrderResponse fromJson(java.util.Map<String, Object> data) {
+    /**
+     * Parse a successful Arrow place response body (already JSON-decoded by caller).
+     *
+     * <p>R-198: the map itself may be null (a JSON body of {@code null}); guard it.
+     * R-124: {@code requestTime} absent or non-numeric is a malformed response —
+     * fail instead of silently defaulting to 0 (1970-01-01), which corrupts
+     * latency/ordering analysis.
+     */
+    public static ArrowOrderResponse fromJson(Map<String, Object> data) {
+        if (data == null) {
+            throw new IllegalArgumentException(
+                    "Arrow response body is null (expected {orderNo, requestTime})");
+        }
         Object no = data.get("orderNo");
         Object rt = data.get("requestTime");
         if (no == null) {
             throw new IllegalArgumentException("orderNo missing in Arrow response");
         }
-        long time = (rt instanceof Number) ? ((Number) rt).longValue() : 0L;
+        if (!(rt instanceof Number)) {
+            throw new IllegalArgumentException(
+                    "requestTime missing or not numeric in Arrow response; got: " + rt);
+        }
+        long time = ((Number) rt).longValue();
+        if (time <= 0) {
+            throw new IllegalArgumentException(
+                    "requestTime must be a positive epoch-ms, got: " + time);
+        }
         return new ArrowOrderResponse(new BrokerOrderId(String.valueOf(no)), time);
     }
 }

@@ -17,9 +17,19 @@ public final class SafetyHaltRequest {
         FAILED
     }
 
-    /** A repeat of the same result for the same halt_request_id is an idempotent no-op. */
+    /**
+     * True only for a repeated terminal-success result (R-129). The old
+     * implementation returned true for ANY repeated result — treating repeated
+     * FAILED (the halt was never applied) and PENDING (non-terminal) as
+     * idempotent no-ops, which would silently swallow a halt that still needs
+     * to be applied.
+     */
     public static boolean isIdempotentDuplicate(Result prior, Result incoming) {
-        return prior != null && prior == incoming;
+        if (prior == null || prior != incoming) {
+            return false;
+        }
+        // Only terminal-success results are idempotent.
+        return prior == Result.APPLIED || prior == Result.ALREADY_HALTED;
     }
 
     /** No auto-resume: once halted, only an explicit, authorized UNHALT may clear it. */
