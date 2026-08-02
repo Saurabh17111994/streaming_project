@@ -6,6 +6,10 @@
 -- Lake: EOD Iceberg offload
 -- Scope: account_scope_id
 -- Schema version: 1
+-- ack_ts: nullable (R-010). Fluss LOG rows are immutable and the broker ack
+-- timestamp is not known at row-build time, so a stored row can never be
+-- updated with its ack time. 0 / NULL means "unknown" — consumers must not
+-- use ack_ts for latency/ordering analysis.
 
 CREATE TABLE raw_table_1 (
     event_fingerprint       STRING      NOT NULL,
@@ -21,7 +25,7 @@ CREATE TABLE raw_table_1 (
     option_type             STRING,
     event_time              BIGINT      NOT NULL,
     ingest_ts               BIGINT      NOT NULL,
-    ack_ts                  BIGINT      NOT NULL,
+    ack_ts                  BIGINT      NULL, -- 0 = unknown (R-010)
     tick_type               STRING      NOT NULL,
     last_price_paise        BIGINT      NOT NULL,
     last_qty                BIGINT      NOT NULL,

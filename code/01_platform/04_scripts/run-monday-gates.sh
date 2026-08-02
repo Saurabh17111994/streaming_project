@@ -67,9 +67,9 @@ echo "PASS: Go suite" | tee -a "$SUMMARY"
 
 # ── 2. Build E2E test binaries (R-016) ────────────────────────────────────────
 echo "=== [2/3] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
-if ! ( cd "$BRIDGE_DIR" && \
-	go build -tags faketool -o faketool/faketool ./faketool && \
-	go build -o arrow-bridge . ); then
+if ! (cd "$BRIDGE_DIR" &&
+	go build -tags faketool -o faketool/faketool ./faketool &&
+	go build -o arrow-bridge .); then
 	echo "FAIL: could not build E2E test binaries — see $GO_LOG" | tee -a "$SUMMARY"
 	gate_fail
 fi

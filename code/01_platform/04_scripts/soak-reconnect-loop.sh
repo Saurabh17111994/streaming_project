@@ -50,8 +50,8 @@ PROGRESS_PATTERN="bridge lifecycle event="
 
 # Service restart budget — read from source so it can never drift.
 RESTART_BUDGET="${RESTART_BUDGET:-$(
-	grep -oE 'MAX_BRIDGE_RESTARTS[[:space:]]*=[[:space:]]*[0-9]+' "$INGESTION_SRC" 2>/dev/null \
-		| grep -oE '[0-9]+$' | head -1
+	grep -oE 'MAX_BRIDGE_RESTARTS[[:space:]]*=[[:space:]]*[0-9]+' "$INGESTION_SRC" 2>/dev/null |
+		grep -oE '[0-9]+$' | head -1
 )}"
 [ -n "${RESTART_BUDGET:-}" ] || RESTART_BUDGET=1
 
@@ -68,34 +68,40 @@ if [ ! -f "$LOG_FILE" ]; then
 fi
 
 # Leak thresholds vs the first-cycle baseline (R-170).
-LEAK_FD_MARGIN_PCT="${LEAK_FD_MARGIN_PCT:-50}"   # allow 50% FD growth before failing
-LEAK_THREAD_MARGIN="${LEAK_THREAD_MARGIN:-20}"   # allow 20 threads growth before failing
+LEAK_FD_MARGIN_PCT="${LEAK_FD_MARGIN_PCT:-50}" # allow 50% FD growth before failing
+LEAK_THREAD_MARGIN="${LEAK_THREAD_MARGIN:-20}" # allow 20 threads growth before failing
 
 mkdir -p "$OUT_DIR"
 RESULT="$OUT_DIR/reconnect-leak-$(date +%Y%m%d-%H%M%S).tsv"
 echo "reconnect-loop: $CYCLES cycle(s) (service restart budget), ${SETTLE_SEC}s settle"
 echo "reconnect-loop: budget=$RESTART_BUDGET  journal=$LOG_FILE"
 echo "reconnect-loop: result → $RESULT"
-echo 'cycle	java_fds_before	java_fds_after	bridge_fds_before	bridge_fds_after	java_threads_before	java_threads_after	progress_delta	recovered_ok	leak_ok' > "$RESULT"
+echo 'cycle	java_fds_before	java_fds_after	bridge_fds_before	bridge_fds_after	java_threads_before	java_threads_after	progress_delta	recovered_ok	leak_ok' >"$RESULT"
 
 # Newest matching PID (not numerically highest — R-173).
 find_pid() {
-	ps -eo pid,etimes,args 2>/dev/null \
-		| awk -v pat="$1" '$3 ~ pat { print $1, $2 }' \
-		| sort -k2 -n \
-		| tail -1 \
-		| awk '{print $1}'
+	ps -eo pid,etimes,args 2>/dev/null |
+		awk -v pat="$1" '$3 ~ pat { print $1, $2 }' |
+		sort -k2 -n |
+		tail -1 |
+		awk '{print $1}'
 }
 count_fds() {
 	local pid="$1"
-	[ -z "$pid" ] && { echo 0; return; }
+	[ -z "$pid" ] && {
+		echo 0
+		return
+	}
 	local n
 	n=$(ls /proc/"$pid"/fd 2>/dev/null | wc -l) || n=0
 	echo "$n"
 }
 threads_of() {
 	local pid="$1"
-	[ -z "$pid" ] && { echo 0; return; }
+	[ -z "$pid" ] && {
+		echo 0
+		return
+	}
 	local n
 	n=$(grep -s '^Threads:' /proc/"$pid"/status 2>/dev/null | awk '{print $2}') || n=0
 	[ -n "$n" ] || n=0
@@ -125,8 +131,12 @@ baseline_java_threads=0
 baseline_bridge_fds=0
 fail=0
 
-for (( i=1; i<=CYCLES; i++ )); do
-	[ -n "$java_pid_before" ] || { echo "  cycle $i: Java PID lost before sampling — cannot continue" >&2; fail=1; break; }
+for ((i = 1; i <= CYCLES; i++)); do
+	[ -n "$java_pid_before" ] || {
+		echo "  cycle $i: Java PID lost before sampling — cannot continue" >&2
+		fail=1
+		break
+	}
 	jfds_b=$(count_fds "$java_pid_before")
 	jthr_b=$(threads_of "$java_pid_before")
 
@@ -147,7 +157,7 @@ for (( i=1; i<=CYCLES; i++ )); do
 	bfds_a=$(count_fds "$bridge_pid_a")
 
 	progress_now=$(count_progress)
-	progress_delta=$(( progress_now - t0_progress ))
+	progress_delta=$((progress_now - t0_progress))
 
 	# Recovered = Java alive AND a bridge child exists AND a fresh lifecycle
 	# event (subscription_ack on resubscribe) was logged after the kill.
@@ -163,9 +173,9 @@ for (( i=1; i<=CYCLES; i++ )); do
 		baseline_java_threads=$jthr_a
 		baseline_bridge_fds=$bfds_a
 	else
-		max_fds=$(( baseline_java_fds * (100 + LEAK_FD_MARGIN_PCT) / 100 ))
-		max_thr=$(( baseline_java_threads + LEAK_THREAD_MARGIN ))
-		max_bfds=$(( baseline_bridge_fds * (100 + LEAK_FD_MARGIN_PCT) / 100 ))
+		max_fds=$((baseline_java_fds * (100 + LEAK_FD_MARGIN_PCT) / 100))
+		max_thr=$((baseline_java_threads + LEAK_THREAD_MARGIN))
+		max_bfds=$((baseline_bridge_fds * (100 + LEAK_FD_MARGIN_PCT) / 100))
 		if [ "$jfds_a" -gt "$max_fds" ] || [ "$jthr_a" -gt "$max_thr" ] || [ "$bfds_a" -gt "$max_bfds" ]; then
 			leak_ok=0
 		fi
@@ -173,10 +183,10 @@ for (( i=1; i<=CYCLES; i++ )); do
 
 	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$i" "$jfds_b" "$jfds_a" "$bfds_b" "$bfds_a" \
-		"$jthr_b" "$jthr_a" "$progress_delta" "$recovered" "$leak_ok" >> "$RESULT"
+		"$jthr_b" "$jthr_a" "$progress_delta" "$recovered" "$leak_ok" >>"$RESULT"
 
 	if [ "$recovered" = "0" ] || [ "$leak_ok" = "0" ]; then
-		echo "  cycle $i: $( [ "$recovered" = 0 ] && echo NOT RECOVERED || echo LEAK DETECTED ) (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a, progress +$progress_delta)"
+		echo "  cycle $i: $([ "$recovered" = 0 ] && echo NOT RECOVERED || echo LEAK DETECTED) (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a, progress +$progress_delta)"
 		fail=1
 	else
 		echo "  cycle $i: ok (java_fds $jfds_b→$jfds_a, bridge_fds $bfds_b→$bfds_a, threads $jthr_b→$jthr_a, progress +$progress_delta)"

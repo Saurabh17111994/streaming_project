@@ -116,7 +116,9 @@ def load_existing_manifest():
         # R-147: normalize the structure so a malformed-but-valid-JSON
         # manifest fails with the clear DDL-contract diagnostic, not a
         # KeyError/TypeError deep in diff_manifests.
-        if not isinstance(manifest, dict) or not isinstance(manifest.get("tables"), list):
+        if not isinstance(manifest, dict) or not isinstance(
+            manifest.get("tables"), list
+        ):
             raise RuntimeError(
                 f"{MANIFEST_PATH} has no 'tables' list — malformed manifest structure"
             )
@@ -199,7 +201,11 @@ def diff_manifests(existing, computed):
             diffs.append(f"  - REMOVED: {path} ({e['table_name']})")
         elif e is not None and c is not None and e["ddl_sha256"] != c["ddl_sha256"]:
             diffs.append(f"  ~ CHANGED: {path} ({c['table_name']}) checksum differs")
-        elif e is not None and c is not None and e.get("table_kind") != c.get("table_kind"):
+        elif (
+            e is not None
+            and c is not None
+            and e.get("table_kind") != c.get("table_kind")
+        ):
             diffs.append(
                 f"  ~ KIND:    {path} ({c['table_name']}) "
                 f"{e.get('table_kind')} -> {c.get('table_kind')}"

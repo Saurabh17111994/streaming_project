@@ -29,4 +29,26 @@ class BridgeEventParserTest {
         assertThrows(IllegalArgumentException.class, () -> parser.parse("{\"record_type\":\"bridge_event\",\"contract_version\":2,\"event\":\"unknown\",\"slot_id\":\"hft-0\",\"connection_id\":\"hft-0\",\"connection_epoch\":1,\"state\":\"ACTIVE\"}"));
         assertThrows(IllegalArgumentException.class, () -> parser.parse("{\"record_type\":\"bridge_event\",\"contract_version\":2,\"event\":\"slot_state\",\"slot_id\":\"hft-0\",\"connection_id\":\"hft-0\",\"connection_epoch\":0,\"state\":\"ACTIVE\"}"));
     }
+
+    @Test
+    void nonBridgeRecordTypesAreSkippedNotRejected() throws Exception {
+        // R-028: broker_quarantine (and any other record_type) must yield
+        // Optional.empty() from parse() so the caller falls through to
+        // parseQuarantine() — it must NOT throw.
+        byte[] raw = "{\"token\":100000}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String b64 = java.util.Base64.getEncoder().encodeToString(raw);
+        String hash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(raw));
+        String quarantine = "{\"record_type\":\"broker_quarantine\",\"contract_version\":2,"
+                + "\"slot_id\":\"hft-0\",\"connection_id\":\"hft-0\",\"connection_epoch\":1,"
+                + "\"token\":100000,\"reason\":\"MALFORMED_JSON\",\"raw_payload\":\"" + b64 + "\","
+                + "\"payload_hash\":\"" + hash + "\",\"detected_ts_ms\":1000}";
+        assertTrue(parser.parse(quarantine).isEmpty(),
+                "broker_quarantine must be skipped by parse()");
+        assertTrue(parser.parseQuarantine(quarantine).isPresent(),
+                "broker_quarantine must reach parseQuarantine()");
+
+        // Unknown record types are skipped too — never rejected.
+        assertTrue(parser.parse("{\"record_type\":\"something_else\"}").isEmpty());
+    }
 }

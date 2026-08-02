@@ -111,11 +111,12 @@ public final class RawTickWriter implements AutoCloseable {
 
         // 4. Submit with retry loop
         int attempt = 0;
+        CompletableFuture<AppendResult> future = null;
         while (attempt < MAX_RETRY_ATTEMPTS) {
             attempt++;
             try {
                 // Submit append (no batching — one tick, one call)
-                CompletableFuture<AppendResult> future = rowConverter.append(packet);
+                future = rowConverter.append(packet);
 
                 // Wait for acknowledgement
                 AppendResult result = future.get(appendTimeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -131,7 +132,18 @@ public final class RawTickWriter implements AutoCloseable {
                 // Timeout → UNCERTAIN: we don't know if Fluss persisted the row.
                 // Do NOT retry — the same row could already be durably stored.
                 // Compute owns logical dedup at the Flink level.
-                tracker.onAppendFailure(rowBytes);
+                //
+                // R-037: cancel the in-flight append and defer the backpressure
+                // release until the future actually completes. The AppendTracker
+                // contract is "pending counters decrease only after append
+                // completes" — releasing now would under-count in-flight work
+                // while the append keeps running in the client's background.
+                if (future != null) {
+                    future.cancel(true);
+                    future.whenComplete((r, ex) -> tracker.onAppendFailure(rowBytes));
+                } else {
+                    tracker.onAppendFailure(rowBytes);
+                }
                 errorCount.incrementAndGet();
                 uncertainCount.incrementAndGet();
                 LOG.warn("raw-writer: append UNCERTAIN (table={}, fp={}, timeout={}ms, attempt={})",

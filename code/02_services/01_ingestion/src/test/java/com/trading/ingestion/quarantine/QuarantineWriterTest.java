@@ -1,8 +1,13 @@
 package com.trading.ingestion.quarantine;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import org.apache.fluss.client.table.writer.AppendResult;
 import org.junit.jupiter.api.Test;
 
 class QuarantineWriterTest {
@@ -42,5 +47,24 @@ class QuarantineWriterTest {
         assertFalse(safe.contains("secretBearerToken"));
         assertFalse(safe.contains("secretQueryToken"));
         assertTrue(safe.length() <= 512, "detail must be bounded to 512 chars");
+    }
+
+    @Test
+    void observePropagatesAsyncAppendFailures() {
+        // R-033: a discarded append future silently loses quarantine evidence.
+        CompletableFuture<AppendResult> failed =
+                CompletableFuture.failedFuture(new RuntimeException("coordinator unreachable"));
+        CompletableFuture<AppendResult> guarded =
+                QuarantineWriter.observe(failed, "q-1", "MISSING_INSTRUMENT");
+        assertTrue(failed.isCompletedExceptionally());
+        assertThrows(CompletionException.class, guarded::join);
+    }
+
+    @Test
+    void observeCompletesNormallyOnSuccessfulAppend() {
+        CompletableFuture<AppendResult> ok = CompletableFuture.completedFuture(null);
+        CompletableFuture<AppendResult> guarded =
+                QuarantineWriter.observe(ok, "q-2", "MISSING_INSTRUMENT");
+        assertEquals(null, guarded.join());
     }
 }

@@ -27,8 +27,8 @@ ELAPSED=0
 # bash /dev/tcp does not support IPv6, and a missing port would make the
 # probe path `/dev/tcp/host/host` (never succeeds). Fail fast instead.
 case "$COORDINATOR" in
-	*:*) HOST="${COORDINATOR%:*}" PORT="${COORDINATOR##*:}" ;;
-	*) HOST="" PORT="" ;;
+*:*) HOST="${COORDINATOR%:*}" PORT="${COORDINATOR##*:}" ;;
+*) HOST="" PORT="" ;;
 esac
 if [ -z "$HOST" ] || ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
 	echo "[ddl-init] FATAL: invalid coordinator address '$COORDINATOR' (expected <host>:<numeric-port>; IPv6 not supported by /dev/tcp)." >&2

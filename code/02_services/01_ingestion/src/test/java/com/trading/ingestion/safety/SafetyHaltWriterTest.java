@@ -2,8 +2,12 @@ package com.trading.ingestion.safety;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import org.apache.fluss.client.table.writer.AppendResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -46,5 +50,26 @@ class SafetyHaltWriterTest {
         String unsafe = SafetyHaltWriter.computeHaltRequestId("fp", "hft-0", 5, "UNSAFE", "FEED_STALLED");
         String recovered = SafetyHaltWriter.computeHaltRequestId("fp", "hft-0", 5, "RECOVERED", "");
         assertNotEquals(unsafe, recovered);
+    }
+
+    @Test
+    @DisplayName("observe() propagates async append failures (R-034)")
+    void observePropagatesAsyncAppendFailures() {
+        CompletableFuture<AppendResult> failed =
+                CompletableFuture.failedFuture(new RuntimeException("broker down"));
+        CompletableFuture<AppendResult> guarded = SafetyHaltWriter.observe(
+                failed, "halt-1", "hft-0", SafetyHaltWriter.SafetyState.UNSAFE,
+                SafetyHaltWriter.ReasonCode.FEED_STALLED.name(), 7L);
+        assertThrows(CompletionException.class, guarded::join,
+                "async failure must surface so the halt is not silently lost");
+    }
+
+    @Test
+    @DisplayName("observe() completes normally on successful append (R-034)")
+    void observeCompletesOnSuccess() {
+        CompletableFuture<AppendResult> ok = CompletableFuture.completedFuture(null);
+        CompletableFuture<AppendResult> guarded = SafetyHaltWriter.observe(
+                ok, "halt-2", "hft-0", SafetyHaltWriter.SafetyState.RECOVERED, "", 8L);
+        assertEquals(null, guarded.join());
     }
 }

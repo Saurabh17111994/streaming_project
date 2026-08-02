@@ -37,27 +37,30 @@ OUT_DIR="${OUT_DIR:-$PROJECT_ROOT/logs/soak}"
 ACK_LINE_PATTERN='bridge lifecycle event=subscription_ack'
 ACK_TOKENS_PATTERN='state=[A-Z]+ (epoch=[0-9]+ )?assigned=[0-9]+ acknowledged=[0-9]+ rejected=[0-9]+'
 
-[ -f "$LOG_FILE" ] || { echo "FATAL: no journal at $LOG_FILE" >&2; exit 1; }
+[ -f "$LOG_FILE" ] || {
+	echo "FATAL: no journal at $LOG_FILE" >&2
+	exit 1
+}
 
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/headroom-summary-$(date +%Y%m%d-%H%M%S).txt"
 {
-echo "headroom: scanning $LOG_FILE"
-echo "---"
-echo "Subscription acks (ACTIVE/PARTIAL/TERMINAL):"
-grep -E "$ACK_LINE_PATTERN" "$LOG_FILE" \
-	| grep -oE "$ACK_TOKENS_PATTERN" \
-	| sort | uniq -c || true
+	echo "headroom: scanning $LOG_FILE"
+	echo "---"
+	echo "Subscription acks (ACTIVE/PARTIAL/TERMINAL):"
+	grep -E "$ACK_LINE_PATTERN" "$LOG_FILE" |
+		grep -oE "$ACK_TOKENS_PATTERN" |
+		sort | uniq -c || true
 
-echo "---"
-echo "Any partial/terminal/rejected events (tightness evidence):"
-grep -E "$ACK_LINE_PATTERN" "$LOG_FILE" \
-	| grep -vE 'state=ACTIVE (epoch=[0-9]+ )?rejected=0' || echo "  (none — all acks full & clean)"
+	echo "---"
+	echo "Any partial/terminal/rejected events (tightness evidence):"
+	grep -E "$ACK_LINE_PATTERN" "$LOG_FILE" |
+		grep -vE 'state=ACTIVE (epoch=[0-9]+ )?rejected=0' || echo "  (none — all acks full & clean)"
 
-echo "---"
-echo "Headroom (capacity_used = acknowledged/assigned; also vs the per-connection cap MaxHFTTokensPerConnection=1024, see subscription_plan.go):"
-CAP="${CAP_TOKENS:-1024}"
-awk -v cap="$CAP" -v ackpat="$ACK_LINE_PATTERN" '
+	echo "---"
+	echo "Headroom (capacity_used = acknowledged/assigned; also vs the per-connection cap MaxHFTTokensPerConnection=1024, see subscription_plan.go):"
+	CAP="${CAP_TOKENS:-1024}"
+	awk -v cap="$CAP" -v ackpat="$ACK_LINE_PATTERN" '
 $0 ~ ackpat {
 	for (i=1; i<=NF; i++) {
 		if ($i ~ /^assigned=/) { split($i,a,"="); assigned=a[2] }
@@ -87,7 +90,7 @@ END {
 	else printf "  headroom=%.1f%%\n", headroom
 }' <(grep -E "$ACK_LINE_PATTERN" "$LOG_FILE")
 
-echo "---"
-echo "Run this periodically during the day; pass = capacity stays below 100% of the assignment and the 1024-token per-connection cap."
+	echo "---"
+	echo "Run this periodically during the day; pass = capacity stays below 100% of the assignment and the 1024-token per-connection cap."
 } | tee "$SUMMARY"
 echo "headroom: summary → $SUMMARY"

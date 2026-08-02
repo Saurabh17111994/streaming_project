@@ -80,6 +80,21 @@ class SchemaAgreementTest {
         }
     }
 
+    @Test
+    @DisplayName("raw_table_1 DDL declares ack_ts as nullable (R-010)")
+    void rawTableAckTsIsNullable() throws IOException {
+        String ddl = readDdl("02_raw_table_1.sql");
+        // R-010: ack_ts is not known at row-build time on an immutable LOG
+        // table — it must be nullable with 0 meaning 'unknown', never NOT NULL.
+        String ackLine = ddl.lines()
+                .filter(l -> l.trim().startsWith("ack_ts"))
+                .findFirst().orElse("<missing ack_ts column>");
+        assertTrue(ackLine.contains("NULL"),
+                "ack_ts must be declared nullable: " + ackLine);
+        assertTrue(!ackLine.contains("NOT NULL"),
+                "ack_ts must not be NOT NULL: " + ackLine);
+    }
+
     // ---- helpers ----
 
     private static String readDdl(String name) throws IOException {

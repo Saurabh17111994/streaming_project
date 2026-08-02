@@ -14,7 +14,10 @@ public final class BridgeEventParser {
         if (node == null || !node.has("record_type")) return Optional.empty();
         String recordType = node.path("record_type").asText();
         if ("tick".equals(recordType)) return Optional.empty();
-        if (!"bridge_event".equals(recordType)) throw new IllegalArgumentException("unknown record_type");
+        // Any record_type other than tick/bridge_event (e.g. broker_quarantine)
+        // is handled by another parser downstream — skip, never reject, so
+        // the caller can fall through to parseQuarantine() (R-028).
+        if (!"bridge_event".equals(recordType)) return Optional.empty();
         return Optional.of(new BridgeEvent(
                 node.path("event").asText("unknown"),
                 node.path("contract_version").asInt(-1),

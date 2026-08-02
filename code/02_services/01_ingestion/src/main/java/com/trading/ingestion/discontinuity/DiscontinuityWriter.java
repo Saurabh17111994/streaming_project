@@ -134,17 +134,19 @@ public class DiscontinuityWriter implements AutoCloseable {
      * Map a bridge lifecycle event to discontinuity evidence (plan §DiscontinuityWriter).
      *
      * <pre>
-     * DISCONNECTED / BRIDGE_EXIT  -> DROP
-     * HEARTBEAT_FAILED / FEED_STALLED -> HEARTBEAT_GAP
-     * RECONNECT                    -> RECONNECT
-     * SUBSCRIPTION_PARTIAL         -> FEED_HEALTH
-     * AUTH_FAILURE                 -> DROP
+     * DISCONNECTED / BRIDGE_SHUTDOWN / AUTH_FAILURE -> DROP
+     * HEARTBEAT_FAILED / FEED_STALLED             -> HEARTBEAT_GAP
+     * RECONNECT                                    -> RECONNECT
+     * SUBSCRIPTION_PARTIAL (rejected tokens > 0)   -> FEED_HEALTH
      * </pre>
      *
      * <p>One immutable row per transition, using the event's own connection
      * epoch and source. Never includes secrets or full raw lines.
      */
     public void writeBridgeEvent(BridgeEvent event, LastTickSnapshot before) {
+        if (!carriesDiscontinuityEvidence(event)) {
+            return; // full subscription ack / non-evidence event
+        }
         Reason reason = mapEventToReason(event.event());
         if (reason == null) {
             return; // not a discontinuity-bearing event
@@ -153,13 +155,32 @@ public class DiscontinuityWriter implements AutoCloseable {
                 event.connectionId(), before, event.reason());
     }
 
+    /**
+     * Whether a bridge event carries discontinuity evidence (R-029).
+     *
+     * <p>The Go bridge validates events against exactly
+     * {@code {slot_state, subscription_ack, heartbeat_failed, feed_stalled,
+     * disconnect, reconnect, auth_failure, bridge_shutdown}} — {@code bridge_exit}
+     * is not in that vocabulary, the real exit event is {@code bridge_shutdown}.
+     * A full {@code subscription_ack} (rejectedTokens == 0) is healthy, not a
+     * discontinuity; only a partial subscription carries FEED_HEALTH evidence.
+     */
+    static boolean carriesDiscontinuityEvidence(BridgeEvent event) {
+        if (event == null) return false;
+        if ("subscription_ack".equals(event.event())) {
+            return event.rejectedTokens() > 0;
+        }
+        return mapEventToReason(event.event()) != null;
+    }
+
     /** Map a bridge event name to a discontinuity {@link Reason}, or null if not applicable. */
     static Reason mapEventToReason(String eventName) {
         if (eventName == null) return null;
         return switch (eventName) {
-            case "disconnect", "bridge_exit", "auth_failure" -> Reason.DROP;
+            case "disconnect", "bridge_shutdown", "auth_failure" -> Reason.DROP;
             case "heartbeat_failed", "feed_stalled" -> Reason.HEARTBEAT_GAP;
             case "reconnect" -> Reason.RECONNECT;
+            case "subscription_ack" -> Reason.FEED_HEALTH;
             default -> null;
         };
     }
@@ -192,10 +213,8 @@ public class DiscontinuityWriter implements AutoCloseable {
                 bs("v1")
         );
         try {
-            @SuppressWarnings("unused")
-            CompletableFuture<AppendResult> future = writer.append(row);
-            LOG.info("discontinuity-writer: wrote {} (reason={}, source={}, epoch={}, note={})",
-                    discontinuityId, reason, source, epoch, note);
+            observe(writer.append(row), discontinuityId,
+                    reason.name() + "/" + note + "/source=" + sourceValue);
         } catch (Exception e) {
             LOG.error("discontinuity-writer: append failed (id={}, reason={}): {}",
                     discontinuityId, reason, e.getMessage());
@@ -234,14 +253,35 @@ public class DiscontinuityWriter implements AutoCloseable {
         );
 
         try {
-            @SuppressWarnings("unused")
-            CompletableFuture<AppendResult> future = writer.append(row);
-            LOG.info("discontinuity-writer: wrote {} (reason={}, note={})",
-                    discontinuityId, reason, note);
+            observe(writer.append(row), discontinuityId,
+                    reason.name() + "/" + note);
         } catch (Exception e) {
             LOG.error("discontinuity-writer: append failed (id={}, reason={}): {}",
                     discontinuityId, reason, e.getMessage());
         }
+    }
+
+    /**
+     * Observe an asynchronous Fluss append (R-030). The {@link AppendWriter}
+     * surfaces broker-side/serialization failures by completing the future
+     * exceptionally — never by throwing from {@code append()} — so a discarded
+     * future silently loses discontinuity evidence (a money-safety evidence
+     * path). Success is only logged after the future actually completes;
+     * failures are logged at ERROR.
+     *
+     * @return a future mirroring the append outcome (for tests)
+     */
+    static CompletableFuture<AppendResult> observe(
+            CompletableFuture<AppendResult> future, String id, String detail) {
+        return future.whenComplete((result, ex) -> {
+            if (ex != null) {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                LOG.error("discontinuity-writer: append failed (id={}, detail={}): {}",
+                        id, detail, cause.getMessage());
+            } else {
+                LOG.info("discontinuity-writer: wrote {} (detail={})", id, detail);
+            }
+        });
     }
 
     /** Shorthand to convert a String to Fluss's internal BinaryString type. */

@@ -32,17 +32,17 @@ fi
 validate_ref() {
 	local img="$1"
 	case "$img" in
-		*@sha256:*)
-			echo "ERROR: '$img' is already digest-pinned — refusing to double-pin" >&2
-			return 1
-			;;
-		*:*)
-			return 0
-			;;
-		*)
-			echo "ERROR: '$img' has no tag — expected <image>:<tag>" >&2
-			return 1
-			;;
+	*@sha256:*)
+		echo "ERROR: '$img' is already digest-pinned — refusing to double-pin" >&2
+		return 1
+		;;
+	*:*)
+		return 0
+		;;
+	*)
+		echo "ERROR: '$img' has no tag — expected <image>:<tag>" >&2
+		return 1
+		;;
 	esac
 }
 
@@ -55,16 +55,16 @@ resolve_one() {
 	# instead of a generic "could not resolve digest".
 	if command -v docker &>/dev/null; then
 		err=$(docker buildx imagetools inspect "$img" \
-			--format '{{.Manifest.Digest}}' 2>&1) && digest="$err" \
-			|| err="docker buildx imagetools inspect failed: $err"
+			--format '{{.Manifest.Digest}}' 2>&1) && digest="$err" ||
+			err="docker buildx imagetools inspect failed: $err"
 	fi
 	if [ -z "$digest" ] && command -v skopeo &>/dev/null; then
-		err=$(skopeo inspect --format '{{.Digest}}' "docker://${img}" 2>&1) && digest="$err" \
-			|| err="skopeo inspect failed: $err"
+		err=$(skopeo inspect --format '{{.Digest}}' "docker://${img}" 2>&1) && digest="$err" ||
+			err="skopeo inspect failed: $err"
 	fi
 	if [ -z "$digest" ] && command -v crane &>/dev/null; then
-		err=$(crane digest "$img" 2>&1) && digest="$err" \
-			|| err="crane digest failed: $err"
+		err=$(crane digest "$img" 2>&1) && digest="$err" ||
+			err="crane digest failed: $err"
 	fi
 
 	if [ -z "$digest" ]; then

@@ -77,6 +77,31 @@ class ManifestLoadTest {
     }
 
     @Test
+    @DisplayName("Synthetic manifest tokens match MockArrowServer formula (R-027)")
+    void syntheticSetMatchesMockArrowServer() {
+        // R-027 regression: the synthetic set used 100_000 + i*100 + (i%10),
+        // which shares only 5 tokens with MockArrowServer's 100_000 + i*100 —
+        // so fake-broker ticks were mostly quarantined as MISSING_INSTRUMENT
+        // and the subscription-completeness check never passed.
+        List<Instrument> set = InstrumentManifestLoader.syntheticSet();
+        assertEquals(50, set.size(), "must be 50 synthetic instruments");
+
+        for (int i = 0; i < 50; i++) {
+            long expected = 100_000L + i * 100L;
+            assertTrue(set.stream().anyMatch(inst -> inst.instrumentToken() == expected),
+                    "token " + expected + " (MockArrowServer formula) missing from set");
+        }
+        assertEquals(50, set.stream().map(Instrument::instrumentToken).distinct().count(),
+                "all 50 tokens must be unique");
+
+        // The exact 5-token overlap that the old formula produced must be gone:
+        // 100_000 + i*100 + (i%10) only coincided at i%10 == 0 (5 values).
+        assertEquals(50, set.stream()
+                .filter(inst -> inst.instrumentToken() >= 100_000L && inst.instrumentToken() <= 104_900L)
+                .count(), "all tokens must be within the MockArrowServer range");
+    }
+
+    @Test
     @DisplayName("Quoted field containing a comma is preserved as one field")
     void quotedCommaPreserved() {
         List<String> cols = InstrumentManifestLoader.parseCsvRecord(

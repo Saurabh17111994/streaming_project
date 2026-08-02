@@ -255,13 +255,19 @@ final class InstrumentManifestLoader {
 
     /**
      * Synthetic instrument set for local development — matches
-     * MockArrowServer's default 50 instruments (tokens 100000-104909).
+     * MockArrowServer's default 50 instruments (tokens 100000-104900).
+     *
+     * <p>R-027: the formula must be exactly {@code 100_000L + i * 100L}.
+     * MockArrowServer builds its default set the same way, so every tick the
+     * fake broker emits resolves against the loaded manifest — otherwise the
+     * ALLOW_SYNTHETIC_MANIFEST dev path quarantines ticks as
+     * MISSING_INSTRUMENT and the subscription-completeness check never passes.
      */
-    private static List<Instrument> syntheticSet() {
+    static List<Instrument> syntheticSet() {
         List<Instrument> instruments = new ArrayList<>();
         // 50 instruments matching MockArrowServer defaults
         for (int i = 0; i < 50; i++) {
-            long token = 100_000L + i * 100L + (i % 10);
+            long token = 100_000L + i * 100L;
             instruments.add(new Instrument.Builder()
                     .instrumentToken(token)
                     .tradingSymbol("SYM" + (i + 1) + "-EQ")

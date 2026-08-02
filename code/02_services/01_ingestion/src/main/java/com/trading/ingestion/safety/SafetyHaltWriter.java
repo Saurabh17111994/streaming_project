@@ -131,15 +131,40 @@ public final class SafetyHaltWriter implements AutoCloseable {
         );
 
         try {
-            @SuppressWarnings("unused")
-            CompletableFuture<AppendResult> future = writer.append(row);
-            LOG.info("safety-halt-writer: wrote {} (slot={}, state={}, reason={}, epoch={})",
-                    haltRequestId, slotId, state, reason, connectionEpoch);
+            // Fluss appends are asynchronous: failures complete the future
+            // exceptionally, never by throwing from append(). Observe so an
+            // undelivered safety-halt request is logged at ERROR, and success
+            // is only logged after the append actually completes (R-034).
+            observe(writer.append(row), haltRequestId, slotId, state, reason, connectionEpoch);
         } catch (Exception e) {
             LOG.error("safety-halt-writer: append failed (id={}, reason={}): {}",
                     haltRequestId, reason, e.getMessage());
         }
         return haltRequestId;
+    }
+
+    /**
+     * Observe an asynchronous Fluss append (R-034). A discarded future would
+     * silently lose a safety-halt request — an unsafe state could go un-halted
+     * with no alert. Success is logged at INFO only after the future completes;
+     * failures are logged at ERROR.
+     *
+     * @return a future mirroring the append outcome (for tests)
+     */
+    static CompletableFuture<AppendResult> observe(
+            CompletableFuture<AppendResult> future, String id, String slotId,
+            SafetyState state, String reason, long epoch) {
+        return future.whenComplete((result, ex) -> {
+            if (ex != null) {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                LOG.error("safety-halt-writer: append failed (id={}, slot={}, state={}, "
+                        + "reason={}, epoch={}): {}",
+                        id, slotId, state, reason, epoch, cause.getMessage());
+            } else {
+                LOG.info("safety-halt-writer: wrote {} (slot={}, state={}, reason={}, epoch={})",
+                        id, slotId, state, reason, epoch);
+            }
+        });
     }
 
     /**

@@ -114,7 +114,7 @@ class RealFlussRowConverter implements FlussRowConverter {
      * Convert a {@link TickPacket} to a {@link GenericRow} matching the
      * {@code raw_table_1} DDL column order, then append to Fluss.
      *
-     * <p>DDL column order (38 columns):
+     * <p>DDL column order (28 columns):
      * <pre>{@code
      *   event_fingerprint, fingerprint_version, connection_id, connection_epoch,
      *   instrument_token, exchange, symbol, instrument_type, strike_paise, expiry,
@@ -150,7 +150,10 @@ class RealFlussRowConverter implements FlussRowConverter {
                 // timestamps
                 packet.eventTime().toEpochMilli(),                  // event_time BIGINT
                 now.toEpochMilli(),                                 // ingest_ts BIGINT
-                0L,                                                 // ack_ts BIGINT (set after append)
+                0L,                                                 // ack_ts BIGINT NULL — 0 = unknown
+                                                                    // (R-010: Fluss LOG rows are immutable;
+                                                                    //  the broker ack time is not known at
+                                                                    //  row-build time)
                 // trade fields
                 bs(packet.validity().name().contains("NON_TRADE") ? "QUOTE" : "TRADE"), // tick_type
                 packet.lastPricePaise(),                            // last_price_paise BIGINT

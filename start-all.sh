@@ -32,15 +32,18 @@ BRIDGE_DIR="${BRIDGE_DIR:-$CODE_DIR/02_services/01_ingestion/go-bridge}"
 JAVA_DIR="${JAVA_DIR:-$CODE_DIR/02_services/01_ingestion}"
 DDL_DIR="${DDL_DIR:-$CODE_DIR/01_platform/02_sql/ddl}"
 FLUSS_BOOTSTRAP="${FLUSS_BOOTSTRAP:-localhost:9123}"
-ALLOW_RUNTIME_DDL="${ALLOW_RUNTIME_DDL:-true}"   # local dev only; production must be false
-GO_FLAGS="${GO_FLAGS:-}"                          # e.g. GO_FLAGS=-tags=netgo
+ALLOW_RUNTIME_DDL="${ALLOW_RUNTIME_DDL:-true}" # local dev only; production must be false
+GO_FLAGS="${GO_FLAGS:-}"                       # e.g. GO_FLAGS=-tags=netgo
 # R-228: default to ONLINE maven (a fresh machine has an empty ~/.m2 and
 # `-o` fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN_FLAGS="${MVN_FLAGS:-}"
 LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs}"
 
-log()  { printf '\033[1;36m[start-all]\033[0m %s\n' "$*"; }
-die()  { printf '\033[1;31m[start-all] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[1;36m[start-all]\033[0m %s\n' "$*"; }
+die() {
+	printf '\033[1;31m[start-all] FATAL:\033[0m %s\n' "$*" >&2
+	exit 1
+}
 
 # R-228: tool preflight — a missing tool must fail with an actionable message.
 for tool in java go mvn docker awk; do
@@ -77,7 +80,7 @@ elif [ -f "$COMPOSE_DIR/.env" ]; then
 	done < <(awk -F= '/^ARROW_[A-Z_]+=/ {print $1 "=" substr($0, index($0,"=")+1)}' "$COMPOSE_DIR/.env")
 	log "no $SECRETS_FILE — using ARROW_* credentials from $COMPOSE_DIR/.env"
 else
-	cat > "$SECRETS_FILE" <<EOF
+	cat >"$SECRETS_FILE" <<EOF
 # Arrow broker credentials — fill these in, then re-run start-all.sh
 ARROW_APP_ID=
 ARROW_APP_SECRET=
@@ -110,7 +113,7 @@ if ! fluss_up; then
 	log "Fluss not running — starting zookeeper + coordinator + tablet..."
 	# The .env supplies FLUSS_IMAGE etc.; fail loudly if it's missing.
 	[ -f "$COMPOSE_DIR/.env" ] || die "missing $COMPOSE_DIR/.env (copy from Arrow_broker/.env and fill in FLUSS_IMAGE)"
-	( cd "$COMPOSE_DIR" && docker compose up -d zookeeper fluss-coordinator fluss-tablet )
+	(cd "$COMPOSE_DIR" && docker compose up -d zookeeper fluss-coordinator fluss-tablet)
 	log "waiting for Fluss coordinator on $FLUSS_BOOTSTRAP..."
 	for i in $(seq 1 30); do
 		if fluss_up; then break; fi
@@ -124,9 +127,9 @@ fi
 # ── 3. Build bridge + jar if stale ────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log "building Go bridge..."
-( cd "$BRIDGE_DIR" && go build $GO_FLAGS -o arrow-bridge . )
+(cd "$BRIDGE_DIR" && go build $GO_FLAGS -o arrow-bridge .)
 log "building Java jar (offline)..."
-( cd "$CODE_DIR" && mvn $MVN_FLAGS -q -pl 02_services/01_ingestion -am package -DskipTests )
+(cd "$CODE_DIR" && mvn $MVN_FLAGS -q -pl 02_services/01_ingestion -am package -DskipTests)
 
 # ── 4. Create tables if missing (local dev only) ──────────────────────────────
 if [ "$ALLOW_RUNTIME_DDL" = "true" ]; then

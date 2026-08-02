@@ -148,14 +148,38 @@ public class QuarantineWriter implements AutoCloseable {
                 now.toEpochMilli(), bs(safeDetail), bs("v1"));
 
         try {
-            @SuppressWarnings("unused")
-            CompletableFuture<AppendResult> future = writer.append(row);
-            LOG.debug("quarantine-writer: wrote {} (reason={}, detail={})",
-                    quarantineId, reason, safeDetail);
+            // Fluss appends are asynchronous: failures surface on the future,
+            // not by throwing from append(). Observe it so async failures are
+            // logged at ERROR and never silently swallowed (R-033).
+            observe(writer.append(row), quarantineId, reason.name());
         } catch (Exception e) {
             LOG.error("quarantine-writer: append failed (id={}, reason={}): {}",
                     quarantineId, reason, e.getMessage());
         }
+    }
+
+    /**
+     * Observe an asynchronous Fluss append (R-033). {@link AppendWriter}
+     * completes the returned future exceptionally on broker-side or
+     * serialization failures; a discarded future would silently lose the
+     * quarantine evidence. Success (DEBUG) is only logged after the future
+     * completes; failures are logged at ERROR per the class contract
+     * ("failures are logged at ERROR and must not block the ingestion
+     * pipeline").
+     *
+     * @return a future mirroring the append outcome (for tests)
+     */
+    static CompletableFuture<AppendResult> observe(
+            CompletableFuture<AppendResult> future, String id, String detail) {
+        return future.whenComplete((result, ex) -> {
+            if (ex != null) {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                LOG.error("quarantine-writer: append failed (id={}, detail={}): {}",
+                        id, detail, cause.getMessage());
+            } else {
+                LOG.debug("quarantine-writer: wrote {} (detail={})", id, detail);
+            }
+        });
     }
 
     /** Shorthand to convert a String to Fluss's internal BinaryString type. */
