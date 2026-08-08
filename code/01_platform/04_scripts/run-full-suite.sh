@@ -140,7 +140,7 @@ port_open localhost 9123 || { echo "!! Fluss :9123 not reachable"; FAILED=1; }
 [ -n "$O2_AUTH" ] || { echo "!! O2_AUTH_BASIC missing from .env"; FAILED=1; }
 [ -f "$MANIFEST" ] || { echo "!! manifest not found: $MANIFEST"; FAILED=1; }
 if pgrep -f 'com.trading.ingestion.IngestionService' >/dev/null 2>&1; then
-	echo "!! a native IngestionService is already running — refusing to double-run"; FAILED=1
+	echo "!! an IngestionService is already running (native or containerized) — refusing to double-run; stop it first (docker compose stop ingestion for the container)"; FAILED=1
 fi
 if port_open 127.0.0.1 8899; then
 	echo "!! port 8899 busy — a fake broker may already run"; FAILED=1
