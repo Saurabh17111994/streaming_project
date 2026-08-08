@@ -12,7 +12,7 @@ class BridgeEventParserTest {
 
     @Test
     void parsesLifecycleAndLeavesTicksEmpty() throws Exception {
-        String event = "{\"record_type\":\"bridge_event\",\"contract_version\":2,\"event\":\"subscription_ack\",\"slot_id\":\"hft-0\",\"connection_id\":\"hft-0\",\"connection_epoch\":1,\"state\":\"ACTIVE\",\"assigned_tokens\":2,\"acknowledged_tokens\":2,\"rejected_tokens\":0}";
+        String event = "{\"record_type\":\"bridge_event\",\"contract_version\":2,\"event\":\"subscription_ack\",\"slot_id\":\"hft-0\",\"connection_id\":\"hft-0\",\"connection_epoch\":1,\"state\":\"ACTIVE\",\"assigned_tokens\":2,\"acknowledged_tokens\":2,\"rejected_tokens\":0,\"received_ts_ms\":1785700000000}";
         BridgeEvent parsed = parser.parse(event).orElseThrow();
         assertEquals("hft-0", parsed.slotId());
         assertTrue(parser.parse("{\"record_type\":\"tick\",\"token\":1}").isEmpty());

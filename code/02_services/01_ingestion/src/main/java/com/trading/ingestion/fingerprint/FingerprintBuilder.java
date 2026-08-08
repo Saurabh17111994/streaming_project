@@ -109,7 +109,7 @@ public final class FingerprintBuilder {
 
     private static MessageDigest sha256() {
         try {
-            return MessageDigest.getInstance("SHA-256");
+            return MessageDigest.getInstance(ALGORITHM);
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }

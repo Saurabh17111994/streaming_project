@@ -572,20 +572,26 @@ public final class IngestionService {
         discontinuityWriter.write(
                 DiscontinuityWriter.Reason.DROP,
                 "arrow-bridge " + (requested ? "exited" : "crashed") + " with code " + exitCode,
-                lastTickSnapshot,
-                null // no after snapshot until reconnection
+                lastTickSnapshot
         );
     }
 
     private void processLine(String jsonLine) {
         frameCount.incrementAndGet();
         try {
-            java.util.Optional<BridgeEvent> bridgeEvent = bridgeEventParser.parse(jsonLine);
+            // R-214: parse the NDJSON line exactly ONCE and route by
+            // record_type. The old flow ran three full JSON parses per tick
+            // (bridge-event readTree + quarantine readTree + GoTick readValue).
+            com.fasterxml.jackson.databind.JsonNode jsonNode = MAPPER.readTree(jsonLine);
+            if (jsonNode == null || jsonNode.isNull() || jsonNode.isMissingNode()) {
+                return;
+            }
+            java.util.Optional<BridgeEvent> bridgeEvent = bridgeEventParser.parse(jsonNode);
             if (bridgeEvent.isPresent()) {
                 handleBridgeEvent(bridgeEvent.get());
                 return;
             }
-            java.util.Optional<BrokerQuarantine> brokerQuarantine = bridgeEventParser.parseQuarantine(jsonLine);
+            java.util.Optional<BrokerQuarantine> brokerQuarantine = bridgeEventParser.parseQuarantine(jsonNode);
             if (brokerQuarantine.isPresent()) {
                 BrokerQuarantine record = brokerQuarantine.get();
                 quarantineWriter.write(record.rawPayload(),
@@ -595,8 +601,8 @@ public final class IngestionService {
                 metrics.incrementDecodeError(record.reason());
                 return;
             }
-            // 1. Parse NDJSON → GoTick (same schema as Go bridge outputs)
-            GoTick gt = MAPPER.readValue(jsonLine, GoTick.class);
+            // 1. Bind the tree → GoTick (no third parse)
+            GoTick gt = MAPPER.treeToValue(jsonNode, GoTick.class);
             long receiveTsMs = gt.received_ts_ms > 0 ? gt.received_ts_ms : System.currentTimeMillis();
             byte[] rawBytes = jsonLine.getBytes(StandardCharsets.UTF_8);
 
@@ -1176,12 +1182,12 @@ public final class IngestionService {
      *         mismatch). Quarantining is performed here; the caller returns.
      */
     private byte[] decodeAndValidatePayload(GoTick gt, byte[] rawLine) {
-        PayloadHashValidator.Result[] result = new PayloadHashValidator.Result[1];
-        byte[] packet = PayloadHashValidator.validate(gt.raw_payload, gt.payload_hash, result);
-        if (packet != null) {
-            return packet;
+        // R-248: result is returned directly (no caller-owned out-array).
+        PayloadHashValidator.Result result = PayloadHashValidator.validate(gt.raw_payload, gt.payload_hash);
+        if (result == PayloadHashValidator.Result.VALID) {
+            return PayloadHashValidator.decodeValid(gt.raw_payload, gt.payload_hash);
         }
-        String detail = switch (result[0]) {
+        String detail = switch (result) {
             case MALFORMED_PAYLOAD -> "raw_payload missing, not valid Base64, or empty";
             case MALFORMED_HASH -> "payload_hash missing or not a SHA-256 hex digest";
             case HASH_MISMATCH -> "payload hash mismatch: broker packet bytes do not match payload_hash";

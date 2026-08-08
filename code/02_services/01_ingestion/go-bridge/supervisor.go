@@ -74,6 +74,7 @@ func runHFTSlotWithFactory(ctx context.Context, cancel context.CancelFunc, facto
 			return false
 		}
 	}, func(epoch uint64, delay time.Duration) {
+		noteReconnect(slot.SlotID)
 		_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "reconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: fmt.Sprintf("retry_in_%s", delay), ReceivedTsMs: time.Now().UnixMilli()})
 	}, func(ctx context.Context, delay time.Duration) {
 		timer := time.NewTimer(delay)
@@ -125,9 +126,13 @@ func runHFTSupervisorWithFactory(ctx context.Context, cancel context.CancelFunc,
 					outcomes[i] = slotOutcome{slotID: slot.SlotID, terminal: true, reason: fmt.Sprintf("panic: %v", r)}
 				}
 			}()
-			outcomes[i] = runHFTSlotWithFactory(ctx, cancel, makeFactory(client, i), slot, latencyMs, responseTimeout, refreshAuth, logf)
-		}(i, slot)
+		outcomes[i] = runHFTSlotWithFactory(ctx, cancel, makeFactory(client, i), slot, latencyMs, responseTimeout, refreshAuth, logf)
+	}(i, slot)
 	}
+	// Supervisor health snapshot: one bridge_metrics NDJSON line per 10s
+	// (reconnect_consecutive, active_sockets, go_goroutines). Exits on cancel
+	// so a cancelled supervisor's goroutine count settles for ING-RES-001.
+	go bridgeMetricsTicker(ctx)
 	wg.Wait()
 	terminal := 0
 	for _, o := range outcomes {

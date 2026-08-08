@@ -114,14 +114,14 @@ class RealFlussRowConverter implements FlussRowConverter {
      * Convert a {@link TickPacket} to a {@link GenericRow} matching the
      * {@code raw_table_1} DDL column order, then append to Fluss.
      *
-     * <p>DDL column order (28 columns):
+     * <p>DDL column order (20 columns, schema v2 — R-054/R-231 removed the
+     * bid/ask and option-metadata columns that the bridge never populates):
      * <pre>{@code
      *   event_fingerprint, fingerprint_version, connection_id, connection_epoch,
-     *   instrument_token, exchange, symbol, instrument_type, strike_paise, expiry,
-     *   option_type, event_time, ingest_ts, ack_ts, tick_type, last_price_paise,
-     *   last_qty, bid_price_paise, bid_qty, ask_price_paise, ask_qty,
-     *   raw_payload, payload_hash, decoder_version, protocol_version,
-     *   validity_state, validity_reason, schema_version
+     *   instrument_token, exchange, symbol, event_time, ingest_ts, ack_ts,
+     *   tick_type, last_price_paise, last_qty, raw_payload, payload_hash,
+     *   decoder_version, protocol_version, validity_state, validity_reason,
+     *   schema_version
      * }</pre>
      */
     @Override
@@ -143,10 +143,6 @@ class RealFlussRowConverter implements FlussRowConverter {
                 packet.instrumentToken(),                           // instrument_token BIGINT
                 bs(packet.exchange()),                              // exchange STRING
                 bs(packet.tradingSymbol()),                         // symbol STRING
-                bs(""),                                             // instrument_type STRING (EQ/IDX...)
-                null,                                               // strike_paise BIGINT
-                null,                                               // expiry BIGINT
-                null,                                               // option_type STRING
                 // timestamps
                 packet.eventTime().toEpochMilli(),                  // event_time BIGINT
                 now.toEpochMilli(),                                 // ingest_ts BIGINT
@@ -155,16 +151,14 @@ class RealFlussRowConverter implements FlussRowConverter {
                                                                     //  the broker ack time is not known at
                                                                     //  row-build time)
                 // trade fields
-                bs(packet.validity().name().contains("NON_TRADE") ? "QUOTE" : "TRADE"), // tick_type
+                // R-244: explicit enum comparison — the substring match on
+                // validity().name().contains("NON_TRADE") silently reclassified
+                // any future enum whose name merely contained the substring.
+                bs(packet.validity() == com.trading.ingestion.model.ValidityClassification.VALID_NON_TRADE ? "QUOTE" : "TRADE"),
                 packet.lastPricePaise(),                            // last_price_paise BIGINT
                 packet.volume(),                                    // last_qty BIGINT
-                // quote fields
-                0L,                                                 // bid_price_paise BIGINT
-                0L,                                                 // bid_qty BIGINT
-                0L,                                                 // ask_price_paise BIGINT
-                0L,                                                 // ask_qty BIGINT
                 // payload preservation
-                raw != null ? raw.rawPayload() : new byte[0],       // raw_payload BYTES
+                raw != null ? raw.rawPayloadUnsafe() : new byte[0],       // raw_payload BYTES
                 bs(raw != null ? raw.payloadHash() : ""),           // payload_hash STRING
                 bs(raw != null ? raw.decoderVersion() : "go-arrow-sdk"), // decoder_version STRING
                 bs(raw != null ? raw.protocolVersion() : ""),       // protocol_version STRING
@@ -181,9 +175,10 @@ class RealFlussRowConverter implements FlussRowConverter {
                     return new RawTickWriter.AppendResult(appendCount, tablePath);
                 })
                 .exceptionally(ex -> {
-                    LOG.warn("fluss: append failed (table={}): {}", tablePath,
-                            ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage());
-                    throw new RuntimeException("Fluss append failed", ex.getCause());
+                    // R-190: ex.getCause() may be null (plain exception).
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    LOG.warn("fluss: append failed (table={}): {}", tablePath, cause.getMessage());
+                    throw new RuntimeException("Fluss append failed", cause);
                 });
     }
 
@@ -193,8 +188,8 @@ class RealFlussRowConverter implements FlussRowConverter {
      */
     @Override
     public int estimatedRowSize(TickPacket packet) {
-        int payloadSize = (packet.raw() != null && packet.raw().rawPayload() != null)
-                ? packet.raw().rawPayload().length : 512;
+        int payloadSize = (packet.raw() != null && packet.raw().rawPayloadUnsafe() != null)
+                ? packet.raw().rawPayloadUnsafe().length : 512;
         return 512 + payloadSize;
     }
 

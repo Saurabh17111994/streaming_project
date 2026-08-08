@@ -57,16 +57,72 @@ gate_fail() {
 	exit 1
 }
 
-# ── 1. Go suite ───────────────────────────────────────────────────────────────
-echo "=== [1/3] Go bridge suite ===" | tee -a "$SUMMARY"
-if ! timeout "$GO_TIMEOUT_SEC" bash -c "cd '$BRIDGE_DIR' && go test -count=1 ./..."; then
+# ── 0. Static checks: bash -n + shellcheck on every script (Phase 8 G4) ─────
+echo "=== [1/7] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
+STATIC_LOG="$OUT_DIR/static-checks.log"
+: >"$STATIC_LOG"
+STATIC_FAIL=0
+# Every repo shell script (excludes third_party vendored sources).
+# Enumerated via a temp file (process substitution < <() needs /dev/fd which
+# some sandboxes/CI chroots do not provide), with a `git ls-files` fallback
+# for environments where find/sort cannot load their shared libraries.
+_script_list=$(mktemp)
+if ! (cd "$CODE_DIR" && find . -name '*.sh' -not -path '*/target/*' -not -path '*/third_party/*' 2>/dev/null | sort 2>/dev/null) >"$_script_list"; then
+	: >"$_script_list"
+fi
+mapfile -t SCRIPTS <"$_script_list"
+if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+	(cd "$CODE_DIR" && git ls-files '*.sh' 2>/dev/null | grep -v -E '(^|/)(target|third_party)/') >"$_script_list" || true
+	mapfile -t SCRIPTS <"$_script_list"
+fi
+rm -f "$_script_list"
+if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+	echo "FAIL: no shell scripts found to check" | tee -a "$SUMMARY"
+	gate_fail
+fi
+for s in "${SCRIPTS[@]}"; do
+	if ! bash -n "$CODE_DIR/$s" >>"$STATIC_LOG" 2>&1; then
+		echo "FAIL: bash -n $s" | tee -a "$STATIC_LOG"
+		STATIC_FAIL=1
+	fi
+	if command -v shellcheck >/dev/null 2>&1; then
+		if ! shellcheck -S warning "$CODE_DIR/$s" >>"$STATIC_LOG" 2>&1; then
+			echo "FAIL: shellcheck $s" | tee -a "$STATIC_LOG"
+			STATIC_FAIL=1
+		fi
+	else
+		echo "WARN: shellcheck not installed — skipping (bash -n still enforced)" | tee -a "$SUMMARY"
+	fi
+done
+if [ "$STATIC_FAIL" -ne 0 ]; then
+	echo "FAIL: static checks — see $STATIC_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: static checks (${#SCRIPTS[@]} scripts bash -n + shellcheck clean)" | tee -a "$SUMMARY"
+
+# ── 0b. Compose config validation (G4) ────────────────────────────────────────
+echo "=== [2/7] docker compose config ===" | tee -a "$SUMMARY"
+COMPOSE_FILE="$CODE_DIR/01_platform/01_docker/docker-compose.yml"
+if [ -f "$COMPOSE_FILE" ]; then
+	if ! docker compose -f "$COMPOSE_FILE" config >/dev/null 2>>"$STATIC_LOG"; then
+		echo "FAIL: docker compose config invalid — see $STATIC_LOG" | tee -a "$SUMMARY"
+		gate_fail
+	fi
+	echo "PASS: docker compose config" | tee -a "$SUMMARY"
+else
+	echo "WARN: compose file not found at $COMPOSE_FILE — skipping compose config" | tee -a "$SUMMARY"
+fi
+
+# ── 1. Go suite with race detector (Phase 8: go test -race) ──────────────────
+echo "=== [3/7] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
+if ! timeout "$GO_TIMEOUT_SEC" bash -c "cd '$BRIDGE_DIR' && go test -race -count=1 ./..."; then
 	echo "FAIL: Go suite failed or timed out — see $GO_LOG" | tee -a "$SUMMARY"
 	gate_fail
 fi
-echo "PASS: Go suite" | tee -a "$SUMMARY"
+echo "PASS: Go suite (-race)" | tee -a "$SUMMARY"
 
-# ── 2. Build E2E test binaries (R-016) ────────────────────────────────────────
-echo "=== [2/3] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
+# ── 2. Build E2E test binaries (R-016) + docker build smoke ───────────────
+echo "=== [4/7] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
 if ! (cd "$BRIDGE_DIR" &&
 	go build -tags faketool -o faketool/faketool ./faketool &&
 	go build -o arrow-bridge .); then
@@ -75,8 +131,33 @@ if ! (cd "$BRIDGE_DIR" &&
 fi
 echo "PASS: E2E binaries built (faketool/faketool, arrow-bridge)" | tee -a "$SUMMARY"
 
+# ── 5. Docker build smoke (G4): ingestion image must build from the reactor root ──
+echo "=== [5/7] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
+if command -v docker >/dev/null 2>&1 && [ -f "$CODE_DIR/02_services/01_ingestion/Dockerfile" ]; then
+	# The build needs network (base images + go/maven deps). Offline runs must
+	# not fail the gate on the network — but WITH images present, a build
+	# failure is the R-002 build-context defect and MUST fail.
+	if docker image inspect golang:1.24-alpine maven:3.9-eclipse-temurin-17 >/dev/null 2>&1; then
+		# R-002: the ingestion Dockerfile requires the Maven reactor root as
+		# build context (parent POM + common module). Tag locally; never push.
+		if ! (cd "$CODE_DIR" && docker build -q \
+			-f 02_services/01_ingestion/Dockerfile -t ingestion-gate-smoke:local \
+			. >/dev/null 2>>"$STATIC_LOG"); then
+			echo "FAIL: docker build smoke failed (images present) — see $STATIC_LOG" | tee -a "$SUMMARY"
+			gate_fail
+		fi
+		docker rmi ingestion-gate-smoke:local >/dev/null 2>&1 || true
+		echo "PASS: docker build smoke (ingestion image from reactor root)" | tee -a "$SUMMARY"
+	else
+		echo "WARN: base images not cached and network likely unavailable — " \
+			"skipping build smoke (CI with network runs it)" | tee -a "$SUMMARY"
+	fi
+else
+	echo "WARN: docker unavailable or Dockerfile missing — skipping build smoke" | tee -a "$SUMMARY"
+fi
+
 # ── 3. Full Java gate with ALL integration flags ──────────────────────────────
-echo "=== [3/3] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
+echo "=== [6/7] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_E2E=true INGESTION_INT_TEST_FLUSS=true \
 	INGESTION_INT_TEST_MANIFEST=true INGESTION_INT_TEST_PERF=true \
@@ -86,8 +167,27 @@ if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 fi
 echo "PASS: Java suite" | tee -a "$SUMMARY"
 
+# ── 4. Schema agreement + perf certification explicit gates (G5) ─────────────
+echo "=== [7/7] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
+SCHEMA_PERF_LOG="$OUT_DIR/schema-perf.log"
+if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
+	INGESTION_INT_TEST_PERF=true \
+	mvn -o test -pl 02_services/01_ingestion -am \
+	-Dtest='SchemaAgreementTest,DdlBootstrapSchemaAgreementTest,PerfBaselineTest' \
+	-Dsurefire.failIfNoSpecifiedTests=false" >"$SCHEMA_PERF_LOG" 2>&1; then
+	echo "FAIL: schema agreement / perf certification — see $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+if ! grep -q "BUILD SUCCESS" "$SCHEMA_PERF_LOG"; then
+	echo "FAIL: schema/perf gate did not report BUILD SUCCESS — see $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: SchemaAgreementTest + PerfBaselineTest (certification gates)" | tee -a "$SUMMARY"
+
 echo "=== ALL GATES PASSED ===" | tee -a "$SUMMARY"
 echo "GATE RESULT: PASS" | tee -a "$SUMMARY"
 echo "Evidence:" | tee -a "$SUMMARY"
+echo "  Static: $STATIC_LOG" | tee -a "$SUMMARY"
 echo "  Go:   $GO_LOG" | tee -a "$SUMMARY"
 echo "  Java: $JAVA_LOG" | tee -a "$SUMMARY"
+echo "  Schema/Perf: $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"

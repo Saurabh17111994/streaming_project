@@ -9,6 +9,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.slf4j.Logger;
@@ -76,12 +77,34 @@ final class InstrumentManifestLoader {
     }
 
     static ManifestResult loadFromPath(String path) {
-        LOG.info("instrument-manifest: loading from {}", path);
-        try (BufferedReader reader = Files.newBufferedReader(Path.of(path))) {
+        return loadFromPath(path, 1);
+    }
+
+    /**
+     * Load and validate the manifest from {@code path} at {@code version}.
+     *
+     * <p>R-247: the manifest version is a parameter, not a hardcoded 1 — a
+     * refreshed daily Arrow CSV is a NEW approved version; pinning 1 forever
+     * made the version check in {@link #isManifestApproved} vacuous.
+     *
+     * <p>R-283: reads are pinned to UTF-8 (the platform default charset would
+     * mangle an Excel-exported CSV on a non-UTF-8 host) and a UTF-8 BOM on
+     * the header line is stripped.
+     *
+     * <p>R-061: a manifest that loaded ZERO data rows is NOT approved — an
+     * empty approval would let readiness pass with no subscription set.
+     */
+    static ManifestResult loadFromPath(String path, int version) {
+        LOG.info("instrument-manifest: loading from {} (version {})", path, version);
+        try (BufferedReader reader = Files.newBufferedReader(Path.of(path), StandardCharsets.UTF_8)) {
             String header = reader.readLine();
             if (header == null || header.isBlank()) {
                 LOG.error("instrument-manifest: CSV is empty");
                 return emptyManifest();
+            }
+            // R-283: strip a UTF-8 BOM that Excel writes on exported CSVs.
+            if (header.startsWith("\uFEFF")) {
+                header = header.substring(1);
             }
 
             // Parse Arrow CSV: Exchange,Segment,ExchSeg,Token,FullName,...
@@ -120,7 +143,7 @@ final class InstrumentManifestLoader {
                                     ? fields.get(exchangeIdx).trim() : "NSE")
                             .segment("CM")
                             .lotSize(lotSize)
-                            .manifestVersion(1)
+                            .manifestVersion(version)
                             .build());
                 } catch (NumberFormatException e) {
                     if (skipped == 0) {
@@ -135,11 +158,17 @@ final class InstrumentManifestLoader {
                 LOG.warn("instrument-manifest: skipped {} malformed lines out of {}", skipped, lineNum - 1);
             }
 
+            // R-061: zero loaded rows is a FAILED load, not an approved one.
+            if (instruments.isEmpty()) {
+                LOG.error("instrument-manifest: loaded 0 instrument rows — refusing to approve");
+                return emptyManifest();
+            }
+
             List<Instrument> result = Collections.unmodifiableList(instruments);
             String fp = computeFingerprint(result);
-            LOG.info("instrument-manifest: approved=true, version=1, instruments={}, fingerprint={}",
-                    result.size(), fp.substring(0, Math.min(12, fp.length())));
-            return new ManifestResult(result, true, 1, result.size(), fp);
+            LOG.info("instrument-manifest: approved=true, version={}, instruments={}, fingerprint={}",
+                    version, result.size(), fp.substring(0, Math.min(12, fp.length())));
+            return new ManifestResult(result, true, version, result.size(), fp);
 
         } catch (IOException e) {
             LOG.error("instrument-manifest: failed to read {}: {}", path, e.getMessage());

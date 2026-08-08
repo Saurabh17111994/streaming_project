@@ -190,7 +190,7 @@ public final class DdlBootstrap {
     private static final List<String> OWNED_TABLES =
             List.of("raw_table_1", "suspected_discontinuities", "ingestion_quarantine");
 
-    /** Full 28-column schema for raw_table_1 matching the DDL. */
+    /** Full 20-column schema for raw_table_1 matching DDL v2 (R-054/R-231). */
     private static final Schema RAW_TABLE_1_SCHEMA = Schema.newBuilder()
             .column("event_fingerprint", org.apache.fluss.types.DataTypes.STRING())
             .column("fingerprint_version", org.apache.fluss.types.DataTypes.STRING())
@@ -199,20 +199,12 @@ public final class DdlBootstrap {
             .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
             .column("exchange", org.apache.fluss.types.DataTypes.STRING())
             .column("symbol", org.apache.fluss.types.DataTypes.STRING())
-            .column("instrument_type", org.apache.fluss.types.DataTypes.STRING())
-            .column("strike_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("expiry", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("option_type", org.apache.fluss.types.DataTypes.STRING())
             .column("event_time", org.apache.fluss.types.DataTypes.BIGINT())
             .column("ingest_ts", org.apache.fluss.types.DataTypes.BIGINT())
             .column("ack_ts", org.apache.fluss.types.DataTypes.BIGINT())
             .column("tick_type", org.apache.fluss.types.DataTypes.STRING())
             .column("last_price_paise", org.apache.fluss.types.DataTypes.BIGINT())
             .column("last_qty", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("bid_price_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("bid_qty", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("ask_price_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("ask_qty", org.apache.fluss.types.DataTypes.BIGINT())
             .column("raw_payload", org.apache.fluss.types.DataTypes.BYTES())
             .column("payload_hash", org.apache.fluss.types.DataTypes.STRING())
             .column("decoder_version", org.apache.fluss.types.DataTypes.STRING())

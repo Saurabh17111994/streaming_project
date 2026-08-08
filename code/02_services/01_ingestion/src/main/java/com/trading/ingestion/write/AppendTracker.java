@@ -80,41 +80,49 @@ public final class AppendTracker {
      * Caller MUST NOT submit the record on false — it was not counted.
      */
     public boolean tryAccept(int recordBytes) {
-        if (halted) {
-            totalRejected.incrementAndGet();
-            return false;
-        }
-
-        long recs = pendingRecords.incrementAndGet();
-        long byt = pendingBytes.addAndGet(recordBytes);
-
-        // 100% halt — immediate, no negotiation
-        if (recs > maxPendingRecords || byt > maxPendingBytes) {
-            halted = true;
-            pendingRecords.decrementAndGet();
-            pendingBytes.addAndGet(-recordBytes);
-            totalRejected.incrementAndGet();
-            listener.onEvent(BackpressureListener.Level.CRITICAL,
-                    recs, byt, maxPendingRecords, maxPendingBytes, Instant.now());
-            return false;
-        }
-
-        // 80% warning — still accept, but flag readiness
-        double recPct = (double) recs / maxPendingRecords;
-        double bytPct = (double) byt / maxPendingBytes;
-        if (recPct >= warningPercent || bytPct >= warningPercent) {
-            warningCount.incrementAndGet();
-            Instant now = Instant.now();
-            // throttle: emit warning at most once per 30 s
-            if (lastWarningAt == null || lastWarningAt.plusSeconds(30).isBefore(now)) {
-                lastWarningAt = now;
-                listener.onEvent(BackpressureListener.Level.WARNING,
-                        recs, byt, maxPendingRecords, maxPendingBytes, now);
+        // R-195: check-then-act on `halted` was racy — a thread could pass the
+        // check and then increment counters after a concurrent halt. Serialize
+        // the accept gate with the halt transition.
+        synchronized (this) {
+            if (halted) {
+                totalRejected.incrementAndGet();
+                return false;
             }
-        }
 
-        totalAccepted.incrementAndGet();
-        return true;
+            long recs = pendingRecords.incrementAndGet();
+            long byt = pendingBytes.addAndGet(recordBytes);
+
+            // 100% halt — immediate, no negotiation
+            if (recs > maxPendingRecords || byt > maxPendingBytes) {
+                halted = true;
+                pendingRecords.decrementAndGet();
+                pendingBytes.addAndGet(-recordBytes);
+                totalRejected.incrementAndGet();
+                listener.onEvent(BackpressureListener.Level.CRITICAL,
+                        recs, byt, maxPendingRecords, maxPendingBytes, Instant.now());
+                return false;
+            }
+
+            // R-196: counters and totals must be consistent BEFORE the
+            // warning listener fires — it reads pending + totals.
+            totalAccepted.incrementAndGet();
+            totalBytesAccepted.addAndGet(recordBytes);
+
+            // 80% warning — still accept, but flag readiness
+            double recPct = (double) recs / maxPendingRecords;
+            double bytPct = (double) byt / maxPendingBytes;
+            if (recPct >= warningPercent || bytPct >= warningPercent) {
+                warningCount.incrementAndGet();
+                Instant now = Instant.now();
+                // throttle: emit warning at most once per 30 s
+                if (lastWarningAt == null || lastWarningAt.plusSeconds(30).isBefore(now)) {
+                    lastWarningAt = now;
+                    listener.onEvent(BackpressureListener.Level.WARNING,
+                            recs, byt, maxPendingRecords, maxPendingBytes, now);
+                }
+            }
+            return true;
+        }
     }
 
     /** MUST be called once per accepted record after Fluss acknowledges the append. */

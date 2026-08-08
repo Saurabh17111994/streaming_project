@@ -28,5 +28,9 @@ public record BridgeEvent(
         if (assignedTokens < 0 || acknowledgedTokens < 0 || rejectedTokens < 0) throw new IllegalArgumentException("token counts must be non-negative");
         if (connectionEpoch <= 0) throw new IllegalArgumentException("connection_epoch must be positive");
         if (reason != null && reason.length() > 512) throw new IllegalArgumentException("reason exceeds 512 characters");
+        // R-206: the Go-side bridge contract (validateBridgeEvent in ndjson.go)
+        // requires received_ts_ms > 0 — mirror it here so a zero-timestamp
+        // event cannot silently enter the discontinuity evidence path.
+        if (receivedTsMs <= 0) throw new IllegalArgumentException("received_ts_ms must be positive");
     }
 }

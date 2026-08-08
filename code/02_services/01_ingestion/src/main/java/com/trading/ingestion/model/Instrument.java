@@ -15,12 +15,39 @@ public final class Instrument {
     private final long manifestVersion;
 
     private Instrument(Builder builder) {
+        // R-115: instrumentToken is the identity/join key — a defaulted 0 or
+        // negative token must fail fast instead of silently corrupting routing.
+        if (builder.instrumentToken <= 0) {
+            throw new IllegalArgumentException(
+                    "instrumentToken must be positive, got " + builder.instrumentToken);
+        }
+        // R-193: required routing fields must be non-blank, not just non-null.
+        if (isBlank(builder.tradingSymbol)) {
+            throw new IllegalArgumentException("tradingSymbol must not be blank");
+        }
+        if (isBlank(builder.exchange)) {
+            throw new IllegalArgumentException("exchange must not be blank");
+        }
         this.instrumentToken = builder.instrumentToken;
-        this.tradingSymbol = Objects.requireNonNull(builder.tradingSymbol, "tradingSymbol");
-        this.exchange = Objects.requireNonNull(builder.exchange, "exchange");
+        this.tradingSymbol = builder.tradingSymbol;
+        this.exchange = builder.exchange;
         this.segment = builder.segment != null ? builder.segment : "";
-        this.lotSize = builder.lotSize > 0 ? builder.lotSize : 1;
+        // R-116: a non-positive lot size must not be silently coerced to 1 —
+        // that masks invalid manifest data. Require an explicit positive value.
+        if (builder.lotSize <= 0) {
+            throw new IllegalArgumentException(
+                    "lotSize must be positive, got " + builder.lotSize);
+        }
+        this.lotSize = builder.lotSize;
+        if (builder.manifestVersion <= 0) {
+            throw new IllegalArgumentException(
+                    "manifestVersion must be positive, got " + builder.manifestVersion);
+        }
         this.manifestVersion = builder.manifestVersion;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     public long instrumentToken() { return instrumentToken; }

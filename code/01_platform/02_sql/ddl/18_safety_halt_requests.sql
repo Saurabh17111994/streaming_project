@@ -1,11 +1,17 @@
--- Safety_Halt_Requests: Immutable LOG/control — durable halt requests from authorized components
+-- Safety_Halt_Requests: KV control table — durable halt requests from authorized components
 -- Owner: Authorized components (Signal job, Action Capture, platform health, operators)
--- Type: LOG (no primary key)
+-- Type: KV (primary key on halt_request_id)
 -- Bucket key: halt_request_id
--- Retention: safety/reconciliation window
+-- Retention: safety/reconciliation window (30 calendar days via table.log.ttl)
 -- Lake: encrypted 7-year audit
 -- Scope: account_scope_id, portfolio_id, execution_partition_id
--- Schema version: 2
+-- Schema version: 3
+--
+-- v3 (2026-08-03, review R-089): was LOG. halt_request_id is the deterministic
+-- SHA-256 of the transition tuple, and the caller dedups on it — but a LOG
+-- table does not enforce uniqueness, so two deliveries of the same halt would
+-- append twice. As a KV table the storage layer enforces one row per
+-- halt_request_id: a duplicate delivery is an upsert no-op.
 --
 -- v2 (offline migration, plan B2): adds ingestion slot-scoped safety fields so
 -- the Ingestion service can emit per-slot unsafe/recovered evidence consumed by
@@ -36,9 +42,14 @@ CREATE TABLE Safety_Halt_Requests (
     assigned_token_set_hash STRING      NOT NULL,
     state                   STRING      NOT NULL,
     evidence_reference      STRING,
-    contract_version        INT         NOT NULL
+    contract_version        INT         NOT NULL,
+    PRIMARY KEY (halt_request_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '4',
     'bucket.key' = 'halt_request_id',
-    'table.retention.days' = '30'
+    'table.log.ttl' = '30d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

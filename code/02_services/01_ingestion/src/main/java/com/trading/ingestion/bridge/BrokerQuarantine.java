@@ -22,6 +22,12 @@ public record BrokerQuarantine(
             "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP", "BROKER_LIMIT_VIOLATION");
 
     public BrokerQuarantine {
+        // R-207: the record is documented Immutable — the byte[] component
+        // must be defensive-copied so a caller cannot mutate it after the
+        // hash was verified.
+        if (rawPayload != null) {
+            rawPayload = rawPayload.clone();
+        }
         if (contractVersion != CONTRACT_VERSION) throw new IllegalArgumentException("unsupported contract version");
         if (slotId == null || slotId.isBlank()) throw new IllegalArgumentException("slot_id is required");
         if (connectionId == null || connectionId.isBlank()) throw new IllegalArgumentException("connection_id is required");
@@ -33,6 +39,12 @@ public record BrokerQuarantine(
         String expected = sha256(rawPayload);
         if (!expected.equals(payloadHash)) throw new IllegalArgumentException("payload hash mismatch");
         if (detectedTsMs <= 0) throw new IllegalArgumentException("detected_ts_ms must be positive");
+    }
+
+    /** R-207: expose the payload via a fresh copy. */
+    @Override
+    public byte[] rawPayload() {
+        return rawPayload == null ? null : rawPayload.clone();
     }
 
     private static String sha256(byte[] payload) {

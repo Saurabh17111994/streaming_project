@@ -5,7 +5,7 @@
 -- Retention: operational investigation window
 -- Lake: optional operational lake retention
 -- Scope: account_scope_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE suspected_discontinuities (
     discontinuity_id        STRING      NOT NULL,
@@ -22,5 +22,9 @@ CREATE TABLE suspected_discontinuities (
 ) WITH (
     'bucket.num' = '4',
     'bucket.key' = 'discontinuity_id',
-    'table.retention.days' = '7'
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

@@ -42,20 +42,45 @@ public final class RetryClassifier {
         if (t == null) return Classification.RETRYABLE;
 
         // Walk the entire cause chain; a fatal cause anywhere wins.
+        boolean sawRetryable = false;
         Throwable current = t;
         while (current != null) {
             String msg = current.getMessage();
             String name = current.getClass().getName();
 
             if (isFatal(name, msg)) return Classification.FATAL;
-            // Retryable patterns are only noted — the walk continues so a
-            // deeper fatal cause is not masked by a retryable wrapper.
+            // Recognized transient patterns are noted — the walk continues so
+            // a deeper fatal cause is not masked by a retryable wrapper.
+            if (isRetryable(name, msg)) sawRetryable = true;
 
             current = current.getCause();
         }
 
-        // Default: assume retryable (Fluss client handles its own retries)
-        return Classification.RETRYABLE;
+        // R-285: retry ONLY on a recognized transient pattern; a completely
+        // unknown exception fails closed (FATAL) — by the time this classifier
+        // runs the Fluss client's built-in retries are exhausted, and an
+        // unclassified failure means we cannot prove the append is safe to
+        // retry. For money-safety evidence, open the halt gate.
+        return sawRetryable ? Classification.RETRYABLE : Classification.FATAL;
+    }
+
+    /** Recognized transient patterns — the Fluss client usually recovers. */
+    private static boolean isRetryable(String name, String msg) {
+        if (name.contains("Timeout") || name.contains("Interrupted")
+                || name.contains("Connect")) {
+            return true;
+        }
+        if (msg != null) {
+            String lower = msg.toLowerCase();
+            return lower.contains("timeout")
+                    || lower.contains("connection")
+                    || lower.contains("refused")
+                    || lower.contains("leader")
+                    || lower.contains("unavailable")
+                    || lower.contains("re-elect")
+                    || lower.contains("retry");
+        }
+        return false;
     }
 
     /** Fatal patterns — return true if this link of the chain is fatal. */

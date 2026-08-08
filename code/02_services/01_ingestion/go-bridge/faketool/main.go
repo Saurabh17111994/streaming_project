@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,13 @@ const (
 func main() {
 	port := flag.Int("port", 8899, "listen port")
 	disconnect := flag.Int("disconnect-after", 0, "connection index to force-close (1-based); 0 = never")
+	// Soak-marathon mode: close every Nth new connection after the
+	// subscription response + first tick, so the real supervisor cycles
+	// through reconnect/backoff with no external driver (run-full-suite.sh).
+	disconnectEvery := flag.Int("disconnect-every", 0, "close every Nth new connection (1-based); 0 = never")
+	// Soak mode: keep sending a full-tick frame every N ms so a long soak has
+	// continuous Fluss append traffic instead of one tick per connection.
+	tickInterval := flag.Int("tick-interval-ms", 0, "if >0, send a full-tick frame every N ms until the client disconnects; 0 = single tick then idle")
 	flag.Parse()
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -56,16 +64,44 @@ func main() {
 			return
 		}
 		defer enc.Close()
+		logf := func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "faketool: conn=%d %s\n", idx, fmt.Sprintf(format, args...))
+		}
+		logf("accepted")
+		// gorilla/websocket panics on concurrent writes ("concurrent write to
+		// websocket connection"): the ticker goroutine's data frames raced the
+		// library's automatic pong replies to the client's heartbeats. All
+		// writes — data frames, control frames, and the pong handler — share
+		// one per-connection mutex so nothing can interleave.
+		var wmu sync.Mutex
+		send := func(payload []byte) error {
+			wmu.Lock()
+			defer wmu.Unlock()
+			return conn.WriteMessage(websocket.BinaryMessage, payload)
+		}
+		sendControl := func(kind int, payload []byte) error {
+			wmu.Lock()
+			defer wmu.Unlock()
+			return conn.WriteControl(kind, payload, time.Now().Add(time.Second))
+		}
+		conn.SetPingHandler(func(appData string) error {
+			wmu.Lock()
+			defer wmu.Unlock()
+			return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
+				logf("read end: %v", err)
 				return
 			}
 			var sub map[string]any
 			if json.Unmarshal(payload, &sub) != nil {
+				logf("non-json frame (len=%d)", len(payload))
 				continue
 			}
 			if code, _ := sub["code"].(string); code != "sub" {
+				logf("non-sub frame code=%q (len=%d)", code, len(payload))
 				continue
 			}
 			ids := []any{}
@@ -76,6 +112,7 @@ func main() {
 					}
 				}
 			}
+			logf("sub received (ids=%d)", len(ids))
 			resp := make([]byte, hftSizeResponse)
 			binary.LittleEndian.PutUint32(resp[0:4], hftSizeResponse)
 			resp[4] = hftPktResponse
@@ -83,27 +120,72 @@ func main() {
 			resp[534] = 0
 			resp[535] = 1
 			binary.LittleEndian.PutUint16(resp[536:538], uint16(len(ids)))
-			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(enc, resp)); err != nil {
+			if err := send(compressZstd(enc, resp)); err != nil {
+				logf("send response failed: %v", err)
 				return
 			}
+			// Initial snapshot: a real broker sends one full-tick frame per
+			// subscribed token right after the sub response — the ingestion
+			// side counts seen tokens toward subscription completeness
+			// (all 1024 must appear or readiness stays false). Emit the
+			// approved fake token 757614 first, then one frame per requested
+			// id so the whole assignment is seen.
 			full := make([]byte, hftSizeFull)
 			binary.LittleEndian.PutUint16(full[0:2], hftSizeFull)
 			full[2] = hftPktFull
 			binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
 			binary.LittleEndian.PutUint32(full[8:12], 15050)
-			if err := conn.WriteMessage(websocket.BinaryMessage, compressZstd(enc, full)); err != nil {
+			if err := send(compressZstd(enc, full)); err != nil {
+				logf("send snapshot tick failed: %v", err)
 				return
 			}
+			snapshotSent := 1
+			for _, id := range ids {
+				tok, ok := id.(float64)
+				if !ok {
+					continue
+				}
+				binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
+				if err := send(compressZstd(enc, full)); err != nil {
+					logf("send snapshot tick failed at %d: %v", snapshotSent, err)
+					return
+				}
+				snapshotSent++
+			}
+			logf("snapshot sent (%d ticks)", snapshotSent)
 			if *disconnect > 0 && idx == *disconnect {
-				_ = conn.WriteControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "forced"), time.Now())
+				_ = sendControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "forced"))
 				return
+			}
+			if *disconnectEvery > 0 && idx%*disconnectEvery == 0 {
+				_ = sendControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "every"))
+				return
+			}
+			// Soak mode: keep emitting ticks until the client goes away. The
+			// read loop below stays the owner of the connection; the ticker
+			// goroutine writes through the same mutex, so it exits via write
+			// errors once the handler's deferred conn.Close() runs.
+			if *tickInterval > 0 {
+				logf("ticker start (every %dms)", *tickInterval)
+				go func() {
+					t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
+					defer t.Stop()
+					for range t.C {
+						if err := send(compressZstd(enc, full)); err != nil {
+							logf("ticker send failed: %v", err)
+							return
+						}
+					}
+				}()
 			}
 		}
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("fake HFT broker listening on %s (disconnect_after=%d)\n", addr, *disconnect)
+	fmt.Printf("fake HFT broker listening on %s (disconnect_after=%d disconnect_every=%d tick_interval_ms=%d)\n",
+		addr, *disconnect, *disconnectEvery, *tickInterval)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

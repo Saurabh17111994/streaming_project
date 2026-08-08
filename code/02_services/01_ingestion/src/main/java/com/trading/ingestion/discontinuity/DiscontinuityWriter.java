@@ -66,6 +66,8 @@ public class DiscontinuityWriter implements AutoCloseable {
     }
 
     private final AppendWriter writer;
+    private Connection connection; // R-062
+    private Table table; // R-062
     private final String instanceId;
     private final String connectionId;
     private final AtomicLong connectionEpoch;
@@ -104,9 +106,10 @@ public class DiscontinuityWriter implements AutoCloseable {
         conf.setString("bootstrap.servers", bootstrapServers);
 
         try {
-            Connection connection = ConnectionFactory.createConnection(conf);
+            // R-062: retain so close() can release them.
+            this.connection = ConnectionFactory.createConnection(conf);
             TablePath path = TablePath.of(TABLE_DB, TABLE_NAME);
-            Table table = connection.getTable(path);
+            this.table = connection.getTable(path);
             this.writer = table.newAppend().createWriter();
             LOG.info("discontinuity-writer: connected (table={}, instanceId={})",
                     path, instanceId);
@@ -121,13 +124,13 @@ public class DiscontinuityWriter implements AutoCloseable {
      * Used for bridge crashes and reconnects.
      *
      * @param reason        detection reason
-     * @param note          free-text operator note
+     * @param note          free-text operator note — carried in the append
+     *                      log detail; no DDL column exists for it (R-249)
      * @param before        last tick before gap (null if none)
-     * @param after         first tick after gap (null if none yet)
      */
     public void write(Reason reason, String note,
-                       LastTickSnapshot before, LastTickSnapshot after) {
-        write(reason, note, before, after, null, null, null);
+                       LastTickSnapshot before) {
+        write(reason, note, before, null, null, null);
     }
 
     /**
@@ -225,14 +228,15 @@ public class DiscontinuityWriter implements AutoCloseable {
      * Write an instrument-scoped discontinuity.
      */
     public void write(Reason reason, String note,
-                       LastTickSnapshot before, LastTickSnapshot after,
+                       LastTickSnapshot before,
                        Long instrumentToken, String exchange, String symbol) {
 
         String discontinuityId = instanceId + "-" + UUID.randomUUID();
         Instant now = Instant.now();
 
-        long instToken = instrumentToken != null ? instrumentToken
-                : (before != null ? before.instrumentToken : 0L);
+        // R-063: connection-wide events write SQL NULL, not 0L.
+        Long instToken = instrumentToken != null ? instrumentToken
+                : (before != null ? before.instrumentToken : null);
         String exch = exchange != null ? exchange
                 : (before != null ? before.exchange : null);
         String sym = symbol != null ? symbol
@@ -286,18 +290,27 @@ public class DiscontinuityWriter implements AutoCloseable {
 
     /** Shorthand to convert a String to Fluss's internal BinaryString type. */
     private static BinaryString bs(String s) {
-        return s != null ? BinaryString.fromString(s) : BinaryString.EMPTY_UTF8;
+        // R-063: null must stay SQL NULL — EMPTY_UTF8 fabricated an empty
+        // string for connection-wide evidence rows.
+        return s != null ? BinaryString.fromString(s) : null;
     }
 
     @Override
     public void close() {
         try {
             writer.flush();
-            // AppendWriter (TableWriter) does not have close() in Fluss 0.9.1-incubating;
-            // only the Connection needs closing. The DiscontinuityWriter creates
-            // its own Connection, which is closed by the creator.
+            // AppendWriter (TableWriter) does not have close() in Fluss 0.9.1-incubating.
         } catch (Exception e) {
             LOG.warn("discontinuity-writer: close failed: {}", e.getMessage());
+        }
+        // R-062: close the Connection + Table this writer created.
+        try {
+            if (table != null) table.close();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (connection != null) connection.close();
+        } catch (Exception ignored) {
         }
     }
 }

@@ -2,7 +2,13 @@ module github.com/trading/arrow-bridge
 
 go 1.24.5
 
-require github.com/arrow-trade/go-arrow v0.0.0
+// go-arrow is pinned to the upstream base commit 7cce1630
+// (2026-06-22, https://github.com/Saurabh17111994/go-arrow) with in-repo
+// patches R-101..R-243 applied (see open_code_review_reports/
+// CODE_REVIEW_REMEDIATION.md). The vendored replace makes the build
+// self-contained; the require version is the upstream identity label and
+// never resolves through the module proxy.
+require github.com/arrow-trade/go-arrow v0.0.0-20260622-7cce1630
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect

@@ -3,7 +3,7 @@
 -- Type: KV (primary key on reservation_id)
 -- Retention: active + rebuild/reconciliation window
 -- Scope: portfolio_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE Portfolio_Reservations (
     reservation_id          STRING      NOT NULL,
@@ -23,5 +23,5 @@ CREATE TABLE Portfolio_Reservations (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'reservation_id',
-    'table.retention.days' = '7'
+    'table.log.ttl' = '7d'
 );

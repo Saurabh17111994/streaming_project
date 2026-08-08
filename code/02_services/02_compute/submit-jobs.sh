@@ -7,7 +7,8 @@ JM="${FLINK_JOBMANAGER:-flink-jobmanager}:8081"
 JAR=/opt/flink-jobs/compute.jar
 
 echo "compute: waiting for JobManager at ${JM}"
-for i in $(seq 1 30); do
+# SC2034: loop counter is unused — the loop is a bounded retry-wait.
+for _ in $(seq 1 30); do
 	if curl -s "http://${JM}/v1/config" >/dev/null 2>&1; then break; fi
 	sleep 2
 done

@@ -135,6 +135,16 @@ func main() {
 		os.Exit(exitFatalStart)
 	}
 	logf("subscription plan=%s slots=%d", plan.Fingerprint, len(plan.Slots))
+	// Slot identity for the safety contract: the bridge events carry
+	// manifest_fingerprint (plan-wide token-set hash) and per-slot
+	// assigned_token_set_hash, byte-identical to Java's computation so the
+	// ingestion side can cross-check them (warn-only).
+	var allTokens []int32
+	for _, s := range plan.Slots {
+		allTokens = append(allTokens, s.Tokens...)
+		bridgeEmitter.SetSlotTokenHash(s.SlotID, tokenSetHash(s.Tokens))
+	}
+	bridgeEmitter.SetManifestFingerprint(tokenSetHash(allTokens))
 
 	useHFT := !truthy(os.Getenv("ARROW_USE_STANDARD"))
 	latencyMs := 50
@@ -232,14 +242,19 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 		logf("HFT connect failed: %v", err)
 		return epochRetryable
 	}
+	addActiveSocket(1)
+	defer func() { addActiveSocket(-1) }()
 	defer stream.Close()
 
-	epochStop := make(chan struct{}, 1)
+	// R-218: epochStop must be CLOSE-based, not send-based. The
+	// heartbeat and watchdog goroutines select on the same channel; a single
+	// buffered send can be consumed by one of them, starving the epoch's
+	// main select and leaving the epoch stuck until ctx.Done (no retry).
+	// close() wakes every receiver.
+	epochStop := make(chan struct{})
+	var epochStopOnce sync.Once
 	signalEpochStop := func() {
-		select {
-		case epochStop <- struct{}{}:
-		default:
-		}
+		epochStopOnce.Do(func() { close(epochStop) })
 	}
 	_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotConnecting), ReceivedTsMs: time.Now().UnixMilli()})
 	responses := make(chan arrow.HFTResponsePacket, 1)
@@ -307,6 +322,7 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 				// already incremented above, so pass authRefreshes-1.
 				switch classifyAuthRefresh(refreshAuth != nil, authRefreshes-1, refreshErr) {
 				case authResumed:
+					noteReconnect(slot.SlotID)
 					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "reconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: "authentication_refreshed", ReceivedTsMs: time.Now().UnixMilli()})
 					signalEpochStop()
 					return
@@ -376,12 +392,20 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "subscription_ack", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotTerminal), AssignedTokens: len(tokens), RejectedTokens: len(tokens), Reason: "subscription_response_timeout", ReceivedTsMs: time.Now().UnixMilli()})
 			signalEpochStop()
 			return epochTerminal
+		case <-epochStop:
+			// R-217: a disconnect/auth-refresh/decode-burst that fires
+			// epochStop while a subscription response is pending must not
+			// wait out the full responseTimeout and degrade into a TERMINAL.
+			// The stream is already gone — report and retry with backoff so
+			// reconnect cycles survive mid-subscription drops.
+			return epochRetryable
 		case <-ctx.Done():
 			return epochRecovered
 		}
 	}
 	logf("HFT subscribed %d tokens (latency=%dms)", len(tokens), latencyMs)
 	lastFrameNanos.Store(time.Now().UnixNano())
+	noteRecovered(slot.SlotID)
 	_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "subscription_ack", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotActive), AssignedTokens: len(tokens), AcknowledgedTokens: len(tokens), ReceivedTsMs: time.Now().UnixMilli()})
 
 	// R-059: heartbeat and watchdog goroutines must stop when the epoch ends

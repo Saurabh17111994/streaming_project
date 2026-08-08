@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -98,4 +99,22 @@ func BuildSubscriptionPlan(tokens []int32, slots, connectionLimit, requestLimit 
 	}
 	plan.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	return plan, nil
+}
+
+// tokenSetHash returns the lowercase SHA-256 hex digest of a token set:
+// tokens sorted ascending, each encoded as 8 big-endian bytes. This is
+// byte-identical to the Java side (SafetyHaltWriter.computeAssignedTokenHash
+// and InstrumentManifestLoader.computeFingerprint), so the BridgeEvent
+// manifest_fingerprint / assigned_token_set_hash fields line up across the
+// bridge. The sort+hash happens here so both fields share one implementation.
+func tokenSetHash(tokens []int32) string {
+	ordered := append([]int32(nil), tokens...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	h := sha256.New()
+	var buf [8]byte
+	for _, t := range ordered {
+		binary.BigEndian.PutUint64(buf[:], uint64(int64(t)))
+		h.Write(buf[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

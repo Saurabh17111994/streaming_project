@@ -3,6 +3,7 @@ package com.trading.ingestion.bridge;
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.regex.Pattern;
 
 /**
  * Validates a tick's original-bytes hash (plan §Tick / §Data Flow).
@@ -28,39 +29,55 @@ public final class PayloadHashValidator {
         HASH_MISMATCH
     }
 
+    /**
+     * R-215: precompiled once — {@code String.matches} compiled a fresh regex
+     * Pattern on every tick of the HFT hot path.
+     */
+    private static final Pattern SHA256_HEX = Pattern.compile("[0-9a-f]{64}");
+
     private PayloadHashValidator() {}
 
     /**
      * Decode and validate. On {@link Result#VALID} returns the exact packet
      * bytes; otherwise returns {@code null} (caller handles quarantine).
+     *
+     * <p>R-248: the previous signature took a caller-owned {@code Result[] out}
+     * and dereferenced {@code out[0]} in every branch without a precondition —
+     * a null/zero-length array would NPE/ArrayIndexOutOfBounds on the hot path.
+     * The result is now returned directly.
      */
-    public static byte[] validate(String rawPayloadB64, String payloadHash, Result[] out) {
-        if (payloadHash == null || !payloadHash.matches("[0-9a-f]{64}")) {
-            out[0] = Result.MALFORMED_HASH;
-            return null;
+    public static Result validate(String rawPayloadB64, String payloadHash) {
+        if (payloadHash == null || !SHA256_HEX.matcher(payloadHash).matches()) {
+            return Result.MALFORMED_HASH;
         }
         if (rawPayloadB64 == null || rawPayloadB64.isBlank()) {
-            out[0] = Result.MALFORMED_PAYLOAD;
-            return null;
+            return Result.MALFORMED_PAYLOAD;
         }
         byte[] packet;
         try {
             packet = Base64.getDecoder().decode(rawPayloadB64);
         } catch (IllegalArgumentException e) {
-            out[0] = Result.MALFORMED_PAYLOAD;
-            return null;
+            return Result.MALFORMED_PAYLOAD;
         }
         if (packet.length == 0) {
-            out[0] = Result.MALFORMED_PAYLOAD;
-            return null;
+            return Result.MALFORMED_PAYLOAD;
         }
         String actual = HexFormat.of().formatHex(sha256(packet));
         if (!actual.equals(payloadHash)) {
-            out[0] = Result.HASH_MISMATCH;
+            return Result.HASH_MISMATCH;
+        }
+        return Result.VALID;
+    }
+
+    /**
+     * Decode-and-validate returning the packet bytes on {@link Result#VALID}.
+     * Kept for callers that need the decoded payload.
+     */
+    public static byte[] decodeValid(String rawPayloadB64, String payloadHash) {
+        if (validate(rawPayloadB64, payloadHash) != Result.VALID) {
             return null;
         }
-        out[0] = Result.VALID;
-        return packet;
+        return Base64.getDecoder().decode(rawPayloadB64);
     }
 
     private static byte[] sha256(byte[] data) {

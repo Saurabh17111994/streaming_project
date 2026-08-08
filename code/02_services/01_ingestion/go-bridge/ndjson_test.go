@@ -122,6 +122,101 @@ func TestSanitizeDiagnosticPreservesUTF8(t *testing.T) {
 	}
 }
 
+func TestEmitMetricsRecordShape(t *testing.T) {
+	var out bytes.Buffer
+	emitter := NewBridgeEmitter(&out)
+	if err := emitter.EmitMetrics(BridgeMetrics{TsMs: 1_750_000_000_000, ReconnectConsecutive: 3, ActiveSockets: 1, GoGoroutines: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("expected exactly one NDJSON line: %q", out.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if rt, _ := decoded["record_type"].(string); rt != "bridge_metrics" {
+		t.Fatalf("record_type=%q, want bridge_metrics", rt)
+	}
+	if cv, _ := decoded["contract_version"].(float64); int(cv) != NDJSONContractVersion {
+		t.Fatalf("contract_version=%v, want %d", cv, NDJSONContractVersion)
+	}
+	if ts, _ := decoded["ts_ms"].(float64); int64(ts) != 1_750_000_000_000 {
+		t.Fatalf("ts_ms=%v", ts)
+	}
+	if rc, _ := decoded["reconnect_consecutive"].(float64); int(rc) != 3 {
+		t.Fatalf("reconnect_consecutive=%v", rc)
+	}
+	if as, _ := decoded["active_sockets"].(float64); int(as) != 1 {
+		t.Fatalf("active_sockets=%v", as)
+	}
+	if gg, _ := decoded["go_goroutines"].(float64); int(gg) != 42 {
+		t.Fatalf("go_goroutines=%v", gg)
+	}
+	// Zero ts_ms must be rejected and must not write a line.
+	out.Reset()
+	if err := emitter.EmitMetrics(BridgeMetrics{}); err == nil {
+		t.Fatal("zero ts_ms must be rejected")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("rejected metrics must not be written, got: %q", out.String())
+	}
+}
+
+func TestTokenSetHashDeterministic(t *testing.T) {
+	// Vector computed with the same algorithm (sorted tokens, 8-byte
+	// big-endian each, SHA-256) — the Java side must reproduce this exactly.
+	want := "8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"
+	if got := tokenSetHash([]int32{1000, 1001, 1}); got != want {
+		t.Fatalf("tokenSetHash([1000,1001,1]) = %q, want %q", got, want)
+	}
+	// Order independence: same set, different input order.
+	if got := tokenSetHash([]int32{1, 1001, 1000}); got != want {
+		t.Fatalf("tokenSetHash must be order-independent: %q != %q", got, want)
+	}
+}
+
+func TestEmitEventAutoFillsIdentity(t *testing.T) {
+	var out bytes.Buffer
+	emitter := NewBridgeEmitter(&out)
+	emitter.SetManifestFingerprint("abc123")
+	emitter.SetSlotTokenHash("hft-0", "def456")
+	if err := emitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if mf, _ := decoded["manifest_fingerprint"].(string); mf != "abc123" {
+		t.Fatalf("manifest_fingerprint=%q, want abc123 (auto-filled)", mf)
+	}
+	if ah, _ := decoded["assigned_token_set_hash"].(string); ah != "def456" {
+		t.Fatalf("assigned_token_set_hash=%q, want def456 (auto-filled)", ah)
+	}
+	// An explicitly-set field wins over the identity map.
+	out.Reset()
+	if err := emitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: time.Now().UnixMilli(), ManifestFingerprint: "explicit", AssignedTokenSetHash: "explicit"}); err != nil {
+		t.Fatal(err)
+	}
+	decoded = map[string]any{}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if mf, _ := decoded["manifest_fingerprint"].(string); mf != "explicit" {
+		t.Fatalf("explicit manifest_fingerprint lost: %q", mf)
+	}
+	// No identity configured → fields omitted, event still valid.
+	out.Reset()
+	blank := NewBridgeEmitter(&out)
+	if err := blank.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "manifest_fingerprint") {
+		t.Fatalf("identity-less event must omit manifest_fingerprint: %q", out.String())
+	}
+}
+
 func TestEmitterFeedSequenceLocal(t *testing.T) {
 	var out bytes.Buffer
 	emitter := NewBridgeEmitter(&out)

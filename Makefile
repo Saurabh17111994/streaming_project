@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion gate static-check
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,8 @@ help:
 	@echo "  cep-check   fail if Flink CEP is referenced (project policy)"
 	@echo "  test        run unit tests (common + ingestion)"
 	@echo "  test-ingestion  run only the ingestion module tests"
+	@echo "  gate        run the full Monday verification gate (static + compose + go + java + schema/perf)"
+	@echo "  static-check  bash -n + shellcheck every repo shell script"
 
 env:
 	@if [ ! -f code/01_platform/01_docker/.env ]; then \
@@ -56,6 +58,20 @@ test:
 # Run only the ingestion module tests.
 test-ingestion:
 	cd code && $(MVN) -q test -pl 02_services/01_ingestion -am
+
+# Phase 8: every guard fires on every run — the full Monday gate.
+gate:
+	bash code/01_platform/04_scripts/run-monday-gates.sh
+
+# Phase 8 G4: static script hygiene without needing the full gate.
+static-check:
+	@set -e; fail=0; for s in $$(find code -name '*.sh' -not -path '*/target/*' -not -path '*/third_party/*' | sort); do \
+		bash -n "$$s" || fail=1; \
+		if command -v shellcheck >/dev/null 2>&1; then \
+			shellcheck -S warning "$$s" || fail=1; \
+		fi; \
+	done; \
+	echo "static-check: $$fail failures"; [ "$$fail" -eq 0 ]
 
 clean:
 	$(COMPOSE) down -v

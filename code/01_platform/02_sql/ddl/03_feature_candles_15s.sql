@@ -2,10 +2,14 @@
 -- Owner: Signal job
 -- Type: LOG (no primary key)
 -- Bucket key: instrument_token
--- Retention: ≤7 trading days (ceiling); extend while EOD offload unverified
--- Lake: EOD Iceberg offload
+-- Retention: 7 calendar days via table.log.ttl (R-055 — Fluss TTL is
+-- calendar-based; the previous '7 trading days' header was unverifiable and
+-- table.retention.days is not a Fluss option). Extend once EOD offload is
+-- verified.
+-- Lake: EOD Iceberg offload (R-168: datalake options restored — dropped in a
+-- rewrite while the header still claimed offload)
 -- Scope: account_scope_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE feature_candles_15s (
     instrument_token        BIGINT      NOT NULL,
@@ -26,5 +30,9 @@ CREATE TABLE feature_candles_15s (
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',
-    'table.retention.days' = '7'
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

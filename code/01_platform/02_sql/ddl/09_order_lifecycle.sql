@@ -1,11 +1,21 @@
--- Order_Lifecycle: KV projection — current order state keyed by broker_order_id
+-- Order_Lifecycle: KV projection — current order state keyed by account+broker order
 -- Owner: Action Capture
--- Type: KV (primary key on broker_order_id)
+-- Type: KV (primary key on account_scope_id, broker_order_id)
+-- Bucket key: account_scope_id, broker_order_id
 -- Retention: current state + rebuild window; rebuildable from Fills audit
--- Scope: account_scope_id
--- Schema version: 1
+--   (Fills retains 7d — matches this table's rebuild window; see 08_fills.sql)
+-- Scope: account_scope_id (R-013: column materialized + composite PK)
+-- Schema version: 2
+--
+-- v2 (2026-08-03, review R-013): the header declared "Scope: account_scope_id"
+-- but the table had no such column and was keyed only on broker_order_id.
+-- Broker-assigned order IDs are typically unique only within one brokerage
+-- account; two accounts can produce the same broker_order_id and the KV
+-- projection would silently overwrite one account's order state. The composite
+-- key (account_scope_id, broker_order_id) makes the projection account-safe.
 
 CREATE TABLE Order_Lifecycle (
+    account_scope_id        STRING      NOT NULL,
     broker_order_id         STRING      NOT NULL,
     instruction_id          STRING,
     execution_attempt_id    STRING,
@@ -20,9 +30,13 @@ CREATE TABLE Order_Lifecycle (
     last_receive_time       BIGINT      NOT NULL,
     correlation_state       STRING      NOT NULL,
     schema_version          STRING      NOT NULL,
-    PRIMARY KEY (broker_order_id) NOT ENFORCED
+    PRIMARY KEY (account_scope_id, broker_order_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '8',
-    'bucket.key' = 'broker_order_id',
-    'table.retention.days' = '7'
+    'bucket.key' = 'account_scope_id,broker_order_id',
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

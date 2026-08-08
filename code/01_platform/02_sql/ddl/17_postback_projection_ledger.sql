@@ -3,8 +3,10 @@
 -- Type: KV (primary key on postback_event_id)
 -- Retention: incomplete + recovery/disposition window
 -- Note: MVP (2026-07-23) skipped — re-process recent postbacks on restart
+-- R-235 (2026-08-03): column renamed completeted_ts -> completed_ts (typo baked
+--   into the schema would have propagated into downstream recovery code).
 -- Scope: account_scope_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE Postback_Projection_Ledger (
     postback_event_id       STRING      NOT NULL,
@@ -14,11 +16,11 @@ CREATE TABLE Postback_Projection_Ledger (
     last_error              STRING,
     disposition             STRING,
     step_ts                 BIGINT      NOT NULL,
-    completeted_ts          BIGINT,
+    completed_ts            BIGINT,
     schema_version          STRING      NOT NULL,
     PRIMARY KEY (postback_event_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'postback_event_id',
-    'table.retention.days' = '7'
+    'table.log.ttl' = '7d'
 );

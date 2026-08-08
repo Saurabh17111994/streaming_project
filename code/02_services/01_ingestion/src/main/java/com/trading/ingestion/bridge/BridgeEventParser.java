@@ -9,8 +9,8 @@ public final class BridgeEventParser {
     private final ObjectMapper mapper;
     public BridgeEventParser(ObjectMapper mapper) { this.mapper = mapper; }
 
-    public Optional<BridgeEvent> parse(String line) throws Exception {
-        JsonNode node = mapper.readTree(line);
+    /** R-214: parse from an already-parsed tree — the hot path parses each NDJSON line exactly once. */
+    public Optional<BridgeEvent> parse(JsonNode node) throws Exception {
         if (node == null || !node.has("record_type")) return Optional.empty();
         String recordType = node.path("record_type").asText();
         if ("tick".equals(recordType)) return Optional.empty();
@@ -28,8 +28,12 @@ public final class BridgeEventParser {
                 node.path("received_ts_ms").asLong(0)));
     }
 
-    public Optional<BrokerQuarantine> parseQuarantine(String line) throws Exception {
-        JsonNode node = mapper.readTree(line);
+    public Optional<BridgeEvent> parse(String line) throws Exception {
+        return parse(mapper.readTree(line));
+    }
+
+    /** R-214: parse from an already-parsed tree. */
+    public Optional<BrokerQuarantine> parseQuarantine(JsonNode node) throws Exception {
         if (node == null || !"broker_quarantine".equals(node.path("record_type").asText())) {
             return Optional.empty();
         }
@@ -40,6 +44,10 @@ public final class BridgeEventParser {
                 node.path("connection_epoch").asLong(-1), node.path("token").asLong(-1),
                 required(node, "reason"), rawPayload, required(node, "payload_hash"),
                 node.path("detected_ts_ms").asLong(0)));
+    }
+
+    public Optional<BrokerQuarantine> parseQuarantine(String line) throws Exception {
+        return parseQuarantine(mapper.readTree(line));
     }
 
     private static String required(JsonNode node, String field) {

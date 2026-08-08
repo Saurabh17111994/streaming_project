@@ -22,17 +22,47 @@ import java.util.Collection;
 import java.util.Deque;
 import java.util.List;
 
-/** Read-only terminal viewer for newly persisted raw ticks. */
+/**
+ * Read-only terminal viewer for newly persisted raw ticks.
+ *
+ * <p>R-155: columns are addressed by named indexes derived from the 20-column
+ * {@code raw_table_1} schema (v2, R-054/R-231) — the old positional literals
+ * (4, 5, 6, 11, 14, 15, 16, 25) were coupled to the pre-Phase-6 28-column
+ * order and would read the wrong fields.
+ */
 public final class TickTableViewer {
     private static final int DEFAULT_LIMIT = 20;
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(1);
+
+    // raw_table_1 schema v2 column order (see FlussClientAdapter).
+    private static final int COL_TOKEN = 4;
+    private static final int COL_EXCHANGE = 5;
+    private static final int COL_SYMBOL = 6;
+    private static final int COL_EVENT_TIME = 7;
+    private static final int COL_TICK_TYPE = 10;
+    private static final int COL_LAST_PRICE = 11;
+    private static final int COL_LAST_QTY = 12;
+    private static final int COL_VALIDITY = 17;
 
     private TickTableViewer() {}
 
     public static void main(String[] args) throws Exception {
         String bootstrap = env("FLUSS_BOOTSTRAP", "localhost:9123");
         String tableName = env("RAW_TABLE_NAME", "raw_table_1");
-        int limit = args.length == 0 ? DEFAULT_LIMIT : Integer.parseInt(args[0]);
+        // R-284: a non-numeric limit must show usage, not throw an uncaught
+        // NumberFormatException.
+        int limit;
+        if (args.length == 0) {
+            limit = DEFAULT_LIMIT;
+        } else {
+            try {
+                limit = Integer.parseInt(args[0]);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "Usage: TickTableViewer [limit]  — limit must be a positive integer, got '"
+                                + args[0] + "'");
+            }
+        }
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be greater than zero");
         }
@@ -89,18 +119,31 @@ public final class TickTableViewer {
 
     private static void print(ScanRecord record) {
         InternalRow row = record.getRow();
+        // R-205: numeric fields are null-guarded like the string fields — a
+        // null BIGINT previously threw via row.getLong().
         System.out.printf(
-                "%s | %d | %s | %s | %.2f | %d | %s | %s | %d | %s%n",
-                Instant.ofEpochMilli(row.getLong(11)),
-                row.getLong(4),
-                text(row, 5),
-                text(row, 6),
-                row.getLong(15) / 100.0,
-                row.getLong(16),
-                text(row, 14),
-                text(row, 25),
+                "%s | %s | %s | %s | %s | %s | %s | %s | %d | %s%n",
+                longValue(row, COL_EVENT_TIME).map(TickTableViewer::toMillis).orElse(""),
+                longValue(row, COL_TOKEN).map(String::valueOf).orElse(""),
+                text(row, COL_EXCHANGE),
+                text(row, COL_SYMBOL),
+                longValue(row, COL_LAST_PRICE).map(p -> String.format("%.2f", p / 100.0)).orElse(""),
+                longValue(row, COL_LAST_QTY).map(String::valueOf).orElse(""),
+                text(row, COL_TICK_TYPE),
+                text(row, COL_VALIDITY),
                 record.logOffset(),
                 record.timestamp() < 0 ? "" : Instant.ofEpochMilli(record.timestamp()));
+    }
+
+    private static java.util.Optional<Long> longValue(InternalRow row, int index) {
+        if (row.isNullAt(index)) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(row.getLong(index));
+    }
+
+    private static String toMillis(long epochMillis) {
+        return Instant.ofEpochMilli(epochMillis).toString();
     }
 
     private static String text(InternalRow row, int index) {

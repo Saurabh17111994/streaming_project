@@ -33,13 +33,19 @@ final class StubFlussRowConverter implements FlussRowConverter {
 
     @Override
     public int estimatedRowSize(TickPacket packet) {
-        int est = 512 + (packet.raw() != null && packet.raw().rawPayload() != null
-                ? packet.raw().rawPayload().length : 0);
+        int est = 512 + (packet.raw() != null && packet.raw().rawPayloadUnsafe() != null
+                ? packet.raw().rawPayloadUnsafe().length : 0);
         return est;
     }
 
     @Override
     public CompletableFuture<RawTickWriter.AppendResult> append(TickPacket packet) {
+        // R-113: the closed flag must have an effect — appends after close()
+        // fail instead of silently acking.
+        if (closed) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("StubFlussRowConverter is closed"));
+        }
         long offset = counter.incrementAndGet();
         if (LOG.isDebugEnabled()) {
             LOG.debug("fluss-stub: append #{} ({} bytes, table={})", offset,

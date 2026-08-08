@@ -4,7 +4,7 @@
 -- Retention: current + history in audit
 -- Lake: encrypted 7-year audit
 -- Scope: execution_partition_id, account_scope_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE Execution_Gate (
     execution_partition_id  STRING      NOT NULL,
@@ -22,5 +22,9 @@ CREATE TABLE Execution_Gate (
 ) WITH (
     'bucket.num' = '4',
     'bucket.key' = 'execution_partition_id',
-    'table.retention.days' = '30'
+    'table.log.ttl' = '30d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

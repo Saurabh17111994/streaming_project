@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  *   <li>Pending counters decrease only after append completes (success or fail)</li>
  *   <li>Arrow payloads are never compressed in the ingestion→Fluss path</li>
  *   <li>Raw ingestion does not deduplicate fingerprints; Compute owns logical dedup</li>
- *   <li>Retry with linear backoff (up to {@code MAX_RETRY_ATTEMPTS}) for RETRYABLE
+ *   <li>Retry with exponential backoff (100, 200, 400 ms; up to {@code MAX_RETRY_ATTEMPTS}) for RETRYABLE
  *       failures; FATAL failures halt immediately</li>
  *   <li>On timeout the outcome is {@code UNCERTAIN} — ingestion cannot prove
  *       whether Fluss persisted the row; Compute owns logical dedup</li>
@@ -81,7 +81,8 @@ public final class RawTickWriter implements AutoCloseable {
      * to the Signal Flink job, plan §Executive Summary).
      *
      * <p>Retry: on RETRYABLE failures (per {@link RetryClassifier}) the writer
-     * retries up to {@link #MAX_RETRY_ATTEMPTS} times with linear backoff.
+     * retries up to {@link #MAX_RETRY_ATTEMPTS} times with exponential backoff
+     * (100, 200, 400 ms — the delay doubles per attempt).
      * Timeout outcomes are classified {@code UNCERTAIN} — the append may have
      * succeeded at Fluss but the ack was lost.
      *
@@ -89,7 +90,11 @@ public final class RawTickWriter implements AutoCloseable {
      * @return outcome with timing
      */
     public AppendOutcome write(TickPacket packet) {
-        if (closed) {
+        // R-069: check-then-act on `closed` was racy — the entry check could
+        // pass, then a concurrent close() (e.g. the shutdown hook) runs and the
+        // append submits after the converter is closed. Serialize the closed
+        // check with the append submission.
+        if (isClosed()) {
             errorCount.incrementAndGet();
             return AppendOutcome.skipped("writer closed");
         }
@@ -208,7 +213,12 @@ public final class RawTickWriter implements AutoCloseable {
      */
     @Override
     public void close() {
-        closed = true;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+        }
         long deadlineNanos = System.nanoTime() + drainDeadline.toNanos();
         long pendingAtStart = tracker.pendingRecords();
 
@@ -228,7 +238,19 @@ public final class RawTickWriter implements AutoCloseable {
             LOG.warn("raw-writer: drain incomplete — {} records still pending "
                     + "(deadline={}, started={})",
                     remaining, drainDeadline, pendingAtStart);
-            tracker.onAppendFailure((int) (remaining * 512)); // approximate
+            // R-260: release the exact tracked bytes instead of an arbitrary
+            // 512/record average — under- or over-counting here corrupts the
+            // uncertainty journal's byte totals.
+            tracker.onAppendFailure((int) tracker.pendingBytes());
+        }
+
+        // R-068: the FlussRowConverter owns the underlying Fluss Connection;
+        // RawTickWriter.close() must close it or the connection leaks (and
+        // the JVM may hang on shutdown).
+        try {
+            rowConverter.close();
+        } catch (Exception e) {
+            LOG.warn("raw-writer: rowConverter.close() failed: {}", e.getMessage());
         }
 
         LOG.info("raw-writer: closed (table={}, appended={}, errors={}, "
@@ -237,6 +259,16 @@ public final class RawTickWriter implements AutoCloseable {
                 tableName, appendCount.get(), errorCount.get(),
                 uncertainCount.get(),
                 pendingAtStart, remaining);
+    }
+
+    /**
+     * R-069: single serialized closed check — the append path and close()
+     * contend on the same monitor so no append can slip past a concurrent close.
+     */
+    private boolean isClosed() {
+        synchronized (this) {
+            return closed;
+        }
     }
 
     // ---- outcome type ----
@@ -264,11 +296,6 @@ public final class RawTickWriter implements AutoCloseable {
             return new AppendOutcome(Status.UNCERTAIN, null, null, null, rowBytes,
                     "uncertain after " + timeout.toMillis() + "ms timeout; may be a duplicate",
                     -1, -1);
-        }
-
-        static AppendOutcome timeout(int rowBytes, Duration timeout) {
-            return new AppendOutcome(Status.TIMEOUT, null, null, null, rowBytes,
-                    "timeout after " + timeout.toMillis() + "ms", -1, -1);
         }
 
         static AppendOutcome fatal(int rowBytes, Exception e) {

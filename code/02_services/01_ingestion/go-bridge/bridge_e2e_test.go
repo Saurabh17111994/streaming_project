@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -190,8 +191,8 @@ func TestBridgeE2EFakeBrokerSubscribeTickAndReconnect(t *testing.T) {
 	defer fake.close()
 
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 
 	client := arrow.NewClient("app", "secret")
@@ -215,7 +216,21 @@ func TestBridgeE2EFakeBrokerSubscribeTickAndReconnect(t *testing.T) {
 
 	// Let the bridge connect, subscribe, receive the tick, then hit the forced
 	// disconnect and complete the 1s-backoff reconnect to a second connection.
-	time.Sleep(1600 * time.Millisecond)
+	// Poll (not a fixed sleep): under -race the machine runs ~2x slower and a
+	// fixed 1.6s window races the 1s reconnect backoff + second epoch.
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		snap := out.String()
+		tickCount := countLinesWith(t, snap, `"feed":"hft"`)
+		hasReconnect := lastEventState(eventsFrom(t, snap), "reconnect") == "BACKOFF"
+		if tickCount >= 2 && hasReconnect && fake.connections.Load() >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
@@ -248,8 +263,8 @@ func TestFakeBrokerMultiSlotSupervisor(t *testing.T) {
 	defer fake.close()
 
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 
 	client := arrow.NewClient("app", "secret")
@@ -269,7 +284,25 @@ func TestFakeBrokerMultiSlotSupervisor(t *testing.T) {
 		defer close(done)
 		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
-	time.Sleep(600 * time.Millisecond)
+	// Poll: both slots ACTIVE + each emits its own token's tick (race-safe).
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		snap := out.String()
+		events := eventsFrom(t, snap)
+		active := 0
+		for _, e := range events {
+			if e["event"] == "subscription_ack" && e["state"] == "ACTIVE" {
+				active++
+			}
+		}
+		if active >= 2 && strings.Contains(snap, `"token":1000`) && strings.Contains(snap, `"token":1001`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
@@ -308,8 +341,8 @@ func TestFakeBrokerForcedOneSlotDisconnect(t *testing.T) {
 	defer fake.close()
 
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 
 	client := arrow.NewClient("app", "secret")
@@ -328,7 +361,25 @@ func TestFakeBrokerForcedOneSlotDisconnect(t *testing.T) {
 		defer close(done)
 		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
-	time.Sleep(1600 * time.Millisecond) // allow the 1s backoff reconnect
+	// Poll: slot-0 reconnects (1s backoff) while slot-1 stays ACTIVE.
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		snap := out.String()
+		events := eventsFrom(t, snap)
+		active := 0
+		for _, e := range events {
+			if e["event"] == "subscription_ack" && e["state"] == "ACTIVE" {
+				active++
+			}
+		}
+		if active >= 2 && lastEventState(events, "reconnect") == "BACKOFF" && fake.connections.Load() >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
@@ -362,8 +413,8 @@ func TestFakeBrokerAllSlotTerminal(t *testing.T) {
 	defer fake.close()
 
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 
 	client := arrow.NewClient("app", "secret")
@@ -388,10 +439,15 @@ func TestFakeBrokerAllSlotTerminal(t *testing.T) {
 		if n != 2 {
 			t.Fatalf("expected 2 terminal slot outcomes, got %d\n%s", n, out.String())
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(8 * time.Second): // -race runs ~2x slower
 		cancel()
 		t.Fatalf("supervisor did not terminate after all slots went terminal\n%s", out.String())
 	}
+	// R-219: the supervisor's bridgeMetricsTicker goroutine runs until ctx is
+	// done — on the success path the supervisor returns without cancelling,
+	// so the ticker would leak into the next test and race its
+	// bridgeEmitter reassignment. Always cancel after the wait.
+	cancel()
 
 	events := eventsFrom(t, out.String())
 	terminalCount := 0
@@ -421,8 +477,8 @@ func TestSlotIsolationSuppressesOnlyAssignedInstruments(t *testing.T) {
 	defer fake.close()
 
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 
 	client := arrow.NewClient("app", "secret")
@@ -440,7 +496,25 @@ func TestSlotIsolationSuppressesOnlyAssignedInstruments(t *testing.T) {
 		defer close(done)
 		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
-	time.Sleep(600 * time.Millisecond)
+	// Poll: slot-0 TERMINAL while slot-1 ACTIVE + emitting (race-safe).
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		snap := out.String()
+		events := eventsFrom(t, snap)
+		terminal := 0
+		for _, e := range events {
+			if e["event"] == "subscription_ack" && e["state"] == "TERMINAL" {
+				terminal++
+			}
+		}
+		if terminal >= 1 && slotEventState(events, "hft-1", "subscription_ack") == "ACTIVE" && strings.Contains(snap, `"token":1001`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
@@ -483,4 +557,26 @@ func slotEventState(events []map[string]any, slotID, event string) string {
 		}
 	}
 	return ""
+}
+
+// lockedBuffer is a mutex-guarded bytes.Buffer: the poll-based E2E tests read
+// the emitter output while the bridge goroutine writes it, so a plain
+// bytes.Buffer would be a data race under `go test -race`.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func newLockedBuffer() *lockedBuffer { return &lockedBuffer{} }
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

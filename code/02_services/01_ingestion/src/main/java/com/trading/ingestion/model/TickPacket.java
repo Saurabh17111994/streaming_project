@@ -47,15 +47,43 @@ public final class TickPacket {
     private final int schemaVersion;
 
     private TickPacket(Builder b) {
+        // R-227: "All typed fields are verified and normalized before
+        // construction" was a lie — build() validated nothing. Fail fast on
+        // the required fields so an uninitialized packet can never reach
+        // the append path.
+        if (b.raw == null) throw new IllegalArgumentException("raw is required");
+        if (b.validity == null) throw new IllegalArgumentException("validity is required");
+        if (b.instrumentToken <= 0) {
+            throw new IllegalArgumentException(
+                    "instrumentToken must be positive, got " + b.instrumentToken);
+        }
+        // R-209: eventTime/ingestTs must be explicitly provided — the old
+        // Instant.EPOCH default made the `eventTime != null` guard dead code
+        // and silently fabricated 1970 timestamps.
+        if (b.eventTime == null || b.eventTime.equals(Instant.EPOCH)) {
+            throw new IllegalArgumentException("eventTime must be set (not EPOCH)");
+        }
+        if (b.ingestTs == null || b.ingestTs.equals(Instant.EPOCH)) {
+            throw new IllegalArgumentException("ingestTs must be set (not EPOCH)");
+        }
+        if (isBlank(b.tradingSymbol)) throw new IllegalArgumentException("tradingSymbol must not be blank");
+        if (isBlank(b.exchange)) throw new IllegalArgumentException("exchange must not be blank");
+        if (isBlank(b.eventFingerprint)) throw new IllegalArgumentException("eventFingerprint must not be blank");
+        if (isBlank(b.connectionId)) throw new IllegalArgumentException("connectionId must not be blank");
+        if (b.fingerprintVersion <= 0) {
+            throw new IllegalArgumentException(
+                    "fingerprintVersion must be positive, got " + b.fingerprintVersion);
+        }
+
         this.raw = b.raw;
         this.validity = b.validity;
         this.validityReason = b.validityReason != null ? b.validityReason : "";
         this.instrumentToken = b.instrumentToken;
-        this.tradingSymbol = b.tradingSymbol != null ? b.tradingSymbol : "";
-        this.exchange = b.exchange != null ? b.exchange : "";
+        this.tradingSymbol = b.tradingSymbol;
+        this.exchange = b.exchange;
         this.eventTime = b.eventTime;
         this.ingestTs = b.ingestTs;
-        this.appendAckTs = Instant.EPOCH;
+        this.appendAckTs = b.appendAckTs; // R-160: no longer hardcoded to EPOCH
         this.lastPricePaise = b.lastPricePaise;
         this.volume = b.volume;
         this.change = b.change;
@@ -65,12 +93,16 @@ public final class TickPacket {
         this.ohlcClosePaise = b.ohlcClosePaise;
         this.averagePricePaise = b.averagePricePaise;
         this.openInterest = b.openInterest;
-        this.eventFingerprint = b.eventFingerprint != null ? b.eventFingerprint : "";
+        this.eventFingerprint = b.eventFingerprint;
         this.fingerprintVersion = b.fingerprintVersion;
-        this.connectionId = b.connectionId != null ? b.connectionId : "";
+        this.connectionId = b.connectionId;
         this.connectionEpoch = b.connectionEpoch;
         this.instanceId = b.instanceId != null ? b.instanceId : "";
         this.schemaVersion = b.schemaVersion;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     // --- accessors ---
@@ -118,8 +150,9 @@ public final class TickPacket {
         long instrumentToken;
         String tradingSymbol;
         String exchange;
-        Instant eventTime = Instant.EPOCH;
-        Instant ingestTs = Instant.EPOCH;
+        Instant eventTime;
+        Instant ingestTs;
+        Instant appendAckTs; // R-160: settable via builder; null until append ack
         long lastPricePaise;
         long volume;
         double change;
@@ -141,6 +174,7 @@ public final class TickPacket {
         public Builder exchange(String v) { this.exchange = v; return this; }
         public Builder eventTime(Instant v) { this.eventTime = v; return this; }
         public Builder ingestTs(Instant v) { this.ingestTs = v; return this; }
+        public Builder appendAckTs(Instant v) { this.appendAckTs = v; return this; }
         public Builder lastPricePaise(long v) { this.lastPricePaise = v; return this; }
         public Builder volume(long v) { this.volume = v; return this; }
         public Builder change(double v) { this.change = v; return this; }

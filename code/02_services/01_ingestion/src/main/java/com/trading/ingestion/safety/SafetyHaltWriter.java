@@ -3,7 +3,6 @@ package com.trading.ingestion.safety;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -56,6 +55,8 @@ public final class SafetyHaltWriter implements AutoCloseable {
     }
 
     private final AppendWriter writer;
+    private Connection connection; // R-141
+    private Table table; // R-141
     private final String sourceInstance;
     private final String manifestFingerprint;
     private final String accountScopeId;
@@ -75,12 +76,15 @@ public final class SafetyHaltWriter implements AutoCloseable {
         Configuration conf = new Configuration();
         conf.setString("bootstrap.servers", bootstrapServers);
         try {
-            Connection connection = ConnectionFactory.createConnection(conf);
+            // R-141: keep the Connection + Table so close() can release them
+            // (previously local vars leaked until process exit).
+            this.connection = ConnectionFactory.createConnection(conf);
             TablePath path = TablePath.of(TABLE_DB, TABLE_NAME);
-            Table table = connection.getTable(path);
+            this.table = connection.getTable(path);
             this.writer = table.newAppend().createWriter();
             LOG.info("safety-halt-writer: connected (table={}, instance={})", path, sourceInstance);
         } catch (Exception e) {
+            closeQuietly();
             LOG.error("safety-halt-writer: failed to connect to Fluss: {}", e.getMessage(), e);
             throw new RuntimeException("Cannot create SafetyHaltWriter", e);
         }
@@ -104,7 +108,8 @@ public final class SafetyHaltWriter implements AutoCloseable {
         String reason = reasonCode != null ? reasonCode.name() : "";
         String haltRequestId = computeHaltRequestId(
                 manifestFingerprint, slotId, connectionEpoch, state.name(), reason);
-        Instant now = Instant.now();
+        // R-255: the unused `Instant now` was dead code — the row carries
+        // detectedTsMs; no local clock value is needed here.
 
         GenericRow row = GenericRow.of(
                 bs(haltRequestId),
@@ -215,6 +220,19 @@ public final class SafetyHaltWriter implements AutoCloseable {
             writer.flush();
         } catch (Exception e) {
             LOG.warn("safety-halt-writer: close failed: {}", e.getMessage());
+        }
+        closeQuietly();
+    }
+
+    /** R-141: release the Fluss Connection + Table held since construction. */
+    private void closeQuietly() {
+        try {
+            if (table != null) table.close();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (connection != null) connection.close();
+        } catch (Exception ignored) {
         }
     }
 }

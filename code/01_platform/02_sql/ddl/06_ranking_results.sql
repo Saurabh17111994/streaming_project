@@ -1,11 +1,13 @@
 -- Ranking_Results: Immutable LOG — per-evaluation ranking audit
 -- Owner: Signal job
 -- Type: LOG (no primary key)
--- Bucket key: evaluation/candidate routing identity
--- Retention: ≤7 trading days
+-- Bucket key: evaluation_id (R-136 — was candidate_id, which scattered one
+-- evaluation's rows across all buckets; a consumer reading per evaluation now
+-- reads a single bucket)
+-- Retention: ≤7 calendar days via table.log.ttl
 -- Lake: EOD Iceberg offload
 -- Scope: portfolio_id
--- Schema version: 1
+-- Schema version: 2
 
 CREATE TABLE Ranking_Results (
     evaluation_id           STRING      NOT NULL,
@@ -29,6 +31,10 @@ CREATE TABLE Ranking_Results (
     schema_version          STRING      NOT NULL
 ) WITH (
     'bucket.num' = '8',
-    'bucket.key' = 'candidate_id',
-    'table.retention.days' = '7'
+    'bucket.key' = 'evaluation_id',
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

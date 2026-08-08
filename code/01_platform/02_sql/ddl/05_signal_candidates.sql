@@ -1,11 +1,16 @@
--- Signal_Candidates: Immutable LOG — candidate detection audit
+-- Signal_Candidates: KV projection — candidate detection state keyed by candidate_id
 -- Owner: Signal job
--- Type: LOG (no primary key)
--- Bucket key: instrument_token or candidate routing identity
--- Retention: ≤7 trading days
+-- Type: KV (primary key on candidate_id)
+-- Bucket key: candidate_id
+-- Retention: ≤7 calendar days via table.log.ttl
 -- Lake: EOD Iceberg offload
 -- Scope: portfolio_id
--- Schema version: 1
+-- Schema version: 2
+--
+-- v2 (2026-08-03, review R-084): was LOG. `superseded_by_candidate_id` can
+-- only be populated by UPDATING the already-appended candidate row, which an
+-- immutable LOG cannot do — so the supersede chain was dead. As a KV table the
+-- storage layer enforces one row per candidate_id and supersede updates land.
 
 CREATE TABLE Signal_Candidates (
     candidate_id            STRING      NOT NULL,
@@ -29,9 +34,14 @@ CREATE TABLE Signal_Candidates (
     validity_reason         STRING,
     supersedes_candidate_id STRING,
     superseded_by_candidate_id STRING,
-    schema_version          STRING      NOT NULL
+    schema_version          STRING      NOT NULL,
+    PRIMARY KEY (candidate_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '16',
-    'bucket.key' = 'instrument_token',
-    'table.retention.days' = '7'
+    'bucket.key' = 'candidate_id',
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

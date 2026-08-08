@@ -2,14 +2,20 @@
 -- Owner: Ingestion
 -- Type: LOG (no primary key)
 -- Bucket key: instrument_token
--- Retention: ≤7 trading days (ceiling); extend while EOD offload unverified
--- Lake: EOD Iceberg offload
+-- Retention: ≤7 calendar days via table.log.ttl (R-011); the "trading days"
+-- ceiling in earlier headers was unverifiable — Fluss TTL is calendar-based,
+-- so the honest claim is 7 calendar days. Extend once EOD offload is verified.
+-- Lake: EOD Iceberg offload (R-011: datalake options restored — they were
+-- dropped in a rewrite while the header still claimed offload)
 -- Scope: account_scope_id
--- Schema version: 1
--- ack_ts: nullable (R-010). Fluss LOG rows are immutable and the broker ack
--- timestamp is not known at row-build time, so a stored row can never be
--- updated with its ack time. 0 / NULL means "unknown" — consumers must not
--- use ack_ts for latency/ordering analysis.
+-- Schema version: 2
+--
+-- v2 (2026-08-03, review R-054/R-231): removed the 8 columns the ingestion
+-- path never populates — quote fields (bid_price_paise/bid_qty/ask_price_paise/
+-- ask_qty, hardcoded 0 by RealFlussRowConverter) and option metadata
+-- (instrument_type/strike_paise/expiry/option_type, always empty/null).
+-- The DDL must tell the truth: these columns return in v3 when the bridge
+-- carries quote/derivative data. Column count drops 28 -> 20.
 
 CREATE TABLE raw_table_1 (
     event_fingerprint       STRING      NOT NULL,
@@ -19,20 +25,12 @@ CREATE TABLE raw_table_1 (
     instrument_token        BIGINT      NOT NULL,
     exchange                STRING      NOT NULL,
     symbol                  STRING      NOT NULL,
-    instrument_type         STRING,
-    strike_paise            BIGINT,
-    expiry                  BIGINT,
-    option_type             STRING,
     event_time              BIGINT      NOT NULL,
     ingest_ts               BIGINT      NOT NULL,
     ack_ts                  BIGINT      NULL, -- 0 = unknown (R-010)
     tick_type               STRING      NOT NULL,
     last_price_paise        BIGINT      NOT NULL,
     last_qty                BIGINT      NOT NULL,
-    bid_price_paise         BIGINT,
-    bid_qty                 BIGINT,
-    ask_price_paise         BIGINT,
-    ask_qty                 BIGINT,
     raw_payload             BYTES       NOT NULL,
     payload_hash            STRING      NOT NULL,
     decoder_version         STRING      NOT NULL,
@@ -43,5 +41,9 @@ CREATE TABLE raw_table_1 (
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',
-    'table.retention.days' = '7'
+    'table.log.ttl' = '7d',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.format' = 'iceberg',
+    'table.datalake.freshness' = '5min',
+    'table.datalake.auto-compaction' = 'true'
 );

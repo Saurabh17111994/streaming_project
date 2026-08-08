@@ -45,6 +45,28 @@ type BridgeEvent struct {
 	RejectedTokens     int    `json:"rejected_tokens,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	ReceivedTsMs       int64  `json:"received_ts_ms"`
+	// ManifestFingerprint and AssignedTokenSetHash are the slot-identity
+	// fields of the safety contract (plan §Slot-scoped safety propagation).
+	// Both are lowercase SHA-256 hex over the sorted token set (8-byte
+	// big-endian per token) — byte-identical to the Java computation. They
+	// are optional on the wire so the supervisor's emit sites stay simple;
+	// EmitEvent fills them from the emitter's identity map, and the Java
+	// side validates them when present.
+	ManifestFingerprint  string `json:"manifest_fingerprint,omitempty"`
+	AssignedTokenSetHash string `json:"assigned_token_set_hash,omitempty"`
+}
+
+// BridgeMetrics is the supervisor's periodic health snapshot (NDJSON
+// record_type "bridge_metrics"). Contract version stays NDJSONContractVersion
+// — the record is an additive extension of the v2 contract, consumed only by
+// ingestion-side gauges; a Java version that predates it ignores it.
+type BridgeMetrics struct {
+	RecordType           string `json:"record_type"`
+	ContractVersion      int    `json:"contract_version"`
+	TsMs                 int64  `json:"ts_ms"`
+	ReconnectConsecutive int    `json:"reconnect_consecutive"`
+	ActiveSockets        int    `json:"active_sockets"`
+	GoGoroutines         int    `json:"go_goroutines"`
 }
 
 type BridgeEmitter struct {
@@ -52,10 +74,30 @@ type BridgeEmitter struct {
 	w         io.Writer
 	seqBySlot map[string]uint64
 	seqMu     sync.Mutex
+	// fingerprint is the plan-wide manifest fingerprint; tokenHashBySlot maps
+	// each slot id to its assigned-token-set hash. EmitEvent fills empty
+	// BridgeEvent identity fields from these so emit sites stay unchanged.
+	fingerprint     string
+	tokenHashBySlot map[string]string
 }
 
 func NewBridgeEmitter(w io.Writer) *BridgeEmitter {
-	return &BridgeEmitter{w: w, seqBySlot: map[string]uint64{}}
+	return &BridgeEmitter{w: w, seqBySlot: map[string]uint64{}, tokenHashBySlot: map[string]string{}}
+}
+
+// SetManifestFingerprint records the plan-wide manifest fingerprint (see
+// tokenSetHash). Called once at startup before any slot goroutine emits.
+func (e *BridgeEmitter) SetManifestFingerprint(fp string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.fingerprint = fp
+}
+
+// SetSlotTokenHash records the assigned-token-set hash for one slot.
+func (e *BridgeEmitter) SetSlotTokenHash(slotID, hash string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tokenHashBySlot[slotID] = hash
 }
 
 // nextSeq returns the next monotonic per-slot tick sequence (starts at 1).
@@ -113,12 +155,35 @@ func (e *BridgeEmitter) EmitEvent(event BridgeEvent) error {
 	event.RecordType = "bridge_event"
 	event.ContractVersion = NDJSONContractVersion
 	event.Reason = sanitizeDiagnostic(event.Reason)
+	// Fill the slot-identity fields from the emitter's identity map when the
+	// call site did not set them (R-206: the Java side validates these when
+	// present, so an empty field is an explicit "identity not configured").
+	e.mu.Lock()
+	if event.ManifestFingerprint == "" {
+		event.ManifestFingerprint = e.fingerprint
+	}
+	if event.AssignedTokenSetHash == "" {
+		event.AssignedTokenSetHash = e.tokenHashBySlot[event.SlotID]
+	}
+	e.mu.Unlock()
 	// R-097: validateBridgeEvent was never invoked by production — EmitEvent
 	// wrote events without validation, so invalid events were emitted silently.
 	if err := validateBridgeEvent(event); err != nil {
 		return fmt.Errorf("bridge event rejected: %w", err)
 	}
 	return e.write(event)
+}
+
+// EmitMetrics writes one bridge_metrics NDJSON line through the same
+// mutex-protected emitter as every other record — one record per line, no
+// interleaving (R-184). The supervisor calls it on its 10s ticker.
+func (e *BridgeEmitter) EmitMetrics(m BridgeMetrics) error {
+	m.RecordType = "bridge_metrics"
+	m.ContractVersion = NDJSONContractVersion
+	if m.TsMs <= 0 {
+		return fmt.Errorf("bridge metrics rejected: ts_ms must be positive")
+	}
+	return e.write(m)
 }
 
 func (e *BridgeEmitter) write(value any) error {

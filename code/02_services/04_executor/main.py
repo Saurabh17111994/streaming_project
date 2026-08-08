@@ -17,7 +17,19 @@ FLUSS_BOOTSTRAP = os.environ.get("FLUSS_BOOTSTRAP", "fluss-coordinator:9123")
 ARROW_REST_URL = os.environ.get("ARROW_REST_URL", "")
 ARROW_APP_ID = os.environ.get("ARROW_APP_ID", "")
 ARROW_TOKEN = os.environ.get("ARROW_TOKEN", "")
-EXECUTION_ENABLED = os.environ.get("EXECUTION_ENABLED", "false") == "true"
+
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    """R-210: case-insensitive boolean env parsing.
+
+    The old `== "true"` check silently treated TRUE / True / 1 as disabled
+    — and this flag gates real order execution, so a wrong read must be
+    impossible. Accepted true values: true/1/yes/on (any case).
+    """
+    return os.environ.get(name, default).strip().lower() in {"true", "1", "yes", "on"}
+
+
+EXECUTION_ENABLED = _env_bool("EXECUTION_ENABLED")
 
 
 def main() -> None:

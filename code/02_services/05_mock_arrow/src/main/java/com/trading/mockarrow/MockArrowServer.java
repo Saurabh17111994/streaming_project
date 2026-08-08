@@ -12,15 +12,23 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Mock Arrow WebSocket server — emits fake market tick data.
+ * Mock Arrow market-data server — emits fake tick data over a raw TCP socket.
  *
  * All prices in integer paise (₹1 = 100 paise).
- * Starts a plain WebSocket server on port 8888. Connected clients receive
- * realistic tick messages at configurable rate. Uses a fixed instrument universe
- * with random price walks. No real broker connection needed.
  *
- * Message format (newline-delimited JSON):
- *   {"instrument_token": 12345, "exchange_ts": 1700000000000, "last_price_paise": 15150, ...}
+ * <p>R-039: this is a plain {@code ServerSocket} server, NOT a WebSocket
+ * server — the previous Javadoc advertised ws://8888 which the implementation
+ * never provided. It exists to feed the ingestion's stdin bridge and local
+ * harnesses, so raw TCP newline-delimited JSON is the correct wire format.
+ *
+ * <p>R-040: message format is strictly one tick object per line
+ * (newline-delimited JSON) — a batch is written as N lines, never as a JSON
+ * array, matching what the NDJSON parser consumes.
+ *
+ * <p>R-071: the scheduler ticks every 10 ms (100 batches/s); the effective
+ * rate is {@code batchSize × 100}, where
+ * {@code batchSize = ceil(instruments × tickRatePerSec / 100)}. Pass
+ * {@code tickRatePerSec} as the TARGET ticks/s across the instrument set.
  */
 public class MockArrowServer {
     private static final Logger log = LoggerFactory.getLogger(MockArrowServer.class);
@@ -35,6 +43,9 @@ public class MockArrowServer {
     private ServerSocket serverSocket;
     private volatile boolean running = false;
     private ScheduledExecutorService tickScheduler;
+
+    /** R-142: decoupled per-client delivery — a stalled client can never stall tick pacing. */
+    private java.util.concurrent.ExecutorService deliveryPool;
 
     // Per-instrument price state for realistic walks (in paise)
     private final Map<Long, Long> prices = new ConcurrentHashMap<>();
@@ -85,6 +96,15 @@ public class MockArrowServer {
         long intervalMs = 10;
         tickScheduler = Executors.newSingleThreadScheduledExecutor();
         tickScheduler.scheduleAtFixedRate(this::generateTicks, 0, intervalMs, TimeUnit.MILLISECONDS);
+
+        // R-142: worker pool for per-client delivery (bounded: one task per
+        // client per tick batch). Delivery never blocks tick generation.
+        deliveryPool = Executors.newFixedThreadPool(
+                Math.max(4, Runtime.getRuntime().availableProcessors()), r -> {
+                    Thread t = new Thread(r, "mock-arrow-delivery");
+                    t.setDaemon(true);
+                    return t;
+                });
     }
 
     // Connected clients
@@ -100,7 +120,12 @@ public class MockArrowServer {
             var realSession = new ClientSession(client, writer, session.connectedAt);
             clients.add(realSession);
         } catch (IOException e) {
-            log.error("Failed to setup client writer", e);
+            // R-180: never leak the accepted socket on writer setup failure.
+            log.error("Failed to setup client writer — closing socket", e);
+            try {
+                client.close();
+            } catch (IOException ignored) {
+            }
         }
     }
 
@@ -132,29 +157,52 @@ public class MockArrowServer {
             batch.add(tick);
         }
 
-        String json;
+        // R-040: serialize each tick as its OWN NDJSON line (one object per
+        // line) — a JSON array line would not parse as a tick downstream.
+        StringBuilder ndjson = new StringBuilder(batch.size() * 160);
         try {
-            json = mapper.writeValueAsString(batch);
+            for (Map<String, Object> tick : batch) {
+                ndjson.append(mapper.writeValueAsString(tick)).append('\n');
+            }
         } catch (Exception e) {
             log.error("JSON serialization failed", e);
             return;
         }
+        String json = ndjson.toString();
         tickCounter.addAndGet(batch.size());
 
-        // Send to all connected clients
-        var deadClients = new ArrayList<ClientSession>();
+        // R-142: per-client delivery runs on the worker pool, NOT the tick
+        // scheduler — a slow/stalled client previously blocked generateTicks()
+        // (and therefore tick generation for every client) for as long as its
+        // write/flush took. The scheduler only enqueues the batch; delivery is
+        // decoupled and never stalls tick pacing.
+        int expected = clients.size();
         for (var session : clients) {
-            try {
-                session.writer.write(json);
-                session.writer.newLine();
-                session.writer.flush();
-            } catch (IOException e) {
-                deadClients.add(session);
-            }
+            deliveryPool.execute(() -> deliver(session, json));
         }
-        clients.removeAll(deadClients);
-        for (var dead : deadClients) {
-            try { dead.socket.close(); } catch (IOException ignored) {}
+        // If delivery is queued behind a stalled client, the scheduler still
+        // advances; the dead-client sweep in deliver() keeps the list bounded.
+        if (expected > 0) {
+            log.debug("mock-arrow: enqueued {} deliveries for batch of {}",
+                    expected, batch.size());
+        }
+    }
+
+    /** Write one batch to one session; removes and closes it on I/O failure. */
+    private void deliver(ClientSession session, String json) {
+        try {
+            // R-040: the wire contract is one JSON object per line — write the
+            // whole batch as N lines, not one JSON array line.
+            session.writer.write(json);
+            session.writer.newLine();
+            session.writer.flush();
+        } catch (IOException e) {
+            clients.remove(session);
+            try {
+                session.socket.close();
+            } catch (IOException ignored) {
+            }
+            log.debug("mock-arrow: dropped stalled client");
         }
     }
 
@@ -189,6 +237,8 @@ public class MockArrowServer {
     public void stop() {
         running = false;
         if (tickScheduler != null) tickScheduler.shutdownNow();
+        // R-142: stop delivery workers too so the JVM can exit promptly.
+        if (deliveryPool != null) deliveryPool.shutdownNow();
         for (var c : clients) {
             try { c.writer.close(); } catch (IOException ignored) {}
             try { c.socket.close(); } catch (IOException ignored) {}

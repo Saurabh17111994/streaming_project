@@ -32,26 +32,20 @@ import org.slf4j.LoggerFactory;
  * Append to Postback_Quarantine with bytes + reason + timestamp.
  * </blockquote>
  *
- * <p>Column mapping (16_postback_quarantine.sql):</p>
+ * <p>Column mapping ({@code 21_ingestion_quarantine.sql} — 10 columns, the
+ * writer's own DDL; R-277 fixed the reference which pointed at Action
+ * Capture's 18-column {@code 16_postback_quarantine.sql}):</p>
  * <pre>
- * quarantine_id      STRING   — UUID
- * postback_event_id  STRING   — null (ingestion, not postback)
- * reason             STRING   — classifier
- * broker_order_id    STRING   — null
- * client_order_ref   STRING   — null
- * broker_status      STRING   — null
- * broker_timestamp   BIGINT   — null
- * instrument_token   BIGINT   — may be null if missing
- * exchange           STRING   — may be null
- * symbol             STRING   — may be null
- * raw_payload        BYTES    — original NDJSON line bytes
- * payload_hash       STRING   — SHA-256 hex
- * detected_ts        BIGINT   — epoch ms
- * status             STRING   — OPEN
- * resolution_ts      BIGINT   — null
- * resolution_note    STRING   — null
- * operator_identity  STRING   — null
- * schema_version     STRING   — v1
+ * quarantine_id       STRING   — UUID
+ * reason              STRING   — classifier
+ * instrument_token    BIGINT   — may be null if missing
+ * exchange            STRING   — may be null
+ * symbol              STRING   — may be null
+ * raw_payload         BYTES    — original NDJSON line bytes
+ * payload_hash        STRING   — SHA-256 hex
+ * detected_ts         BIGINT   — epoch ms
+ * detail              STRING   — scrubbed operator detail
+ * schema_version      STRING   — v1
  * </pre>
  */
 public class QuarantineWriter implements AutoCloseable {
@@ -60,8 +54,7 @@ public class QuarantineWriter implements AutoCloseable {
 
     private static final String TABLE_DB = "default";
     private static final String TABLE_NAME = "ingestion_quarantine";
-    private static final int BUCKET_COUNT = 8;
-    private static final Pattern SECRET_PATTERN = Pattern.compile(
+        private static final Pattern SECRET_PATTERN = Pattern.compile(
             "(?i)(ARROW_APP_SECRET|ARROW_PASSWORD|ARROW_TOTP_KEY|ARROW_TOKEN|access_token|authorization|appID|token)([=:][^&\\s,}]+)");
     /** Runs first so `Bearer <token>` (space-separated) is consumed before the
      *  name=value pattern can eat only the literal `Bearer` and leak the token. */
@@ -69,6 +62,8 @@ public class QuarantineWriter implements AutoCloseable {
             "(?i)\\bBearer[=:\\s]+[^\\s,}]+");
 
     private final AppendWriter writer;
+    private Connection connection; // R-253
+    private Table table; // R-253
     private final String instanceId;
 
     /**
@@ -106,13 +101,15 @@ public class QuarantineWriter implements AutoCloseable {
         conf.setString("bootstrap.servers", bootstrapServers);
 
         try {
-            Connection connection = ConnectionFactory.createConnection(conf);
+            // R-253: retain Connection + Table so close() releases them.
+            this.connection = ConnectionFactory.createConnection(conf);
             TablePath path = TablePath.of(TABLE_DB, TABLE_NAME);
-            Table table = connection.getTable(path);
+            this.table = connection.getTable(path);
             this.writer = table.newAppend().createWriter();
             LOG.info("quarantine-writer: connected (table={}, instanceId={})",
                     path, instanceId);
         } catch (Exception e) {
+            closeQuietly();
             LOG.error("quarantine-writer: failed to connect to Fluss: {}", e.getMessage(), e);
             throw new RuntimeException("Cannot create QuarantineWriter", e);
         }
@@ -195,6 +192,19 @@ public class QuarantineWriter implements AutoCloseable {
             // AppendWriter (TableWriter) does not have close() in Fluss 0.9.1-incubating
         } catch (Exception e) {
             LOG.warn("quarantine-writer: close failed: {}", e.getMessage());
+        }
+        closeQuietly();
+    }
+
+    /** R-253: release the Fluss Connection + Table held since construction. */
+    private void closeQuietly() {
+        try {
+            if (table != null) table.close();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (connection != null) connection.close();
+        } catch (Exception ignored) {
         }
     }
 
