@@ -1,0 +1,63 @@
+# =============================================================================
+# docker-compose.soak.yml — soak override for the unattended full-suite run
+# (run-full-suite.sh, Steps 1-4 of the remaining plan).
+#
+# Runs the ingestion container against the LOCAL fake HFT broker (host
+# process, no live Arrow credentials) so the container-runtime run and the
+# 7h soak need no human or AI attention. The fake broker publishes port 8899
+# on the Docker host; the container reaches it via the bridge gateway.
+#
+# Usage:
+#   SOAK_JOURNAL_DIR=<host dir> docker compose -f docker-compose.yml \
+#     -f docker-compose.soak.yml up -d ingestion
+#
+# Volume merge semantics: long-form bind entries REPLACE base entries with
+# the same target (journal dir + manifest mount).
+# =============================================================================
+services:
+  ingestion:
+    # Host networking (R-222): the Fluss cluster's advertised.listeners are
+    # host-oriented (CLIENT://localhost:9123/9124) because the Stage-2
+    # marathon java is host-native, and the fake broker is a host process.
+    # A container on trading-net cannot use those advertised endpoints
+    # (localhost = itself; tablet host port 9124 != container port 9123),
+    # so the soak container joins the HOST network: loopback reaches the
+    # host-published Fluss ports and the faketool directly. Changing
+    # advertised.listeners instead would break the Stage-2 host client.
+    # `!reset` clears the base `networks: [trading-net]` — compose forbids
+    # combining network_mode with networks.
+    networks: !reset []
+    network_mode: host
+    environment:
+      # Fluss bootstrap via host-published coordinator port (compose DNS
+      # names are unresolvable on the host network).
+      FLUSS_BOOTSTRAP: localhost:9123
+      # Fake broker is a host process on the host loopback.
+      ARROW_HFT_URL: ws://127.0.0.1:8899
+      # Dummy credentials: the fake broker performs no auth; same shape the
+      # FullStackE2ETest uses (ARROW_TOKEN present -> token auth path).
+      ARROW_APP_ID: soak
+      ARROW_APP_SECRET: soaksecret
+      ARROW_TOKEN: soaktoken
+      ARROW_USER_ID: ""
+      ARROW_PASSWORD: ""
+      ARROW_TOTP_KEY: ""
+      ARROW_HFT_CONNECTIONS: "1"
+      GO_ARROW_SDK_VERSION: v0.0.0-20260622-7cce1630
+      ARROW_USE_STANDARD: "false"
+      # Fake-feed soaks have no live wall-clock feed to cross-check.
+      CLOCK_CHECK_REQUIRED: "false"
+      NTP_SERVER: ntp.ubuntu.com,time.google.com,in.pool.ntp.org
+      # Journal on a host bind mount so soak evidence scripts read it.
+      LOG_DIR: /data/ingestion/logs
+    volumes:
+      - type: bind
+        source: ${SOAK_JOURNAL_DIR:-/tmp/soak-journal}
+        target: /data/ingestion/logs
+      # Approved 1,024-instrument manifest (quoted CSV containing fake token
+      # 757614) — replaces the base compose mount of the full NSE file so the
+      # fake tick token passes manifest validation.
+      - type: bind
+        source: /home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv
+        target: /instruments/NSE_CM_EQUITY.csv
+        read_only: true

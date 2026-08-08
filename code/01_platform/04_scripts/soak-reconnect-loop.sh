@@ -42,6 +42,20 @@ JAVA_MATCH="${JAVA_MATCH:-com.trading.ingestion.IngestionService}"
 BRIDGE_MATCH="${BRIDGE_MATCH:-arrow-bridge}"
 INGESTION_SRC="${INGESTION_SRC:-$PROJECT_ROOT/code/02_services/01_ingestion/src/main/java/com/trading/ingestion/IngestionService.java}"
 
+# Container mode (R-222): Stage 3/4 run the java inside the ingestion
+# container, so process discovery + SIGKILL must target its PID namespace.
+# Host mode (Stage 2 marathon) is the default: empty CONTAINER.
+CONTAINER="${CONTAINER:-}"
+if [ -n "$CONTAINER" ]; then
+	docker inspect "$CONTAINER" >/dev/null 2>&1 || {
+		echo "FATAL: container '$CONTAINER' not found — start the ingestion container first." >&2
+		exit 1
+	}
+	NS() { docker exec "$CONTAINER" "$@"; }
+else
+	NS() { "$@"; }
+fi
+
 # The one progress signal Java actually writes to the journal for every bridge
 # lifecycle event (subscription_ack ACTIVE after a restart = recovery). Tick
 # NDJSON from the bridge is consumed in-process and never logged (R-004), so
@@ -78,10 +92,15 @@ echo "reconnect-loop: budget=$RESTART_BUDGET  journal=$LOG_FILE"
 echo "reconnect-loop: result → $RESULT"
 echo 'cycle	java_fds_before	java_fds_after	bridge_fds_before	bridge_fds_after	java_threads_before	java_threads_after	progress_delta	recovered_ok	leak_ok' >"$RESULT"
 
-# Newest matching PID (not numerically highest — R-173).
+# Newest matching PID (not numerically highest — R-173). Matches the FULL
+# command line (the java class is not in argv[0]), and the pattern is passed
+# via the environment so the awk process's own cmdline cannot self-match.
 find_pid() {
-	ps -eo pid,etimes,args 2>/dev/null |
-		awk -v pat="$1" '$3 ~ pat { print $1, $2 }' |
+	# export (not VAR=... command): the awk is a pipeline sibling, so a
+	# command-scoped assignment never reaches its ENVIRON.
+	export PAT="$1"
+	NS ps -eo pid,etimes,args 2>/dev/null |
+		awk 'index($0, ENVIRON["PAT"]) { print $1, $2 }' |
 		sort -k2 -n |
 		tail -1 |
 		awk '{print $1}'
@@ -93,7 +112,7 @@ count_fds() {
 		return
 	}
 	local n
-	n=$(ls /proc/"$pid"/fd 2>/dev/null | wc -l) || n=0
+	n=$(NS ls /proc/"$pid"/fd 2>/dev/null | wc -l) || n=0
 	echo "$n"
 }
 threads_of() {
@@ -103,7 +122,7 @@ threads_of() {
 		return
 	}
 	local n
-	n=$(grep -s '^Threads:' /proc/"$pid"/status 2>/dev/null | awk '{print $2}') || n=0
+	n=$(NS grep -s '^Threads:' /proc/"$pid"/status 2>/dev/null | awk '{print $2}') || n=0
 	[ -n "$n" ] || n=0
 	echo "$n"
 }
@@ -145,7 +164,7 @@ for ((i = 1; i <= CYCLES; i++)); do
 
 	# Force the disconnect: SIGKILL only — a clean SIGTERM exit would be
 	# treated as a requested shutdown and stop the whole pipeline (R-001).
-	[ -n "$bridge_pid" ] && kill -9 "$bridge_pid" 2>/dev/null || true
+	[ -n "$bridge_pid" ] && NS kill -9 "$bridge_pid" 2>/dev/null || true
 
 	# Wait for Java to restart the bridge + resubscribe.
 	sleep "$SETTLE_SEC"

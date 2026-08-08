@@ -61,8 +61,7 @@ services:
       FLUSS_TABLET_HOST: fluss-tablet
       FLUSS_PROPERTIES: |
         zookeeper.address: zookeeper:2181
-        bind.listeners: INTERNAL://fluss-coordinator:0,
-          CLIENT://fluss-coordinator:9123
+        bind.listeners: INTERNAL://fluss-coordinator:0,CLIENT://fluss-coordinator:9123
         advertised.listeners: CLIENT://localhost:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
