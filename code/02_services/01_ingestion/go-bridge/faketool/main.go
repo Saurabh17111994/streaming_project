@@ -12,8 +12,10 @@ package main
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -38,6 +40,12 @@ func main() {
 	// subscription response + first tick, so the real supervisor cycles
 	// through reconnect/backoff with no external driver (run-full-suite.sh).
 	disconnectEvery := flag.Int("disconnect-every", 0, "close every Nth new connection (1-based); 0 = never")
+	// R-220: a connection due for a forced close must first serve the client's
+	// complete subscription batch — the bridge splits a 1024-token plan into
+	// 2x512 requests, so closing right after the first response would leave
+	// every epoch half-subscribed (no ACTIVE ack ever emitted). Close only
+	// after the connection has been idle for close-linger-ms.
+	closeLinger := flag.Duration("close-linger", 500*time.Millisecond, "how long a forced-close connection keeps serving sub frames before closing")
 	// Soak mode: keep sending a full-tick frame every N ms so a long soak has
 	// continuous Fluss append traffic instead of one tick per connection.
 	tickInterval := flag.Int("tick-interval-ms", 0, "if >0, send a full-tick frame every N ms until the client disconnects; 0 = single tick then idle")
@@ -89,10 +97,33 @@ func main() {
 			defer wmu.Unlock()
 			return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
+		closePending := (*disconnect > 0 && idx == *disconnect) ||
+			(*disconnectEvery > 0 && idx%*disconnectEvery == 0)
 		for {
+			if closePending {
+				// R-220: linger for further subscription frames instead of
+				// closing right after the first response — the client may split
+				// its plan across several sub requests and must complete the
+				// whole batch (and emit its ACTIVE ack) before the forced close.
+				if err := conn.SetReadDeadline(time.Now().Add(*closeLinger)); err != nil {
+					logf("set read deadline failed: %v", err)
+					return
+				}
+			}
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
-				logf("read end: %v", err)
+				if closePending {
+					var netErr net.Error
+					if errors.As(err, &netErr) && netErr.Timeout() {
+						logf("subscription batch idle — force closing")
+					} else {
+						logf("read end: %v", err)
+					}
+					_ = sendControl(websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseNormalClosure, "every"))
+				} else {
+					logf("read end: %v", err)
+				}
 				return
 			}
 			var sub map[string]any
@@ -153,21 +184,11 @@ func main() {
 				snapshotSent++
 			}
 			logf("snapshot sent (%d ticks)", snapshotSent)
-			if *disconnect > 0 && idx == *disconnect {
-				_ = sendControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "forced"))
-				return
-			}
-			if *disconnectEvery > 0 && idx%*disconnectEvery == 0 {
-				_ = sendControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "every"))
-				return
-			}
 			// Soak mode: keep emitting ticks until the client goes away. The
 			// read loop below stays the owner of the connection; the ticker
 			// goroutine writes through the same mutex, so it exits via write
 			// errors once the handler's deferred conn.Close() runs.
-			if *tickInterval > 0 {
+			if !closePending && *tickInterval > 0 {
 				logf("ticker start (every %dms)", *tickInterval)
 				go func() {
 					t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
