@@ -15,9 +15,9 @@ import org.junit.jupiter.api.Test;
 class IngestionConfigTest {
 
     @Test
-    @DisplayName("MAX_PENDING_RECORDS = 10,000")
+    @DisplayName("MAX_PENDING_RECORDS = 50,000 (throughput redesign Phase 3)")
     void maxPendingRecords() {
-        assertEquals(10_000L, IngestionConfig.MAX_PENDING_RECORDS);
+        assertEquals(50_000L, IngestionConfig.MAX_PENDING_RECORDS);
     }
 
     @Test

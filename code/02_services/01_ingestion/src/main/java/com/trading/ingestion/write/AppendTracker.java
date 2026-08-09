@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class AppendTracker {
 
-    public static final long MAX_PENDING_RECORDS = 10_000L;
+    public static final long MAX_PENDING_RECORDS = 50_000L;
     static final long MAX_PENDING_BYTES = 67_108_864L; // 64 MiB
     static final double WARNING_PERCENT = 0.80;
 

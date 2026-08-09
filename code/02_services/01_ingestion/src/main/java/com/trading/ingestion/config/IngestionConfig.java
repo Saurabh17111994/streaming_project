@@ -22,7 +22,7 @@ public final class IngestionConfig {
     private static final Logger LOG = LoggerFactory.getLogger(IngestionConfig.class);
 
     // ---- Constants (matching dossier) ----
-    public static final long MAX_PENDING_RECORDS = 10_000L;
+    public static final long MAX_PENDING_RECORDS = 50_000L;
     public static final long MAX_PENDING_BYTES = 67_108_864L; // 64 MiB
     public static final double WARNING_PERCENT = 0.80;
     public static final long CLOCK_OFFSET_LIMIT_MS = 100L;
@@ -150,13 +150,14 @@ public final class IngestionConfig {
         b.flussBootstrap = required(env, "FLUSS_BOOTSTRAP", errors);
         b.rawTableName = required(env, "RAW_TABLE_NAME", errors);
 
-        // ---- Batching (must be exactly 1 and 0) ----
-        b.maxBatchRecords = exactInt(env, "INGESTION_MAX_BATCH_RECORDS", 1, errors);
-        b.maxBatchWaitMs = exactInt(env, "INGESTION_MAX_BATCH_WAIT_MS", 0, errors);
+        // ---- Batching (max bounds; app-level batching stays off at the
+        // defaults — the Fluss client owns transport-level coalescing) ----
+        b.maxBatchRecords = intRange(env, "INGESTION_MAX_BATCH_RECORDS", 1, 1, 1000, errors);
+        b.maxBatchWaitMs = intRange(env, "INGESTION_MAX_BATCH_WAIT_MS", 0, 0, 100, errors);
 
         // ---- Backpressure ----
         b.maxPendingRecords = intRange(env, "MAX_PENDING_APPEND_RECORDS",
-                10_000, 100, 1_000_000, errors);
+                50_000, 100, 1_000_000, errors);
         b.maxPendingBytes = longRange(env, "MAX_PENDING_APPEND_BYTES",
                 67_108_864L, 1_048_576L, Long.MAX_VALUE, errors);
         b.pendingWarningPercent = doubleRange(env, "PENDING_APPEND_WARNING_PERCENT",
@@ -202,7 +203,10 @@ public final class IngestionConfig {
         }
 
         // ---- Fingerprint & SDK version ----
-        b.goArrowSdkVersion = optionalWithFallback(env, "GO_ARROW_SDK_VERSION", "0.0.0-local");
+        // Pinned in versions.pin (go-arrow v0.0.0-20260622-7cce1630, tree
+        // sha256:f622f8a9...); fallback kept for dev, logged as warning.
+        b.goArrowSdkVersion = optionalWithFallback(env, "GO_ARROW_SDK_VERSION",
+                "v0.0.0-20260622-7cce1630");
 
         // ---- DDL & clock strictness ----
         b.allowRuntimeDdl = "true".equalsIgnoreCase(
@@ -304,9 +308,8 @@ public final class IngestionConfig {
      * overload's {@code errors} parameter was never used — it always warned and
      * returned the fallback, which misled maintainers into thinking
      * {@code GO_ARROW_SDK_VERSION} is mandatory and that violations reach the
-     * error list. It is genuinely optional with a dev fallback while the SDK
-     * version pin is evidence-pending ({@code TO_BE_VERIFIED} in versions.pin);
-     * missing values log a warning.
+     * error list. It is optional with a dev fallback (the pinned version in
+     * versions.pin); missing values log a warning.
      */
     private static String optionalWithFallback(Map<String, String> env, String key, String fallback) {
         String v = env.get(key);
@@ -410,14 +413,14 @@ public final class IngestionConfig {
         String flussBootstrap = "fluss-coordinator:9123";
         String rawTableName = "raw_table_1";
         int maxBatchRecords = 1, maxBatchWaitMs;
-        int maxPendingRecords = 10_000;
+        int maxPendingRecords = 50_000;
         long maxPendingBytes = 67_108_864L;
         double pendingWarningPercent = 0.80;
         Duration appendTimeout = Duration.ofSeconds(5);
         long clockOffsetLimitMs = 100L;
         long arrowMaxEventAgeMs;
         long arrowMaxFutureEventSkewMs;
-        String goArrowSdkVersion = "0.0.0-local";
+        String goArrowSdkVersion = "v0.0.0-20260622-7cce1630";
         boolean allowRuntimeDdl;
         boolean clockCheckRequired;
         String uncertaintyJournalPath = "";

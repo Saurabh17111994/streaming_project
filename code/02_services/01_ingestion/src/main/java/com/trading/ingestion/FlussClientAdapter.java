@@ -52,6 +52,11 @@ final class FlussClientAdapter {
         // 1. Configure bootstrap
         Configuration conf = new Configuration();
         conf.setString("bootstrap.servers", bootstrapServers);
+        // Throughput plan Phase 3: bound transport-batch linger at 20ms so a
+        // single table writer keeps per-row latency ~25-35ms at 20k/s
+        // (default is 100ms; the batch-size cap alone is never the binding
+        // wait at target rate).
+        conf.setString("client.writer.batch-timeout", "20ms");
 
         // 2. Create connection
         Connection connection = ConnectionFactory.createConnection(conf);
