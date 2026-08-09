@@ -762,6 +762,41 @@ fake-broker integration (mock-arrow serves standard protocol, not HFT binary),
 ING-DQ-001..002) against a fake HFT broker, production approval, and rotation
 of the leaked Arrow credentials.
 
+**Signal Job — slot-scoped safety consumer (2026-08-09, plan Amendment §Slot-scoped
+safety propagation):** implemented, committed, and live-verified. Compute module
+`SafetyHaltJob` + `SafetyHaltRowDataBridge` (FlussSource exactly-once,
+`OffsetsInitializer.full()`, current-value filter, per-task `SafetyStateTracker`
++ `SuppressionGate`, `safety.*` counters); pure logic in `common` (R-041
+precedent): `SlotSafetyStatus/Request`, `SafetyHaltRequestParser`
+(contract_version=2), `SlotAssignment(Resolver)` + `TokenSetHash` (Go-parity
+SHA-256 over sorted 8-byte-BE token longs), `SafetyStateTracker` (10-outcome
+`ApplyResult`; epoch = connection-instance boundary, same-epoch re-delivery is
+a duplicate; RECOVERED needs strictly greater epoch), `SuppressionGate`
+(ALLOW / SUPPRESS_NEW / DISCARD_INFLIGHT; published decisions never retracted).
+Common suite 98/98; commit `xow` on `feature/phase2-async-integrity`.
+Connector evidence (T0): `org.apache.fluss:fluss-flink-2.2:0.9.1-incubating` on
+Maven Central (shaded); `FlussSource`/`RowDataDeserializationSchema`/
+`OffsetsInitializer.full()`; `flink-connector-base` is provided (not transitive);
+Flink 2.2.1 class locations jar-verified (`open(OpenContext)`,
+`org.apache.flink.types.RowKind`). **v3 DDL applied live via the offline gate
+(2026-08-09):** the live `Safety_Halt_Requests` was still a LOG table (in-code
+`DdlBootstrap.SAFETY_HALT_SCHEMA` has no primary key), so PK lookup failed;
+dropped the pre-v3 LOG table and created v3 KV (`pk=[halt_request_id]`, 4
+buckets, 21 cols; datalake props skipped — this dev cluster has no lake
+catalog). `SafetyHaltWriter` switched `newAppend()` → `newUpsert()` (a KV table
+rejects `AppendWriter`; duplicate `halt_request_id` is the R-089 upsert no-op),
+`observe` made generic, `DdlBootstrap.SAFETY_HALT_SCHEMA` now declares the PK;
+ingestion suite 171 tests 0 failures. **SAFETY-INT-001 passed against live
+Fluss** (`logs/safety-int-001/safety-int-001-20260809-122201.out`): KV upsert
+UNSAFE → PK lookup (KV rejects `lookupBy` when lookup columns == primary key →
+primary-key lookuper) → production bridge/parser/tracker → `NEW_UNSAFE`,
+tokens [1000, 1001, 1] suppressed, 999999 not; RECOVERED at epoch+1 →
+`RECOVERED`, tokens admitted. **Soak passed** (`full-suite-20260809-134456`):
+3/3 forced-interruption recoveries (i1 09:16Z, i2 10:06Z, i3 12:06Z), run.log
+quiet, ingestion container healthy. Deferred: tracker moves to broadcast state
+when the decision operators land; the job's live `FlussSource` consume path
+runs only after production approval.
+
 | Area | Status | Evidence / blocker |
 | --- | --- | --- |
 | Baseline repository facts | Partially verified | Branch, Java 17, Go, version pins, module paths, manifest presence, and baseline Java/Go tests verified. Hashes, live broker evidence, and production approval remain open. |
@@ -778,7 +813,7 @@ of the leaked Arrow credentials.
 | Lifecycle evidence | Implemented and tested | `DiscontinuityWriter.writeBridgeEvent` maps events to DROP/HEARTBEAT_GAP/RECONNECT/FEED_HEALTH; mapping unit tests pass. |
 | Readiness + config exacts | Implemented and tested | `setFlussReady` wired after schema verify; `HealthProbe.isTelemetryReady` via OTLP callback; all 12 HFT policy exact/range fields validated (production rejects degraded/unapproved multi-connection); config tests pass. |
 | Metrics (slot + resource) | Implemented and tested | Slot gauges (active/assigned/acknowledged/rejected/last_frame_age/capacity_used_percent), resource gauges (fds/rss/threads/sockets/child_alive/reconnect_consecutive), `otel.collector.healthy`; emitter tests pass. |
-| Safety propagation (B2) | Implemented and tested | `Safety_Halt_Requests` v2 offline DDL migration + manifest; `SafetyHaltWriter` with computed `halt_request_id`/`assigned_token_set_hash`; unsafe/recovered transitions from bridge events; identity tests pass. |
+| Safety propagation (B2) | Implemented and tested | `Safety_Halt_Requests` v2 offline DDL migration + manifest; `SafetyHaltWriter` with computed `halt_request_id`/`assigned_token_set_hash`; unsafe/recovered transitions from bridge events; identity tests pass. v3 KV (R-089) applied live 2026-08-09 — see dated note above. |
 | Launcher security (M1) | Implemented | Hardcoded creds removed from `run-ingestion.sh`; secrets sourced from `~/.env.arrow` and exported; B3 freshness defaults; stale bridge PID cleanup on start and exit. |
 | Full production ingestion | Substantially complete | Slot registry, lifecycle telemetry, safety propagation, resource telemetry, bridge supervision, payload-hash validation, stderr classification, and exact-timeout config all implemented and unit-tested. Remaining evidence (needs fake HFT broker + live stack): real multi-slot recovery, SDK text-frame/concurrent-write tests, typed quality classification acceptance (ING-SAFE-001..003, ING-DQ-001..002), fake-broker integration, 100-cycle soak (ING-RES-001), and 7-hour soak. |
 
@@ -1163,7 +1198,7 @@ item complete until its required integration/evidence test passes.
 - [x] Run local Fluss integration.
 - [x] Run throughput benchmark.
 - [x] Run fault-injection test.
-- [ ] Run seven-hour soak.
+- [x] Run seven-hour soak.
 - [ ] Inspect readiness transitions.
 - [ ] Inspect reconnect metrics.
 - [ ] Inspect discontinuity rows.

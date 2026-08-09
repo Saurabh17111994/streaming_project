@@ -7,8 +7,8 @@ import java.util.concurrent.CompletableFuture;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.writer.AppendResult;
-import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertResult;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
@@ -17,15 +17,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Appends slot-scoped safety requests to {@code Safety_Halt_Requests}
+ * Writes slot-scoped safety requests to {@code Safety_Halt_Requests}
  * (plan Amendment §Slot-scoped safety propagation).
  *
- * <p>One immutable row per unsafe/recovered transition. {@code halt_request_id}
- * is the SHA-256 hex of {@code manifest_fingerprint|slot_id|connection_epoch|
- * state|reason_code}, so re-emitting the same tuple is a duplicate (deduped by
- * the caller — never a second state transition). The request never contains
- * credentials, raw payload bytes, token lists, symbol lists, or free-form SDK
- * exceptions.
+ * <p>One row per unsafe/recovered transition. {@code halt_request_id} is the
+ * SHA-256 hex of {@code manifest_fingerprint|slot_id|connection_epoch|state|
+ * reason_code}. The table is a KV table (DDL v3, review R-089), so the storage
+ * layer enforces one row per {@code halt_request_id}: a duplicate delivery is
+ * an upsert no-op. The caller additionally dedups so it never emits a second
+ * state transition. The request never contains credentials, raw payload bytes,
+ * token lists, symbol lists, or free-form SDK exceptions.
  */
 public final class SafetyHaltWriter implements AutoCloseable {
 
@@ -54,7 +55,7 @@ public final class SafetyHaltWriter implements AutoCloseable {
         RECOVERED
     }
 
-    private final AppendWriter writer;
+    private final UpsertWriter writer;
     private Connection connection; // R-141
     private Table table; // R-141
     private final String sourceInstance;
@@ -81,7 +82,7 @@ public final class SafetyHaltWriter implements AutoCloseable {
             this.connection = ConnectionFactory.createConnection(conf);
             TablePath path = TablePath.of(TABLE_DB, TABLE_NAME);
             this.table = connection.getTable(path);
-            this.writer = table.newAppend().createWriter();
+            this.writer = table.newUpsert().createWriter();
             LOG.info("safety-halt-writer: connected (table={}, instance={})", path, sourceInstance);
         } catch (Exception e) {
             closeQuietly();
@@ -136,11 +137,11 @@ public final class SafetyHaltWriter implements AutoCloseable {
         );
 
         try {
-            // Fluss appends are asynchronous: failures complete the future
-            // exceptionally, never by throwing from append(). Observe so an
+            // Fluss upserts are asynchronous: failures complete the future
+            // exceptionally, never by throwing from upsert(). Observe so an
             // undelivered safety-halt request is logged at ERROR, and success
-            // is only logged after the append actually completes (R-034).
-            observe(writer.append(row), haltRequestId, slotId, state, reason, connectionEpoch);
+            // is only logged after the write actually completes (R-034).
+            observe(writer.upsert(row), haltRequestId, slotId, state, reason, connectionEpoch);
         } catch (Exception e) {
             LOG.error("safety-halt-writer: append failed (id={}, reason={}): {}",
                     haltRequestId, reason, e.getMessage());
@@ -149,15 +150,16 @@ public final class SafetyHaltWriter implements AutoCloseable {
     }
 
     /**
-     * Observe an asynchronous Fluss append (R-034). A discarded future would
+     * Observe an asynchronous Fluss write (R-034). A discarded future would
      * silently lose a safety-halt request — an unsafe state could go un-halted
      * with no alert. Success is logged at INFO only after the future completes;
      * failures are logged at ERROR.
      *
-     * @return a future mirroring the append outcome (for tests)
+     * @param future the append or upsert future to observe
+     * @return a future mirroring the write outcome (for tests)
      */
-    static CompletableFuture<AppendResult> observe(
-            CompletableFuture<AppendResult> future, String id, String slotId,
+    static <T> CompletableFuture<T> observe(
+            CompletableFuture<T> future, String id, String slotId,
             SafetyState state, String reason, long epoch) {
         return future.whenComplete((result, ex) -> {
             if (ex != null) {

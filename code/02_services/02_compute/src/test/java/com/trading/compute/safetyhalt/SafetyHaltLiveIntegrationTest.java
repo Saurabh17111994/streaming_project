@@ -16,11 +16,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.writer.AppendResult;
-import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertResult;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
@@ -124,7 +125,7 @@ class SafetyHaltLiveIntegrationTest {
         }
     }
 
-    /** Mirrors SafetyHaltWriter: 21-column v3 row, append writer, async ack. */
+    /** Mirrors SafetyHaltWriter: 21-column v3 row, KV upsert writer, async ack. */
     private static String appendRow(Table table, String manifestFingerprint, String slotId,
                                     long epoch, String state, String reasonCode,
                                     String assignedTokenHash) throws Exception {
@@ -153,15 +154,19 @@ class SafetyHaltLiveIntegrationTest {
                 bs("safety-int-test"),                  // evidence_reference
                 2                                       // contract_version
         );
-        AppendWriter writer = table.newAppend().createWriter();
-        CompletableFuture<AppendResult> future = writer.append(row);
+        UpsertWriter writer = table.newUpsert().createWriter();
+        CompletableFuture<UpsertResult> future = writer.upsert(row);
         writer.flush();
         future.get(APPEND_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
         return haltRequestId;
     }
 
     private static InternalRow lookupById(Table table, String haltRequestId) throws Exception {
-        var lookuper = table.newLookup().lookupBy("halt_request_id").createLookuper();
+        // KV table: halt_request_id IS the physical primary key, so the
+        // primary-key lookuper (no lookupBy) is the only supported path —
+        // prefix lookup is rejected by the client when lookup columns equal
+        // the primary key.
+        var lookuper = table.newLookup().createLookuper();
         var result = lookuper.lookup(GenericRow.of(bs(haltRequestId)))
                 .get(APPEND_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
         assertNotNull(result, "lookup must return a result for " + haltRequestId);
@@ -178,13 +183,13 @@ class SafetyHaltLiveIntegrationTest {
      */
     private static SlotSafetyRequest bridge(InternalRow row) {
         GenericRowData flink = GenericRowData.of(
-                row.getString(0).toString(),     // halt_request_id
+                StringData.fromString(row.getString(0).toString()), // halt_request_id
                 null,                            // account_scope_id
                 null,                            // portfolio_id
                 null,                            // execution_partition_id
-                row.getString(4).toString(),     // source_component
+                StringData.fromString(row.getString(4).toString()), // source_component
                 null,                            // source_instance
-                row.getString(6).toString(),     // reason_code
+                StringData.fromString(row.getString(6).toString()), // reason_code
                 null,                            // reason_detail
                 row.getLong(8),                  // detection_time
                 null,                            // source_epoch
@@ -192,11 +197,11 @@ class SafetyHaltLiveIntegrationTest {
                 null,                            // application_result
                 null,                            // applied_ts
                 null,                            // schema_version
-                row.getString(14).toString(),    // slot_id
+                StringData.fromString(row.getString(14).toString()), // slot_id
                 row.getLong(15),                 // connection_epoch
-                row.getString(16).toString(),    // manifest_fingerprint
-                row.getString(17).toString(),    // assigned_token_set_hash
-                row.getString(18).toString(),    // state
+                StringData.fromString(row.getString(16).toString()), // manifest_fingerprint
+                StringData.fromString(row.getString(17).toString()), // assigned_token_set_hash
+                StringData.fromString(row.getString(18).toString()), // state
                 null,                            // evidence_reference
                 row.getInt(20)                   // contract_version
         );

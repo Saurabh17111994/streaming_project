@@ -260,7 +260,7 @@ public final class DdlBootstrap {
             .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
             .build();
 
-    /** Full 21-column schema for Safety_Halt_Requests matching the migrated v2 DDL. */
+    /** Full 21-column KV schema for Safety_Halt_Requests matching the migrated v3 DDL. */
     private static final Schema SAFETY_HALT_SCHEMA = Schema.newBuilder()
             .column("halt_request_id", org.apache.fluss.types.DataTypes.STRING())
             .column("account_scope_id", org.apache.fluss.types.DataTypes.STRING())
@@ -283,6 +283,7 @@ public final class DdlBootstrap {
             .column("state", org.apache.fluss.types.DataTypes.STRING())
             .column("evidence_reference", org.apache.fluss.types.DataTypes.STRING())
             .column("contract_version", org.apache.fluss.types.DataTypes.INT())
+            .primaryKey("halt_request_id") // DDL v3 (R-089): LOG→KV for PK dedup
             .build();
 
     /**

@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Main pipeline implementation-ready; slot-scoped safety consumer (plan Amendment) implemented and compiling — see Safety consumer section below |
+| Status | Main pipeline implementation-ready; slot-scoped safety consumer (plan Amendment) implemented, compiling, and live-verified — SAFETY-INT-001 passed 2026-08-09, see Safety consumer section below |
 | Owner | Compute and Strategy Teams |
 | Requirements | `REQ-FC-*`, `REQ-SS-*`, `REQ-RNK-*` |
 | Contracts | `docs/04_contracts/03-compute.md`, `04-business-logic.md`, `10-ranking.md` |
@@ -328,7 +328,7 @@ Implements plan.md §"Slot-scoped safety propagation" for the Signal Job: consum
 | `common/src/main/java/com/trading/common/safety/SuppressionGate.java` | ALLOW / SUPPRESS_NEW / DISCARD_INFLIGHT per token; published decisions never retracted. |
 | `02_compute/.../safetyhalt/SafetyHaltJob.java` | Flink shell: `FlussSource` (exactly-once, `OffsetsInitializer.full()`) → current-value filter (INSERT/UPDATE_AFTER) → per-task `SafetyHaltApplyFunction` (RichFlatMapFunction) with `safety.transitions.applied` / `safety.rows.malformed` / `safety.rows.skipped` metrics; malformed rows counted, never fatal. |
 | `02_compute/.../safetyhalt/SafetyHaltRowDataBridge.java` | RowData → request via DDL v3 column positions. |
-| `02_compute/src/test/.../SafetyHaltLiveIntegrationTest.java` | SAFETY-INT-001: env-gated (`COMPUTE_INT_TEST_SAFETY=true`) live harness — append UNSAFE/RECOVERED rows via the writer's append path, read back by PK, bridge + parse + apply, assert suppression window opens/closes. |
+| `02_compute/src/test/.../SafetyHaltLiveIntegrationTest.java` | SAFETY-INT-001: env-gated (`COMPUTE_INT_TEST_SAFETY=true`) live harness — upsert UNSAFE/RECOVERED rows via the writer's KV write path, read back by primary key, bridge + parse + apply, assert suppression window opens/closes. **Passed against live Fluss 2026-08-09.** |
 
 ### Connector and compile evidence (T0)
 
@@ -336,8 +336,13 @@ Implements plan.md §"Slot-scoped safety propagation" for the Signal Job: consum
 - Flink 2.2.1 class locations (jar-verified): `RichFlatMapFunction` = `org.apache.flink.api.common.functions` (flink-core); `open(OpenContext)` (not `Configuration`); `RowKind` = `org.apache.flink.types`; `DataStream`/`StreamExecutionEnvironment` = flink-runtime. The user's local Flink source tree (`/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/flink`, 2.4-SNAPSHOT) confirms identical locations.
 - `mvn -f 02_services/02_compute/pom.xml test` is green (main + test compile; SAFETY-INT-001 skips without the env gate). Compute is a standalone module outside the reactor; parent + `common` must be installed in `.m2` first (`mvn -N install`, `mvn install -pl common -DskipTests`).
 
+### Live verification (2026-08-09)
+
+- **v3 DDL applied live via the offline gate.** The dev cluster's `Safety_Halt_Requests` was still a LOG table (in-code `DdlBootstrap.SAFETY_HALT_SCHEMA` had no primary key), which rejects PK lookup. Dropped the pre-v3 LOG table and created the v3 KV table (`pk=[halt_request_id]`, 4 buckets, 21 columns). Datalake props from the DDL were skipped — this dev cluster has no lake catalog. `SafetyHaltWriter` switched `newAppend()` → `newUpsert()` (a KV table rejects `AppendWriter`; a duplicate `halt_request_id` is the R-089 upsert no-op), `observe` became generic, and `DdlBootstrap.SAFETY_HALT_SCHEMA` now declares the PK so a fresh cluster creates KV. Ingestion suite: 171 tests, 0 failures.
+- **SAFETY-INT-001 passed** (`logs/safety-int-001/safety-int-001-20260809-122201.out`): KV upsert of an UNSAFE row → primary-key lookup (the client rejects `lookupBy` when lookup columns equal the physical PK) → production `SafetyHaltRowDataBridge` + `SafetyHaltRequestParser` + `SafetyStateTracker` → `NEW_UNSAFE`, tokens `[1000, 1001, 1]` suppressed and `999999` not; then RECOVERED at epoch+1 → `RECOVERED`, tokens admitted.
+
 ### Deferred (documented, not stubbed)
 
 - The tracker lives per-task in the job shell; when the decision operators land it moves to broadcast state so `isTokenSuppressed` / `SuppressionGate` gate candidates/rankings/reservations/decisions. A tick alone never clears unsafe state; RECOVERED admits only post-recovery input.
-- The live `FlussSource` consume path is exercised by SAFETY-INT-001 against the dev cluster after the seven-hour soak (no load added during the soak); the job itself runs only after production approval.
+- The job itself (live `FlussSource` consume path end-to-end) runs only after production approval; SAFETY-INT-001 already exercises the production bridge/parser/tracker against live Fluss.
 
