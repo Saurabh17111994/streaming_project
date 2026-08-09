@@ -68,6 +68,9 @@ class NoBatchingTest {
             assertNotEquals(RawTickWriter.Status.FATAL, outcome.status());
         }
 
+        // Phase 2: write() is async — wait for all acks before counting.
+        writer.drain();
+
         LOG.info("no-batching: {} ticks → {} accepted",
                 TICK_COUNT, writer.appendCount());
         assertEquals(TICK_COUNT, writer.appendCount(),

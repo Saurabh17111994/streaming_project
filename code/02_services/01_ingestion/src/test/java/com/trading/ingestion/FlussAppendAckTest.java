@@ -64,19 +64,17 @@ class FlussAppendAckTest {
                 Duration.ofSeconds(30));
 
         LOG.info("append-100: writing to {}", bootstrap);
-        int accepted = 0;
 
         for (int i = 0; i < 100; i++) {
             TickPacket packet = TickPacketFixtures.validTrade(i);
             RawTickWriter.AppendOutcome outcome = writer.write(packet);
-
             assertNotNull(outcome, "outcome must not be null");
-            if (outcome.status() == RawTickWriter.Status.SUCCESS) {
-                accepted++;
-            }
         }
 
-        LOG.info("append-100: accepted={}", accepted);
+        // Phase 2: write() is async — wait for all acks before counting.
+        writer.drain();
+
+        LOG.info("append-100: accepted={}", writer.appendCount());
         assertEquals(100, writer.appendCount(),
                 "all ticks submitted");
         assertEquals(0, writer.uncertainCount(), "no uncertain outcomes");

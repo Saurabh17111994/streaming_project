@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.ingestion.config.IngestionConfig;
 import com.trading.ingestion.bridge.BridgeEvent;
 import com.trading.ingestion.bridge.BridgeEventParser;
+import com.trading.ingestion.bridge.BridgeMetrics;
 import com.trading.ingestion.bridge.BrokerQuarantine;
 import com.trading.ingestion.bridge.PayloadHashValidator;
 import com.trading.ingestion.discontinuity.DiscontinuityWriter;
@@ -65,6 +66,13 @@ public final class IngestionService {
 
     private static final String VERSION = "0.2.0";
     private static final String FINGERPRINT_ALGO = "SHA-256";
+    /**
+     * ING-DQ-001: static detail for malformed-JSON quarantine rows. Never
+     * interpolated with the offending line — Jackson's message embeds the
+     * input snippet, which would leak raw line content into quarantine/logs.
+     */
+    private static final String MALFORMED_JSON_DETAIL =
+            "NDJSON line is not valid JSON — quarantined per REQ-ING";
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
@@ -137,6 +145,10 @@ public final class IngestionService {
         this.writer = new RawTickWriter(flussWriter, tracker, config.rawTableName,
                 config.appendTimeout,
                 java.time.Duration.ofSeconds(30)); // drain deadline
+        // Async append completions (throughput plan Phase 2): metrics, error
+        // counters, and discontinuity evidence are driven by the writer's
+        // completion callback — write() no longer blocks on the Fluss ack.
+        writer.setOutcomeListener(this::onAppendOutcome);
 
         // Telemetry emitter — flushes every 10s to otel-collector:4318
         String otelHost = System.getenv().getOrDefault(
@@ -601,6 +613,19 @@ public final class IngestionService {
                 metrics.incrementDecodeError(record.reason());
                 return;
             }
+            // Supervisor health snapshot (additive v2 record). Must be routed
+            // BEFORE the GoTick fall-through — a bridge_metrics line has no
+            // feed/state and would otherwise be quarantined as INVALID_SCHEMA.
+            java.util.Optional<BridgeMetrics> bridgeMetrics = bridgeEventParser.parseMetrics(jsonNode);
+            if (bridgeMetrics.isPresent()) {
+                BridgeMetrics m = bridgeMetrics.get();
+                // The Go supervisor is authoritative for these (10s cadence);
+                // the lifecycle-derived values are only pre-metrics fallbacks.
+                metrics.setReconnectConsecutive(m.reconnectConsecutive());
+                metrics.setActiveSockets(m.activeSockets());
+                metrics.setGoGoroutines(m.goGoroutines());
+                return;
+            }
             // 1. Bind the tree → GoTick (no third parse)
             GoTick gt = MAPPER.treeToValue(jsonNode, GoTick.class);
             long receiveTsMs = gt.received_ts_ms > 0 ? gt.received_ts_ms : System.currentTimeMillis();
@@ -628,12 +653,16 @@ public final class IngestionService {
             if (fd == FreshnessDecision.FUTURE) {
                 quarantineWriter.write(rawBytes, QuarantineWriter.Reason.FUTURE_BROKER_TIMESTAMP,
                         "event timestamp exceeds receive time", gt.token, null, null);
+                emitQualityUnsafe(gt.slot_id, gt.connection_epoch,
+                        QuarantineWriter.Reason.FUTURE_BROKER_TIMESTAMP);
                 return;
             }
             if (fd == FreshnessDecision.STALE) {
                 quarantineWriter.write(rawBytes, QuarantineWriter.Reason.STALE_BROKER_TIMESTAMP,
                         "event timestamp is older than configured age", gt.token, null, null);
                 metrics.incrementDecodeError("STALE_BROKER_TIMESTAMP");
+                emitQualityUnsafe(gt.slot_id, gt.connection_epoch,
+                        QuarantineWriter.Reason.STALE_BROKER_TIMESTAMP);
                 return;
             }
 
@@ -653,6 +682,17 @@ public final class IngestionService {
             // 3. Validate
             ValidityClassification validity;
             String validityReason = null;
+            // AC-ING-002: an unrecognized broker protocol version is quarantined
+            // (UNKNOWN_VERSION) before any trade classification — the raw bytes
+            // are preserved but the tick can never become a trade decision.
+            if (!"hft".equals(gt.feed) && !"standard".equals(gt.feed)) {
+                quarantineWriter.write(rawBytes,
+                        QuarantineWriter.Reason.INVALID_SCHEMA,
+                        "unknown broker protocol version: " + (gt.feed == null ? "<null>" : gt.feed),
+                        gt.token, null, null);
+                metrics.incrementDecodeError("UNKNOWN_VERSION");
+                return;
+            }
             if (gt.ltp_paise <= 0 && (gt.mode.equals("ltp") || gt.mode.equals("ltpc"))) {
                 validity = ValidityClassification.INVALID_VALUES;
                 validityReason = "ltp_paise <= 0";
@@ -678,6 +718,8 @@ public final class IngestionService {
                 quarantineWriter.write(rawBytes, QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION,
                         "ltp outside broker circuit limits",
                         instr.instrumentToken(), instr.exchange(), instr.tradingSymbol());
+                emitQualityUnsafe(gt.slot_id, gt.connection_epoch,
+                        QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION);
                 return;
             }
 
@@ -731,30 +773,18 @@ public final class IngestionService {
                     .schemaVersion(1)
                     .build();
 
-            // 7. Submit to bounded writer (individual append, no batching)
+            // 7. Submit to bounded writer (async append — each tick is its
+            //    own append call; the terminal outcome is delivered via
+            //    onAppendOutcome when the Fluss ack completes)
             RawTickWriter.AppendOutcome outcome = writer.write(packet);
 
-            // Record metrics
+            // Record receive-side metrics
             metrics.recordTick(packetBytes.length);
-            long latencyMs = outcome.ackTime() != null
-                    ? java.time.Duration.between(outcome.acceptTime(), outcome.ackTime()).toMillis()
-                    : -1;
-            if (latencyMs >= 0) metrics.recordAppendLatencyMs(latencyMs);
             metrics.incrementFingerprint();
 
             if (outcome.status() == RawTickWriter.Status.REJECTED) {
                 LOG.warn("ingestion: tick rejected (reason={})", outcome.detail());
                 metrics.incrementAcknowledgedLoss();
-            } else if (outcome.status() == RawTickWriter.Status.TIMEOUT) {
-                LOG.warn("ingestion: append timeout (rowBytes={})", outcome.rowBytes());
-            } else if (outcome.status() == RawTickWriter.Status.UNCERTAIN) {
-                LOG.warn("ingestion: append UNCERTAIN — Fluss may have persisted (rowBytes={}, detail={})",
-                        outcome.rowBytes(), outcome.detail());
-                errorCount.incrementAndGet();
-            } else if (outcome.status() == RawTickWriter.Status.FAILED
-                    || outcome.status() == RawTickWriter.Status.FATAL) {
-                errorCount.incrementAndGet();
-                metrics.incrementDecodeError("append_" + outcome.status().name().toLowerCase());
             }
 
             // 8. Update health probe + gauge metrics + lastTickSnapshot
@@ -768,24 +798,16 @@ public final class IngestionService {
             // too, not just bridge lifecycle events.
             updateReadinessFile();
 
-            // R-111: lastTickSnapshot is discontinuity evidence — it must only
-            // reflect a tick that was actually persisted. REJECTED/TIMEOUT/
-            // UNCERTAIN/FAILED/FATAL ticks were not (or may not have been)
-            // appended; recording them would fabricate false "last accepted
-            // tick" evidence after a later bridge crash.
-            if (outcome.status() == RawTickWriter.Status.SUCCESS) {
-                lastTickSnapshot = new DiscontinuityWriter.LastTickSnapshot(
-                        gt.ts_ms,
-                        fp.hash(),
-                        gt.token,
-                        instr.exchange(),
-                        instr.tradingSymbol()
-                );
-            }
-
         } catch (JsonProcessingException e) {
-            // Non-JSON line (e.g. Go bridge startup output). Silently skip —
-            // bridge stderr is already drained to SLF4J at DEBUG level.
+            // ING-DQ-001: a malformed NDJSON line must produce quarantine
+            // evidence — never a silent drop (REQ-ING: every accepted or
+            // rejected packet SHALL produce audit evidence). The raw line
+            // bytes are preserved as the quarantine payload; the detail is a
+            // static constant because Jackson's message embeds the offending
+            // input snippet (line content must not leak into logs).
+            MalformedJsonDecision decision = malformedJsonDecision(rawLineBytes(jsonLine));
+            quarantineWriter.write(decision.rawPayload(), decision.reason(), decision.detail());
+            metrics.incrementDecodeError("MALFORMED_JSON");
         } catch (Exception e) {
             errorCount.incrementAndGet();
             metrics.incrementDecodeError(e.getClass().getSimpleName());
@@ -799,6 +821,47 @@ public final class IngestionService {
                 LOG.error("ingestion: quarantine writer failed: {}", nested.getMessage());
             }
             LOG.warn("ingestion: line processing error: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Async append completion (throughput plan Phase 2) — invoked by the
+     * writer's background completion for every terminal outcome. Metrics,
+     * error counters, and discontinuity evidence move here because
+     * {@link #processLine} no longer blocks on the Fluss ack.
+     *
+     * <p>R-111: lastTickSnapshot is discontinuity evidence — it must only
+     * reflect a tick that was actually persisted; only SUCCESS completes
+     * with an ack, so only SUCCESS updates the snapshot.
+     */
+    private void onAppendOutcome(RawTickWriter.AppendOutcome outcome) {
+        long latencyMs = outcome.ackTime() != null
+                ? java.time.Duration.between(outcome.acceptTime(), outcome.ackTime()).toMillis()
+                : -1;
+        if (latencyMs >= 0) metrics.recordAppendLatencyMs(latencyMs);
+
+        switch (outcome.status()) {
+            case TIMEOUT -> LOG.warn("ingestion: append timeout (rowBytes={})",
+                    outcome.rowBytes());
+            case UNCERTAIN -> {
+                LOG.warn("ingestion: append UNCERTAIN — Fluss may have persisted (rowBytes={}, detail={})",
+                        outcome.rowBytes(), outcome.detail());
+                errorCount.incrementAndGet();
+            }
+            case FAILED, FATAL -> {
+                errorCount.incrementAndGet();
+                metrics.incrementDecodeError("append_" + outcome.status().name().toLowerCase());
+            }
+            case SUCCESS -> lastTickSnapshot = new DiscontinuityWriter.LastTickSnapshot(
+                    outcome.eventTime().toEpochMilli(),
+                    outcome.fingerprint(),
+                    outcome.instrumentToken(),
+                    outcome.exchange(),
+                    outcome.tradingSymbol());
+            default -> {
+                // REJECTED / SKIPPED / ACCEPTED are synchronous outcomes and
+                // are never delivered through the listener.
+            }
         }
     }
 
@@ -825,8 +888,33 @@ public final class IngestionService {
                 event.assignedTokens() > 0
                         ? (100.0 * event.acknowledgedTokens()) / event.assignedTokens()
                         : 0.0);
+        // Capacity headroom (plan ING-CAP-001): remaining = connection limit
+        // − assigned. Negative never happens (assigned ≤ limit by plan
+        // construction) but clamp for gauge safety.
+        long capacityRemaining = Math.max(0,
+                (long) config.arrowHftMaxTokensPerConnection - event.assignedTokens());
+        metrics.setSlotCapacityRemaining(event.slotId(), capacityRemaining);
+        health.setSlotCapacityRemaining(event.slotId(), capacityRemaining);
         metrics.setActiveSockets(active ? 1 : 0);
         metrics.setChildProcessAlive(true);
+
+        // Slot-identity cross-check (plan §Slot-scoped safety propagation):
+        // the bridge's manifest_fingerprint / assigned_token_set_hash must
+        // match Java's manifest-derived digests. Warn-only — the event is
+        // never rejected, because Go/Java token sets can legitimately differ
+        // in dev synthetic mode. Both sides are hex digests (no secrets).
+        if (!manifestFingerprint.equals(event.manifestFingerprint())) {
+            LOG.warn("ingestion: bridge manifest_fingerprint mismatch (slot={}, epoch={}): got={} want={} — cross-check only, event not rejected",
+                    event.slotId(), event.connectionEpoch(),
+                    event.manifestFingerprint(), manifestFingerprint);
+            metrics.incrementDecodeError("FINGERPRINT_MISMATCH");
+        }
+        if (!assignedTokenSetHash.equals(event.assignedTokenSetHash())) {
+            LOG.warn("ingestion: bridge assigned_token_set_hash mismatch (slot={}, epoch={}): got={} want={} — cross-check only, event not rejected",
+                    event.slotId(), event.connectionEpoch(),
+                    event.assignedTokenSetHash(), assignedTokenSetHash);
+            metrics.incrementDecodeError("TOKEN_HASH_MISMATCH");
+        }
 
         // ---- Slot-scoped safety propagation (plan Amendment §Slot-scoped safety) ----
         emitSafetyTransition(event, active);
@@ -880,16 +968,18 @@ public final class IngestionService {
     }
 
     /**
-     * Emit slot-scoped safety requests (plan Amendment §Slot-scoped safety
-     * propagation). One UNSAFE row exactly once per transition; a RECOVERED
-     * row only when the slot returns to ACTIVE with full acknowledgement. Rows
-     * are deduped by the computed halt_request_id (same tuple never re-emitted).
+     * Slot-scoped safety transition classification (plan Amendment
+     * §Slot-scoped safety propagation). Pure decision logic extracted from
+     * {@link #emitSafetyTransition} for direct unit testing (ING-SAFE-001..003).
+     *
+     * @param event  validated bridge lifecycle event (never null)
+     * @param active {@code ACTIVE} state with full acknowledgement and no
+     *               rejected tokens (the caller's slot-readiness computation)
+     * @return the unsafe reason code for this event, or {@code null} when the
+     *         event carries no unsafe transition
      */
-    private void emitSafetyTransition(BridgeEvent event, boolean active) {
-        if (safetyHaltWriter == null) return;
-        String slotId = event.slotId();
-        long epoch = event.connectionEpoch();
-
+    static com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode unsafeReasonFor(
+            BridgeEvent event, boolean active) {
         com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode unsafe = null;
         switch (event.event()) {
             case "feed_stalled" ->
@@ -912,8 +1002,34 @@ public final class IngestionService {
                     unsafe = com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.SUBSCRIPTION_TIMEOUT;
                 }
             }
-            default -> { /* slot_state / reconnect handled below */ }
+            default -> { /* slot_state / reconnect carry no unsafe transition */ }
         }
+        return unsafe;
+    }
+
+    /**
+     * Whether a bridge event is a RECOVERED transition: the slot returns to
+     * {@code ACTIVE} with full acknowledgement via {@code subscription_ack}
+     * (plan ING-SAFE-003: recovery requires ACTIVE + full ack; the
+     * post-recovery frame is confirmed separately by the reader loop).
+     */
+    static boolean isRecoveredTransition(BridgeEvent event, boolean active) {
+        return active && "subscription_ack".equals(event.event());
+    }
+
+    /**
+     * Emit slot-scoped safety requests (plan Amendment §Slot-scoped safety
+     * propagation). One UNSAFE row exactly once per transition; a RECOVERED
+     * row only when the slot returns to ACTIVE with full acknowledgement. Rows
+     * are deduped by the computed halt_request_id (same tuple never re-emitted).
+     */
+    private void emitSafetyTransition(BridgeEvent event, boolean active) {
+        if (safetyHaltWriter == null) return;
+        String slotId = event.slotId();
+        long epoch = event.connectionEpoch();
+
+        com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode unsafe =
+                unsafeReasonFor(event, active);
 
         if (unsafe != null) {
             String id = safetyHaltWriter.write(slotId, epoch,
@@ -923,7 +1039,8 @@ public final class IngestionService {
                 LOG.warn("safety: slot {} UNSAFE (reason={}, epoch={}, halt={})",
                         slotId, unsafe, epoch, id.substring(0, Math.min(8, id.length())));
             }
-        } else if (active && "subscription_ack".equals(event.event())) {
+            markSlotUnsafe(slotId);
+        } else if (isRecoveredTransition(event, active)) {
             // Full acknowledgement → RECOVERED (same or greater epoch, frame present).
             String id = safetyHaltWriter.write(slotId, epoch,
                     com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.RECOVERED,
@@ -932,7 +1049,60 @@ public final class IngestionService {
                 LOG.info("safety: slot {} RECOVERED (epoch={}, halt={})",
                         slotId, epoch, id.substring(0, Math.min(8, id.length())));
             }
+            // A RECOVERED transition is the only way a slot returns to SAFE —
+            // bridge restarts (resetSlotsToAuthenticating) must not clear it.
+            health.setSlotUnsafe(slotId, false);
+            metrics.setSlotSafetyState(slotId, 0, 0);
         }
+    }
+
+    /**
+     * Quality-class slot-unsafe evidence (plan §Market-data quality
+     * classification): FUTURE_BROKER_TIMESTAMP, STALE_BROKER_TIMESTAMP and
+     * BROKER_LIMIT_VIOLATION quarantine rows also emit one UNSAFE safety
+     * request per slot/epoch, so Signal suppresses decisions for the slot
+     * while the broker's timestamps/prices are untrustworthy. Rows are
+     * deduped by halt_request_id (tuple = fp|slot|epoch|state|reason); the
+     * plan's "once per instrument/slot/epoch" collapses to once per
+     * slot/epoch because the tuple carries no instrument.
+     */
+    private void emitQualityUnsafe(String slotId, long epoch,
+                                   QuarantineWriter.Reason quarantineReason) {
+        if (safetyHaltWriter == null || slotId == null || slotId.isBlank()) return;
+        com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode code =
+                qualityUnsafeReason(quarantineReason);
+        if (code == null) return;
+        long safeEpoch = epoch > 0 ? epoch : 1L;
+        String id = safetyHaltWriter.write(slotId, safeEpoch,
+                com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
+                code, assignedTokenSetHash, quarantineReason.name(),
+                System.currentTimeMillis());
+        if (safetyEmitted.add("UNSAFE|" + id)) {
+            LOG.warn("safety: slot {} UNSAFE (reason={}, epoch={}, halt={})",
+                    slotId, code, safeEpoch, id.substring(0, Math.min(8, id.length())));
+        }
+        markSlotUnsafe(slotId);
+    }
+
+    /**
+     * Maps a quality-class quarantine reason to its safety reason code
+     * (pure — unit-tested). Anything else maps to {@code null} so only the
+     * plan's three quality classes emit slot-unsafe evidence.
+     */
+    static com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode qualityUnsafeReason(
+            QuarantineWriter.Reason quarantineReason) {
+        return switch (quarantineReason) {
+            case FUTURE_BROKER_TIMESTAMP -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.FUTURE_BROKER_TIMESTAMP;
+            case STALE_BROKER_TIMESTAMP -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.STALE_BROKER_TIMESTAMP;
+            case BROKER_LIMIT_VIOLATION -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.BROKER_LIMIT_VIOLATION;
+            default -> null;
+        };
+    }
+
+    /** Propagate slot-unsafe evidence to HealthProbe + the metrics emitter. */
+    private void markSlotUnsafe(String slotId) {
+        health.setSlotUnsafe(slotId, true);
+        metrics.setSlotSafetyState(slotId, 1, health.slot(slotId).unsafeSinceNanos);
     }
 
     private void handleBridgeEvent(BridgeEvent event) {
@@ -1096,6 +1266,30 @@ public final class IngestionService {
 
     // ---- helpers ----
 
+    /** Raw NDJSON line bytes for quarantine evidence (null-safe). */
+    static byte[] rawLineBytes(String jsonLine) {
+        return jsonLine != null ? jsonLine.getBytes(StandardCharsets.UTF_8) : null;
+    }
+
+    /** Decision for a malformed NDJSON line (ING-DQ-001). */
+    record MalformedJsonDecision(QuarantineWriter.Reason reason, byte[] rawPayload, String detail) {}
+
+    /**
+     * Classify a non-JSON line for quarantine (ING-DQ-001). The raw line bytes
+     * are preserved verbatim as quarantine evidence; the detail is the static
+     * {@link #MALFORMED_JSON_DETAIL} constant — never the Jackson message, which
+     * embeds the offending input snippet.
+     */
+    static MalformedJsonDecision malformedJsonDecision(byte[] rawLine) {
+        return new MalformedJsonDecision(
+                QuarantineWriter.Reason.MALFORMED_JSON, rawLine, MALFORMED_JSON_DETAIL);
+    }
+
+    /** The static detail used for MALFORMED_JSON quarantine rows (ING-DQ-001). */
+    static String malformedJsonDetail() {
+        return MALFORMED_JSON_DETAIL;
+    }
+
     /**
      * Refresh resource gauges (plan Amendment §Resource): FDs, RSS, JVM threads.
      * Go goroutines are reported by the bridge; child-process-alive is set by
@@ -1116,12 +1310,51 @@ public final class IngestionService {
         long limit = readFdLimit();
         metrics.setProcessOpenFds(open);
         metrics.setProcessFdLimit(limit);
-        metrics.setProcessFdUsagePercent(limit > 0 ? 100.0 * open / limit : 0.0);
+        double usage = limit > 0 ? 100.0 * open / limit : 0.0;
+        metrics.setProcessFdUsagePercent(usage);
+        maybeEmitResourceExhausted(usage);
         metrics.setProcessRssBytes(readRssBytes());
         try {
             metrics.setJvmThreadsLive(
                     java.lang.management.ManagementFactory.getThreadMXBean().getThreadCount());
         } catch (Exception ignore) { /* skip */ }
+    }
+
+    /**
+     * Critical resource condition (plan Amendment §Resource): process FD
+     * usage at or above 90% of the soft limit triggers the RESOURCE_EXHAUSTED
+     * safety path. Pure and defensive — /proc unavailable or negative counts
+     * produce a false result so a broken platform never fabricates exhaustion.
+     */
+    static boolean isCriticalResourceCondition(double fdUsagePercent) {
+        return fdUsagePercent >= 90.0;
+    }
+
+    /**
+     * RESOURCE_EXHAUSTED emission: while the critical FD condition holds,
+     * every tracked slot gets one UNSAFE request per slot/epoch (deduped by
+     * halt_request_id — the 5s refresh throttle bounds re-checks). The
+     * orphan-child and unsafe-duration critical conditions from the plan text
+     * are covered by the child-process lifecycle gauges and the safety-state
+     * tracking instead of separate halt requests.
+     */
+    private void maybeEmitResourceExhausted(double fdUsagePercent) {
+        if (!isCriticalResourceCondition(fdUsagePercent) || safetyHaltWriter == null) return;
+        for (String slotId : health.slotIds()) {
+            HealthProbe.SlotHealth slot = health.slot(slotId);
+            long epoch = slot.epoch > 0 ? slot.epoch : connectionEpoch.get();
+            if (epoch <= 0) continue;
+            String id = safetyHaltWriter.write(slotId, epoch,
+                    com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
+                    com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.RESOURCE_EXHAUSTED,
+                    assignedTokenSetHash, "fd_usage_exhausted", System.currentTimeMillis());
+            if (safetyEmitted.add("UNSAFE|" + id)) {
+                LOG.error("safety: slot {} UNSAFE (reason=RESOURCE_EXHAUSTED, fd_usage={}%, epoch={}, halt={})",
+                        slotId, String.format("%.1f", fdUsagePercent), epoch,
+                        id.substring(0, Math.min(8, id.length())));
+            }
+            markSlotUnsafe(slotId);
+        }
     }
 
     /** Count open FDs via /proc/self/fd (Linux); -1 on non-Linux or failure. */

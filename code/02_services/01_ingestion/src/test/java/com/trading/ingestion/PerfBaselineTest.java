@@ -15,7 +15,10 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -253,8 +256,22 @@ class PerfBaselineTest {
             writer.write(TickPacketFixtures.validTrade(i));
         }
 
+        // Phase 2 (throughput redesign): write() is async — the append
+        // accept→ack latency is collected from the completion listener, and
+        // any non-SUCCESS async outcome counts as a failure.
+        List<Long> latencies = Collections.synchronizedList(new ArrayList<>());
+        AtomicLong asyncFailures = new AtomicLong(0);
+        writer.setOutcomeListener(outcome -> {
+            if (outcome.status() == RawTickWriter.Status.SUCCESS
+                    && outcome.ackTime() != null) {
+                latencies.add(Duration.between(
+                        outcome.acceptTime(), outcome.ackTime()).toNanos());
+            } else if (outcome.status() != RawTickWriter.Status.SUCCESS) {
+                asyncFailures.incrementAndGet();
+            }
+        });
+
         long targetWrites = TARGET_TPS * 3L; // 3 s at target rate
-        long[] latencies = new long[(int) targetWrites];
         int count = 0;
         long failures = 0;
 
@@ -265,13 +282,11 @@ class PerfBaselineTest {
             long writeStart = System.nanoTime();
             RawTickWriter.AppendOutcome outcome = writer.write(
                     TickPacketFixtures.validTrade(seq++));
-            if (outcome.status() != RawTickWriter.Status.SUCCESS) {
+            if (outcome.status() != RawTickWriter.Status.ACCEPTED) {
                 failures++;
                 continue;
             }
-            // acceptTime → ackTime is the per-append latency.
-            latencies[count++] = Duration.between(
-                    outcome.acceptTime(), outcome.ackTime()).toNanos();
+            count++;
 
             long elapsed = System.nanoTime() - writeStart;
             if (elapsed < intervalNs) {
@@ -281,10 +296,19 @@ class PerfBaselineTest {
                 }
             }
         }
+        // All acks have landed (counters are final once drain returns — the
+        // release precedes the completion callback); fold any async failures
+        // into the total before asserting.
+        writer.drain();
         writer.close();
+        failures += asyncFailures.get();
 
         double actualTps = (double) count / 3.0;
-        long p99Ns = percentile(latencies, count, 0.99);
+        long[] latencyArr = new long[latencies.size()];
+        for (int i = 0; i < latencyArr.length; i++) {
+            latencyArr[i] = latencies.get(i);
+        }
+        long p99Ns = percentile(latencyArr, latencyArr.length, 0.99);
 
         LOG.info("perf-append: writes={} failures={} actualTps={} p99AppendMs={}",
                 count, failures, String.format("%.0f", actualTps),

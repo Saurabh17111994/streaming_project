@@ -7,6 +7,9 @@ import com.trading.ingestion.TickPacketFixtures;
 import com.trading.ingestion.model.TickPacket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -16,10 +19,10 @@ import org.junit.jupiter.api.Test;
  * {@code get()} timeout while the append may still be running in the Fluss
  * client's background).
  *
- * <p>Regression: the previous code called {@code tracker.onAppendFailure()}
- * synchronously at the timeout while abandoning the future, so the AppendTracker
- * contract "pending counters decrease only after append completes" was violated
- * and in-flight work was under-counted under sustained Fluss latency.
+ * <p>Phase 2 (throughput redesign): {@code write()} is asynchronous — it
+ * returns {@code ACCEPTED} on submission and the terminal outcome arrives on
+ * the {@link RawTickWriter.OutcomeListener}, so every test here observes the
+ * outcome through a listener latch instead of the write() return value.
  */
 @DisplayName("R-037: RawTickWriter timeout accounting")
 class RawTickWriterTimeoutTest {
@@ -43,67 +46,94 @@ class RawTickWriterTimeoutTest {
         public void close() {}
     }
 
-    @Test
-    @DisplayName("timeout cancels the in-flight append and releases via the future")
-    void timeoutCancelsAndReleasesViaFuture() {
+    /** Writer + latch wired to the first delivered outcome. */
+    private record Harness(RawTickWriter writer,
+                           ControllableConverter converter,
+                           AppendTracker tracker,
+                           CountDownLatch done,
+                           AtomicReference<RawTickWriter.AppendOutcome> outcome) {
+    }
+
+    private static Harness harness(Duration appendTimeout) {
         ControllableConverter converter = new ControllableConverter();
         AppendTracker tracker = new AppendTracker();
         RawTickWriter writer = new RawTickWriter(
                 converter, tracker, "default.raw_table_1",
-                Duration.ofMillis(50), Duration.ofSeconds(1));
+                appendTimeout, Duration.ofSeconds(1));
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicReference<RawTickWriter.AppendOutcome> outcome =
+                new AtomicReference<>();
+        writer.setOutcomeListener(o -> {
+            outcome.set(o);
+            done.countDown();
+        });
+        return new Harness(writer, converter, tracker, done, outcome);
+    }
 
-        RawTickWriter.AppendOutcome outcome = writer.write(TickPacketFixtures.validTrade(0));
+    private static RawTickWriter.AppendOutcome awaitOutcome(Harness h) throws Exception {
+        assertTrue(h.done().await(5, TimeUnit.SECONDS),
+                "terminal outcome must arrive via the listener");
+        return h.outcome().get();
+    }
+
+    @Test
+    @DisplayName("timeout cancels the in-flight append and releases via the future")
+    void timeoutCancelsAndReleasesViaFuture() throws Exception {
+        Harness h = harness(Duration.ofMillis(50));
+        RawTickWriter.AppendOutcome submitted = h.writer().write(TickPacketFixtures.validTrade(0));
+
+        assertEquals(RawTickWriter.Status.ACCEPTED, submitted.status(),
+                "write() returns ACCEPTED on submission; outcome is async");
+        RawTickWriter.AppendOutcome outcome = awaitOutcome(h);
 
         assertEquals(RawTickWriter.Status.UNCERTAIN, outcome.status(),
                 "timeout outcome stays UNCERTAIN (may be a duplicate)");
-        assertTrue(converter.pending.isCancelled(),
+        assertTrue(h.converter().pending.isCancelled(),
                 "in-flight append must be cancelled on timeout");
 
         // The reservation is released by the future's completion (cancellation),
         // not while the append might still be running — no leaked reservation,
         // and the tracker contract holds.
-        assertEquals(0, tracker.pendingRecords(),
+        assertEquals(0, h.tracker().pendingRecords(),
                 "no leaked reservation after timeout");
-        assertEquals(0, tracker.pendingBytes());
+        assertEquals(0, h.tracker().pendingBytes());
+        assertEquals(1, h.writer().uncertainCount());
     }
 
     @Test
     @DisplayName("late completion of a timed-out append does not double-release")
-    void lateCompletionDoesNotDoubleRelease() {
-        ControllableConverter converter = new ControllableConverter();
-        AppendTracker tracker = new AppendTracker();
-        RawTickWriter writer = new RawTickWriter(
-                converter, tracker, "default.raw_table_1",
-                Duration.ofMillis(50), Duration.ofSeconds(1));
-
-        writer.write(TickPacketFixtures.validTrade(1));
-        assertEquals(0, tracker.pendingRecords());
+    void lateCompletionDoesNotDoubleRelease() throws Exception {
+        Harness h = harness(Duration.ofMillis(50));
+        h.writer().write(TickPacketFixtures.validTrade(1));
+        RawTickWriter.AppendOutcome outcome = awaitOutcome(h);
+        assertEquals(RawTickWriter.Status.UNCERTAIN, outcome.status());
+        assertEquals(0, h.tracker().pendingRecords());
 
         // Simulate the abandoned append surfacing a late failure in the
         // client's background — the accounting must stay exact (no double
         // release below zero, no second reservation).
-        converter.pending.completeExceptionally(new RuntimeException("late failure"));
-        assertEquals(0, tracker.pendingRecords(),
+        h.converter().pending.completeExceptionally(new RuntimeException("late failure"));
+        assertEquals(0, h.tracker().pendingRecords(),
                 "late completion must not re-release the reservation");
-        assertEquals(0, tracker.pendingBytes());
+        assertEquals(0, h.tracker().pendingBytes());
     }
 
     @Test
     @DisplayName("successful appends still release once")
-    void successfulAppendReleasesOnce() {
-        ControllableConverter converter = new ControllableConverter();
-        AppendTracker tracker = new AppendTracker();
-        RawTickWriter writer = new RawTickWriter(
-                converter, tracker, "default.raw_table_1",
-                Duration.ofSeconds(5), Duration.ofSeconds(1));
-
+    void successfulAppendReleasesOnce() throws Exception {
+        Harness h = harness(Duration.ofSeconds(5));
         // Complete the append before write() so the ack path is exercised.
-        converter.pending.complete(new RawTickWriter.AppendResult(42L, "p0"));
-        RawTickWriter.AppendOutcome outcome = writer.write(TickPacketFixtures.validTrade(2));
+        h.converter().pending.complete(new RawTickWriter.AppendResult(42L, "p0"));
+        RawTickWriter.AppendOutcome submitted = h.writer().write(TickPacketFixtures.validTrade(2));
 
+        // The pre-completed future fires the listener synchronously, but
+        // write() itself still reports ACCEPTED (submission status).
+        assertEquals(RawTickWriter.Status.ACCEPTED, submitted.status());
+        RawTickWriter.AppendOutcome outcome = awaitOutcome(h);
         assertEquals(RawTickWriter.Status.SUCCESS, outcome.status());
-        assertEquals(0, tracker.pendingRecords(),
+        assertEquals(0, h.tracker().pendingRecords(),
                 "success releases the reservation exactly once");
-        assertEquals(1, writer.appendCount());
+        assertEquals(0, h.tracker().pendingBytes());
+        assertEquals(1, h.writer().appendCount());
     }
 }

@@ -49,11 +49,11 @@ public final class SmokeTest {
                 converter, tracker, config.rawTableName,
                 Duration.ofSeconds(5), Duration.ofSeconds(30));
 
-        int ok = 0;
         for (int i = 0; i < 10; i++) {
-            RawTickWriter.AppendOutcome outcome = writer.write(TickPacketFixtures.validTrade(i));
-            if (outcome.status() == RawTickWriter.Status.SUCCESS) ok++;
+            writer.write(TickPacketFixtures.validTrade(i));
         }
+        writer.drain();
+        int ok = (int) writer.appendCount();
 
         System.out.println("✓ appended " + ok + "/10 ticks");
         System.out.println("  total=" + writer.appendCount()

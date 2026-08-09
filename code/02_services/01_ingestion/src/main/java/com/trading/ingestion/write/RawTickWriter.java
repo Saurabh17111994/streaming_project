@@ -1,12 +1,13 @@
 package com.trading.ingestion.write;
 
-import com.trading.ingestion.model.RawTick;
 import com.trading.ingestion.model.TickPacket;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +17,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Contract:
  * <ul>
- *   <li>No application batching: each tick is submitted individually
- *       ({@code INGESTION_MAX_BATCH_RECORDS=1, INGESTION_MAX_BATCH_WAIT_MS=0})</li>
+ *   <li>Each tick is submitted as its own append call — no application-level
+ *       batching ({@code INGESTION_MAX_BATCH_RECORDS} bounds the transport
+ *       batch; the Fluss client may coalesce rows into transport batches, so
+ *       completion order may differ from submission order; every outcome is
+ *       keyed by its row's fingerprint).</li>
  *   <li>Backpressure: before every append, calls {@link AppendTracker#tryAccept(int)}
  *       with the row size estimate; rejects if halted</li>
  *   <li>Every append records receive-time, append-start, append-acknowledgement
@@ -29,6 +33,10 @@ import org.slf4j.LoggerFactory;
  *       failures; FATAL failures halt immediately</li>
  *   <li>On timeout the outcome is {@code UNCERTAIN} — ingestion cannot prove
  *       whether Fluss persisted the row; Compute owns logical dedup</li>
+ *   <li>{@link #write(TickPacket)} is asynchronous: it submits the append and
+ *       returns {@code ACCEPTED} without waiting for the ack; the terminal
+ *       outcome is delivered on the {@link OutcomeListener} when the Fluss
+ *       future completes (success, retried failure, timeout, or fatal).</li>
  * </ul>
  *
  * <p>This class wraps the Fluss client table writer. The concrete Fluss
@@ -53,6 +61,10 @@ public final class RawTickWriter implements AutoCloseable {
     private final AtomicLong uncertainCount = new AtomicLong(0);
     private volatile boolean closed;
 
+    /** Schedules per-attempt timeouts and retry resubmissions (daemon threads). */
+    private final ScheduledExecutorService scheduler;
+    private volatile OutcomeListener outcomeListener = OutcomeListener.NOOP;
+
     /**
      * @param rowConverter  converts {@link TickPacket} → Fluss row
      * @param tracker       shared backpressure tracker
@@ -70,11 +82,30 @@ public final class RawTickWriter implements AutoCloseable {
         this.tableName = tableName;
         this.appendTimeout = appendTimeout;
         this.drainDeadline = drainDeadline;
+        this.scheduler = Executors.newScheduledThreadPool(2, r -> {
+            Thread t = new Thread(r, "raw-writer-async");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /** Receives every terminal append outcome (SUCCESS, UNCERTAIN, FAILED, FATAL, TIMEOUT). */
+    @FunctionalInterface
+    public interface OutcomeListener {
+        void onOutcome(AppendOutcome outcome);
+
+        OutcomeListener NOOP = o -> {};
+    }
+
+    public void setOutcomeListener(OutcomeListener l) {
+        this.outcomeListener = l != null ? l : OutcomeListener.NOOP;
     }
 
     /**
      * Convert a tick packet to a Fluss row, reserve backpressure capacity,
-     * and submit the append individually.
+     * and submit the append. Returns immediately with {@code ACCEPTED} once
+     * the row is submitted; the terminal outcome is delivered asynchronously
+     * via the {@link OutcomeListener}.
      *
      * <p>Delivery is at-least-once: every accepted tick is appended exactly
      * once; ingestion never deduplicates by fingerprint (logical dedup belongs
@@ -87,7 +118,7 @@ public final class RawTickWriter implements AutoCloseable {
      * succeeded at Fluss but the ack was lost.
      *
      * @param packet the decoded+normalized+fingerprinted tick
-     * @return outcome with timing
+     * @return ACCEPTED (submitted), or REJECTED/SKIPPED synchronously
      */
     public AppendOutcome write(TickPacket packet) {
         // R-069: check-then-act on `closed` was racy — the entry check could
@@ -98,8 +129,6 @@ public final class RawTickWriter implements AutoCloseable {
             errorCount.incrementAndGet();
             return AppendOutcome.skipped("writer closed");
         }
-
-        String fp = packet.eventFingerprint();
 
         // 1. Estimate row size for backpressure
         int rowBytes = rowConverter.estimatedRowSize(packet);
@@ -114,115 +143,114 @@ public final class RawTickWriter implements AutoCloseable {
         // 3. Record ingestion timestamp
         Instant acceptTime = Instant.now();
 
-        // 4. Submit with retry loop
-        int attempt = 0;
-        CompletableFuture<AppendResult> future = null;
-        while (attempt < MAX_RETRY_ATTEMPTS) {
-            attempt++;
-            try {
-                // Submit append (no batching — one tick, one call)
-                future = rowConverter.append(packet);
-
-                // Wait for acknowledgement
-                AppendResult result = future.get(appendTimeout.toMillis(), TimeUnit.MILLISECONDS);
-
-                // ---- Success ----
-                tracker.onAppendSuccess(rowBytes);
-                appendCount.incrementAndGet();
-                return AppendOutcome.success(
-                        packet.eventTime(), acceptTime, Instant.now(),
-                        rowBytes, result);
-
-            } catch (TimeoutException e) {
-                // Timeout → UNCERTAIN: we don't know if Fluss persisted the row.
-                // Do NOT retry — the same row could already be durably stored.
-                // Compute owns logical dedup at the Flink level.
-                //
-                // R-037: cancel the in-flight append and defer the backpressure
-                // release until the future actually completes. The AppendTracker
-                // contract is "pending counters decrease only after append
-                // completes" — releasing now would under-count in-flight work
-                // while the append keeps running in the client's background.
-                if (future != null) {
-                    future.cancel(true);
-                    future.whenComplete((r, ex) -> tracker.onAppendFailure(rowBytes));
-                } else {
-                    tracker.onAppendFailure(rowBytes);
-                }
-                errorCount.incrementAndGet();
-                uncertainCount.incrementAndGet();
-                LOG.warn("raw-writer: append UNCERTAIN (table={}, fp={}, timeout={}ms, attempt={})",
-                        tableName,
-                        fp != null ? fp.substring(0, Math.min(12, fp.length())) : "null",
-                        appendTimeout.toMillis(), attempt);
-                return AppendOutcome.uncertain(rowBytes, appendTimeout);
-
-            } catch (Exception e) {
-                RetryClassifier.Classification retry = RetryClassifier.classify(e);
-
-                if (retry == RetryClassifier.Classification.FATAL) {
-                    // Fatal → no retry, halt the append path
-                    tracker.onAppendFailure(rowBytes);
-                    errorCount.incrementAndGet();
-                    LOG.error("raw-writer: FATAL append error (table={}, class={})",
-                            tableName, e.getClass().getSimpleName());
-                    return AppendOutcome.fatal(rowBytes, e);
-                }
-
-                // RETRYABLE — retry with backoff if attempts remain
-                if (attempt < MAX_RETRY_ATTEMPTS) {
-                    long backoffMs = BASE_RETRY_BACKOFF_MS * (1L << (attempt - 1));
-                    LOG.warn("raw-writer: append retryable (table={}, attempt={}/{}, backoff={}ms, class={})",
-                            tableName, attempt, MAX_RETRY_ATTEMPTS, backoffMs,
-                            e.getClass().getSimpleName());
-                    try {
-                        Thread.sleep(backoffMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        tracker.onAppendFailure(rowBytes);
-                        errorCount.incrementAndGet();
-                        return AppendOutcome.failed(rowBytes, new RuntimeException(
-                                "Retry interrupted after " + attempt + " attempts", e));
-                    }
-                } else {
-                    // Exhausted retries
-                    tracker.onAppendFailure(rowBytes);
-                    errorCount.incrementAndGet();
-                    LOG.warn("raw-writer: append failed after {} attempts (table={})",
-                            MAX_RETRY_ATTEMPTS, tableName, e);
-                    return AppendOutcome.failed(rowBytes, e);
-                }
-            }
-        }
-
-        // Should be unreachable — the loop always returns or breaks.
-        tracker.onAppendFailure(rowBytes);
-        errorCount.incrementAndGet();
-        return AppendOutcome.failed(rowBytes,
-                new IllegalStateException("Exhausted retry attempts"));
+        // 4. Submit asynchronously (no per-row blocking on the ack)
+        submitAppend(packet, rowBytes, acceptTime, 1);
+        return AppendOutcome.accepted(rowBytes, acceptTime);
     }
 
+    /**
+     * Submit one append attempt. The Fluss future completes on server ack;
+     * completion handling runs on the future's completing thread.
+     */
+    private void submitAppend(TickPacket packet, int rowBytes, Instant acceptTime, int attempt) {
+        CompletableFuture<AppendResult> future = rowConverter.append(packet);
+
+        // Per-attempt timeout: cancel the in-flight append when the deadline
+        // passes — R-037: the tracker release is deferred to the future's
+        // actual completion (handleCompletion), never to the timeout itself.
+        scheduler.schedule(() -> {
+            if (!future.isDone()) {
+                future.cancel(true);
+            }
+        }, appendTimeout.toMillis(), TimeUnit.MILLISECONDS);
+
+        future.whenComplete((result, ex) ->
+                handleCompletion(packet, rowBytes, acceptTime, attempt, result, ex));
+    }
+
+    private void handleCompletion(TickPacket packet, int rowBytes, Instant acceptTime,
+                                  int attempt, AppendResult result, Throwable ex) {
+        if (ex == null) {
+            // ---- Success ----
+            tracker.onAppendSuccess(rowBytes);
+            appendCount.incrementAndGet();
+            completeOutcome(AppendOutcome.success(
+                    packet, acceptTime, Instant.now(), rowBytes, result));
+            return;
+        }
+
+        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+
+        if (cause instanceof CancellationException) {
+            // Timeout → UNCERTAIN: we don't know if Fluss persisted the row.
+            // Do NOT retry — the same row could already be durably stored.
+            // Compute owns logical dedup at the Flink level.
+            // R-037: the release is deferred until this completion — the
+            // AppendTracker contract "pending counters decrease only after
+            // append completes" is honored exactly here.
+            tracker.onAppendFailure(rowBytes);
+            errorCount.incrementAndGet();
+            uncertainCount.incrementAndGet();
+            LOG.warn("raw-writer: append UNCERTAIN (table={}, fp={}, timeout={}ms, attempt={})",
+                    tableName, fp12(packet), appendTimeout.toMillis(), attempt);
+            completeOutcome(AppendOutcome.uncertain(rowBytes, appendTimeout));
+            return;
+        }
+
+        RetryClassifier.Classification retry = RetryClassifier.classify(cause);
+
+        if (retry == RetryClassifier.Classification.FATAL) {
+            // Fatal → no retry, halt the append path
+            tracker.onAppendFailure(rowBytes);
+            errorCount.incrementAndGet();
+            LOG.error("raw-writer: FATAL append error (table={}, class={})",
+                    tableName, cause.getClass().getSimpleName());
+            completeOutcome(AppendOutcome.fatal(rowBytes, cause));
+            return;
+        }
+
+        // RETRYABLE — retry with backoff if attempts remain
+        if (attempt < MAX_RETRY_ATTEMPTS) {
+            long backoffMs = BASE_RETRY_BACKOFF_MS * (1L << (attempt - 1));
+            LOG.warn("raw-writer: append retryable (table={}, attempt={}/{}, backoff={}ms, class={})",
+                    tableName, attempt, MAX_RETRY_ATTEMPTS, backoffMs,
+                    cause.getClass().getSimpleName());
+            scheduler.schedule(() -> submitAppend(packet, rowBytes, acceptTime, attempt + 1),
+                    backoffMs, TimeUnit.MILLISECONDS);
+            return;
+        }
+
+        // Exhausted retries
+        tracker.onAppendFailure(rowBytes);
+        errorCount.incrementAndGet();
+        LOG.warn("raw-writer: append failed after {} attempts (table={})",
+                MAX_RETRY_ATTEMPTS, tableName, cause);
+        completeOutcome(AppendOutcome.failed(rowBytes, cause));
+    }
+
+    private void completeOutcome(AppendOutcome outcome) {
+        outcomeListener.onOutcome(outcome);
+    }
+
+    private static String fp12(TickPacket packet) {
+        String fp = packet.eventFingerprint();
+        return fp != null ? fp.substring(0, Math.min(12, fp.length())) : "null";
+    }
 
     public long appendCount() { return appendCount.get(); }
     public long errorCount() { return errorCount.get(); }
     public long uncertainCount() { return uncertainCount.get(); }
 
     /**
-     * Drain pending writes and close. Waits up to {@code drainDeadline}
-     * for pending records to reach zero before force-closing the connection.
+     * Wait for pending appends to complete, up to the drain deadline.
+     * Blocks the calling thread until {@code tracker.pendingRecords()} hits
+     * zero or the deadline elapses; on deadline expiry the exact tracked
+     * bytes are released (R-260) so the tracker never leaks.
      */
-    @Override
-    public void close() {
-        synchronized (this) {
-            if (closed) {
-                return;
-            }
-            closed = true;
-        }
+    public void drain() {
         long deadlineNanos = System.nanoTime() + drainDeadline.toNanos();
         long pendingAtStart = tracker.pendingRecords();
 
-        // Drain: wait for pending appends to complete
         while (tracker.pendingRecords() > 0
                 && System.nanoTime() < deadlineNanos) {
             try {
@@ -243,6 +271,29 @@ public final class RawTickWriter implements AutoCloseable {
             // uncertainty journal's byte totals.
             tracker.onAppendFailure((int) tracker.pendingBytes());
         }
+    }
+
+    /**
+     * Drain pending writes and close. Waits up to {@code drainDeadline}
+     * for pending records to reach zero before force-closing the connection.
+     */
+    @Override
+    public void close() {
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+        }
+        long pendingAtStart = tracker.pendingRecords();
+
+        // Drain: wait for pending appends to complete (retry resubmissions
+        // run on the scheduler while we wait — it is only shut down after).
+        drain();
+
+        // No new retries/timeouts can matter now — every in-flight append has
+        // completed (tracker zero) and no more writes can be accepted.
+        scheduler.shutdownNow();
 
         // R-068: the FlussRowConverter owns the underlying Fluss Connection;
         // RawTickWriter.close() must close it or the connection leaks (and
@@ -258,7 +309,7 @@ public final class RawTickWriter implements AutoCloseable {
                 + "pending_at_start={}, pending_remaining={})",
                 tableName, appendCount.get(), errorCount.get(),
                 uncertainCount.get(),
-                pendingAtStart, remaining);
+                pendingAtStart, tracker.pendingRecords());
     }
 
     /**
@@ -273,7 +324,7 @@ public final class RawTickWriter implements AutoCloseable {
 
     // ---- outcome type ----
 
-    public enum Status { SUCCESS, UNCERTAIN, TIMEOUT, FAILED, FATAL, REJECTED, SKIPPED }
+    public enum Status { SUCCESS, UNCERTAIN, TIMEOUT, FAILED, FATAL, REJECTED, SKIPPED, ACCEPTED }
 
     public record AppendOutcome(
             Status status,
@@ -283,42 +334,55 @@ public final class RawTickWriter implements AutoCloseable {
             int rowBytes,
             String detail,
             long pendingRecords,
-            long pendingBytes
+            long pendingBytes,
+            String fingerprint,
+            long instrumentToken,
+            String exchange,
+            String tradingSymbol
     ) {
-        static AppendOutcome success(Instant eventTime, Instant acceptTime,
+        static AppendOutcome success(TickPacket packet, Instant acceptTime,
                                      Instant ackTime, int rowBytes, AppendResult result) {
-            return new AppendOutcome(Status.SUCCESS, eventTime, acceptTime, ackTime,
-                    rowBytes, result.toString(), -1, -1);
+            return new AppendOutcome(Status.SUCCESS, packet.eventTime(), acceptTime, ackTime,
+                    rowBytes, result.toString(), -1, -1,
+                    packet.eventFingerprint(), packet.instrumentToken(),
+                    packet.exchange(), packet.tradingSymbol());
         }
 
         /** Append timed out — Fluss may have persisted the row. */
         static AppendOutcome uncertain(int rowBytes, Duration timeout) {
             return new AppendOutcome(Status.UNCERTAIN, null, null, null, rowBytes,
                     "uncertain after " + timeout.toMillis() + "ms timeout; may be a duplicate",
-                    -1, -1);
+                    -1, -1, null, 0L, null, null);
         }
 
-        static AppendOutcome fatal(int rowBytes, Exception e) {
+        static AppendOutcome fatal(int rowBytes, Throwable e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();
             return new AppendOutcome(Status.FATAL, null, null, null, rowBytes,
-                    "FATAL: " + msg, -1, -1);
+                    "FATAL: " + msg, -1, -1, null, 0L, null, null);
         }
 
-        static AppendOutcome failed(int rowBytes, Exception e) {
+        static AppendOutcome failed(int rowBytes, Throwable e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();
             return new AppendOutcome(Status.FAILED, null, null, null, rowBytes,
-                    msg, -1, -1);
+                    msg, -1, -1, null, 0L, null, null);
         }
 
         static AppendOutcome rejected(long pendingRecs, long pendingBytes, String detail) {
             return new AppendOutcome(Status.REJECTED, null, null, null, 0,
-                    detail, pendingRecs, pendingBytes);
+                    detail, pendingRecs, pendingBytes, null, 0L, null, null);
         }
 
         static AppendOutcome skipped(String detail) {
-            return new AppendOutcome(Status.SKIPPED, null, null, null, 0, detail, -1, -1);
+            return new AppendOutcome(Status.SKIPPED, null, null, null, 0, detail, -1, -1,
+                    null, 0L, null, null);
+        }
+
+        /** Submitted to Fluss; terminal outcome arrives via the OutcomeListener. */
+        static AppendOutcome accepted(int rowBytes, Instant acceptTime) {
+            return new AppendOutcome(Status.ACCEPTED, null, acceptTime, null, rowBytes,
+                    "submitted; awaiting ack", -1, -1, null, 0L, null, null);
         }
     }
 
