@@ -1234,9 +1234,9 @@ item complete until its required integration/evidence test passes.
 - [x] Verify rollback artifact.
 - [x] Publish release manifest.
 - [ ] Obtain production approval.
-  (Pre-production gate — all four MUST be done before signing, added 2026-08-09:
-  1. Rotate the leaked Arrow credentials (user action — plan marks rotation done,
-     the actual rotation is still pending and is a prerequisite for real tokens).
+  (Pre-production gate — all MUST be done before signing, added 2026-08-09:
+  1. Arrow credential rotation: DECLINED by user decision 2026-08-09 — existing
+     credentials kept as-is; exposure risk retained (see session note above).
   2. One live market-hours capture window against the real broker (all evidence
      so far is fake-broker; real HFT wire + real tokens have never been exercised).
   3. Decide production alert-routing topology (O2 blocks private-ranged alert
