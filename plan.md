@@ -1234,6 +1234,16 @@ item complete until its required integration/evidence test passes.
 - [x] Verify rollback artifact.
 - [x] Publish release manifest.
 - [ ] Obtain production approval.
+  (Pre-production gate — all four MUST be done before signing, added 2026-08-09:
+  1. Rotate the leaked Arrow credentials (user action — plan marks rotation done,
+     the actual rotation is still pending and is a prerequisite for real tokens).
+  2. One live market-hours capture window against the real broker (all evidence
+     so far is fake-broker; real HFT wire + real tokens have never been exercised).
+  3. Decide production alert-routing topology (O2 blocks private-ranged alert
+     targets; production consumers must be public-reachable or netns-shared).
+  4. First-live-run check of the Signal Job's FlussSource consume path — the
+     path this approval unlocks has only passed the component harness
+     (SAFETY-INT-001), never an end-to-end runtime run.)
 
 # Production Ingestion Hardening Amendments
 
