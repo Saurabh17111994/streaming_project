@@ -797,9 +797,26 @@ primary-key lookuper) → production bridge/parser/tracker → `NEW_UNSAFE`,
 tokens [1000, 1001, 1] suppressed, 999999 not; RECOVERED at epoch+1 →
 `RECOVERED`, tokens admitted. **Soak passed** (`full-suite-20260809-134456`):
 3/3 forced-interruption recoveries (i1 09:16Z, i2 10:06Z, i3 12:06Z), run.log
-quiet, ingestion container healthy. Deferred: tracker moves to broadcast state
-when the decision operators land; the job's live `FlussSource` consume path
-runs only after production approval.
+quiet, ingestion container healthy. **Soak completed + inspected (2026-08-09):**
+full suite `full-suite-20260809-134456` finished `PASS` (16:06:55Z; stages 1-4
+PASS, SUMMARY.txt). Stage 4 ran the full 7h window 09:06:19Z→16:06:30Z:
+append_latency_ms_count 79→54519, `send_failed=0.0` at all 30-min snapshots,
+health=healthy throughout, 3/3 recoveries (ack 3→4→5→6, readiness='ready' each).
+Post-soak inspections: readiness transitions + reconnect metrics observed in
+snapshots.tsv / reconnect-leak TSV (java fds 68→68, bridge fds 6→6, threads
+53→54, progress +3, leak_ok=1) / journal (BACKOFF→CONNECTING→CONNECTED epochs
+1-7); 8 discontinuity rows + 12 safety-halt rows written to Fluss (all DROP /
+READ_FAILURE events from the 3 forced interruptions + crash-restart cycle —
+expected); raw tick rows sampled at end-of-soak via tick-viewer (ARIS-EQ,
+offsets 988879→988907, storage lag ~21ms); no control bytes in faketool.log /
+monitor.log / snapshots.tsv / run.log / headroom.out (no raw packet bytes);
+quarantine writer connected but zero quarantined rows. **100-cycle real-backoff
+soak (ING-RES-001) passed 2026-08-09** (`go-bridge/logs/res001-real-backoff/
+res001-real-backoff-20260809-181619.out`, 2852.9s): 100/100 forced-disconnect
+cycles through the real 1s→2s→4s→8s→16s→30s backoff, final goroutines 3
+(baseline 4), fds 11 (baseline 11), no orphan socket. Deferred: tracker moves
+to broadcast state when the decision operators land; the job's live
+`FlussSource` consume path runs only after production approval.
 
 | Area | Status | Evidence / blocker |
 | --- | --- | --- |
@@ -1203,12 +1220,12 @@ item complete until its required integration/evidence test passes.
 - [x] Run throughput benchmark.
 - [x] Run fault-injection test.
 - [x] Run seven-hour soak.
-- [ ] Inspect readiness transitions.
-- [ ] Inspect reconnect metrics.
-- [ ] Inspect discontinuity rows.
-- [ ] Inspect raw tick rows.
+- [x] Inspect readiness transitions.
+- [x] Inspect reconnect metrics.
+- [x] Inspect discontinuity rows.
+- [x] Inspect raw tick rows.
 - [x] Verify no credentials in logs.
-- [ ] Verify no raw packet bytes in logs.
+- [x] Verify no raw packet bytes in logs.
 - [x] Verify artifact hashes.
 - [x] Verify image has no secrets.
 - [x] Verify rollback artifact.

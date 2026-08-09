@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -197,6 +198,120 @@ func TestINGRES001OneHundredForcedDisconnectReconnectCycles(t *testing.T) {
 	}
 	// Every cycle must have recovered to ACTIVE — a healthy slot is never
 	// left interrupted by the previous epoch's drop.
+	actives := countLinesWith(t, out.String(), `"state":"ACTIVE"`)
+	if actives < cycles {
+		t.Errorf("ACTIVE recoveries=%d, want ≥ %d (cycles)", actives, cycles)
+	}
+}
+
+// TestINGRES001OneHundredForcedDisconnectReconnectCyclesRealBackoff is the
+// full wall-clock variant of ING-RES-001 (plan: "full wall-clock 100-cycle
+// supervisor soak with real backoff", deferred mechanical run ~48 min): the
+// same 100 forced disconnect/reconnect cycles through the REAL production
+// backoff sequence (1s→2s→4s→8s→16s→30s→…, Backoff(attempt)) instead of the
+// suppressed-hook fast path. The suppressed test proves the resource
+// contract; this run proves the timing path: epoch advances across real
+// backoff waits, and no goroutine/FD/socket leak accrues over wall-clock
+// backoff pacing.
+//
+// Env-gated so the regular suite stays fast:
+//
+//	ING_RES001_REAL_BACKOFF=1   run the real-backoff soak
+//	ING_RES001_CYCLES=<n>       cycles (default 100; use 2-3 for a smoke run)
+//
+// The wait hook mirrors main.go's production timer wait
+// (supervisor.go waitBackoff: timer + ctx cancellation), not a no-op.
+func TestINGRES001OneHundredForcedDisconnectReconnectCyclesRealBackoff(t *testing.T) {
+	if os.Getenv("ING_RES001_REAL_BACKOFF") != "1" {
+		t.Skip("ING-RES-001 real-backoff soak: set ING_RES001_REAL_BACKOFF=1 to run")
+	}
+	if testing.Short() {
+		t.Skip("ING-RES-001 real-backoff soak skipped in -short mode")
+	}
+	cycles := 100
+	if n := os.Getenv("ING_RES001_CYCLES"); n != "" {
+		v, err := strconv.Atoi(n)
+		if err != nil || v <= 0 {
+			t.Fatalf("ING_RES001_CYCLES=%q: positive integer", n)
+		}
+		cycles = v
+	}
+	t.Logf("ING-RES-001 real-backoff soak: cycles=%d (backoff 1+2+4+8+16+30x… ≈ %s total)",
+		cycles, (time.Duration(cycles*30) * time.Second).Round(time.Minute))
+
+	b := newDropBroker(t)
+
+	old := bridgeEmitter
+	out := newLockedBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
+	defer func() { bridgeEmitter = old }()
+
+	client := arrow.NewClient("app", "secret")
+	client.SetToken("token")
+	t.Setenv("ARROW_HFT_URL", b.url)
+
+	plan, err := BuildSubscriptionPlan([]int32{757614}, 1, MaxHFTTokensPerConnection, MaxHFTTokensPerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := plan.Slots[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	completed := make(chan struct{})
+	go func() {
+		defer close(completed)
+		runReconnectLoop(ctx,
+			func(epoch uint64) bool {
+				res := runHFTEpoch(ctx, cancel, streamFactoryFor(client, 0), slot, 50, 10*time.Second, epoch, nil, t.Logf)
+				return res == epochTerminal || res == epochRecovered
+			},
+			func(uint64, time.Duration) {}, // onRetry — event emission is internal
+			func(ctx context.Context, delay time.Duration) { // wait — REAL backoff
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+				case <-timer.C:
+				}
+			},
+		)
+	}()
+
+	// Wait for the first cycle to establish the post-init baseline.
+	waitFor(t, 2*time.Minute, func() bool { return b.cycles.Load() >= 1 })
+	baselineGoroutines := runtime.NumGoroutine()
+	baselineFDs := countOpenFDs()
+	t.Logf("ING-RES-001 real-backoff baseline (after cycle 1): goroutines=%d fds=%d",
+		baselineGoroutines, baselineFDs)
+
+	// Full wall-clock run: cycles * ~30s backoff + per-cycle connect time.
+	// Budget 60s per cycle plus a 2-minute settle margin.
+	waitFor(t, time.Duration(cycles)*60*time.Second+2*time.Minute,
+		func() bool { return b.cycles.Load() >= int32(cycles) })
+	t.Logf("ING-RES-001 real-backoff: %d/%d forced-disconnect cycles completed", b.cycles.Load(), cycles)
+
+	cancel()
+	<-completed
+
+	finalGoroutines := settledGoroutines(500 * time.Millisecond)
+	finalFDs := countOpenFDs()
+	t.Logf("ING-RES-001 real-backoff final: goroutines=%d (baseline %d), fds=%d (baseline %d)",
+		finalGoroutines, baselineGoroutines, finalFDs, baselineFDs)
+
+	if got := b.cycles.Load(); got < int32(cycles) {
+		t.Fatalf("completed cycles=%d, want %d", got, cycles)
+	}
+	if finalGoroutines > baselineGoroutines+2 {
+		t.Errorf("goroutine leak: final=%d > baseline %d + 2", finalGoroutines, baselineGoroutines)
+	}
+	if finalFDs >= 0 && finalFDs > baselineFDs+2 {
+		t.Errorf("FD leak: final=%d > baseline %d + 2", finalFDs, baselineFDs)
+	}
+	if max := b.maxConn.Load(); max > 1 {
+		t.Errorf("orphan socket: broker observed %d concurrent connections, want ≤ 1", max)
+	}
 	actives := countLinesWith(t, out.String(), `"state":"ACTIVE"`)
 	if actives < cycles {
 		t.Errorf("ACTIVE recoveries=%d, want ≥ %d (cycles)", actives, cycles)
