@@ -49,7 +49,20 @@ func main() {
 	// Soak mode: keep sending a full-tick frame every N ms so a long soak has
 	// continuous Fluss append traffic instead of one tick per connection.
 	tickInterval := flag.Int("tick-interval-ms", 0, "if >0, send a full-tick frame every N ms until the client disconnects; 0 = single tick then idle")
+	// Throughput bench mode (Phase 4): a real broker cadence — one full-tick
+	// frame per subscribed token per interval at real-rate-hz. 1024 ids x
+	// 20 Hz = 20,480 frames/s (the redesign's per-connection target).
+	realRate := flag.Bool("real-rate", false, "emit one frame per subscribed id at -real-rate-hz (bench mode)")
+	realRateHz := flag.Int("real-rate-hz", 20, "frames per second per subscribed id when -real-rate; must divide 1000")
 	flag.Parse()
+	if *realRate && *tickInterval > 0 {
+		fmt.Fprintln(os.Stderr, "faketool: -real-rate and -tick-interval-ms are mutually exclusive")
+		os.Exit(2)
+	}
+	if *realRate && 1000%*realRateHz != 0 {
+		fmt.Fprintf(os.Stderr, "faketool: -real-rate-hz %d must divide 1000\n", *realRateHz)
+		os.Exit(2)
+	}
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	// R-094: each WebSocket handler runs in its own goroutine under net/http;
@@ -82,6 +95,12 @@ func main() {
 		// writes — data frames, control frames, and the pong handler — share
 		// one per-connection mutex so nothing can interleave.
 		var wmu sync.Mutex
+		// Real-rate mode (Phase 4): every sub request contributes its ids to
+		// the per-connection subscription set; the ticker emits one frame per
+		// subscribed id per interval (the bridge splits its 1024-token plan
+		// into 2x512 requests, so both halves must be collected).
+		var subMu sync.Mutex
+		var subscribed []uint32
 		send := func(frame []byte) error {
 			wmu.Lock()
 			defer wmu.Unlock()
@@ -150,6 +169,15 @@ func main() {
 				}
 			}
 			logf("sub received (ids=%d)", len(ids))
+			if *realRate {
+				subMu.Lock()
+				for _, id := range ids {
+					if tok, ok := id.(float64); ok {
+						subscribed = append(subscribed, uint32(int64(tok)))
+					}
+				}
+				subMu.Unlock()
+			}
 			resp := make([]byte, hftSizeResponse)
 			binary.LittleEndian.PutUint32(resp[0:4], hftSizeResponse)
 			resp[4] = hftPktResponse
@@ -165,25 +193,52 @@ func main() {
 			// ticker starts right after the first sub response (before the
 			// snapshot burst) so ticks flow continuously from subscription
 			// time; it exits via write errors once the connection closes.
-			if !closePending && *tickInterval > 0 && !tickerStarted {
+			// Real-rate mode (Phase 4) uses its own per-id cadence instead.
+			if !closePending && !tickerStarted && (*tickInterval > 0 || *realRate) {
 				tickerStarted = true
-				logf("ticker start (every %dms)", *tickInterval)
-				tickerFrame := make([]byte, hftSizeFull)
-				binary.LittleEndian.PutUint16(tickerFrame[0:2], hftSizeFull)
-				tickerFrame[2] = hftPktFull
-				binary.LittleEndian.PutUint32(tickerFrame[4:8], 757614)
-				binary.LittleEndian.PutUint32(tickerFrame[8:12], 15050)
-				go func() {
-					t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
-					defer t.Stop()
-					for range t.C {
-						binary.LittleEndian.PutUint64(tickerFrame[180:188], uint64(time.Now().UnixNano()))
-						if err := send(tickerFrame); err != nil {
-							logf("ticker send failed: %v", err)
-							return
+				if *realRate {
+					logf("real-rate ticker start (hz=%d)", *realRateHz)
+					go func() {
+						interval := time.Duration(1000 / *realRateHz) * time.Millisecond
+						t := time.NewTicker(interval)
+						defer t.Stop()
+						frame := make([]byte, hftSizeFull)
+						binary.LittleEndian.PutUint16(frame[0:2], hftSizeFull)
+						frame[2] = hftPktFull
+						binary.LittleEndian.PutUint32(frame[8:12], 15050)
+						for range t.C {
+							subMu.Lock()
+							ids := append([]uint32(nil), subscribed...)
+							subMu.Unlock()
+							for _, tok := range ids {
+								binary.LittleEndian.PutUint32(frame[4:8], tok)
+								binary.LittleEndian.PutUint64(frame[180:188], uint64(time.Now().UnixNano()))
+								if err := send(frame); err != nil {
+									logf("real-rate send failed: %v", err)
+									return
+								}
+							}
 						}
-					}
-				}()
+					}()
+				} else {
+					logf("ticker start (every %dms)", *tickInterval)
+					tickerFrame := make([]byte, hftSizeFull)
+					binary.LittleEndian.PutUint16(tickerFrame[0:2], hftSizeFull)
+					tickerFrame[2] = hftPktFull
+					binary.LittleEndian.PutUint32(tickerFrame[4:8], 757614)
+					binary.LittleEndian.PutUint32(tickerFrame[8:12], 15050)
+					go func() {
+						t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
+						defer t.Stop()
+						for range t.C {
+							binary.LittleEndian.PutUint64(tickerFrame[180:188], uint64(time.Now().UnixNano()))
+							if err := send(tickerFrame); err != nil {
+								logf("ticker send failed: %v", err)
+								return
+							}
+						}
+					}()
+				}
 			}
 			// Initial snapshot: a real broker sends one full-tick frame per
 			// subscribed token right after the sub response — the ingestion
@@ -213,44 +268,49 @@ func main() {
 			// = ~8.7/s, which stays under the pipe's ~10/s drain rate.
 			// (120ms pacing measured 16.7/s combined — enough to back up
 			// the pipe and quarantine every aged frame as STALE.)
-			go func(ids []any) {
-				full := make([]byte, hftSizeFull)
-				binary.LittleEndian.PutUint16(full[0:2], hftSizeFull)
-				full[2] = hftPktFull
-				binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
-				binary.LittleEndian.PutUint32(full[8:12], 15050)
-				// A real broker stamps every frame with send-time nanoseconds
-				// (bridge ts_ms = ts/1e6). Without it ts_ms=0 and the
-				// ingestion freshness gate quarantines every tick as
-				// INVALID_VALUES.
-				binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
-				if err := send(full); err != nil {
-					logf("send snapshot tick failed: %v", err)
-					return
-				}
-				snapshotSent := 1
-				for _, id := range ids {
-					tok, ok := id.(float64)
-					if !ok {
-						continue
-					}
-					time.Sleep(300 * time.Millisecond)
-					binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
+			// In real-rate mode the burst is skipped entirely: the ticker's
+			// per-id frames (one per subscribed token per interval) are the
+			// subscription-completeness evidence.
+			if !*realRate {
+				go func(ids []any) {
+					full := make([]byte, hftSizeFull)
+					binary.LittleEndian.PutUint16(full[0:2], hftSizeFull)
+					full[2] = hftPktFull
+					binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
+					binary.LittleEndian.PutUint32(full[8:12], 15050)
+					// A real broker stamps every frame with send-time nanoseconds
+					// (bridge ts_ms = ts/1e6). Without it ts_ms=0 and the
+					// ingestion freshness gate quarantines every tick as
+					// INVALID_VALUES.
 					binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
 					if err := send(full); err != nil {
-						logf("send snapshot tick failed at %d: %v", snapshotSent, err)
+						logf("send snapshot tick failed: %v", err)
 						return
 					}
-					snapshotSent++
-				}
-				logf("snapshot sent (%d ticks)", snapshotSent)
-			}(ids)
+					snapshotSent := 1
+					for _, id := range ids {
+						tok, ok := id.(float64)
+						if !ok {
+							continue
+						}
+						time.Sleep(300 * time.Millisecond)
+						binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
+						binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
+						if err := send(full); err != nil {
+							logf("send snapshot tick failed at %d: %v", snapshotSent, err)
+							return
+						}
+						snapshotSent++
+					}
+					logf("snapshot sent (%d ticks)", snapshotSent)
+				}(ids)
+			}
 		}
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("fake HFT broker listening on %s (disconnect_after=%d disconnect_every=%d tick_interval_ms=%d)\n",
-		addr, *disconnect, *disconnectEvery, *tickInterval)
+	fmt.Printf("fake HFT broker listening on %s (disconnect_after=%d disconnect_every=%d tick_interval_ms=%d real_rate=%v real_rate_hz=%d)\n",
+		addr, *disconnect, *disconnectEvery, *tickInterval, *realRate, *realRateHz)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
