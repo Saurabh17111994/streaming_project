@@ -20,7 +20,7 @@ Live-money readiness is blocked until Platform and Execution provide official pr
 - Ingestion SHALL NOT log original packet bytes, credentials, or secrets.
 - Ingestion SHALL accept variable broker arrivals. It SHALL NOT require or infer a fixed 50 ms tick interval.
 - Synthetic workload profiles use a 20 ticks/s/instrument baseline average and SHALL enforce a 30 ticks/s/instrument maximum; live broker arrivals below or above the baseline are valid.
-- Ingestion SHALL NOT batch ticks. Each accepted tick SHALL be submitted immediately. `INGESTION_MAX_BATCH_RECORDS` SHALL be `1` and `INGESTION_MAX_BATCH_WAIT_MS` SHALL be `0`. Startup SHALL fail for any other values.
+- Ingestion SHALL NOT batch ticks. Each accepted tick SHALL be submitted immediately. `INGESTION_MAX_BATCH_RECORDS` SHALL validate within `1..1000` (default `1`) and `INGESTION_MAX_BATCH_WAIT_MS` SHALL validate within `0..100` (default `0`). Startup SHALL fail for out-of-range values.
 - Application-level batching beyond a single tick is prohibited.
 - Ingestion SHALL maintain pending append counters in both records (`MAX_PENDING_APPEND_RECORDS=10000`) and bytes (`MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes × 0.10))`).
 - Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.

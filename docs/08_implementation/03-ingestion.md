@@ -59,8 +59,8 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `FLUSS_BOOTSTRAP_SERVERS` | Yes | Pinned environment endpoint |
 | `RAW_TABLE_NAME` | Yes | Must equal reconciled schema manifest |
 | `INSTRUMENT_MANIFEST_VERSION` | Yes | Approved subscription snapshot |
-| `INGESTION_MAX_BATCH_RECORDS` | Yes | Fixed at `1`; append each accepted tick immediately; startup fails for any other value |
-| `INGESTION_MAX_BATCH_WAIT_MS` | Yes | Fixed at `0`; do not wait for a batch; startup fails for any other value |
+| `INGESTION_MAX_BATCH_RECORDS` | Yes | Validated `1..1000` (default `1`); append each accepted tick immediately; startup fails outside range |
+| `INGESTION_MAX_BATCH_WAIT_MS` | Yes | Validated `0..100` (default `0`); do not wait for a batch; startup fails outside range |
 | `MAX_PENDING_APPEND_RECORDS` | Yes | Fixed at `10000`; stop accepting new broker data and set readiness false at the limit |
 | `MAX_PENDING_APPEND_BYTES` | Yes | `min(67108864, floor(container_memory_limit_bytes × 0.10))`; stop accepting new broker data and set readiness false at the limit |
 | `PENDING_APPEND_WARNING_PERCENT` | Yes | Fixed at `80`; emit warning alert and set readiness false at 80% of either pending limit |

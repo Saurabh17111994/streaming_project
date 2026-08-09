@@ -24,7 +24,7 @@ The current architecture does **not** assume Arrow Trade, `seq_no`, exact sequen
 ### Config & validation
 
 - [x] IngestionConfig validates all required keys at startup — `IngestionConfig.java` (294 lines)
-- [x] Reject startup if `INGESTION_MAX_BATCH_RECORDS != 1` or `INGESTION_MAX_BATCH_WAIT_MS != 0`
+- [x] Validate `INGESTION_MAX_BATCH_RECORDS` (1..1000) and `INGESTION_MAX_BATCH_WAIT_MS` (0..100)
 - [x] Reject startup if backpressure/memory/timing keys out of range
 - [x] Production never falls back to demo credentials
 

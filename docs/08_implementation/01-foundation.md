@@ -69,8 +69,8 @@ All constants are versioned runtime configuration. No numeric literals scattered
 | --- | ---: | --- |
 | `BROKER_BASELINE_TICKS_PER_INSTRUMENT_PER_SEC` | `20` | Synthetic baseline average only; not a fixed arrival interval |
 | `BROKER_MAX_TICKS_PER_INSTRUMENT_PER_SEC` | `30` | Workload profile rejects a per-instrument rate above `30` |
-| `INGESTION_MAX_BATCH_RECORDS` | `1` | Append each accepted tick immediately |
-| `INGESTION_MAX_BATCH_WAIT_MS` | `0` | Do not wait for a batch |
+| `INGESTION_MAX_BATCH_RECORDS` | `1` (validated 1..1000) | Append each accepted tick immediately |
+| `INGESTION_MAX_BATCH_WAIT_MS` | `0` (validated 0..100) | Do not wait for a batch |
 | `MAX_PENDING_APPEND_RECORDS` | `10000` | Stop accepting at limit; set readiness false |
 | `MAX_PENDING_APPEND_BYTES` | `min(67108864, floor(container_memory_limit_bytes × 0.10))` | Stop accepting at limit; set readiness false |
 | `PENDING_APPEND_WARNING_PERCENT` | `80` | Emit warning alert; set readiness false at 80% of either limit |

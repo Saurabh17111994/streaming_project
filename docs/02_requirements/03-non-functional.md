@@ -81,8 +81,8 @@ The following configuration values SHALL be enforced at startup. Deployment SHAL
 | `CHECKPOINT_TIMEOUT_MS` | `30000` | Signal and Babysitter jobs use this timeout |
 | `MAX_CONCURRENT_CHECKPOINTS` | `1` | Signal and Babysitter jobs use this value |
 | `MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT` | `1` | Do not forward another active candidate for that instrument |
-| `INGESTION_MAX_BATCH_RECORDS` | `1` | Append each tick immediately |
-| `INGESTION_MAX_BATCH_WAIT_MS` | `0` | Do not wait for a batch |
+| `INGESTION_MAX_BATCH_RECORDS` | `1` (validated 1..1000) | Append each tick immediately |
+| `INGESTION_MAX_BATCH_WAIT_MS` | `0` (validated 0..100) | Do not wait for a batch |
 | `MAX_PENDING_APPEND_RECORDS` | `10000` | Stop accepting at limit |
 | `MAX_PENDING_APPEND_BYTES` | `min(67108864, floor(container_memory_limit_bytes × 0.10))` | Stop accepting at limit |
 | `PENDING_APPEND_WARNING_PERCENT` | `80` | Emit warning and set readiness false at 80% |
