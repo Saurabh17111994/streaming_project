@@ -82,10 +82,15 @@ func main() {
 		// writes — data frames, control frames, and the pong handler — share
 		// one per-connection mutex so nothing can interleave.
 		var wmu sync.Mutex
-		send := func(payload []byte) error {
+		send := func(frame []byte) error {
 			wmu.Lock()
 			defer wmu.Unlock()
-			return conn.WriteMessage(websocket.BinaryMessage, payload)
+			// Compress inside the lock: EncodeAll returns a slice aliasing the
+			// encoder's internal buffer, and the ticker goroutine can compress
+			// while the handler serves a second sub batch — a concurrent
+			// EncodeAll would overwrite this payload mid-write and corrupt the
+			// stream ("hft unknown packet: N trailing bytes" on the bridge).
+			return conn.WriteMessage(websocket.BinaryMessage, compressZstd(enc, frame))
 		}
 		sendControl := func(kind int, payload []byte) error {
 			wmu.Lock()
@@ -99,6 +104,7 @@ func main() {
 		})
 		closePending := (*disconnect > 0 && idx == *disconnect) ||
 			(*disconnectEvery > 0 && idx%*disconnectEvery == 0)
+		tickerStarted := false
 		for {
 			if closePending {
 				// R-220: linger for further subscription frames instead of
@@ -151,9 +157,33 @@ func main() {
 			resp[534] = 0
 			resp[535] = 1
 			binary.LittleEndian.PutUint16(resp[536:538], uint16(len(ids)))
-			if err := send(compressZstd(enc, resp)); err != nil {
+			if err := send(resp); err != nil {
 				logf("send response failed: %v", err)
 				return
+			}
+			// Soak mode: keep emitting ticks until the client goes away. The
+			// ticker starts right after the first sub response (before the
+			// snapshot burst) so ticks flow continuously from subscription
+			// time; it exits via write errors once the connection closes.
+			if !closePending && *tickInterval > 0 && !tickerStarted {
+				tickerStarted = true
+				logf("ticker start (every %dms)", *tickInterval)
+				tickerFrame := make([]byte, hftSizeFull)
+				binary.LittleEndian.PutUint16(tickerFrame[0:2], hftSizeFull)
+				tickerFrame[2] = hftPktFull
+				binary.LittleEndian.PutUint32(tickerFrame[4:8], 757614)
+				binary.LittleEndian.PutUint32(tickerFrame[8:12], 15050)
+				go func() {
+					t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
+					defer t.Stop()
+					for range t.C {
+						binary.LittleEndian.PutUint64(tickerFrame[180:188], uint64(time.Now().UnixNano()))
+						if err := send(tickerFrame); err != nil {
+							logf("ticker send failed: %v", err)
+							return
+						}
+					}
+				}()
 			}
 			// Initial snapshot: a real broker sends one full-tick frame per
 			// subscribed token right after the sub response — the ingestion
@@ -161,46 +191,60 @@ func main() {
 			// (all 1024 must appear or readiness stays false). Emit the
 			// approved fake token 757614 first, then one frame per requested
 			// id so the whole assignment is seen.
-			full := make([]byte, hftSizeFull)
-			binary.LittleEndian.PutUint16(full[0:2], hftSizeFull)
-			full[2] = hftPktFull
-			binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
-			binary.LittleEndian.PutUint32(full[8:12], 15050)
-			if err := send(compressZstd(enc, full)); err != nil {
-				logf("send snapshot tick failed: %v", err)
-				return
-			}
-			snapshotSent := 1
-			for _, id := range ids {
-				tok, ok := id.(float64)
-				if !ok {
-					continue
-				}
-				binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
-				if err := send(compressZstd(enc, full)); err != nil {
-					logf("send snapshot tick failed at %d: %v", snapshotSent, err)
+			//
+			// The burst runs in its own goroutine so the read loop keeps
+			// draining sub requests: the bridge splits a 1024-token plan into
+			// 2x512 requests and waits for BOTH responses inside a 10s
+			// window. Serving sub1's 513-frame burst inline would delay sub2's
+			// response by the whole burst (minutes under backpressure), so a
+			// real broker's promptness is simulated: every request gets its
+			// response immediately, bursts proceed concurrently.
+			//
+			// Frames are paced (~300ms) so the burst never outruns the Java
+			// pipeline's consumption of the bridge's stdout pipe. The bridge
+			// emits each tick synchronously to that pipe; when the Java side
+			// processes ticks slowly (per-tick Fluss append + resource
+			// metrics, ~10/s), an unpaced 1026-frame burst fills the pipe,
+			// blocks the bridge's read loop mid-burst, and its second
+			// subscription response (in-stream after the first 513 frames)
+			// arrives past the 10s window — terminating the subscription.
+			// Two bursts (one per 512-token sub) run concurrently, so the
+			// combined rate is 2x this pacing + the 2/s ticker: 2/0.3 + 2
+			// = ~8.7/s, which stays under the pipe's ~10/s drain rate.
+			// (120ms pacing measured 16.7/s combined — enough to back up
+			// the pipe and quarantine every aged frame as STALE.)
+			go func(ids []any) {
+				full := make([]byte, hftSizeFull)
+				binary.LittleEndian.PutUint16(full[0:2], hftSizeFull)
+				full[2] = hftPktFull
+				binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
+				binary.LittleEndian.PutUint32(full[8:12], 15050)
+				// A real broker stamps every frame with send-time nanoseconds
+				// (bridge ts_ms = ts/1e6). Without it ts_ms=0 and the
+				// ingestion freshness gate quarantines every tick as
+				// INVALID_VALUES.
+				binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
+				if err := send(full); err != nil {
+					logf("send snapshot tick failed: %v", err)
 					return
 				}
-				snapshotSent++
-			}
-			logf("snapshot sent (%d ticks)", snapshotSent)
-			// Soak mode: keep emitting ticks until the client goes away. The
-			// read loop below stays the owner of the connection; the ticker
-			// goroutine writes through the same mutex, so it exits via write
-			// errors once the handler's deferred conn.Close() runs.
-			if !closePending && *tickInterval > 0 {
-				logf("ticker start (every %dms)", *tickInterval)
-				go func() {
-					t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
-					defer t.Stop()
-					for range t.C {
-						if err := send(compressZstd(enc, full)); err != nil {
-							logf("ticker send failed: %v", err)
-							return
-						}
+				snapshotSent := 1
+				for _, id := range ids {
+					tok, ok := id.(float64)
+					if !ok {
+						continue
 					}
-				}()
-			}
+					time.Sleep(300 * time.Millisecond)
+					binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
+					binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
+					if err := send(full); err != nil {
+						logf("send snapshot tick failed at %d: %v", snapshotSent, err)
+						return
+					}
+					snapshotSent++
+				}
+				logf("snapshot sent (%d ticks)", snapshotSent)
+			}(ids)
 		}
 	})
 

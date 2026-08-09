@@ -105,7 +105,11 @@ PY
 try:
     d=json.load(sys.stdin)
     hits=d.get("hits", [])
-    print(hits[0]["_source"].get("value", "NO_VALUE") if hits else "NO_HITS")
+    if not hits:
+        print("NO_HITS")
+    else:
+        src=hits[0].get("_source") or {}
+        print(src.get("value", hits[0].get("value", "NO_VALUE")))
 except Exception:
     print("UNAVAILABLE")' || true)"
 	echo "${val:-UNAVAILABLE}"
@@ -244,6 +248,7 @@ export ARROW_BRIDGE_BIN="$BRIDGE_DIR/arrow-bridge"
 export ARROW_APP_ID="soak" ARROW_APP_SECRET="soaksecret" ARROW_TOKEN="soaktoken"
 unset ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY 2>/dev/null || true
 export FLUSS_BOOTSTRAP="localhost:9123" FLUSS_BOOTSTRAP_SERVERS="localhost:9123"
+export OTEL_COLLECTOR_HOST="localhost:4318"
 export RAW_TABLE_NAME="raw_table_1"
 export ARROW_MAX_EVENT_AGE_MS="5000" ARROW_MAX_FUTURE_EVENT_SKEW_MS="2000"
 export ARROW_USE_STANDARD="false" ARROW_HFT_LATENCY_MS="50"
@@ -311,6 +316,7 @@ export ARROW_BRIDGE_BIN="$BRIDGE_DIR/arrow-bridge"
 export ARROW_APP_ID="soak" ARROW_APP_SECRET="soaksecret" ARROW_TOKEN="soaktoken"
 unset ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY 2>/dev/null || true
 export FLUSS_BOOTSTRAP="localhost:9123" FLUSS_BOOTSTRAP_SERVERS="localhost:9123"
+export OTEL_COLLECTOR_HOST="localhost:4318"
 export RAW_TABLE_NAME="raw_table_1"
 export ARROW_MAX_EVENT_AGE_MS="5000" ARROW_MAX_FUTURE_EVENT_SKEW_MS="2000"
 export ARROW_USE_STANDARD="false" ARROW_HFT_LATENCY_MS="50"

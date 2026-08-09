@@ -34,6 +34,9 @@ services:
       FLUSS_BOOTSTRAP: localhost:9123
       # Fake broker is a host process on the host loopback.
       ARROW_HFT_URL: ws://127.0.0.1:8899
+      # OTel collector is a host-published port; the default
+      # `otel-collector:4318` is unresolvable on the host network.
+      OTEL_COLLECTOR_HOST: localhost:4318
       # Dummy credentials: the fake broker performs no auth; same shape the
       # FullStackE2ETest uses (ARROW_TOKEN present -> token auth path).
       ARROW_APP_ID: soak
