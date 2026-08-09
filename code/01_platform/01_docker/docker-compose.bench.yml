@@ -1,0 +1,14 @@
+# docker-compose.bench.yml — bench-throughput.sh only (NOT used by the soak suite).
+#
+# The bench measures the append pipeline (rate / latency / decode errors) against
+# the fake HFT broker. Readiness gating on the NTP clock check is incidental to
+# that measurement: this host currently measures ~120-190ms offset vs the
+# configured NTP servers (three independent servers agree), which is real clock
+# skew, not jitter, and would keep the container permanently unhealthy with the
+# default 100ms limit. 500ms keeps a genuine guard while letting the bench run.
+#
+# Override at run time: BENCH_CLOCK_OFFSET_LIMIT_MS=... ./bench-throughput.sh
+services:
+  ingestion:
+    environment:
+      CLOCK_OFFSET_LIMIT_MS: ${BENCH_CLOCK_OFFSET_LIMIT_MS:-500}
