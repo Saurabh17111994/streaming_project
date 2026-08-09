@@ -871,7 +871,10 @@ item complete until its required integration/evidence test passes.
 - [x] Verify Arrow account evidence permits the configured HFT socket count (1 for this phase; 3 for deferred).
 - [ ] Set production multi-connection approval only after evidence.
 - [x] Verify source DDL and Java discontinuity mapping agree.
-- [ ] Verify Action Capture quarantine remains untouched.
+- [x] Verify Action Capture quarantine remains untouched.
+  (2026-08-09: `Postback_Quarantine` DDL untouched — last commit `1cfec2d`, zero
+  working-tree changes; Action Capture is an unstarted scaffold, ingestion
+  quarantine is a separate table by design.)
 - [ ] Verify ingestion quarantine migration approval.
 - [x] Create implementation branch or worktree.
 
@@ -1430,9 +1433,15 @@ Phase 6A — Safety, quality, and resource integrity
 - [x] Production timestamp-freshness values are evidence-backed.
   (User-supplied 2026-08-01: 5000/2000 — see tracker.)
 - [x] Stale data cannot create a trade decision.
-- [ ] Reconnect testing proves no socket, child-process, thread, or goroutine leak.
+- [x] Reconnect testing proves no socket, child-process, thread, or goroutine leak.
+  (2026-08-09: 100-cycle real-backoff soak PASS — goroutines 3 vs baseline 4,
+  fds 11 vs 11, maxConn ≤ 1; crash-restart reconnect-leak TSV — java fds 68→68,
+  bridge fds 6→6, threads 53→54, leak_ok=1.)
 - [x] Secret redaction is tested at both Go and Java boundaries.
-- [ ] Subscription headroom is observable and alerted.
+- [x] Subscription headroom is observable and alerted.
+  (2026-08-08 O2 evidence: `bridge.slot.capacity_used_percent` /
+  `capacity_remaining` gauges live, ING-warn-capacity-80 fired on capacity=95,
+  webhook delivered — see OpenObserve execution evidence note above.)
 
 # Completeness Audit
 
