@@ -762,9 +762,10 @@ fake-broker integration (mock-arrow serves standard protocol, not HFT binary),
 ING-DQ-001..002) against a fake HFT broker, production approval, and rotation
 of the leaked Arrow credentials.
 
-**Leaked Arrow credential rotation: marked
-done 2026-08-09 (user-owned action — the actual rotation is performed by the user
-separately; no longer an open project item).**
+**Arrow credential rotation: closed by
+user decision 2026-08-09 — credentials kept as-is (user will not change them);
+risk recorded: the credentials were flagged as leaked, and that exposure is
+retained by this decision.**
 
 **Signal Job — slot-scoped safety consumer (2026-08-09, plan Amendment §Slot-scoped
 safety propagation):** implemented, committed, and live-verified. Compute module
