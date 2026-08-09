@@ -30,6 +30,16 @@
       <artifactId>flink-table-api-java-bridge</artifactId>
       <scope>provided</scope>
     </dependency>
+    <!-- fluss-flink-2.2 extends org.apache.flink.connector.base.source.reader.*;
+         and flink-streaming-java does NOT pull flink-connector-base transitively
+         (verified against the flink-streaming-java 2.2.1 pom). Provided: the
+         Flink dist ships it in lib/. -->
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-base</artifactId>
+      <version>${flink.version}</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>org.apache.fluss</groupId>
       <artifactId>fluss-flink-2.2</artifactId>
@@ -37,6 +47,11 @@
     <dependency>
       <groupId>com.trading</groupId>
       <artifactId>common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 

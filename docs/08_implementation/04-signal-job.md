@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation-ready, connector/version evidence blocked |
+| Status | Main pipeline implementation-ready; slot-scoped safety consumer (plan Amendment) implemented and compiling — see Safety consumer section below |
 | Owner | Compute and Strategy Teams |
 | Requirements | `REQ-FC-*`, `REQ-SS-*`, `REQ-RNK-*` |
 | Contracts | `docs/04_contracts/03-compute.md`, `04-business-logic.md`, `10-ranking.md` |
@@ -309,3 +309,35 @@ The implementation is complete when exactly one Signal job performs the full pat
 ## Verification mapping
 
 The required behavior above is verified by the canonical [Signal job test design](./11-testing-and-release.md#signal-job): `SIG-UNIT-001` to `SIG-UNIT-009`, `SIG-HARNESS-001` to `SIG-HARNESS-005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, and `SIG-PERF-001`.
+
+## Slot-scoped safety consumer (plan Amendment — implemented 2026-08-09)
+
+Implements plan.md §"Slot-scoped safety propagation" for the Signal Job: consume the immutable `Safety_Halt_Requests` KV changelog, bridge each current-value row, apply it to a per-slot state machine, and suppress decisions only for the affected slot's deterministic token set.
+
+### Files
+
+| File | Responsibility |
+| --- | --- |
+| `common/src/main/java/com/trading/common/safety/SlotSafetyStatus.java` | `UNSAFE` / `RECOVERED` vocabulary. |
+| `common/src/main/java/com/trading/common/safety/SlotSafetyRequest.java` | Row contract record; mirrors `SafetyHaltWriter` validation (UNSAFE requires a reason). |
+| `common/src/main/java/com/trading/common/safety/SafetyHaltRequestParser.java` | Map → request validation (contract_version = 2, state vocabulary, UNSAFE reason); `ParseException` for malformed rows — never fatal. |
+| `common/src/main/java/com/trading/common/safety/SlotAssignment.java` | Deterministic manifest-derived slot→token-set mapping. |
+| `common/src/main/java/com/trading/common/safety/SlotAssignmentResolver.java` | Go-parity assignment (sorted tokens, contiguous `connectionLimit` chunks into `hft-N`), byte-identical `TokenSetHash` vectors. |
+| `common/src/main/java/com/trading/common/safety/TokenSetHash.java` | SHA-256 over sorted 8-byte-BE token longs (Go-parity). |
+| `common/src/main/java/com/trading/common/safety/SafetyStateTracker.java` | State machine; 10-outcome `ApplyResult`; epoch = connection-instance boundary (same-epoch re-delivery is a duplicate); RECOVERED needs strictly greater epoch; gates on source component, contract version, manifest fingerprint, slot hash before any state change. |
+| `common/src/main/java/com/trading/common/safety/SuppressionGate.java` | ALLOW / SUPPRESS_NEW / DISCARD_INFLIGHT per token; published decisions never retracted. |
+| `02_compute/.../safetyhalt/SafetyHaltJob.java` | Flink shell: `FlussSource` (exactly-once, `OffsetsInitializer.full()`) → current-value filter (INSERT/UPDATE_AFTER) → per-task `SafetyHaltApplyFunction` (RichFlatMapFunction) with `safety.transitions.applied` / `safety.rows.malformed` / `safety.rows.skipped` metrics; malformed rows counted, never fatal. |
+| `02_compute/.../safetyhalt/SafetyHaltRowDataBridge.java` | RowData → request via DDL v3 column positions. |
+| `02_compute/src/test/.../SafetyHaltLiveIntegrationTest.java` | SAFETY-INT-001: env-gated (`COMPUTE_INT_TEST_SAFETY=true`) live harness — append UNSAFE/RECOVERED rows via the writer's append path, read back by PK, bridge + parse + apply, assert suppression window opens/closes. |
+
+### Connector and compile evidence (T0)
+
+- `org.apache.fluss:fluss-flink-2.2:0.9.1-incubating` resolves from Maven Central (shaded, 69 MB). `FlussSource<OUT>` + `FlussSource.<OUT>builder()` + `RowDataDeserializationSchema` + `OffsetsInitializer.full()`; `FlussSource.build()` performs a live `Admin.getTableInfo` (fail-fast startup). `flink-connector-base` is required as a provided dep (not transitive from `flink-streaming-java` 2.2.1).
+- Flink 2.2.1 class locations (jar-verified): `RichFlatMapFunction` = `org.apache.flink.api.common.functions` (flink-core); `open(OpenContext)` (not `Configuration`); `RowKind` = `org.apache.flink.types`; `DataStream`/`StreamExecutionEnvironment` = flink-runtime. The user's local Flink source tree (`/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/flink`, 2.4-SNAPSHOT) confirms identical locations.
+- `mvn -f 02_services/02_compute/pom.xml test` is green (main + test compile; SAFETY-INT-001 skips without the env gate). Compute is a standalone module outside the reactor; parent + `common` must be installed in `.m2` first (`mvn -N install`, `mvn install -pl common -DskipTests`).
+
+### Deferred (documented, not stubbed)
+
+- The tracker lives per-task in the job shell; when the decision operators land it moves to broadcast state so `isTokenSuppressed` / `SuppressionGate` gate candidates/rankings/reservations/decisions. A tick alone never clears unsafe state; RECOVERED admits only post-recovery input.
+- The live `FlussSource` consume path is exercised by SAFETY-INT-001 against the dev cluster after the seven-hour soak (no load added during the soak); the job itself runs only after production approval.
+
