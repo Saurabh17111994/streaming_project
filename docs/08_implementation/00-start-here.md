@@ -148,7 +148,7 @@ Read these **in order** before writing any code:
 1. Go `arrow-bridge` (Arrow Go SDK → stdout NDJSON) pipes into Java `IngestionService` (stdin → validate → fingerprint → Fluss `raw_table_1` writer)
 2. Reconnect loop with exponential backoff (epoch bump on reconnect)
 3. Per-tick append latency tracking
-4. Backpressure: stop accepting at `MAX_PENDING_APPEND_RECORDS` (10k) / `MAX_PENDING_APPEND_BYTES` (64MB)
+4. Backpressure: stop accepting at `MAX_PENDING_APPEND_RECORDS` (50k) / `MAX_PENDING_APPEND_BYTES` (64MB)
 5. Readiness probe: returns not-ready when backpressured
 
 **Acceptance tests:** `FAIL-PENDING-001`, `STATE-DEDUP-001`

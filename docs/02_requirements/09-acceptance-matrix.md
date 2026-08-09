@@ -221,7 +221,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 
 | Acceptance ID | Requirement | Coverage type | Uncovered criteria | Fixture / Workload | Threshold | Evidence Artifact | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `AC-NFR-001` | NFR-PERF-002 | Full | — | Broker packet receive → raw append ack | p99 <5 ms target (evidence-gated) | `test/nfr/ingestion-latency/` report | `EVIDENCE_BLOCKED` |
+| `AC-NFR-001` | NFR-PERF-002 | Full | — | Broker packet receive → raw append ack | p99 <50 ms target (evidence-gated) | `test/nfr/ingestion-latency/` report | `EVIDENCE_BLOCKED` |
 | `AC-NFR-002` | NFR-PERF-002 | Full | — | Trigger tick → instruction commit | p99 <100 ms at variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) | `test/nfr/decision-latency/` report | `NOT_IMPLEMENTED` |
 | `AC-NFR-003` | NFR-PERF-002 | Full | — | Failure detection → data processing resumed | <30 s | `test/nfr/recovery-time/` report | `NOT_IMPLEMENTED` |
 | `AC-NFR-004` | NFR-PERF-002 | Full | — | Uncertainty detection → gate blocks new calls | <5 s | `test/nfr/safe-halt-time/` report | `NOT_IMPLEMENTED` |

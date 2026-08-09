@@ -122,7 +122,7 @@ After `PERF-PROD-60000-001` establishes the baseline, define the numeric review 
 
 | SLO | Boundary | Target |
 | --- | --- | --- |
-| Raw append | Broker packet received → Fluss append acknowledged | p99 <5 ms target; evidence-gated |
+| Raw append | Broker packet received → Fluss append acknowledged | p99 <50 ms target (≤ 20 ms transport linger); evidence-gated |
 | Decision | Trigger tick consumed → immutable decision committed | p99 <100 ms at variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) |
 | Delivery | Decision committed → Executor received | Baseline then threshold |
 | Broker REST | Arrow REST request start → verified broker response | Report separately; evidence-gated |
@@ -162,7 +162,7 @@ Every threshold below uses a **60-second consecutive breach window** before esca
 | Pending limits warning | Pending records or bytes ≥ 80% of configured limit for 60s | Warning | Readiness false |
 | Pending limits critical | Pending records or bytes ≥ 100% of configured limit for 60s | Critical | Stop broker reads; acknowledge loss |
 | Container memory critical | Total container memory ≥ 85% for 60 consecutive seconds | Critical | Safe halt |
-| Append latency critical | Raw append p99 > 5 ms for 60 consecutive seconds | Critical | Readiness degraded |
+| Append latency critical | Raw append p99 > 50 ms for 60 consecutive seconds | Critical | Readiness degraded |
 | Decision latency critical | Trigger-tick-to-decision p99 > 100 ms for 60 consecutive seconds | Critical | Suppress new decisions |
 | Checkpoint duration critical | Checkpoint p99 > 5 s for 60 consecutive seconds | Critical | Suppress new decisions |
 | Checkpoint failure | Any checkpoint fails | Critical | Safety halt request |

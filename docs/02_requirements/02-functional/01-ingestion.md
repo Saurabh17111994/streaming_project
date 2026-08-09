@@ -22,7 +22,7 @@ Live-money readiness is blocked until Platform and Execution provide official pr
 - Synthetic workload profiles use a 20 ticks/s/instrument baseline average and SHALL enforce a 30 ticks/s/instrument maximum; live broker arrivals below or above the baseline are valid.
 - Ingestion SHALL NOT batch ticks. Each accepted tick SHALL be submitted immediately. `INGESTION_MAX_BATCH_RECORDS` SHALL validate within `1..1000` (default `1`) and `INGESTION_MAX_BATCH_WAIT_MS` SHALL validate within `0..100` (default `0`). Startup SHALL fail for out-of-range values.
 - Application-level batching beyond a single tick is prohibited.
-- Ingestion SHALL maintain pending append counters in both records (`MAX_PENDING_APPEND_RECORDS=10000`) and bytes (`MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes × 0.10))`).
+- Ingestion SHALL maintain pending append counters in both records (`MAX_PENDING_APPEND_RECORDS=50000`, validated 100..1000000) and bytes (`MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes × 0.10))`).
 - Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.
 - At 80% of either pending limit (`PENDING_APPEND_WARNING_PERCENT=80`), ingestion SHALL set readiness false and emit a warning event containing current records, current bytes, and both limits.
 - At 100% of either pending limit, ingestion SHALL stop broker reads/subscriptions, keep readiness false, emit a critical event, and preserve an acknowledged-loss/uncertainty record. Silently discarding data is prohibited.
@@ -52,7 +52,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Bounded memory with hard limit:** Under sustained backpressure, ingestion makes readiness false before memory exhaustion. Packets may be dropped only under an explicit acknowledged-loss policy with readiness impact.
 - **Partial subscription is not READY:** Unless an explicitly approved degraded mode exists, all configured instruments must be subscribed for readiness.
 - **Unknown outcomes are counted, not hidden:** Append timeouts, Fluss unavailability, and uncertain write outcomes increment uncertainty counters and affect readiness. They are never silently absorbed.
-- **Slow-Fluss policy:** Resolved by capacity. Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required. Bounded pending-append limits (10,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; reaching them indicates a platform-capacity fault, not a normal operating condition.
+- **Slow-Fluss policy:** Resolved by capacity. Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; reaching them indicates a platform-capacity fault, not a normal operating condition.
 
 ## Out of Scope
 

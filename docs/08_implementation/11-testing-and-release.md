@@ -63,7 +63,7 @@ The following mappings identify the detailed sections in this catalog.
 
 | Test ID | Duration | Input | Pass conditions |
 | --- | ---: | --- | --- |
-| `PERF-PER-INSTRUMENT-001` | 30 min | 3,000 instruments; variable 60,000 ticks/s average baseline | Raw append p99 <5 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
+| `PERF-PER-INSTRUMENT-001` | 30 min | 3,000 instruments; variable 60,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
 | `PERF-PER-INSTRUMENT-002` | 10 min | 3,000 instruments; variable baseline; restart Signal job once | Processing resumes <30 s; state restores; no duplicate final candle or decision within proven boundary |
 | `PERF-PER-INSTRUMENT-003` | Declared campaign | 3,000 instruments; 90,000 ticks/s peak; every instrument <=30 ticks/s | No acknowledged loss; bounded backlog/memory; checkpoints and recovery remain stable; no per-instrument cap violation |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
@@ -114,7 +114,7 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. |
 | `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. |
 | `ING-FAIL-003` | Force shutdown with pending writes | Uncertainty/loss evidence is persisted. |
-| `ING-PERF-001` | Variable 60,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 5 ms and memory/backlog remain bounded. |
+| `ING-PERF-001` | Variable 60,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. |
 | `ING-PERF-002` | 90,000 ticks/s peak; every instrument at or below 30 ticks/s | Bounded backlog/memory and no acknowledged loss. |
 
 Evidence: approved packet corpus, manifest snapshot, deterministic clock, workload seed, append-outcome log, metrics report, and quarantine records. Real broker credentials are never used in unit tests.
@@ -462,7 +462,7 @@ Pass requires zero acknowledged loss, safe halt below five seconds, data-path re
 
 | Test ID | Duration | Input | Pass conditions |
 | --- | ---: | --- | --- |
-| `PERF-PER-INSTRUMENT-001` | 30 min | Production instrument manifest; variable 60,000 ticks/s average baseline | Raw append p99 <5 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
+| `PERF-PER-INSTRUMENT-001` | 30 min | Production instrument manifest; variable 60,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
 | `PERF-PER-INSTRUMENT-002` | 10 min | Same manifest; restart Signal job once | Processing resumes <30 s; state restores; no duplicate final candle or decision within the proven boundary |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |

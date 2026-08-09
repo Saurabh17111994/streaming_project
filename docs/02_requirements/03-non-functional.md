@@ -45,7 +45,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **RPO is per-boundary, not a single platform claim:** Recovery Point Objective is defined separately for raw packets, immutable instructions, postback audit, Executor attempts/audit, projections, and EOD data.
 - **Health is multidimensional:** A single green/red indicator cannot represent the platform. Liveness, readiness, job health, and trading readiness are separate dimensions.
 - **Seven-year audit is encryption-gated:** Money-moving audit records are encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before seven years requires policy change, legal-hold release, and two-person authorization.
-- **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform maximum is 90,000 ticks/s, so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (10,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the policy limit is reached.
+- **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform maximum is 90,000 ticks/s, so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the ...
 
 ## Out of Scope
 
@@ -83,7 +83,7 @@ The following configuration values SHALL be enforced at startup. Deployment SHAL
 | `MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT` | `1` | Do not forward another active candidate for that instrument |
 | `INGESTION_MAX_BATCH_RECORDS` | `1` (validated 1..1000) | Append each tick immediately |
 | `INGESTION_MAX_BATCH_WAIT_MS` | `0` (validated 0..100) | Do not wait for a batch |
-| `MAX_PENDING_APPEND_RECORDS` | `10000` | Stop accepting at limit |
+| `MAX_PENDING_APPEND_RECORDS` | `50000` (validated 100..1000000) | Stop accepting at limit |
 | `MAX_PENDING_APPEND_BYTES` | `min(67108864, floor(container_memory_limit_bytes × 0.10))` | Stop accepting at limit |
 | `PENDING_APPEND_WARNING_PERCENT` | `80` | Emit warning and set readiness false at 80% |
 | `POSITION_ACTIONS_ENABLED` | `false` | Hard-coded for MVP; startup fails if set to `true` |
@@ -105,7 +105,7 @@ Tests use the full 3,000-instrument production manifest, connection count, subsc
 
 | Boundary                                                           | Target                                                                    |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------:|
-| Broker packet receive → raw append acknowledgement                 | p99 <5 ms target, evidence-gated against actual protocol/client           |
+| Broker packet receive → raw append acknowledgement                 | p99 <50 ms target (≤ 20 ms transport linger), evidence-gated against actual protocol/client           |
 | Trigger tick consumed by Signal job → immutable instruction commit | **p99 <100 ms** at the 60,000 ticks/s variable baseline (3,000 instruments). Single release target; internal stage timings are diagnostic only. |
 | Instruction commit → Executor receipt                              | Report p50/p95/p99; release threshold set after pinned connector baseline |
 | Arrow REST call start → verified broker response                     | Report separately; no unverified fixed SLA                                |

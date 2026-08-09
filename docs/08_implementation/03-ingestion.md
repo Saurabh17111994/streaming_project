@@ -61,7 +61,7 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `INSTRUMENT_MANIFEST_VERSION` | Yes | Approved subscription snapshot |
 | `INGESTION_MAX_BATCH_RECORDS` | Yes | Validated `1..1000` (default `1`); append each accepted tick immediately; startup fails outside range |
 | `INGESTION_MAX_BATCH_WAIT_MS` | Yes | Validated `0..100` (default `0`); do not wait for a batch; startup fails outside range |
-| `MAX_PENDING_APPEND_RECORDS` | Yes | Fixed at `10000`; stop accepting new broker data and set readiness false at the limit |
+| `MAX_PENDING_APPEND_RECORDS` | Yes | Validated `100..1000000` (default `50000`); stop accepting new broker data and set readiness false at the limit |
 | `MAX_PENDING_APPEND_BYTES` | Yes | `min(67108864, floor(container_memory_limit_bytes × 0.10))`; stop accepting new broker data and set readiness false at the limit |
 | `PENDING_APPEND_WARNING_PERCENT` | Yes | Fixed at `80`; emit warning alert and set readiness false at 80% of either pending limit |
 | `APPEND_TIMEOUT` | Yes | Pinned client classification |
@@ -93,11 +93,11 @@ receive NDJSON line from stdin
 → hash raw JSON bytes for payload integrity
 → calculate versioned event fingerprint
 → create raw row containing original bytes + typed fields + provenance
-→ submit single tick immediately through bounded writer (no batching; INGESTION_MAX_BATCH_RECORDS=1, INGESTION_MAX_BATCH_WAIT_MS=0)
+→ submit single tick immediately through bounded writer (no application batching; INGESTION_MAX_BATCH_RECORDS=1, INGESTION_MAX_BATCH_WAIT_MS=0; transport rows coalesced ≤ 20 ms linger)
 → record acknowledgement timestamp or uncertainty
 ```
 
-Ingestion appends an accepted raw packet even if its fingerprint was seen before. Compute owns bounded logical deduplication. No time-based or record-count-based application batching is permitted: each accepted tick is submitted individually.
+Ingestion appends an accepted raw packet even if its fingerprint was seen before. Compute owns bounded logical deduplication. No time-based or record-count-based application batching is permitted: each accepted tick is submitted individually. The Fluss client may coalesce rows into transport batches, bounded at 20 ms linger (`client.writer.batch-timeout`).
 
 ### Fingerprint contract
 
@@ -117,13 +117,13 @@ Fingerprint identity is best-effort, not broker-global identity.
 
 ### Backpressure and memory
 
-- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (10000 records) and `MAX_PENDING_APPEND_BYTES` (`min(67108864, floor(container_memory_limit_bytes × 0.10))`).
+- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (50000 records) and `MAX_PENDING_APPEND_BYTES` (`min(67108864, floor(container_memory_limit_bytes × 0.10))`).
 - Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.
 - At 80% of either pending limit: set readiness false, emit a warning event containing current records, current bytes, and both limits.
 - At 100% of either pending limit: stop broker reads/subscriptions, keep readiness false, emit a critical event, and preserve an acknowledged-loss/uncertainty record. Silently discarding data is prohibited.
 - Pending counters SHALL decrease only after the append completes, whether successful or failed.
 - Record receive time, append-start time, append-acknowledgement time, append outcome, record size, and error class for every append outcome.
-- Retry uses the pinned Fluss client classification.
+- Retryable append failures retry with exponential backoff (100, 200, 400 ms) up to 3 attempts; fatal failures do not retry. A timeout outcome is `UNCERTAIN` (the row may already be persisted) and is never retried. Classification uses the pinned `RetryClassifier`.
 - No unbounded custom queue is permitted.
 - Arrow payloads SHALL NOT be compressed in the ingestion-to-Fluss path.
 - TCP flow control is not described as lossless without a broker test.
@@ -134,7 +134,7 @@ When Fluss latency, retry count, pending records, or pending bytes cross a confi
 
 **Resolution:** Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required.
 
-**Remaining defensive bound:** Bounded pending-append limits (10,000 records / `min(64MiB, 10% container memory)` bytes) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
+**Remaining defensive bound:** Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
 
 ### Failure matrix
 
@@ -174,7 +174,7 @@ Logs include service, instance, connection scope, decoder/protocol version, mani
 - `ING-FAIL-001` reconnect/resubscribe/epoch.
 - `ING-FAIL-002` bounded append backpressure (80% warning, 100% critical halt, no unrecorded drop).
 - `ING-FAIL-003` forced shutdown and uncertainty accounting.
-- `ING-PERF-001` variable 60,000 ticks/s average-baseline full session; broker_receive_to_fluss_ack p99 <5 ms.
+- `ING-PERF-001` variable 60,000 ticks/s average-baseline full session; broker_receive_to_fluss_ack p99 <50 ms.
 - `ING-PERF-002` 90,000 ticks/s peak with every instrument ≤30 ticks/s; bounded append backlog/memory and no acknowledged loss.
 
 ### Implementation checklist (from [`01_plan.md`](./01-foundation.md) Task 2)
@@ -195,7 +195,7 @@ Before code is accepted, verify each item:
 #### Acceptance checks
 
 - At the variable 60,000 ticks/s average baseline and 90,000 ticks/s peak (3,000 instruments; every instrument ≤30 ticks/s), one append submission per accepted input tick; no application batch contains more than one record. The current testing phase uses the 1,024-instrument manifest on one connection; the 3,000-instrument / 3-connection envelope is the deferred target.
-- `broker_receive_to_fluss_ack_p99_ms < 5` over a 30-minute 3,000-instrument production-manifest test.
+- `broker_receive_to_fluss_ack_p99_ms < 50` over a 30-minute 3,000-instrument production-manifest test.
 - Simulated slow Fluss writer reaches 80% warning condition before exceeding a pending limit.
 - Simulated unavailable Fluss writer reaches 100% condition without exceeding either limit and without an unrecorded drop.
 

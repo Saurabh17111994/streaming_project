@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code docs/04_contracts/01-ingestion.md}:
  *
  * <ul>
- *   <li>Max pending records: 10,000 ({@code MAX_PENDING_APPEND_RECORDS})</li>
+ *   <li>Max pending records: 50,000 ({@code MAX_PENDING_APPEND_RECORDS})</li>
  *   <li>Max pending bytes: 64 MiB ({@code MAX_PENDING_APPEND_BYTES})</li>
  *   <li>80% warning → readiness false, warning event emitted</li>
  *   <li>100% → stop accepting broker data, readiness false, critical event,

@@ -6,7 +6,7 @@ Every SLO must report p50, p95, and p99, the workload profile, UTC clock source,
 
 | Stage | Target | Measurement boundary |
 | --- | ---: | --- |
-| Decode to raw append acknowledgement | < 5 ms target | Broker event received → `raw_table_1` acknowledgement |
+| Decode to raw append acknowledgement | < 50 ms target | Broker event received → `raw_table_1` acknowledgement (includes ≤ 20 ms transport linger) |
 | Trigger tick to winner commit | **p99 < 100 ms** (single release target) | Signal-triggering tick consumed by Flink → `Trade_Decisions` commit at 60,000 ticks/s (3,000 instruments) |
 | Winner commit to Executor receipt | Baseline required | Instruction commit → Executor changelog receipt; set release threshold from the pinned connector benchmark |
 | Broker REST call | Baseline required | Arrow REST request start → verified broker response; separate from stream SLO and evidence-gated |
