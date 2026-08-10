@@ -1090,8 +1090,6 @@ Executed with the offline-approved tooling against the dev cluster (Fluss
   STATUS=OK` — exit 0 (previously exit 2). All other counts unchanged,
   so the accept list disturbs nothing else. Regression: audit without the
   file still aborts (`UNACCEPTED_KEYS=25`, exit 2).
-  **The load itself has NOT run** — it is an approved-operator step
-  (`CandleMigrationTool load`, expecting `DEST_ROWS_AFTER == DISTINCT_KEYS`).
   → **EXECUTED 2026-08-10 (approved Full Phase 8 on dev):** `MODE=load`,
   `SOURCE=feature_candles_15s`, `DEST=feature_candles_15s_current` (id=92),
   `CANDLE_MIGRATION_ACCEPT_KEYS_FILE=logs/candle-kv-replay-001/accept-keys-2026-08-10.csv`:
