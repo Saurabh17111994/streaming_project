@@ -1,6 +1,6 @@
 # Compute — Signal and Babysitter implementation handoff
 
-> **Status:** implementation not started. Use the implementation dossiers as the build contracts.
+> **Status:** Signal-job compute path (raw source → validation → event-time watermark → keyed dedup → 15s candles → `feature_candles_15s` sink) **implemented and live-verified against the dev Fluss cluster 2026-08-09**: full 15,219,441-row `raw_table_1` replay → 205,146 candle rows across 1,074 distinct instruments; OHLC/volume/tick_count/window invariants scanned clean; 48 continuous EXACTLY_ONCE checkpoints to `file://` storage (dev override `CHECKPOINT_DIR`; the dist configures `state.checkpoints.dir`). MVP signal detection (Slice 2.1, DEC-034 — closed candles → 20-candle breakout placeholder rule → `Signal_Candidates` KV records) is **implemented and live-verified against the dev Fluss cluster 2026-08-10** (see `04-signal-job.md` §Slice 2.1). **CANDLE-KV-REPLAY-001 (2026-08-10): candle dual-sink (`feature_candles_15s_current` KV projection) + fail-closed startup gate + offline `CandleMigrationTool` implemented; unit/integration tests green; historical load and live cutover blocked pending a data-ops decision on 25 replay-conflict keys** (see `docs/08_implementation/13-candle-log-kv-replay-safety.md`). Forming-bar handoff + Business Logic internals, in-operator Ranking, and decisions remain. The slot-scoped safety consumer (`SafetyHaltJob` Flink shell + `SafetyStateTracker`/`SuppressionGate` in `common`) is implemented and live-verified: SAFETY-INT-001 passed 2026-08-09 (see `docs/08_implementation/04-signal-job.md` §Slot-scoped safety consumer).
 >
 > **Live money:** disabled until checkpoint, state, connector, decision, and Executor safety evidence passes.
 
@@ -15,13 +15,16 @@ Ranking is not a separate job and the Signal job does not read feature tables ba
 
 ## Implementation checklist
 
-- [ ] Pin Flink/Fluss connector and state/checkpoint versions.
-- [ ] Implement raw source/schema/validity and event-time watermarks.
-- [ ] Implement bounded fingerprint deduplication.
-- [ ] Implement final 15-second candles and late-event policy.
-- [ ] Implement forming-bar typed handoff and Business Logic.
+- [x] Pin Flink/Fluss connector and state/checkpoint versions. — Flink 2.2.1 / Fluss 0.9.1-incubating / fluss-flink-2.2 pinned in parent POM + `versions.pin`; connector boundary proven (T0: resolves, `FlussSource` builds, live KV read) — see `04-signal-job.md` §Connector and compile evidence.
+- [x] Slot-scoped safety consumer shell (SAFETY-INT-001, 2026-08-09). — `SafetyHaltJob` + `SafetyStateTracker` + `SuppressionGate`; moves to broadcast state when decision operators land.
+- [x] Implement raw source/schema/validity and event-time watermarks. — `SignalJob` sources `raw_table_1` full-offset via `FlussSource` + `RowDataDeserializationSchema`; `RawValidationFunction` fail-closed gate (INSERT kind, pinned `schema_version`, VALID-prefixed validity, price > 0, qty ≥ 0, per-reason counters); `CandleWatermarkStrategy` bounded out-of-order 5 s + idle 15 s. Envelope 1,024 instruments / 20,480 ticks·s⁻¹.
+- [x] Implement bounded fingerprint deduplication. — `FingerprintDedupFunction`: keyed by `instrument_token`, MapState keyed `fingerprint_version|scope|fingerprint` → `DedupEntry(firstSeen, expiry)`; explicit event-time expiry timers + expiry index (Flink 2.2.1 has no event-time state TTL) with `compute.dedup.first` / `compute.dedup.duplicates` counters.
+- [x] Implement final 15-second candles and late-event policy. — tumbling event-time 15 s windows, keyed by `instrument_token` (colocates with `raw_table_1` bucket layout); OHLC from `(event_time, fingerprint)` order key (deterministic under replay), volume/tick_count from `TRADE && last_qty > 0` rows only; window-state emit-once flag → exactly one row per non-empty window (R-012, no correction rows); `allowedLateness(5 s)` folds late rows into state and counts `compute.candles.late.updates` without re-emitting; append-only `FlussSink` → `feature_candles_15s`. Live-verified 2026-08-09: full 15.2M-row replay → 205,146 rows across 1,074 instruments; OHLC invariants and 15 000 ms window spacing scanned clean; 48 checkpoints completed.
+- [x] Implement MVP signal detection and immutable `Signal_Candidates` output (Slice 2.1, DEC-034). — `SignalDetectionFunction` (keyed by `instrument_token`, ring-buffer highs/closes state; rule: bullish candle closing strictly above the previous `SIGNAL_LOOKBACK_CANDLES`=20 highs); 22-column records (side BUY / action ENTRY / order MARKET / quantity config-driven) via KV upsert `FlussSink` (`RowDataSerializationSchema(false, false)`); `DdlBootstrap` carries the full KV descriptor. Live-verified 2026-08-10 (see `04-signal-job.md` §Slice 2.1). Ranking/reservation/decision fields stay NULL until the postponed ranking phase.
+- [x] Implement candle dual-sink + replay safety (CANDLE-KV-REPLAY-001, 2026-08-10). — the candle branch now writes **both** the immutable LOG `feature_candles_15s` and the canonical KV projection `feature_candles_15s_current` (PK `(instrument_token, window_start)`, same 15-column schema via shared `CandleTableSchema`, upsert `RowDataSerializationSchema(false, false)`); startup fails closed unless `STATE_RECOVERY_PATH` (RESTORE) or explicit `ALLOW_FULL_REPLAY=true` (break-glass); `CandleTableContractValidator` preflights live-table metadata; `CandleMigrationTool` audits/loads historical LOG → KV offline. Unit + integration tests green; historical load and live cutover blocked pending a data-ops decision on 25 replay-conflict keys — see `docs/08_implementation/13-candle-log-kv-replay-safety.md`.
+- [ ] Implement forming-bar typed handoff and Business Logic internals (candidate lifecycle, supersession).
 - [ ] Implement deterministic in-operator Ranking and reservations.
-- [ ] Implement immutable `Signal_Candidates`, `Ranking_Results`, and `Trade_Decisions` outputs.
+- [ ] Implement immutable `Ranking_Results` and `Trade_Decisions` outputs.
 - [ ] Implement Signal job submission/status/checkpoint verification.
 - [ ] Implement separate checkpointed Babysitter no-op.
 - [ ] Pass deterministic replay, checkpoint, failure, and workload tests.
@@ -33,6 +36,10 @@ Ranking is not a separate job and the Signal job does not read feature tables ba
 - `seq_no`-based deduplication.
 - Mutable `Trade_Decisions` execution fields.
 - Broker REST calls from Flink jobs.
+
+## Cross-boundary pin habit (process rule, 2026-08-10)
+
+Any change crossing a module boundary is pinned by a test on **both** sides in the **same** change. Applied instances: `TickPacketSchemaVersionTest` (ingestion) ↔ `RawValidationFunctionTest` (compute) pin the `schema_version=2` wire label; `RawTable1DdlSchemaVersionTest` (compute) + `SchemaAgreementTest` (ingestion) pin DDL files ↔ Java row layouts from both directions; `CandleTableColumns` ↔ `CandleAggregateFunctionTest` pin the candle sink row; `CandleCurrentDdlContractTest` (common) pins `22_feature_candles_15s_current.sql` to the LOG DDL column-for-column; `SignalJobConfigTest` pins config keys and their reject-on-deviation behavior. One-sided edits fail a pin test or the live gate (`Raw validation gate accepts schema_version=2` per subtask) instead of drifting silently. See `docs/08_implementation/04-signal-job.md` §Cross-boundary pin habit.
 
 ## References
 

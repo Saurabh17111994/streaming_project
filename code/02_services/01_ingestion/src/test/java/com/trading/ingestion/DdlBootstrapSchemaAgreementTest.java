@@ -111,6 +111,54 @@ class DdlBootstrapSchemaAgreementTest {
                 "ingestion_quarantine must be in the registry (QuarantineWriter writes it)");
     }
 
+    @Test
+    @DisplayName("ensureTables creates only owned tables — never the compute/registry-only tables (A4.4)")
+    void ensureTablesScopeIsOwnedTables() throws IOException {
+        String src = Files.readString(CLASS_SOURCE, StandardCharsets.UTF_8);
+        int start = src.indexOf("public static boolean ensureTables");
+        int end = src.indexOf("private static void ensureDatabase");
+        assertTrue(start >= 0 && end > start, "could not locate the ensureTables method body");
+        String body = src.substring(start, end);
+        assertTrue(body.contains("for (String name : OWNED_TABLES)"),
+                "ensureTables must iterate OWNED_TABLES only (A4.4) — it must never "
+                        + "bootstrap-create registry-only tables like feature_candles_15s_current");
+        assertFalse(body.contains("ALL_TABLES.entrySet()"),
+                "ensureTables must not iterate ALL_TABLES (A4.4) — compute tables are "
+                        + "provisioned by the offline DDL gate, not by the ingestion bootstrap");
+    }
+
+    @Test
+    @DisplayName("compute tables are never owned by the ingestion bootstrap (A4.4)")
+    void computeTablesAreNotOwned() {
+        for (String computeTable : List.of(
+                "feature_candles_15s", "feature_candles_15s_current",
+                "Signal_Candidates", "Ranking_Results", "Trade_Decisions",
+                "Portfolio_Reservations")) {
+            assertFalse(DdlBootstrap.ownedTables().contains(computeTable),
+                    computeTable + " is a compute-owned table — DdlBootstrap must not own it "
+                            + "(A4.4, CANDLE-KV-REPLAY-001 P4)");
+        }
+    }
+
+    @Test
+    @DisplayName("feature_candles_15s registry entry carries the real 15-column schema (no placeholder)")
+    void candleRegistryEntriesUseRealSchemas() {
+        TableDescriptor log = DdlBootstrap.tableRegistry().get("feature_candles_15s");
+        TableDescriptor kv = DdlBootstrap.tableRegistry().get("feature_candles_15s_current");
+        assertNotNull(log, "registry missing feature_candles_15s");
+        assertNotNull(kv, "registry missing feature_candles_15s_current (22_feature_candles_15s_current.sql)");
+        assertEquals(15, log.getSchema().getColumns().size(),
+                "LOG twin must carry the real 15-column candle schema, not the MINIMAL_SCHEMA placeholder");
+        assertEquals(15, kv.getSchema().getColumns().size(),
+                "KV twin must carry the real 15-column candle schema");
+        assertEquals(List.of("instrument_token", "window_start"),
+                kv.getSchema().getPrimaryKeyColumnNames(),
+                "KV twin PK must be exactly (instrument_token, window_start)");
+        assertEquals(List.of("instrument_token"),
+                kv.getBucketKeys(),
+                "KV twin must be distributed by instrument_token (colocation with the LOG)");
+    }
+
     // ---- helpers ----
 
     /** Map a table name to its DDL file name (e.g. raw_table_1 → 02_raw_table_1.sql). */

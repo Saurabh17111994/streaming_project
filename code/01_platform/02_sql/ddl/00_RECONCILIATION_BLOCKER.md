@@ -1,5 +1,19 @@
 # DDL Reconciliation Blocker
 
+> **SUPERSEDED (2026-08-10).** The status line below — "VERSION PINNING PENDING" — and the 19-table
+> numbering predate the current repository state: versions are pinned (DEC-021: Fluss
+> 0.9.1-incubating, Flink 2.2.1, Java 17.0.19; ZooKeeper 3.9.2 per DEC-032) in
+> `code/01_platform/04_scripts/versions.pin`, the DDL set is now the 21 numbered files in this
+> directory (`02_raw_table_1.sql` … `22_feature_candles_15s_current.sql` — the last is the canonical
+> candle KV projection from CANDLE-KV-REPLAY-001), and the manifest drift gate runs
+> clean (SCH-01..04, `schema_manifest.json` + `ddl_apply.py`). Since 2026-08-10 the gate also
+> field-validates `primary_key`/`bucket_key` against the DDLs (not only checksum + `table_kind`),
+> so a manifest whose routing fields silently diverge from a DDL now fails `make ddl` instead of
+> passing. `Safety_Halt_Requests` is now a KV table (v3, R-089) and `Signal_Candidates` is now a KV
+> table (v2, R-084) — see the DDL headers.
+> Keep this file as the historical record of the requirements→DDL reconciliation; it no longer
+> describes the live DDL surface.
+
 ## Status: REQUIREMENTS RECONCILED — SQL GENERATED — VERSION PINNING PENDING
 
 The requirements documents have been reconciled to the active decisions (DEC-001 through DEC-021). Replacement DDL SQL files have been generated using the reconciled schemas. **However, the SQL cannot be applied to a production or live-money environment until version-specific integration tests pass.**

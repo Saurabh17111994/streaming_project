@@ -115,15 +115,24 @@ public final class DdlBootstrap {
     }
 
     /**
-     * Ensure all platform tables exist on the given Fluss cluster.
+     * Ensure the tables this service owns exist on the given Fluss cluster.
+     *
+     * <p><b>Owned tables only (A4.4, CANDLE-KV-REPLAY-001 P4).</b> The
+     * registry contains full platform tables whose owning services are not
+     * built yet; {@code ensureTables} must never bootstrap-create those —
+     * their creation is the offline DDL gate's job (schema reconciliation is
+     * owned by {@code ddl_apply.py} / {@code schema_manifest.json}). The
+     * compute tables ({@code feature_candles_15s}, {@code
+     * feature_candles_15s_current}, {@code Signal_Candidates}, …) are
+     * provisioned out-of-band; this method only ever creates
+     * {@link #OWNED_TABLES}.
      *
      * <p><b>Create-only:</b> existing tables are never dropped or recreated,
-     * even when their column count differs from the in-code schema — schema
-     * reconciliation belongs to the offline DDL gate. Intended for local
-     * development; production should apply the DDLs out-of-band and start
-     * through {@link #verifyTables(String)}.
+     * even when their column count differs from the in-code schema. Intended
+     * for local development; production should apply the DDLs out-of-band and
+     * start through {@link #verifyTables(String)}.
      *
-     * @return true if every table exists (created or already present)
+     * @return true if every owned table exists (created or already present)
      */
     public static boolean ensureTables(String bootstrapServers) {
         Configuration conf = new Configuration();
@@ -137,9 +146,8 @@ public final class DdlBootstrap {
             ensureDatabase(admin, "default");
 
             int ok = 0, failed = 0;
-            for (Map.Entry<String, TableDescriptor> entry : ALL_TABLES.entrySet()) {
-                String name = entry.getKey();
-                TableDescriptor td = entry.getValue();
+            for (String name : OWNED_TABLES) {
+                TableDescriptor td = ALL_TABLES.get(name);
                 TablePath path = TablePath.of("default", name);
 
                 try {
@@ -287,6 +295,90 @@ public final class DdlBootstrap {
             .build();
 
     /**
+     * Full 22-column KV schema for Signal_Candidates matching the v2 DDL
+     * (05_signal_candidates.sql, R-084). Written by the compute job's
+     * signal-detection slice (DEC-034); KV so the supersede chain
+     * (superseded_by_candidate_id) can be populated by the ranking phase later.
+     */
+    private static final Schema SIGNAL_CANDIDATES_SCHEMA = Schema.newBuilder()
+            .column("candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("instruction_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("trade_context_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
+            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
+            .column("strategy_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("strategy_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("rule_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("detection_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("evaluation_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("action", org.apache.fluss.types.DataTypes.STRING())
+            .column("side", org.apache.fluss.types.DataTypes.STRING())
+            .column("quantity", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("order_type", org.apache.fluss.types.DataTypes.STRING())
+            .column("limit_price_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("score_inputs", org.apache.fluss.types.DataTypes.STRING())
+            .column("formation_snapshot_ref", org.apache.fluss.types.DataTypes.STRING())
+            .column("validity_reason", org.apache.fluss.types.DataTypes.STRING())
+            .column("supersedes_candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("superseded_by_candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .primaryKey("candidate_id") // DDL v2 (R-084): KV, 16 buckets
+            .build();
+
+    /**
+     * Full 15-column schema for feature_candles_15s matching DDL 03
+     * (03_feature_candles_15s.sql, schema v2). Written by the compute job's
+     * candle slice. Column names/order mirror
+     * {@code com.trading.common.schema.CandleTableSchema} — the shared
+     * contract both candle sinks serialize against.
+     */
+    private static final Schema FEATURE_CANDLES_SCHEMA = Schema.newBuilder()
+            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
+            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
+            .column("window_start", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("window_end", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("open_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("high_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("low_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("close_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("volume", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("tick_count", org.apache.fluss.types.DataTypes.INT())
+            .column("algorithm_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("configuration_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("output_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .build();
+
+    /**
+     * Full 15-column KV schema for feature_candles_15s_current matching DDL 22
+     * (CANDLE-KV-REPLAY-001): same columns as the LOG twin plus
+     * PRIMARY KEY (instrument_token, window_start) — the idempotent
+     * current-state projection that makes replay-safe candle writes possible.
+     * Bucket key instrument_token is a strict subset of the PK (Fluss
+     * requires pk ⊇ bucketKey), keeping per-ticker colocation with the LOG.
+     */
+    private static final Schema FEATURE_CANDLES_CURRENT_SCHEMA = Schema.newBuilder()
+            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
+            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
+            .column("window_start", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("window_end", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("open_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("high_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("low_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("close_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("volume", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("tick_count", org.apache.fluss.types.DataTypes.INT())
+            .column("algorithm_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("configuration_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("output_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .primaryKey("instrument_token", "window_start")
+            .build();
+
+    /**
      * Minimal placeholder schema for platform tables whose owning service is
      * not built yet. These tables are only existence-checked at runtime — the
      * full DDL (applied by the offline DDL gate) is authoritative for their
@@ -334,9 +426,17 @@ public final class DdlBootstrap {
                                     .distributedBy(16, "instrument_token")
                                     .build()),
                     Map.entry("feature_candles_15s",
-                            logTable("instrument_token")),
+                            TableDescriptor.builder()
+                                    .schema(FEATURE_CANDLES_SCHEMA)
+                                    .distributedBy(16, "instrument_token")
+                                    .build()),
+                    Map.entry("feature_candles_15s_current",
+                            TableDescriptor.builder()
+                                    .schema(FEATURE_CANDLES_CURRENT_SCHEMA)
+                                    .distributedBy(16, "instrument_token")
+                                    .build()),
                     Map.entry("Signal_Candidates",
-                            logTable("instrument_token")),
+                            TableDescriptor.builder().schema(SIGNAL_CANDIDATES_SCHEMA).distributedBy(16, "candidate_id").build()),
                     Map.entry("Ranking_Results",
                             logTable("execution_partition_id")),
                     Map.entry("Trade_Decisions",

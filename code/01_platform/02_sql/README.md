@@ -9,24 +9,27 @@
 | File | Logical object |
 | --- | --- |
 | `01_catalog.sql` | Fluss catalog and `trading` database |
-| `02_raw_table_1.sql` | Immutable raw packet/tick LOG |
-| `03_feature_candles_15s.sql` | Final 15-second candle LOG |
-| `04_fills.sql` | Immutable broker postback/fill LOG |
-| `05_order_lifecycle.sql` | Broker-order lifecycle KV |
-| `06_positions.sql` | Fill-derived position KV |
-| `07_signal_candidates.sql` | Immutable candidate audit LOG |
-| `08_ranking_results.sql` | Immutable ranking audit LOG |
-| `09_trade_decisions.sql` | Immutable instruction feed |
-| `10_suspected_discontinuities.sql` | Feed discontinuity evidence LOG |
-| `11_instruments.sql` | Versioned instrument manifest |
-| `12_execution_gate.sql` | Executor gate KV |
-| `13_execution_attempts.sql` | Executor attempt KV |
-| `14_order_correlation.sql` | Identity mapping KV |
-| `15_execution_audit.sql` | Immutable execution/safety audit LOG |
-| `16_postback_quarantine.sql` | Immutable ambiguous/invalid postback LOG |
-| `17_portfolio_reservations.sql` | Portfolio-capacity reservation KV |
-| `18_postback_projection_ledger.sql` | Projection progress and recovery KV |
-| `19_safety_halt_requests.sql` | Immutable safety-halt request LOG |
+| `02_raw_table_1.sql` | `raw_table_1` — immutable raw packet/tick LOG |
+| `03_feature_candles_15s.sql` | `feature_candles_15s` — final 15-second candle LOG (immutable evidence trail) |
+| `04_forming_bar.sql` | `forming_bar` — per-ticker forming-bar KV |
+| `05_signal_candidates.sql` | `Signal_Candidates` — candidate audit (KV since DDL v2, R-084) |
+| `06_ranking_results.sql` | `Ranking_Results` — immutable ranking audit LOG |
+| `07_trade_decisions.sql` | `Trade_Decisions` — immutable instruction feed LOG |
+| `08_fills.sql` | `Fills` — immutable broker postback/fill LOG |
+| `09_order_lifecycle.sql` | `Order_Lifecycle` — broker-order lifecycle KV |
+| `10_positions.sql` | `Positions` — fill-derived position KV |
+| `11_execution_gate.sql` | `Execution_Gate` — executor gate KV |
+| `12_execution_attempts.sql` | `Execution_Attempts` — executor attempt KV |
+| `13_order_correlation.sql` | `Order_Correlation` — identity mapping KV |
+| `14_execution_audit.sql` | `Execution_Audit` — immutable execution/safety audit LOG |
+| `15_portfolio_reservations.sql` | `Portfolio_Reservations` — portfolio-capacity reservation KV |
+| `16_postback_quarantine.sql` | `Postback_Quarantine` — immutable ambiguous/invalid postback LOG |
+| `17_postback_projection_ledger.sql` | `Postback_Projection_Ledger` — projection progress and recovery KV |
+| `18_safety_halt_requests.sql` | `Safety_Halt_Requests` — safety-halt KV |
+| `19_suspected_discontinuities.sql` | `suspected_discontinuities` — feed discontinuity evidence LOG |
+| `20_instruments.sql` | `instruments` — versioned instrument manifest KV |
+| `21_ingestion_quarantine.sql` | `ingestion_quarantine` — immutable ingestion quarantine LOG |
+| `22_feature_candles_15s_current.sql` | `feature_candles_15s_current` — canonical candle KV projection, PK `(instrument_token, window_start)`, same 15-column v2 schema and bucket layout as `feature_candles_15s` (CANDLE-KV-REPLAY-001) |
 
 ## Validation required before application
 

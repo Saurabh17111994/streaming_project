@@ -10,6 +10,15 @@ package com.trading.common.model;
  * {@code configuration_version} (replacing the single {@code candle_version}),
  * and {@code output_ts} (replacing {@code ingest_ts}, which was ambiguous with
  * the raw-tick ingestion timestamp).
+ *
+ * <p>CANDLE-KV-REPLAY-001: the same 15-column layout is the schema of the
+ * canonical KV projection {@code feature_candles_15s_current} (DDL 22), where
+ * {@code (instrument_token, window_start)} is the primary key and
+ * {@code output_ts} is the last-write-wins ordering field for replay/duplicate
+ * convergence. The shared contract lives in
+ * {@code com.trading.common.schema.CandleTableSchema} + {@code CandleTableColumns};
+ * {@link #schemaVersion()} carries the wire schema version ("2") checked by
+ * {@code CanonicalCandlePolicy}.
  */
 public record Candle15s(
     long instrumentToken,
