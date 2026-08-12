@@ -431,6 +431,70 @@ class CandleMigrationBatchJobTest {
         }
     }
 
+    /** Parallel pipeline (P3.6): 4-slot cluster so a parallelism-4 job can run. */
+    private static MiniClusterWithClientResource newMiniCluster4() {
+        return new MiniClusterWithClientResource(
+                new MiniClusterResourceConfiguration.Builder()
+                        .setNumberSlotsPerTaskManager(4)
+                        .setNumberTaskManagers(1)
+                        .build());
+    }
+
+    @Test
+    @DisplayName("parallel pipeline (P3.6): parallelism 4 clean audit converges, gate sees every key")
+    void parallelCleanAuditConverges(@TempDir Path tmp) throws Exception {
+        MiniClusterWithClientResource cluster = newMiniCluster4();
+        cluster.before();
+        try {
+            Configuration conf = new Configuration();
+            conf.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(conf);
+            env.setParallelism(4);
+            // Same business row emitted twice (replay convergence) + one clean key;
+            // canned source distributes rows across 4 subtasks — keyBy must regroup.
+            DataStream<RowData> rows = canned(env,
+                    rowData(1660, WINDOW, 15050, 100L),
+                    rowData(1660, WINDOW, 15050, 200L),
+                    rowData(5000, WINDOW, 9000, 100L));
+            CandleMigrationBatchJob.wire(env, config("audit", tmp.resolve("reports").toString()), rows);
+            env.execute("parallel-clean-audit"); // gate (parallelism 1) must NOT throw
+            assertFalse(reportFiles(tmp).anyMatch(line ->
+                            line.contains("CANDLE_MIGRATION_CONFLICT_RECORD")
+                                    || line.contains("CANDLE_MIGRATION_APPROVAL_RECORD")),
+                    "no conflicts in a clean parallel run");
+        } finally {
+            cluster.after();
+        }
+    }
+
+    @Test
+    @DisplayName("parallel pipeline (P3.6): parallelism 4 unaccepted conflict still ends FAILED")
+    void parallelUnacceptedConflictFailsClosed(@TempDir Path tmp) throws Exception {
+        MiniClusterWithClientResource cluster = newMiniCluster4();
+        cluster.before();
+        try {
+            Configuration conf = new Configuration();
+            conf.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(conf);
+            env.setParallelism(4);
+            DataStream<RowData> rows = canned(env,
+                    rowData(1660, WINDOW, 15050, 100L),
+                    rowData(1660, WINDOW, 15550, 200L));
+            CandleMigrationBatchJob.wire(env, config("audit", tmp.resolve("reports").toString()), rows);
+            try {
+                env.execute("parallel-unaccepted");
+                fail("expected job FAILED");
+            } catch (Exception e) {
+                assertTrue(hasCause(e, MigrationBlockedException.class),
+                        "parallel gate must still fail closed on unaccepted conflict, got: " + e);
+            }
+        } finally {
+            cluster.after();
+        }
+    }
+
     /** Every line of the report file under the test temp dir (single file, parallelism 1). */
     private static Stream<String> reportFiles(Path tmp) throws Exception {
         Path report = tmp.resolve("reports").resolve("conflict-and-approval-records");

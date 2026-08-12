@@ -94,9 +94,13 @@ import org.slf4j.LoggerFactory;
  * {@code CANDLE_MIGRATION_MODE=audit|load} (default {@code audit}),
  * {@code CANDLE_MIGRATION_REPORT_DIR} (default {@code candle-migration-reports}).
  *
- * <p>Parallelism is pinned to 1 everywhere: the migration is a single-scan
- * cutover and the notFound gate needs every approval key's absence visible in
- * one task.
+ * <p>Parallelism: {@code CANDLE_MIGRATION_PARALLELISM} (default 1, P3.6
+ * efficiency knob) sets the env parallelism — the Fluss bounded source's
+ * SplitEnumerator distributes bucket splits across subtasks without
+ * duplication, so a 16-bucket table reads up to 16-way concurrently. The
+ * gate, report-file and stats sinks stay pinned to 1: the notFound gate
+ * needs every approval key's absence visible in one task and the evidence
+ * file must have a single writer.
  */
 public final class CandleMigrationBatchJob {
 
@@ -205,6 +209,7 @@ public final class CandleMigrationBatchJob {
                 + lakeProps.get("iceberg.iceberg.hadoop.fs.s3a.connection.timeout"));
         System.out.println("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS="
                 + lakeProps.get("iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout"));
+        System.out.println("CANDLE_MIGRATION_PARALLELISM=" + cfg.parallelism);
         System.out.println("CANDLE_MIGRATION_READ_TS=" + Instant.now());
         System.out.println("CANDLE_MIGRATION_CUTOVER=single-scan boundary "
                 + "(OffsetsInitializer.latest at enumeration); rows appended during the run "
@@ -222,7 +227,7 @@ public final class CandleMigrationBatchJob {
         flinkConf.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
         StreamExecutionEnvironment env =
                 StreamExecutionEnvironment.getExecutionEnvironment(flinkConf);
-        env.setParallelism(1);
+        env.setParallelism(cfg.parallelism);
 
         StreamTableEnvironment tEnv = StreamTableEnvironment.create(env);
         tEnv.registerCatalog("fluss", new FlinkCatalog(
@@ -350,16 +355,19 @@ public final class CandleMigrationBatchJob {
                 .returns(Types.STRING)
                 .name("migration-report-renderer");
         reports.addSink(new ReportFileSink(cfg.reportDir))
-                .name("migration-report-file");
+                .name("migration-report-file")
+                .setParallelism(1); // single evidence file, one writer
 
         meta.addSink(new MigrationGateSink(cfg))
-                .name("migration-gate");
+                .name("migration-gate")
+                .setParallelism(1); // notFound needs every approval key in one task
 
         // Row-count evidence (bounded global counts via constant-key reduce).
         DataStream<Tuple2<String, Long>> stats = countStats("total_rows", rows)
                 .union(countStats("canonical_rows", canonical))
                 .union(countStats("non_canonical_rows", nonCanonical));
-        stats.addSink(new MigrationStatsSink()).name("migration-stats");
+        stats.addSink(new MigrationStatsSink()).name("migration-stats")
+                .setParallelism(1); // single clean stats output (reduce already funnels)
 
         if ("load".equals(cfg.mode)) {
             upsertRows.sinkTo(FlussSink.<RowData>builder()
@@ -486,10 +494,19 @@ public final class CandleMigrationBatchJob {
         final String acceptKeysFile;
         final String mode;
         final String reportDir;
+        final int parallelism;
 
+        /** Parallelism 1 (single-scan cutover semantics) unless overridden. */
         Config(String bootstrap, String sourceTable, String destTable, String schemaVersion,
                String algorithmVersion, String configurationVersion, String acceptKeysFile,
                String mode, String reportDir) {
+            this(bootstrap, sourceTable, destTable, schemaVersion, algorithmVersion,
+                    configurationVersion, acceptKeysFile, mode, reportDir, 1);
+        }
+
+        Config(String bootstrap, String sourceTable, String destTable, String schemaVersion,
+               String algorithmVersion, String configurationVersion, String acceptKeysFile,
+               String mode, String reportDir, int parallelism) {
             this.bootstrap = bootstrap;
             this.sourceTable = sourceTable;
             this.destTable = destTable;
@@ -499,6 +516,7 @@ public final class CandleMigrationBatchJob {
             this.acceptKeysFile = acceptKeysFile;
             this.mode = mode;
             this.reportDir = reportDir;
+            this.parallelism = parallelism;
         }
 
         static Config fromEnv() {
@@ -519,7 +537,34 @@ public final class CandleMigrationBatchJob {
                     System.getenv("CANDLE_MIGRATION_ACCEPT_KEYS_FILE"),
                     mode,
                     System.getenv().getOrDefault("CANDLE_MIGRATION_REPORT_DIR",
-                            "candle-migration-reports"));
+                            "candle-migration-reports"),
+                    migrationParallelism());
+        }
+
+        /**
+         * {@code CANDLE_MIGRATION_PARALLELISM}: positive int, default 1 (P3.6
+         * efficiency knob — the Fluss bounded source distributes bucket splits
+         * across subtasks without duplication). Zero/negative/non-numeric fail
+         * startup rather than silently degrading to a different topology.
+         */
+        static int migrationParallelism() {
+            String raw = System.getenv("CANDLE_MIGRATION_PARALLELISM");
+            if (raw == null) {
+                return 1;
+            }
+            int value;
+            try {
+                value = Integer.parseInt(raw.trim());
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("candle-migration: "
+                        + "CANDLE_MIGRATION_PARALLELISM must be a positive integer, got '"
+                        + raw + "'");
+            }
+            if (value < 1) {
+                throw new IllegalArgumentException("candle-migration: "
+                        + "CANDLE_MIGRATION_PARALLELISM must be >= 1, got " + value);
+            }
+            return value;
         }
     }
 
