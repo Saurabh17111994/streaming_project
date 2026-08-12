@@ -7,6 +7,8 @@
 
 > This document is the authoritative tracker for this corrective phase. Do not mark a checkbox complete from prose alone. Each completed item needs the stated code, test, command output, or operational evidence. Do not modify production code, apply DDL, start SignalJob, or touch the live cluster unless the task explicitly belongs to the later operator-only phase.
 
+> **Long-run gate (operating rule, user directive 2026-08-12):** any test/audit/bench/soak estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of the same machinery — e.g. `logs/tracker-14/probe-r2.sh` (R2 lake-read probe) before any run touching the R2 lake read, a 60 s feed smoke before rate runs, a bounded-read probe before audit/load runs. Smoke passes → start the long run; smoke fails → fix, re-smoke. No blind long waits: the P3.5 R2 canary proved a 55-90 min run can wedge with zero error while a 30 s probe catches the same failure. The smoke result is recorded in each run's evidence.
+
 ### Observability authority
 
 `docs/04_contracts/openobserve.md` remains the normative OpenObserve/OTLP
@@ -522,7 +524,17 @@ The production-path migration audit reads history through the Fluss Flink source
 ### Residual risk (still open 2026-08-12)
 
 - Post-fix canary `batch-audit-20260812-155017.log` wedged 3/3 on the SAME R2 edge blackhole (same `Net.poll` stack; pins proven effective in the same log: `RESOLVED_OPTION_COUNT=15`, `EFFECTIVE_*=30000`) — the blackhole is at the R2 edge, outside client control. Containment proven: the outer deadline terminated the run at 10 m (exit 124, trap removed the container). NMT exit summary NOT printed (SIGKILL before JVM exit stats — 0 hits in the log).
-- Open: full-run native peaks (box 428) + plan Phase 6 success evidence need a stall-free audit. The stall is intermittent: the byte-identical probe passes minutes later, the tiering job is healthy, and a 55m41s full audit succeeded pre-fix (2026-08-12 ~03:xx). Rerun until R2 cooperates; the deadline guarantees no infinite hang.
+- Open: full-run native peaks (box 428) + plan Phase 6 success evidence need a stall-free audit. The stall is intermittent: the byte-identical probe passes minutes later, the tiering job is healthy, and a 55m41s full audit succeeded pre-fix (2026-08-12 ~03:xx). Rerun until R2 cooperates; the deadline guarantees no infinite hang. Standing rule from this lesson (tracker header, 2026-08-12): every run > 10 min is gated by a ≤ 2-min smoke of the same machinery (`probe-r2.sh` + bounded reads) — a blackhole now costs 30 s, not 90 min. First application: Block 0's rerun — probe PASS 2026-08-12 17:3x (`logs/tracker-14/probe-r2-*.log`) while the full audit runs.
+
+## P3.6 Audit-run efficiency follow-up (2026-08-12 — option 1 IMPLEMENTED, options 2-3 open)
+
+Root cause: the ENTIRE batch pipeline ran at parallelism 1 (thread dump: `migration-source-lake-batch (1/1)`; `env.setParallelism(1)` hard pin): ~500 R2 parquet files fetched one at a time, each open ~1.5 s (probe-measured 1391-1740 ms). Not a data-volume problem — 1.6M rows is trivial for parquet — it is serial internet round-trips.
+
+1. **[x] Parallelism knob (implemented 2026-08-12; compute.jar rebuilt 18:21)**: `CANDLE_MIGRATION_PARALLELISM` (default 1, positive-int validated, fail-fast) → `env.setParallelism(N)`. Safe because the Fluss bounded source is the new Source API: `FlinkSourceEnumerator` distributes bucket splits across subtasks ("splits in same bucket → same subtask, uniformly distributed across subtasks" — no duplication; verified against fluss-flink-common 0.9.1-incubating). Gate/report/stats sinks explicitly pinned to parallelism 1 (the `notFound` global check needs every approval key in one task; evidence file needs one writer). `run-batch.sh` passes the knob with default 16. Tests: compute module 218/0/0/11 (was 216; +2 parallel-pipeline MiniCluster tests — clean audit converges and unaccepted conflict still fails closed, both at parallelism 4).
+2. [ ] **Metadata-only count reconciliation**: Iceberg manifests carry per-file row counts; the union-total check (`UNION_TOTAL==FULL_TOTAL`, 16/16 buckets) is answerable from manifests + log offsets without fetching data files — minutes. Only the 25 conflict keys need real rows. This is the engine production P10.2's dry audit should use (production data >> dev).
+3. [ ] **Incremental audits**: track the last audited snapshot; read only new snapshots on re-runs.
+
+Full-run timing comparison (parallelism 16 vs 1) pending the next audit run — Block 0's in-flight run still used the old jar (launched 17:26). Owner: coding agent; fold option 2 into the P10 plan's dry-audit step when built.
 
 ---
 
@@ -815,6 +827,8 @@ rejected end-to-end (no TOKEN_BAD candle) while its watermark legitimately close
 ---
 
 ## P7 — Performance and capacity evidence
+
+**P7 bench plan (2026-08-12):** `docs/plans/20260812-p7-bench.md` — locked bench spec (24 user decisions: 12 scope — dev compose cluster, 3+ faketool connections, live raw_table_1, writer stopped for the window, 1024 tokens, as-produced realism, 30 min @ 60k, source-consumed gate with p50/p95/p99/max, tick→emit p99 < 100 ms, R2 checkpoints for gate + file:// for debug, docker-level disturbance matrix, application mode + PARALLELISM=8; 12 measurement/operation — clock from RUNNING, feed-emit latency origin incl. Fluss round-trip, latency tracking ON for gate run, two 5-min 90k bursts, accepted = emitted+deduped+quarantined, checkpoint tolerance <= 2 restart-recovered, memory vs TM 2g container limit, dedup expiry sweep, dev baseline first, 5 s raw capture) + phases 0-3 + gate definitions + evidence template; long-run gate rule §4.1 (every >10-min phase preceded by the ≤2-min smoke: probe-r2.sh + feed smoke). **Nothing executed yet.**
 
 ## P7.1 Test matrix
 
@@ -1143,6 +1157,8 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 
 Do not execute until P1–P9 code/evidence gates are complete.
 
+**P10 plan (2026-08-12):** `docs/plans/20260812-p10-rehearsal-cutover.md` — locked spec (13 user decisions: dev = qualification target with P10.2/3 delivered as a ready-runbook, second compose project on the same host, full dev data + archived known-good checkpoint, full union audit, audit-derived distinct count, migration-load-twice idempotency proof, B8.7 rollback + re-cutover, autonomous execution with user evidence review, strictly after P7, 'point consumers to KV' vacuous today, identical gated DDL path, KV+LOG exposure envelope). **Nothing executed yet — sequencing gate: P7 bench complete.** Long-run gate rule per plan §4.1: every >10-min phase (90-min audit, load, replay, rollback) is preceded by the ≤2-min smoke (probe-r2.sh + bounded reads).
+
 ## P10.1 Isolated rehearsal
 
 - [ ] Create isolated Fluss/Flink environment.
@@ -1202,9 +1218,9 @@ Do not execute until P1–P9 code/evidence gates are complete.
 | `CHECKPOINT-DURABILITY-001` | Durable S3 checkpoint/savepoint and cross-worker restore | `[x]` 2026-08-11 — config+gate tests AND live R2 write/read/restore proof (P4.2: `SignalJobObjectStoreCheckpointIntegrationTest`, COMPUTE_INT_TEST_P42-gated, real R2 creds via env) |
 | | `CHECKPOINT-RESTORE-002` | Dual-sink graph restore with default strict state matching | `[x]` 2026-08-11 (P6.1 phase 3) |
 | | `STARTUP-GATE-001` | No accidental full replay — startup gate fail-closed | `[x]` 2026-08-12 — config gate + strict-restore offset proof + gate tests (see delivered-piece row) |
-| `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` (P5/P7) |
-| `PERF-THROUGHPUT-001` | 60k sustained / 90k peak benchmark | `[ ]` (P7) |
-| `PERF-LATENCY-001` | p99 latency evidence | `[ ]` (P7) |
+| `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` (P5/P7 — bench plan `docs/plans/20260812-p7-bench.md`) |
+| `PERF-THROUGHPUT-001` | 60k sustained / 90k peak benchmark | `[ ]` (P7 — bench plan `docs/plans/20260812-p7-bench.md`) |
+| `PERF-LATENCY-001` | p99 latency evidence | `[ ]` (P7 — bench plan `docs/plans/20260812-p7-bench.md`) |
 | `FAILOVER-FLUSS-001` | Fluss/sink/checkpoint failure injection | `[x]` all legs proven 2026-08-11 + terminal-failure upgrade 2026-08-12 — checkpoint-failure → configured restart → FAILED + KV-write shared-fate now reaches terminal FAILED via the `StallGuardedSink` watchdog (`CandleFailureInjectionIntegrationTest` 3/3, gate `COMPUTE_INT_TEST_P6=true`; kv-drop leg `seen=[RUNNING, FAILED, FAILING]`, `cause=… sink write-path stall: flush exceeded 15000 ms`, LOG frozen, no hang — evidence `logs/tracker-14/p6-2-stall-guard-terminal-failed-2026-08-12.txt`, `gated-run-20260812-nonroot-fullsuite.log`); live timeout (checkpoint 506 expired at 30 s → global restart → restore from chk-505, no data loss), live tablet leader change, live coordinator restart (dev bench job `a05c101f`; evidence `logs/tracker-14/p6-3-failover-injection-2026-08-11.md`) |
 | `OBSERVABILITY-002` | OpenObserve metrics, logs, traces, alerts, dashboards, retention, and runbooks | `[x]` 2026-08-11 — P8.0/P8.2 delivery proofs complete (unit payload/auth 9/9; live OTLP/HTTP delivery + O2 PromQL verification incl. labels/units; collector-outage non-blocking integration test; two O2 outages: in-window retry with zero loss (1000-point burst, accepted==sent==1106) and terminal failure (send_failed=38) with ING-crit-telemetry-delivery-failed alert → webhook HTTP 200; flink_logs live from the distributed job; **P8.3 alerts DONE**: 14 SIGNAL rules provisioned idempotently via o2-provision.py (label-condition support, 23 total), 14/14 fired via OTLP fixtures + 12/14 recovered, storm test PASS (204,800-tick full replay + collector outage → zero unintended fires; evidence `logs/tracker-14/p8-3-alerts-2026-08-11.txt`); **P8.4 dashboards/runbooks + retention pending**; emitver enabled for ingestion JSON logs, queryable in `platform_logs`; traces negative; image digests recorded). Evidence: `logs/tracker-14/p8-2-otel-live-2026-08-11.txt`. Pending: distributed TaskManager metrics (P8.2 box 830) — DONE 2026-08-11 (distributed Flink metrics live: PrometheusReporter JM :9249/TM :9250 → collector scrape → remote-write → O2 PromQL battery, accepted==sent==48,569; `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`); `flink_logs` live structured logs — DONE 2026-08-11 (docs 463→1,924 from the distributed SignalJob, checkpoint lines queryable; `logs/tracker-14/p8-2-flink-logs-live-2026-08-11.txt`); **P8.3 alerts DONE**: 15 SIGNAL rules + 8 ING rules provisioned idempotently via o2-provision.py (24 total; SIGNAL-warn-source-lag added 2026-08-11 on the now-live operator event-time-lag metric, fired live via webhook); **P8.4 DONE**: 5 COMPUTE dashboards provisioned + panel queries validated live; retention contract applied per-stream (logs 30 / metrics 90 / traces 14 via provision_retention(), idempotent, 335 metric streams verified) with alerts-180d mapped to the metadata.sqlite meta store; operator-metric discovery closed P8.1 854/882 + P8.3 931 (Fluss client + operator metrics live: 78 streams); runbooks (SignalJob ops, replay, checkpoint, Fluss failure, schema-preflight, migration conflict, rollback with exact chk registry + cutoff chk-1539, alert catalogue, retention lifecycle) in docs/06_operations/01-runbooks.md; evidence: p8-1-flink-distributed-metrics (correction §7), p8-2-flink-logs-live, p8-3-alert-proposal, p8-3-alerts, p8-4-retention (all logs/tracker-14/, 2026-08-11) |
 | `MIGRATION-CONFLICT-002` | 25 historical conflicts reconciled with hashes/approvals | `[x]` 2026-08-11 — hash-pinned approvals + provenance records + DEV_EXCEPTION classification (P3.1) |
