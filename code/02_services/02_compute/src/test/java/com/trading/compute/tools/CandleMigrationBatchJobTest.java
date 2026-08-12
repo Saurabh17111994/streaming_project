@@ -505,7 +505,8 @@ class CandleMigrationBatchJobTest {
     @Test
     @DisplayName("lake-catalog map carries exactly the two fs.s3a.* supplier keys")
     void lakeCatalogMapExactKeys() {
-        Map<String, String> props = CandleMigrationBatchJob.lakeCatalogProperties();
+        Map<String, String> props =
+                CandleMigrationBatchJob.lakeCatalogProperties("30000", "30000");
         assertEquals(2, props.size());
         assertEquals("30000", props.get("iceberg.iceberg.hadoop.fs.s3a.connection.timeout"));
         assertEquals("30000", props.get("iceberg.iceberg.hadoop.fs.s3a.socket.timeout"));
@@ -514,7 +515,8 @@ class CandleMigrationBatchJobTest {
     @Test
     @DisplayName("lake-catalog map contains no credentials, keys, or tokens")
     void lakeCatalogMapNoCredentials() {
-        Map<String, String> props = CandleMigrationBatchJob.lakeCatalogProperties();
+        Map<String, String> props =
+                CandleMigrationBatchJob.lakeCatalogProperties("30000", "30000");
         for (Map.Entry<String, String> e : props.entrySet()) {
             String combined = (e.getKey() + " " + e.getValue()).toLowerCase();
             for (String forbidden : List.of("access", "secret", "credential", "token")) {
@@ -527,7 +529,8 @@ class CandleMigrationBatchJobTest {
     @Test
     @DisplayName("supplier keys round-trip through the fluss connector to fs.s3a.*")
     void lakeCatalogPrefixTransformation() {
-        Map<String, String> supplier = CandleMigrationBatchJob.lakeCatalogProperties();
+        Map<String, String> supplier =
+                CandleMigrationBatchJob.lakeCatalogProperties("30000", "30000");
 
         // FlinkCatalog.getLakeTable prepends "table.datalake." to each supplier key,
         // and the lake table options carry table.datalake.format=iceberg.

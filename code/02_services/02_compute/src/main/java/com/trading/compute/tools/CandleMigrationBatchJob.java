@@ -122,20 +122,34 @@ public final class CandleMigrationBatchJob {
      * table.datalake.iceberg.} and {@code HadoopUtils} (prefix {@code
      * iceberg.hadoop.}) strips the rest, so each entry lands in the
      * S3AFileSystem {@code Configuration} as {@code fs.s3a.*}. Verified against
-     * fluss-flink-common 0.9.1-incubating: {@code FlinkCatalog.getLakeTable}
-     * (table.datalake.* table options) → {@code LakeSourceUtils.createLakeSource}
-     * → {@code DataLakeUtils} → {@code HadoopUtils.FLUSS_CONFIG_PREFIXES}.
-     * Without these pins the R2 lake reader had an infinite socket timeout and
-     * a wedged connection blocked the audit forever (tracker 14 R2 lake-read
-     * stall 2026-08-12). Never put credentials here — the keys are passed to
-     * the catalog supplier, not the env.
+     * fluss-flink-common 0.9.1-incubating ({@code FlinkCatalog.getTable},
+     * datalake-enabled branch — plain table names take this path and get the
+     * {@code table.datalake.} prepend at line 364) and fluss-lake-iceberg
+     * 0.9.1-incubating ({@code HadoopUtils.FLUSS_CONFIG_PREFIXES}):
+     * {@code FlinkCatalog.getTable} → {@code LakeSourceUtils.createLakeSource}
+     * → {@code DataLakeUtils} → {@code HadoopUtils}. Without these pins the R2
+     * lake reader had an infinite socket timeout and a wedged connection
+     * blocked the audit forever (tracker 14 R2 lake-read stall 2026-08-12).
+     * Never put credentials here — the keys are passed to the catalog
+     * supplier, not the env.
      */
     static Map<String, String> lakeCatalogProperties() {
+        return lakeCatalogProperties(
+                System.getenv("CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS"),
+                System.getenv("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS"));
+    }
+
+    /**
+     * Pure two-arg variant for hermetic tests (no env access); null raw means
+     * missing -> default 30000.
+     */
+    static Map<String, String> lakeCatalogProperties(
+            String connectionTimeoutRaw, String socketTimeoutRaw) {
         return Map.of(
                 "iceberg.iceberg.hadoop.fs.s3a.connection.timeout",
-                s3TimeoutMs("CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS"),
+                s3TimeoutMs("CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS", connectionTimeoutRaw),
                 "iceberg.iceberg.hadoop.fs.s3a.socket.timeout",
-                s3TimeoutMs("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS"));
+                s3TimeoutMs("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS", socketTimeoutRaw));
     }
 
     /**
@@ -145,7 +159,14 @@ public final class CandleMigrationBatchJob {
      * pin removes.
      */
     static String s3TimeoutMs(String envName) {
-        String raw = System.getenv().getOrDefault(envName, "30000");
+        return s3TimeoutMs(envName, System.getenv(envName));
+    }
+
+    /** Pure parse/validate (testable without env access); null raw = missing. */
+    static String s3TimeoutMs(String envName, String raw) {
+        if (raw == null) {
+            raw = "30000";
+        }
         long value;
         try {
             value = Long.parseLong(raw.trim());
