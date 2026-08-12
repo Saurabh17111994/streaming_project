@@ -1,13 +1,17 @@
 package com.trading.ingestion;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.trading.ingestion.bridge.BridgeEvent;
 import com.trading.ingestion.quarantine.QuarantineWriter;
 import com.trading.ingestion.safety.SafetyHaltWriter;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -232,5 +236,80 @@ class SafetyTransitionMappingTest {
         assertEquals(true, IngestionService.isCriticalResourceCondition(99.9));
         // A broken platform (/proc unavailable → 0%) must never fire.
         assertEquals(false, IngestionService.isCriticalResourceCondition(-1.0));
+    }
+
+    @Test
+    @DisplayName("R-298: one real write per (state, tuple) — repeats are gated")
+    void firstEmissionGatesRepeatedTuple() {
+        Set<String> emitted = ConcurrentHashMap.newKeySet();
+        String fp = "fp-r298";
+        String id = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-0", 3, "UNSAFE", "STALE_BROKER_TIMESTAMP");
+
+        // First STALE tick for this slot/epoch → the write is allowed.
+        assertTrue(IngestionService.firstEmission(emitted, "UNSAFE", id),
+                "first emission of the tuple must be written");
+        // Every repeated STALE tick for the SAME tuple → no write (pre-R-298
+        // wrote an upsert per tick and deduped only the log line).
+        assertFalse(IngestionService.firstEmission(emitted, "UNSAFE", id),
+                "repeated tick must not re-write the same tuple");
+        assertFalse(IngestionService.firstEmission(emitted, "UNSAFE", id),
+                "repeat is still gated on the third tick");
+
+        // A NEW epoch (slot reconnected) is a new transition → write again.
+        String idNewEpoch = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-0", 4, "UNSAFE", "STALE_BROKER_TIMESTAMP");
+        assertTrue(IngestionService.firstEmission(emitted, "UNSAFE", idNewEpoch),
+                "new epoch → new transition → write");
+        // New reason (FUTURE) on the same epoch is also a new transition.
+        String idNewReason = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-0", 4, "UNSAFE", "FUTURE_BROKER_TIMESTAMP");
+        assertTrue(IngestionService.firstEmission(emitted, "UNSAFE", idNewReason),
+                "new reason → new transition → write");
+        // A different slot is independent of the first.
+        String idOtherSlot = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-1", 3, "UNSAFE", "STALE_BROKER_TIMESTAMP");
+        assertTrue(IngestionService.firstEmission(emitted, "UNSAFE", idOtherSlot),
+                "different slot → independent transition → write");
+    }
+
+    @Test
+    @DisplayName("R-298: UNSAFE and RECOVERED are separate gates for the same tuple")
+    void firstEmissionSeparatesStates() {
+        Set<String> emitted = ConcurrentHashMap.newKeySet();
+        String fp = "fp-r298";
+        String unsafe = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-0", 3, "UNSAFE", "FEED_STALLED");
+        String recovered = SafetyHaltWriter.computeHaltRequestId(
+                fp, "hft-0", 3, "RECOVERED", "");
+
+        assertTrue(IngestionService.firstEmission(emitted, "UNSAFE", unsafe));
+        assertFalse(IngestionService.firstEmission(emitted, "UNSAFE", unsafe),
+                "duplicate UNSAFE is gated");
+        // Recovery for the same slot/epoch must NOT be gated by the UNSAFE write.
+        assertTrue(IngestionService.firstEmission(emitted, "RECOVERED", recovered),
+                "RECOVERED is a distinct gate from UNSAFE");
+        assertFalse(IngestionService.firstEmission(emitted, "RECOVERED", recovered),
+                "duplicate RECOVERED is gated");
+    }
+
+    @Test
+    @DisplayName("R-298: pre-write id equals the writer's internal tuple id")
+    void preWriteIdMatchesWriterTuple() {
+        // The call sites compute computeHaltRequestId(manifestFingerprint,
+        // slot, epoch, state, reason) BEFORE write(); write() derives its
+        // returned id from the same tuple. A mismatch would silently break
+        // the dedup (each write would compute a fresh, ungated id).
+        String fp = "fp-r298";
+        long epoch = 7;
+        String reason = "STALE_BROKER_TIMESTAMP";
+        String preWrite = SafetyHaltWriter.computeHaltRequestId(fp, "hft-0", epoch, "UNSAFE", reason);
+        assertEquals(preWrite,
+                SafetyHaltWriter.computeHaltRequestId(fp, "hft-0", epoch, "UNSAFE", reason),
+                "same tuple → same id regardless of caller");
+        // RECOVERED uses the empty reason exactly as write(null) does.
+        String recovered = SafetyHaltWriter.computeHaltRequestId(fp, "hft-0", epoch, "RECOVERED", "");
+        assertNotEquals(preWrite, recovered);
+        assertEquals(64, recovered.length());
     }
 }

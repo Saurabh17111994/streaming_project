@@ -1031,20 +1031,24 @@ public final class IngestionService {
                 unsafeReasonFor(event, active);
 
         if (unsafe != null) {
-            String id = safetyHaltWriter.write(slotId, epoch,
-                    com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
-                    unsafe, assignedTokenSetHash, event.event(), System.currentTimeMillis());
-            if (safetyEmitted.add("UNSAFE|" + id)) {
+            String id = com.trading.ingestion.safety.SafetyHaltWriter.computeHaltRequestId(
+                    manifestFingerprint, slotId, epoch, "UNSAFE", unsafe.name());
+            if (firstEmission(safetyEmitted, "UNSAFE", id)) {
+                safetyHaltWriter.write(slotId, epoch,
+                        com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
+                        unsafe, assignedTokenSetHash, event.event(), System.currentTimeMillis());
                 LOG.warn("safety: slot {} UNSAFE (reason={}, epoch={}, halt={})",
                         slotId, unsafe, epoch, id.substring(0, Math.min(8, id.length())));
             }
             markSlotUnsafe(slotId);
         } else if (isRecoveredTransition(event, active)) {
             // Full acknowledgement → RECOVERED (same or greater epoch, frame present).
-            String id = safetyHaltWriter.write(slotId, epoch,
-                    com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.RECOVERED,
-                    null, assignedTokenSetHash, event.event(), System.currentTimeMillis());
-            if (safetyEmitted.add("RECOVERED|" + id)) {
+            String id = com.trading.ingestion.safety.SafetyHaltWriter.computeHaltRequestId(
+                    manifestFingerprint, slotId, epoch, "RECOVERED", "");
+            if (firstEmission(safetyEmitted, "RECOVERED", id)) {
+                safetyHaltWriter.write(slotId, epoch,
+                        com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.RECOVERED,
+                        null, assignedTokenSetHash, event.event(), System.currentTimeMillis());
                 LOG.info("safety: slot {} RECOVERED (epoch={}, halt={})",
                         slotId, epoch, id.substring(0, Math.min(8, id.length())));
             }
@@ -1072,11 +1076,13 @@ public final class IngestionService {
                 qualityUnsafeReason(quarantineReason);
         if (code == null) return;
         long safeEpoch = epoch > 0 ? epoch : 1L;
-        String id = safetyHaltWriter.write(slotId, safeEpoch,
-                com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
-                code, assignedTokenSetHash, quarantineReason.name(),
-                System.currentTimeMillis());
-        if (safetyEmitted.add("UNSAFE|" + id)) {
+        String id = com.trading.ingestion.safety.SafetyHaltWriter.computeHaltRequestId(
+                manifestFingerprint, slotId, safeEpoch, "UNSAFE", code.name());
+        if (firstEmission(safetyEmitted, "UNSAFE", id)) {
+            safetyHaltWriter.write(slotId, safeEpoch,
+                    com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
+                    code, assignedTokenSetHash, quarantineReason.name(),
+                    System.currentTimeMillis());
             LOG.warn("safety: slot {} UNSAFE (reason={}, epoch={}, halt={})",
                     slotId, code, safeEpoch, id.substring(0, Math.min(8, id.length())));
         }
@@ -1102,6 +1108,19 @@ public final class IngestionService {
     private void markSlotUnsafe(String slotId) {
         health.setSlotUnsafe(slotId, true);
         metrics.setSlotSafetyState(slotId, 1, health.slot(slotId).unsafeSinceNanos);
+    }
+
+    /**
+     * R-298 safety-write dedup gate: {@code true} only for the FIRST emission
+     * of this {@code (state, halt_request_id)} pair. Callers MUST gate the
+     * actual {@code SafetyHaltWriter.write(...)} on this — the pre-R-298 code
+     * wrote unconditionally and deduped only the log line, so every repeated
+     * STALE tick still appended a KV upsert (table-89 growth + hot-path cost).
+     * Backed by a {@link java.util.concurrent.ConcurrentHashMap} key set:
+     * concurrency-safe, pure, unit-tested.
+     */
+    static boolean firstEmission(java.util.Set<String> emitted, String state, String haltRequestId) {
+        return emitted.add(state + "|" + haltRequestId);
     }
 
     private void handleBridgeEvent(BridgeEvent event) {
@@ -1343,11 +1362,13 @@ public final class IngestionService {
             HealthProbe.SlotHealth slot = health.slot(slotId);
             long epoch = slot.epoch > 0 ? slot.epoch : connectionEpoch.get();
             if (epoch <= 0) continue;
-            String id = safetyHaltWriter.write(slotId, epoch,
-                    com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
-                    com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.RESOURCE_EXHAUSTED,
-                    assignedTokenSetHash, "fd_usage_exhausted", System.currentTimeMillis());
-            if (safetyEmitted.add("UNSAFE|" + id)) {
+            String id = com.trading.ingestion.safety.SafetyHaltWriter.computeHaltRequestId(
+                    manifestFingerprint, slotId, epoch, "UNSAFE", "RESOURCE_EXHAUSTED");
+            if (firstEmission(safetyEmitted, "UNSAFE", id)) {
+                safetyHaltWriter.write(slotId, epoch,
+                        com.trading.ingestion.safety.SafetyHaltWriter.SafetyState.UNSAFE,
+                        com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.RESOURCE_EXHAUSTED,
+                        assignedTokenSetHash, "fd_usage_exhausted", System.currentTimeMillis());
                 LOG.error("safety: slot {} UNSAFE (reason=RESOURCE_EXHAUSTED, fd_usage={}%, epoch={}, halt={})",
                         slotId, String.format("%.1f", fdUsagePercent), epoch,
                         id.substring(0, Math.min(8, id.length())));
