@@ -1,8 +1,10 @@
 # Version pins for the DDL application contract.
 #
 # Platform versions (Flink/Fluss) are PINNED (Option A, approved 2026).
-# External/verification versions (broker/Arrow/schema-lifecycle) remain
-# TO_BE_VERIFIED until their contracts are captured and capability tests run.
+# BROKER_PROTOCOL (go-arrow) is PINNED (see line 18). Remaining
+# external/verification versions (Arrow API contract, schema lifecycle)
+# stay TO_BE_VERIFIED until their contracts are captured and capability
+# tests run.
 #
 # `make ddl` enforces the VERSION GATE on PLATFORM versions only
 # (FLINK_VERSION, FLUSS_VERSION): absent / 'latest' / placeholder -> FAIL.
@@ -15,6 +17,7 @@
 
 FLINK_VERSION=2.2.1
 FLUSS_VERSION=0.9.1-incubating
-BROKER_PROTOCOL=go-arrow-v0.0.0-local (git:26115cf, module:github.com/arrow-trade/go-arrow, replace-only)
+ZOOKEEPER_VERSION=3.9.2
+BROKER_PROTOCOL=go-arrow-v0.0.0-20260622-7cce1630 (module:github.com/arrow-trade/go-arrow, upstream base 7cce1630 2026-06-22 + in-repo patches R-101..R-243, vendored third_party/go-arrow replace, tree sha256:f622f8a9a0cf4916869184d423523f819bd42202c256462466bf621e5e3af368) PINNED
 ARROW_API_CONTRACT=v2026-05 (captured from Arrow_broker repo, docs/04_contracts/arrow_broker.md)
 SCHEMA_LIFECYCLE=v1 (all 6 schema-state classes + 5 evolution classes implemented)

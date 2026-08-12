@@ -47,6 +47,13 @@ public final class HealthProbe {
         public volatile int rejected;
         public volatile long lastFrameNanos;
         public volatile long epoch;
+        // Safety evidence (plan Amendment): unsafe is true from the first
+        // unsafe transition until RECOVERED; unsafeSinceNanos is the
+        // monotonic stamp of that first transition (0 while safe);
+        // capacityRemaining = connection limit − assigned.
+        public volatile boolean unsafe;
+        public volatile long unsafeSinceNanos;
+        public volatile long capacityRemaining;
     }
 
     /**
@@ -104,9 +111,38 @@ public final class HealthProbe {
 
     public SlotHealth slot(String slotId) { return slots.computeIfAbsent(slotId, ignored -> new SlotHealth()); }
 
+    /** Slots currently tracked (used to fan safety evidence across slots). */
+    public java.util.Set<String> slotIds() { return slots.keySet(); }
+
+    /**
+     * Slot safety evidence (plan Amendment). The first safe→unsafe transition
+     * stamps {@code unsafeSinceNanos} (monotonic); re-emissions of the same
+     * unsafe state keep the original stamp so the unsafe-duration gauge does
+     * not reset. {@code false} clears both — a slot is safe again only via a
+     * RECOVERED transition.
+     */
+    public void setSlotUnsafe(String slotId, boolean unsafe) {
+        SlotHealth slot = slot(slotId);
+        if (unsafe && !slot.unsafe) {
+            slot.unsafeSinceNanos = System.nanoTime();
+        }
+        if (!unsafe) {
+            slot.unsafeSinceNanos = 0;
+        }
+        slot.unsafe = unsafe;
+    }
+
+    /** Remaining subscription capacity (connection limit − assigned). */
+    public void setSlotCapacityRemaining(String slotId, long remaining) {
+        slot(slotId).capacityRemaining = remaining;
+    }
+
     /**
      * Reset every tracked slot to AUTHENTICATING with zero coverage — used when
      * a fresh bridge process starts (plan: reset all slot states on restart).
+     * Safety evidence is deliberately NOT reset here: an unsafe slot stays
+     * unsafe until a RECOVERED transition (full ACTIVE ack on a strictly
+     * greater epoch), so a bridge restart cannot silently clear the flag.
      */
     public void resetSlotsToAuthenticating() {
         slots.forEach((id, slot) -> {
@@ -188,6 +224,10 @@ public final class HealthProbe {
             values.put("rejected", slot.rejected);
             values.put("frame_age_ms", slot.lastFrameNanos == 0 ? -1 :
                     Duration.ofNanos(Math.max(0, System.nanoTime() - slot.lastFrameNanos)).toMillis());
+            values.put("unsafe", slot.unsafe);
+            values.put("unsafe_duration_ms", slot.unsafeSinceNanos == 0 ? 0 :
+                    Duration.ofNanos(Math.max(0, System.nanoTime() - slot.unsafeSinceNanos)).toMillis());
+            values.put("capacity_remaining", slot.capacityRemaining);
             slotDiagnostics.put(id, values);
         });
         m.put("slots", slotDiagnostics);

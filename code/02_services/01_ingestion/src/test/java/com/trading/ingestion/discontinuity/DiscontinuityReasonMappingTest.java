@@ -29,6 +29,10 @@ import org.junit.jupiter.api.Test;
 @DisplayName("ING-UNIT-011: bridge event to discontinuity reason mapping")
 class DiscontinuityReasonMappingTest {
 
+    /** 64 lowercase hex chars — the SHA-256 digest shape the bridge emits. */
+    private static final String HEX64 =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     @Test
     @DisplayName("disconnect and bridge_shutdown map to DROP")
     void disconnectMapsToDrop() {
@@ -76,7 +80,7 @@ class DiscontinuityReasonMappingTest {
     void fullSubscriptionAckCarriesNoEvidence() {
         BridgeEvent fullAck = new BridgeEvent(
                 "subscription_ack", BridgeEvent.CONTRACT_VERSION, "hft-0", "ingestion-local/hft-0",
-                1L, "ACTIVE", 1024, 1024, 0, "", 1_000L);
+                1L, "ACTIVE", 1024, 1024, 0, "", 1_000L, HEX64, HEX64);
         // The event maps, but with rejectedTokens == 0 the write guard must
         // suppress the row — a clean full ack is not a discontinuity.
         assertEquals(DiscontinuityWriter.Reason.FEED_HEALTH,
@@ -89,7 +93,7 @@ class DiscontinuityReasonMappingTest {
     void partialSubscriptionAckCarriesEvidence() {
         BridgeEvent partialAck = new BridgeEvent(
                 "subscription_ack", BridgeEvent.CONTRACT_VERSION, "hft-0", "ingestion-local/hft-0",
-                1L, "PARTIAL", 1024, 900, 124, "tokens rejected", 1_000L);
+                1L, "PARTIAL", 1024, 900, 124, "tokens rejected", 1_000L, HEX64, HEX64);
         assertEquals(DiscontinuityWriter.Reason.FEED_HEALTH,
                 DiscontinuityWriter.mapEventToReason(partialAck.event()));
         assertEquals(true, DiscontinuityWriter.carriesDiscontinuityEvidence(partialAck));
@@ -101,7 +105,7 @@ class DiscontinuityReasonMappingTest {
         // slot_state must not produce a row — no exception, just no mapping.
         BridgeEvent slotState = new BridgeEvent(
                 "slot_state", BridgeEvent.CONTRACT_VERSION, "hft-0", "ingestion-local/hft-0",
-                1L, "CONNECTING", 1024, 0, 0, "", 1_000L);
+                1L, "CONNECTING", 1024, 0, 0, "", 1_000L, HEX64, HEX64);
         assertEquals(null, DiscontinuityWriter.mapEventToReason(slotState.event()));
         assertEquals(false, DiscontinuityWriter.carriesDiscontinuityEvidence(slotState));
     }

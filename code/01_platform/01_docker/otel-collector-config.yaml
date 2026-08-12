@@ -1,57 +1,215 @@
-# OpenTelemetry Collector configuration for the trading platform.
+# =============================================================================
+# OTel Collector — ingestion telemetry bridge to OpenObserve
 #
-# Receives OTLP gRPC (4317) and HTTP (4318) from all platform services
-# and exports logs, metrics, and traces to the OpenObserve backend.
+# Topology (observability-only; NEVER in the ingestion critical path):
+#   Java ingestion (OtlpMetricsEmitter) --OTLP/HTTP--> collector :4318
+#     --> otlphttp exporter --> openobserve :5080 /api/{org}/v1/metrics
+#   Java ingestion JSON logs (/data/ingestion/logs/*.json) --filelog receiver-->
+#     same pipeline --> openobserve (logs stream)
 #
-# See docs/04_contracts/openobserve.md for the full observability contract.
-
+# The collector normalizes the service's hand-rolled OTLP JSON into canonical
+# OTLP and holds the OpenObserve Basic auth (ingestion code carries no creds).
+# Export failures are exposed as otelcol_exporter_send_failed_metric_points
+# (the otelcol 0.123.0 naming — present-tense send_failed; verified against the
+# live stream 2026-08-11), which OpenObserve itself alerts on (end-to-end
+# delivery guarantee). retry_on_failure keeps retrying within max_elapsed_time
+# (5m), so the counter only fires on TERMINAL export failure — exactly the
+# "persist beyond the approved interval" alert semantics.
+#
+# Phase 2 (approved scope): filelog receiver for /data/ingestion/logs/*.json
+# to make OpenObserve the single pane for metrics + logs. Enabled 2026-08-11
+# (tracker 14 P8.2 box 10); the SignalJob structured-log half (flink_logs) is
+# live from the distributed job (P8.2 evidence 2026-08-11).
+# =============================================================================
 receivers:
   otlp:
     protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+  filelog:
+    include: [/data/ingestion/logs/*.json]
+    start_at: end
+    operators:
+      - type: json_parser
+        parse_to: body
+      - type: add
+        field: resource.service.name
+        value: ingestion
+      # Stream routing happens in the exporter via the stream-name HTTP
+      # header (O2 v0.91.5 ZO_GRPC_STREAM_HEADER_KEY) — not attributes.
+  # P8 (tracker 14): scrape the Flink PrometheusReporter endpoints. The
+  # collector does the scraping (single place holding the O2 auth); Flink
+  # containers stay credential-free.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: flink
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["flink-jobmanager:9249", "flink-taskmanager:9249"]
+  # P8.2 (tracker 14): flink_logs stream from the flink-logs volume
+  # (/opt/flink/log/<role>.log, plain-text log4j output). ID must use the
+  # type/name syntax (filelog/flink), not a bare custom type name.
+  filelog/flink:
+    include: [/data/flink/logs/*.log]
+    start_at: beginning
+    operators:
+      - type: add
+        field: resource.service.name
+        value: flink
+  # P8.1 (tracker 14 box 827): fluss_logs stream from the fluss-logs volume
+  # (/opt/fluss/log/*.log — fluss--<role>-*.log log4j2 output, verified live
+  # 2026-08-11). Reads CoordinatorServer + TabletServer logs: connection,
+  # leadership, storage, replication, lake tiering.
+  filelog/fluss:
+    include: [/data/fluss/logs/*.log]
+    start_at: beginning
+    operators:
+      - type: add
+        field: resource.service.name
+        value: fluss
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+exporters:
+  otlphttp/openobserve:
+    # Base path: the exporter appends /v1/metrics -> .../api/default/v1/metrics
+    # Port 5080 = O2 HTTP API (OTLP HTTP included). 5081 is gRPC-only.
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  # Logs route to O2's platform_logs stream via the stream-name HTTP header
+  # (ZO_GRPC_STREAM_HEADER_KEY, default "stream-name"; O2 v0.91.5 source
+  # src/handler/http/request/logs/ingest.rs otlp_logs_write — verified by
+  # direct probes + collector config 2026-08-11). OTLP attributes such as
+  # stream_name are NOT honored, so the header is the only routing mechanism.
+  otlphttp/openobserve-logs:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+      stream-name: platform_logs
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  # P8 (tracker 14): Flink metrics -> O2 Prometheus remote-write (the same
+  # O2 instance; PromQL queries hit /api/{org}/prometheus/api/v1/query — no
+  # _prometheus underscore; that route 404s, verified 2026-08-11).
+  # stream-name: flink_logs routes log records to the flink_logs stream
+  # (O2 v0.91.5 ZO_GRPC_STREAM_HEADER_KEY) instead of platform_logs.
+  otlphttp/openobserve-flink-logs:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+      stream-name: flink_logs
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  # P8.1 (tracker 14 box 827): Fluss server logs -> fluss_logs stream.
+  otlphttp/openobserve-fluss-logs:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+      stream-name: fluss_logs
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  # P8.1 (tracker 14 box 828): SignalJob lifecycle alert events (OTLP logs
+  # from the app) -> trading_alerts stream. O2 alert RULES (24, incl. the
+  # SIGNAL-* set) route to destinations/webhooks in v0.91.5 — this stream is
+  # the application-emitter contract for deterministic events (startup mode,
+  # schema-preflight failure); runtime failures stay on the metrics rules.
+  otlphttp/openobserve-trading-alerts:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+      stream-name: trading_alerts
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  prometheusremotewrite/openobserve:
+    endpoint: http://openobserve:5080/api/default/prometheus/api/v1/write
+    headers:
+      Authorization: "Basic ${env:O2_AUTH_BASIC}"
+    # Remote-write protocol: snappy only (default) — gzip is rejected.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
 
 processors:
   batch:
-    timeout: 5s
     send_batch_size: 512
+    timeout: 5s
   memory_limiter:
     check_interval: 1s
-    limit_mib: 512
-    spike_limit_mib: 128
-
-exporters:
-  otlphttp/logs:
-    endpoint: http://openobserve:5080/api/default
-    headers:
-      Authorization: Basic ${env:O2_AUTH_BASIC}
-      stream-name: default
-  otlphttp/metrics:
-    endpoint: http://openobserve:5080/api/default
-    headers:
-      Authorization: Basic ${env:O2_AUTH_BASIC}
-      stream-name: default
-  otlphttp/traces:
-    endpoint: http://openobserve:5080/api/default
-    headers:
-      Authorization: Basic ${env:O2_AUTH_BASIC}
-      stream-name: default
-  debug:
-    verbosity: basic
+    limit_mib: 256
+    spike_limit_mib: 64
 
 service:
+  extensions: [health_check]
   pipelines:
-    logs:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlphttp/logs, debug]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/metrics]
-    traces:
+      exporters: [otlphttp/openobserve]
+    # P8: Flink Prometheus scrape -> O2 remote-write (same O2 instance).
+    metrics/flink:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite/openobserve]
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/openobserve-logs]
+    # P8.2: flink file logs -> flink_logs stream.
+    logs/flink:
+      receivers: [filelog/flink]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/openobserve-flink-logs]
+    # P8.1: fluss server logs -> fluss_logs stream.
+    logs/fluss:
+      receivers: [filelog/fluss]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/openobserve-fluss-logs]
+    # P8.1: SignalJob OTLP logs (startup-mode / schema-preflight events) ->
+    # trading_alerts stream. The otlp receiver serves both HTTP (4318) and
+    # gRPC (4317); OTLP logs arriving on either route to this pipeline.
+    logs/trading:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/traces]
+      exporters: [otlphttp/openobserve-trading-alerts]
+  # Self-telemetry: export the collector's own counters (notably
+  # otelcol_exporter_send_failed_metric_points) through its own pipeline so
+  # OpenObserve can alert when data stops arriving. Standard OTel pattern.
+  telemetry:
+    metrics:
+      readers:
+        - periodic:
+            interval: 60000
+            exporter:
+              otlp:
+                protocol: http/protobuf
+                endpoint: http://localhost:4318

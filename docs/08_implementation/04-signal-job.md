@@ -209,6 +209,8 @@ Restore must recover source offsets, dedup state, windows, forming bars, active 
 
 Normal restarts SHALL pass `STATE_RECOVERY_PATH` (a Flink checkpoint/savepoint dir); the job then restores offsets and state. If `STATE_RECOVERY_PATH` is absent the job fails closed at startup with an explicit mode error — unless the operator deliberately sets `ALLOW_FULL_REPLAY=true` (documented break-glass; logs and emits `compute.startup.mode` = `FULL_REPLAY`). RESTORE mode emits `compute.startup.mode` = `RESTORE`. The two modes are mutually exclusive and never defaulted to replay. This gate is what turns the 2026-08-10 incident's no-restore restart from a silent replay into a refused startup.
 
+Completed checkpoints are externalized with `RETAIN_ON_CANCELLATION` (set in `SignalJob.buildTopology`), so a deliberate stop keeps the exact checkpoint named by the next `STATE_RECOVERY_PATH`; the default delete-on-cancel would silently invalidate the restore contract (P6.1 phase 2→3 verifies cancel preserves the `chk-N` directory and the restore resumes from it).
+
 ### Checkpoint sizing
 
 Estimated checkpoint metrics at the 60,000 ticks/s baseline (3,000 instruments; 20 ticks/s/instrument average):
@@ -357,7 +359,7 @@ The required behavior above is verified by the canonical [Signal job test design
 
 | File | Responsibility |
 | --- | --- |
-| `02_compute/.../signaljob/SignalJob.java` | Job topology: source → validation → dedup → 15 s window → sinks (LOG + KV); EXACTLY_ONCE checkpointing (interval/timeout/max-concurrent pinned), fixed-delay restart 3 × 30 s (declarative `Configuration`, Flink 2.2.1); `preflightTableContracts(config)` metadata gate + startup-mode gate (RESTORE / explicit FULL_REPLAY). |
+| `02_compute/.../signaljob/SignalJob.java` | Job topology: source → validation → dedup → 15 s window → sinks (LOG + KV); EXACTLY_ONCE checkpointing (interval/timeout/max-concurrent pinned, `RETAIN_ON_CANCELLATION` externalized retention so the `STATE_RECOVERY_PATH` restore point survives deliberate stops), fixed-delay restart 3 × 30 s (declarative `Configuration`, Flink 2.2.1); `preflightTableContracts(config)` metadata gate + startup-mode gate (RESTORE / explicit FULL_REPLAY). |
 | `02_compute/.../signaljob/SignalJobConfig.java` | Pinned-load-bearing config: `DEDUP_TTL_MS=300000`, `CANDLE_WINDOW_MS=15000`, `CHECKPOINT_INTERVAL_MS=10000`, `CHECKPOINT_TIMEOUT_MS=30000`, `MAX_CONCURRENT_CHECKPOINTS=1` (reject any other value); tuning keys defaulted (`WATERMARK_OUT_OF_ORDER_MS=5000`, `ALLOWED_LATENESS_MS=5000`, `SOURCE_IDLE_MS=15000`, `RESTART_MAX_ATTEMPTS=3`, `RESTART_DELAY_MS=30000`); replay gate keys (`CANDLE_CURRENT_TABLE`, `ALLOW_FULL_REPLAY`, `STATE_RECOVERY_PATH`). |
 | `02_compute/.../signaljob/RawTableColumns.java` / `CandleTableColumns.java` | DDL v2 column layouts (20 / 15 fields) mirrored as field indexes; explicit `InternalTypeInfo` at the candle boundary (no Kryo fallback for RowData). The same `CandleTableColumns` layouts drive both candle sinks and `CandleMigrationTool`. |
 | `common/.../schema/CandleTableSchema.java` + `CanonicalCandlePolicy.java` | Shared 15-column candle schema contract (LOG and KV DDL parity) and canonical-version check `(schema_version, algorithm_version, configuration_version)` (CANDLE-KV-REPLAY-001). |

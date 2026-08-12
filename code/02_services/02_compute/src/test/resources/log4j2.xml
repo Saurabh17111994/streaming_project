@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" shutdownHook="disable">
+  <!--
+    Test-scope log4j2 config for the compute module: makes MiniCluster /
+    Flink / S3A logs visible in surefire output. Without a working slf4j
+    provider, Flink falls back to NOP and checkpoint-write failures (e.g. the
+    tracker-14 P4.2 R2 proof) are silent.
+    SLF4J bridge: log4j-slf4j2-impl 2.25.4 (test scope) → Log4j2 2.25.4.
+  -->
+  <Properties>
+    <Property name="CONSOLE_PATTERN">%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Property>
+  </Properties>
+  <Appenders>
+    <Console name="CONSOLE" target="SYSTEM_ERR">
+      <PatternLayout pattern="${CONSOLE_PATTERN}"/>
+    </Console>
+    <!-- Tracker 14 P6.3 (2026-08-12): durable capture — surefire's fork
+         swallows SYSTEM_ERR, so the stall-guard diagnostics were invisible.
+         Written to the workspace mount (logs/tracker-14/) so container runs
+         keep the Flink log after the container exits. -->
+    <File name="FILE" fileName="${sys:test.log.dir:-target}/p63-flink.log">
+      <PatternLayout pattern="${CONSOLE_PATTERN}"/>
+    </File>
+  </Appenders>
+  <Loggers>
+    <!-- S3A is verbose at INFO (retries, region probes); keep at WARN so the
+         P4.2 checkpoint proof surfaces real errors, not noise. -->
+    <Logger name="org.apache.hadoop.fs.s3a" level="WARN"/>
+    <Logger name="org.apache.flink" level="INFO"/>
+    <Logger name="com.trading" level="INFO"/>
+    <Root level="INFO">
+      <AppenderRef ref="CONSOLE"/>
+      <AppenderRef ref="FILE"/>
+    </Root>
+  </Loggers>
+</Configuration>

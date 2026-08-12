@@ -1,25 +1,35 @@
 # Tick NDJSON Schema — Go arrow-bridge ↔ Java IngestionService
 
 <!--
-  Version 2.0 — 2026-08-01.
+  Version 2.2 — 2026-08-08.
   Contract between go-bridge/main.go stdout and IngestionService.java stdin.
   This schema is the single source of truth for the pipe contract.
   Supersedes v1.0 (2026-07-30) — see Versioning.
+
+  v2.2 is an ADDITIVE extension of contract version 2: one new record type
+  (bridge_metrics) and two new required bridge_event fields. The integer
+  contract_version stays 2 — consumers from v2.0/v2.1 that do not know the
+  new record type ignore it (Java routes unknown record types through the
+  quarantine parser, which falls through), and the new fields are additive
+  JSON keys. A consumer that validates strictly (Java BridgeEvent) requires
+  the new fields; older producers that predate v2.2 must not be paired with
+  such a consumer.
 -->
 
 ## Delivery
 
 One record per line, newline-delimited JSON (NDJSON). No array wrapping. No pretty-printing. Empty lines are ignored. Malformed lines are counted as errors and quarantined.
 
-There are **three record types**, discriminated by the required `record_type` field:
+There are **four record types**, discriminated by the required `record_type` field:
 
 | `record_type` | Producer | Consumer |
 | --- | --- | --- |
 | `tick` | Go bridge (each decoded HFT/standard tick) | `IngestionService.processLine` → `raw_table_1` |
 | `bridge_event` | Go bridge (lifecycle transitions) | `IngestionService.processBridgeEvent` → health/metrics/evidence |
+| `bridge_metrics` | Go bridge (10s telemetry snapshot, v2.2+) | `IngestionService.processLine` → `parseMetrics` → Go-authoritative gauges |
 | `broker_quarantine` | Go bridge (undecodable/unknown broker packets) | `IngestionService` → `ingestion_quarantine` |
 
-Contract version is integer `2`.
+Contract version is integer `2` (v2.2 is an additive document revision — see Versioning).
 
 ## Tick record
 
@@ -122,7 +132,9 @@ Lifecycle records are `record_type="bridge_event"`. The `event` field names the 
   "acknowledged_tokens": 0,
   "rejected_tokens": 0,
   "reason": "",
-  "received_ts_ms": 1785471200000
+  "received_ts_ms": 1785471200000,
+  "manifest_fingerprint": "8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c",
+  "assigned_token_set_hash": "8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"
 }
 ```
 
@@ -130,37 +142,37 @@ Lifecycle records are `record_type="bridge_event"`. The `event` field names the 
 
 `slot_state`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"slot_state","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"CONNECTING","assigned_tokens":1024,"acknowledged_tokens":0,"rejected_tokens":0,"reason":"","received_ts_ms":1785471200000}
+{"record_type":"bridge_event","contract_version":2,"event":"slot_state","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"CONNECTING","assigned_tokens":1024,"acknowledged_tokens":0,"rejected_tokens":0,"reason":"","received_ts_ms":1785471200000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `subscription_ack` (full success):
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"subscription_ack","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"ACTIVE","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"","received_ts_ms":1785471200100}
+{"record_type":"bridge_event","contract_version":2,"event":"subscription_ack","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"ACTIVE","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"","received_ts_ms":1785471200100,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `heartbeat_failed`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"heartbeat_failed","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"[redacted]","received_ts_ms":1785471210000}
+{"record_type":"bridge_event","contract_version":2,"event":"heartbeat_failed","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"[redacted]","received_ts_ms":1785471210000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `feed_stalled`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"feed_stalled","slot_id":"hft-1","connection_id":"ingestion-local/hft-1","connection_epoch":2,"state":"STALLED","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"no_tick_for_15s","received_ts_ms":1785471215000}
+{"record_type":"bridge_event","contract_version":2,"event":"feed_stalled","slot_id":"hft-1","connection_id":"ingestion-local/hft-1","connection_epoch":2,"state":"STALLED","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"no_tick_for_15s","received_ts_ms":1785471215000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `reconnect`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"reconnect","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":2,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"retry_in_2s","received_ts_ms":1785471216000}
+{"record_type":"bridge_event","contract_version":2,"event":"reconnect","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":2,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"retry_in_2s","received_ts_ms":1785471216000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `auth_failure`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"auth_failure","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":3,"state":"AUTH_FAILED","assigned_tokens":1024,"acknowledged_tokens":0,"rejected_tokens":0,"reason":"authentication_refresh_exhausted","received_ts_ms":1785471219000}
+{"record_type":"bridge_event","contract_version":2,"event":"auth_failure","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":3,"state":"AUTH_FAILED","assigned_tokens":1024,"acknowledged_tokens":0,"rejected_tokens":0,"reason":"authentication_refresh_exhausted","received_ts_ms":1785471219000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 `bridge_shutdown`:
 ```json
-{"record_type":"bridge_event","contract_version":2,"event":"bridge_shutdown","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"","received_ts_ms":1785471300000}
+{"record_type":"bridge_event","contract_version":2,"event":"bridge_shutdown","slot_id":"hft-0","connection_id":"ingestion-local/hft-0","connection_epoch":1,"state":"BACKOFF","assigned_tokens":1024,"acknowledged_tokens":1024,"rejected_tokens":0,"reason":"","received_ts_ms":1785471300000,"manifest_fingerprint":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c","assigned_token_set_hash":"8a65b772eeae7692de1f941da206dc6a5b6649568e999dc06fb16a7b0615744c"}
 ```
 
 ### Bridge event field reference
@@ -179,13 +191,42 @@ Lifecycle records are `record_type="bridge_event"`. The `event` field names the 
 | `rejected_tokens` | `int` | tokens rejected by the broker |
 | `reason` | `string` | bounded ≤512 chars, redacted; never credentials |
 | `received_ts_ms` | `int64` | epoch ms |
+| `manifest_fingerprint` | `string` | SHA-256 hex (64 lowercase) of the whole manifest token set — sorted tokens, each as 8 big-endian bytes (v2.2+, required by strict consumers) |
+| `assigned_token_set_hash` | `string` | SHA-256 hex (64 lowercase) of this slot's assigned token set, same encoding as the fingerprint (v2.2+, required by strict consumers) |
+
+The two identity hashes use the same encoding as `SafetyHaltWriter.computeAssignedTokenHash` / `InstrumentManifestLoader.computeFingerprint`: SHA-256 over the **sorted** token list, each token as **8 big-endian bytes**. The Java consumer treats a fingerprint/token-hash mismatch as a **warn-only cross-check** (increments `FINGERPRINT_MISMATCH` / `TOKEN_HASH_MISMATCH` decode-error counters) — events are never rejected, because Go and Java token sets can legitimately differ in dev synthetic mode. Both fields are always present in the real bridge's stdout (identity configured at startup); Go omits them only when identity was never configured.
 
 `reason` is always redacted by the Go bridge before emission (secrets, tokens, app secrets, and raw payload values scrubbed). Java independently redacts bridge stderr forwarding and parser exceptions (defense in depth — never rely on one layer).
+
+## Bridge metrics record
+
+`record_type="bridge_metrics"` is a periodic (10s) telemetry snapshot produced by the bridge supervisor's ticker (v2.2+). The Java consumer routes it **before** the GoTick fall-through (it must never misparse as a tick with `feed=""` → `INVALID_SCHEMA` quarantine). Values are Go-authoritative and overwrite the Java lifecycle-derived gauges; those lifecycle values are only the pre-first-metrics fallback.
+
+```json
+{
+  "record_type": "bridge_metrics",
+  "contract_version": 2,
+  "ts_ms": 1785471200000,
+  "reconnect_consecutive": 3,
+  "active_sockets": 1,
+  "go_goroutines": 42
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `record_type` | `string` | `"bridge_metrics"` |
+| `contract_version` | `int` | `2` |
+| `ts_ms` | `int64` | snapshot wall-clock time, > 0 |
+| `reconnect_consecutive` | `int` | highest per-slot consecutive-reconnect streak at snapshot time (resets when a slot reaches ACTIVE) |
+| `active_sockets` | `int` | currently open broker sockets (open/close counted by the bridge, so orphaned sockets are visible) |
+| `go_goroutines` | `int` | `runtime.NumGoroutine()` — leak detection evidence |
+
+Java maps these onto `bridge.reconnect_consecutive`, `bridge.active_sockets`, `bridge.go_goroutines` gauges. A `bridge_metrics` line with an unknown `contract_version` is a protocol error (thrown, like unknown event versions). Missing/zero `ts_ms` is rejected. Any other `record_type` yields `Optional.empty()` — never a rejection.
 
 ## Broker quarantine record
 
 Undecodable or unknown broker packets with recoverable packet boundaries become `record_type="broker_quarantine"`:
-
 ```json
 {
   "record_type": "broker_quarantine",
@@ -214,6 +255,8 @@ Java hash-validates `raw_payload` against `payload_hash` and persists to `ingest
 7. **raw_payload is the exact decompressed broker packet bytes** (Base64), never the JSON line. `payload_hash` is their SHA-256.
 8. **One record per line, atomic writes.** The emitter serializes complete lines; three slot goroutines may emit concurrently.
 9. **Java errors:** malformed JSON → quarantine + `decode.errors`; unknown lifecycle version/event → fatal protocol failure; valid tick with bad business values → quarantine; valid lifecycle event → state/evidence/metrics update.
+10. **Records are additive within a contract version.** Unknown `record_type` values fall through to the next parser (quarantine, then metrics, then tick bind) and are never silently dropped or rejected; `bridge_metrics` is routed before the GoTick bind. New fields on known records are additive JSON keys — strict consumers require them, lenient consumers (Go `omitempty`) may omit.
+11. **`bridge_metrics` lines must never be quarantined as `INVALID_SCHEMA`** — a metrics line bound as a GoTick has `feed=""`, so routing order is part of the contract.
 
 ## Versioning
 
@@ -222,8 +265,9 @@ Java hash-validates `raw_payload` against `payload_hash` and persists to `ingest
 | 1.0 | 2026-07-30 | Initial schema. Matches `go-bridge/main.go` `Tick` struct and `IngestionService.java` `GoTick` class. |
 | 2.0 | 2026-08-01 | Added `record_type`, `contract_version=2`, `connection_id`, `connection_epoch`, `slot_id`, `received_ts_ms`, `raw_payload`, `payload_hash`; added `bridge_event` and `broker_quarantine` record types; documented lifecycle event examples and Java handling. |
 | 2.1 | 2026-08-01 | Added `feed_sequence_local` (monotonic per-slot tick sequence, not part of dedup fingerprint). |
+| 2.2 | 2026-08-08 | **Additive extension, contract version stays 2.** Added `bridge_metrics` record type (10s telemetry: `reconnect_consecutive`, `active_sockets`, `go_goroutines`); added `manifest_fingerprint` + `assigned_token_set_hash` (SHA-256 over sorted tokens, 8-byte big-endian each) to `bridge_event` — required by the strict Java consumer, warn-only cross-check on mismatch. Slot safety/capacity gauges (`bridge.slot.safety_state`, `bridge.slot.unsafe_duration_ms`, `bridge.slot.capacity_remaining`) are Java-side exports of the same evidence. |
 
 ## Implementation References
 
-- **Go side:** `code/02_services/01_ingestion/go-bridge/main.go` — `Tick` struct, `runHFTEpoch`/`emit()`; `code/02_services/01_ingestion/go-bridge/ndjson.go` — `EmitTick`, `EmitEvent`, redaction
-- **Java side:** `code/02_services/01_ingestion/src/main/java/com/trading/ingestion/IngestionService.java` — `GoTick` inner class, `processLine()`, `processBridgeEvent()`, `decodeAndValidatePayload()`; `bridge/BridgeEventParser.java`, `bridge/BrokerQuarantine.java`, `bridge/PayloadHashValidator.java`
+- **Go side:** `code/02_services/01_ingestion/go-bridge/main.go` — `Tick` struct, `runHFTEpoch`/`emit()`, identity wiring (`SetManifestFingerprint`/`SetSlotTokenHash`); `code/02_services/01_ingestion/go-bridge/ndjson.go` — `EmitTick`, `EmitEvent`, `EmitMetrics`, redaction; `code/02_services/01_ingestion/go-bridge/metrics.go` — reconnect-streak/active-socket state, 10s metrics ticker
+- **Java side:** `code/02_services/01_ingestion/src/main/java/com/trading/ingestion/IngestionService.java` — `GoTick` inner class, `processLine()`, `processBridgeEvent()`, `parseMetrics` routing, `decodeAndValidatePayload()`; `bridge/BridgeEventParser.java` (events + metrics), `bridge/BridgeMetrics.java`, `bridge/BrokerQuarantine.java`, `bridge/PayloadHashValidator.java`

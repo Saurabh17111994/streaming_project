@@ -13,7 +13,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Status | Implementation-ready; metric names and data-derived capacity thresholds remain implementation inputs |
 | Owner | Platform/Operations; component owners emit telemetry |
 | Backend | OpenObserve target plus immutable local execution audit |
-| Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/08-observability.md` |
+| Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |
 
 ### Common telemetry envelope
 
@@ -82,7 +82,7 @@ Gate state/epoch, halt latency, attempts by phase/outcome, unknown outcomes, req
 
 #### Storage/platform
 
-Fluss quorum/replicas/leaders, disk/volume, checkpoint S3, EOD manifest/retry/verification/expiry margin, retention extension, Iceberg commit/checksum, VM/node/container/job health, secret/certificate age, unauthorized controls, alert acknowledgement.
+Fluss quorum/replicas/leaders, ZooKeeper ensemble quorum/leader/latency, disk/volume, checkpoint S3, Flink HA leader/standby state, EOD manifest/retry/verification/expiry margin, retention extension, Iceberg commit/checksum, VM/node/container/job health, secret/certificate age, unauthorized controls, alert acknowledgement.
 
 ### Dashboards
 
@@ -102,7 +102,7 @@ Show gate state/epoch; halt detection-to-block latency; attempts by phase/outcom
 
 #### Storage, EOD, and durability dashboard
 
-Show Fluss replica/quorum/leader health; disk and volume pressure; checkpoint S3 availability and restore status; projection backlog/freshness; EOD rows/bytes, manifest status, retries, verification age, and expiry margin; live retention days/extension state; Iceberg commit/checksum verification; and one-workload-VM recovery state/backlog.
+Show Fluss replica/quorum/leader health; ZooKeeper ensemble quorum/leader health and latency; Flink HA leader/standby state; disk and volume pressure; checkpoint S3 availability and restore status; projection backlog/freshness; EOD rows/bytes, manifest status, retries, verification age, and expiry margin; live retention days/extension state; Iceberg commit/checksum verification; and one-workload-VM recovery state/backlog.
 
 #### Security and platform dashboard
 
@@ -110,7 +110,7 @@ Show credential age/expiry/rotation/revocation; authentication/token-refresh fai
 
 #### `Safe to Trade` operator dashboard
 
-The primary operator dashboard is named **`Safe to Trade`**. It contains broker connection and subscription status; per-instrument freshness (`FRESH`, `STALE`, `UNKNOWN`, `MARKET_CLOSED`); current tick rate against the 60,000 ticks/s average baseline and 90,000 ticks/s peak; decision and Fluss append percentiles; Flink checkpoint/restart state; per-VM CPU/memory/SSD/network; Executor gate state/epoch; unknown-attempt count/age; and active scoped halts.
+The primary operator dashboard is named **`Safe to Trade`**. It contains broker connection and subscription status; per-instrument freshness (`FRESH`, `STALE`, `UNKNOWN`, `MARKET_CLOSED`); current tick rate against the 60,000 ticks/s average baseline and 90,000 ticks/s peak (3,000-instrument production targets; the current testing phase runs the 1,024-instrument / 20,480 ticks/s envelope); decision and Fluss append percentiles; Flink checkpoint/restart state; per-VM CPU/memory/SSD/network; Executor gate state/epoch; unknown-attempt count/age; and active scoped halts.
 
 `GREEN` means nominal, `YELLOW` means attention is needed without blocking new orders, and `RED` means orders are blocked or safety is violated. These colours are summaries only; the Executor gate is the authority for order placement.
 

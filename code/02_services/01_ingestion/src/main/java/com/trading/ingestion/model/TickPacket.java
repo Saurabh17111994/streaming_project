@@ -1,5 +1,6 @@
 package com.trading.ingestion.model;
 
+import com.trading.common.config.PlatformConfig;
 import java.time.Instant;
 
 /**
@@ -164,7 +165,11 @@ public final class TickPacket {
         String connectionId;
         long connectionEpoch;
         String instanceId;
-        int schemaVersion = 1;
+        /**
+         * Default = shared raw_table_1 contract version; IngestionService no longer
+         * overrides it, so the persisted label cannot drift from the consumer default.
+         */
+        int schemaVersion = Integer.parseInt(PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION);
 
         public Builder raw(RawTick v) { this.raw = v; return this; }
         public Builder validity(ValidityClassification v) { this.validity = v; return this; }

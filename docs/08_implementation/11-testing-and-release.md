@@ -11,7 +11,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation-ready test design; executable suites pending |
+| Status | Test design complete; ingestion suites executable and green; downstream suites pending |
 | Owner | Component owners; Platform owns integration/acceptance evidence |
 | Scope | Unit, harness, integration, failure, recovery, performance, security, release |
 | Rule | A skipped/flaky mandatory gate is a failure until dispositioned with evidence |
@@ -21,8 +21,8 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Not started: no Java, integration, or benchmark test suite exists yet. |
-| Runtime evidence | Not started: no local, sandbox, or production-like test report exists yet. |
+| Executable tests | Ingestion suites executable and green: 78 tests (43 ingestion + 35 common), 0 failures, 4 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
 ### Detailed test designs
@@ -114,8 +114,20 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. |
 | `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. |
 | `ING-FAIL-003` | Force shutdown with pending writes | Uncertainty/loss evidence is persisted. |
-| `ING-PERF-001` | Variable 60,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. |
-| `ING-PERF-002` | 90,000 ticks/s peak; every instrument at or below 30 ticks/s | Bounded backlog/memory and no acknowledged loss. |
+| `ING-PERF-001` | Variable 60,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. Current phase: 1,024-instrument envelope — 58,951 ticks/s baseline probe recorded 2026-08-09; the 3,000/60k baseline is the deferred production target. |
+| `ING-PERF-002` | 90,000 ticks/s peak; every instrument at or below 30 ticks/s | Bounded backlog/memory and no acknowledged loss. Deferred with the 3,000-instrument envelope. |
+| `ING-UNIT-010` | raw_payload hash validation (SHA-256 + base64) | Hash mismatch, malformed hash, invalid base64, and empty payload are rejected with a typed result. |
+| `ING-UNIT-010b` | Golden-corpus payload hash validation | Every golden packet validates and decodes to the exact frame bytes; tampered frames are rejected. |
+| `ING-UNIT-011` | Bridge event → discontinuity reason mapping | Disconnect/auth/shutdown → DROP; heartbeat/stall → HEARTBEAT_GAP; reconnect → RECONNECT; partial subscription_ack → FEED_HEALTH; non-evidence events produce no row. |
+| `ING-UNIT-012` | Bridge restart policy | Unexpected exit restarts once; a second unexpected exit is terminal; clean exit 0 and shutdown never restart. |
+| `ING-SCHEMA-001` | Writer schema ↔ DDL agreement | Written columns match source DDL order; raw_table_1 v2 = 20 columns; ack_ts nullable; no `retention.days` option; lake-claiming DDLs carry datalake options. |
+| `ING-DQ-001` | Malformed-line quality classification | MALFORMED_JSON with raw bytes preserved; static detail bounded and line-safe; quarantine reason vocabulary exact per plan. |
+| `ING-DQ-002` | Stale classification precedence | Stale/future timestamps (5 s max age, 2 s future skew) are quarantined before any trade path. |
+| `ING-SAFE-001` | Slot-scoped safety halt requests | halt_request_id is slot-scoped and tuple-deterministic; assigned-token-set hash is deterministic and order-independent. |
+| `ING-SAFE-002` | Partial ack → unsafe, full ack never unsafe | Bridge-event safety mapping exact per plan. |
+| `ING-SAFE-003` | RECOVERED only on ACTIVE + full-ack subscription | No other combination recovers a slot. |
+| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. |
+| `THR-PROBE-001` | Client capacity probe without per-row blocking | 20,480 rows submitted non-blocking; rows/s and avg/p50/p99 reported; no ack-wait bottleneck. |
 
 Evidence: approved packet corpus, manifest snapshot, deterministic clock, workload seed, append-outcome log, metrics report, and quarantine records. Real broker credentials are never used in unit tests.
 
@@ -139,6 +151,17 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits. |
 
 Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoint reference, state-size report, and performance report.
+
+**Implemented as of 2026-08-10 (Slice 1)** — the executable unit tests do not yet carry SIG-* IDs; the mapping is:
+
+| Implementing test class | Tests | Covers SIG-* |
+| --- | --- | --- |
+| `CandleAggregateFunctionTest` | 5 | `SIG-UNIT-001`/`SIG-UNIT-002` core (tie ordering, OHLCV aggregation, quote-only window, merge) |
+| `RawValidationFunctionTest` | 7 | Validation-gate rules (input classification) |
+| `SignalJobConfigTest` | 7 | `SIG-UNIT-003` core (pinned values + rejection of deviations) |
+| `FingerprintDedupFunctionTest` | 6 | `SIG-UNIT-008`/`SIG-UNIT-009` dedup half — Flink 2.2.1 operator harness (`KeyedOneInputStreamOperatorTestHarness`, no cluster): first occurrence passes / duplicate within TTL dropped; state stays exactly two rows per active key (dedup map + expiry index) regardless of fingerprint count; expiry timer deletes entries at watermark ≥ `first_seen + TTL` (never early), re-arriving expired fingerprint re-admitted; state key scoped by `version\|token\|fingerprint`; shared-expiry timer clears every listed key |
+
+**Pending (no implementing test yet):** `SIG-UNIT-004..006` (candidate/ranking/reservation — Slice 3), `SIG-UNIT-007` (dependency scan), `SIG-UNIT-008/009` emit half (`CandleEmitFunction` state-content assertions), `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001/002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001`. The full required set is `SIG-UNIT-001..009`, `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (reconciled with [`04-signal-job.md`](./04-signal-job.md) §Verification mapping). Solving method, prerequisites, and pass gates for each pending item: [`04-signal-job.md`](./04-signal-job.md) §Pending work items: resolution plan. Harness infra (compute-pom test-scope `flink-streaming-java` test-jar + `flink-test-utils`) landed 2026-08-10 — the pure-JVM rows need only test code from here on.
 
 ### Action Capture
 
@@ -216,8 +239,8 @@ Evidence: compose file digest, image digests, effective config with secrets remo
 | --- | --- | --- |
 | `SWARM-INT-001` | Pinned images, placement, network, secrets, and identities | No mutable image, unsafe network exposure, or replica co-location remains. |
 | `SWARM-INT-002` | Separate service, durability, job, and trading readiness | Each readiness state reports independently. |
-| `SWARM-FAIL-001` | One workload VM loss | Quorum/restore passes; processing recovery is within accepted target and gate halts within 5 seconds when required. |
-| `PERF-NODELOSS-001` | 90,000 ticks/s peak plus one VM loss | Records quorum degradation, leader re-election, checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, and zero acknowledged loss against the catalog limits. |
+| `SWARM-FAIL-001` | One workload VM loss | ZooKeeper quorum 2-of-3 maintained with leader re-election; Fluss quorum/restore passes; processing recovery is within accepted target and gate halts within 5 seconds when required. |
+| `PERF-NODELOSS-001` | 90,000 ticks/s peak plus one VM loss | Records ZooKeeper quorum degradation/leader re-election, Fluss quorum degradation, Flink JobManager HA failover (standby takes over), checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, and zero acknowledged loss against the catalog limits. |
 | `SWARM-FAIL-002` | S3/checkpoint/lake/audit dependency failure | Affected readiness is false; unsafe trading is blocked. |
 | `SWARM-REC-001` | Halted rollback and state readability | Rollback preserves readable state and never auto-enables trading. |
 | `SEC-NET-001` | Public and internal deny-path network probes | Only approved ingress and service paths are reachable; every prohibited path is blocked. |
@@ -369,7 +392,7 @@ Deterministic tests use fixed clocks, versioned fixtures, stable IDs/seeds, and 
 
 All chaos tests use a sandbox or simulated broker unless a separately approved controlled test exists. The Executor starts `HALTED`; every fault preserves evidence; no test bypasses fencing or two-person approval controls.
 
-The required fault coverage includes: Ingestion crash, disconnect, authentication expiry, partial subscription, append timeout, and bounded-buffer saturation; Signal JobManager/TaskManager failure, checkpoint timeout/corruption, S3/state/sink failure, and backpressure; Action Capture crashes after each independent write, projection backlog, Fluss outage, ambiguity, and postback storm; Babysitter restart, changelog gap, stale input, and accidental action enablement; Executor crash windows, mapping/state/audit failure, fencing loss, and split brain; Fluss coordinator/tablet/volume/quorum/leader failures; one-VM loss at baseline and peak; Arrow REST timeout/malformed/ambiguous response; OpenObserve alert failure; EOD/offload/retry/expiry failures; and credential/TLS/authorization failures.
+The required fault coverage includes: Ingestion crash, disconnect, authentication expiry, partial subscription, append timeout, and bounded-buffer saturation; Signal JobManager/TaskManager failure, ZooKeeper node loss/restart, ZooKeeper quorum loss, ZooKeeper latency/partition, Flink JobManager HA failover, checkpoint timeout/corruption, S3/state/sink failure, and backpressure; Action Capture crashes after each independent write, projection backlog, Fluss outage, ambiguity, and postback storm; Babysitter restart, changelog gap, stale input, and accidental action enablement; Executor crash windows, mapping/state/audit failure, fencing loss, and split brain; Fluss coordinator/tablet/volume/quorum/leader failures; one-VM loss at baseline and peak; Arrow REST timeout/malformed/ambiguous response; OpenObserve alert failure; EOD/offload/retry/expiry failures; and credential/TLS/authorization failures.
 
 Every exercise records exact versions, topology, workload, fault point/time, detected signals, gate state/epoch, RPO/RTO, backlog, checkpoints/offsets, reconciliation actions, recovery proof, alerts, and operator approvals.
 
@@ -449,12 +472,13 @@ Run this at the variable baseline or peak profile; use the 90,000 ticks/s peak u
 
 1. Record two minutes of healthy baseline metrics.
 2. Hard-stop one workload VM and record `T0`.
-3. Record Fluss quorum degradation and leader re-election.
-4. Record Flink TaskManager loss and restart/rescale trigger.
-5. Record the gate transition to `HALTED`.
-6. Record Ingestion reconnect and Flink checkpoint restore.
-7. Run for ten minutes at reduced capacity and record throughput, backlog, and checkpoints.
-8. Restore the VM and record quorum, replica catch-up, and backlog drain.
+3. Record ZooKeeper ensemble state (quorum 2-of-3 maintained) and ZK leader re-election.
+4. Record Fluss quorum degradation and leader re-election.
+5. Record Flink JobManager HA failover (standby takes over leadership) and TaskManager loss/restart trigger.
+6. Record the gate transition to `HALTED`.
+7. Record Ingestion reconnect and Flink checkpoint restore.
+8. Run for ten minutes at reduced capacity and record throughput, backlog, and checkpoints.
+9. Restore the VM and record ZooKeeper ensemble re-formation, Fluss quorum, replica catch-up, and backlog drain.
 
 Pass requires zero acknowledged loss, safe halt below five seconds, data-path recovery below thirty seconds, successful checkpoint restore, and quorum re-formation without manual intervention. The evidence JSON records timestamps, topology, workload, versions, configuration hash, ISR shrink, leader election, checkpoint restore, backlog drain, and replica catch-up.
 
@@ -514,21 +538,21 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 
 | Audit issues | Primary dossier | Test/evidence families |
 | --- | --- | --- |
-| P0-1 | `components/05-executor.md` | `EXE-*`, `REL-EXE-*`, `REL-CRASH-*`, `REL-HALT-*` |
+| P0-1 | `07-executor.md` | `EXE-*`, `REL-EXE-*`, `REL-CRASH-*`, `REL-HALT-*` |
 | P0-2 | All component dossiers | `ING-*`, `SIG-*`, `AC-*`, `BAB-*`, `EXE-*` |
-| P0-3 | `components/02-signal-job.md` | Job submission/readiness integration tests |
-| P0-003 | `17_portfolio_reservations.sql`, `18_postback_projection_ledger.sql`, `19_safety_halt_requests.sql`, `03-schema-lifecycle.md` | DDL-INV-*, DDL-SCHEMA-*, DDL-APPLY-*, DDL-META-*, DDL-REPLAY-* |
-| P0-4 | `01-documentation-governance.md`, ingestion/action dossiers | `BROKER-MD-*`, `BROKER-PB-*`, stale-term CI gate |
-| P1-1 | Component dossiers, `02-version-compatibility.md` | Build entry-point and artifact tests |
+| P0-3 | `04-signal-job.md` | Job submission/readiness integration tests |
+| P0-003 | `15_portfolio_reservations.sql`, `17_postback_projection_ledger.sql`, `18_safety_halt_requests.sql`, `02-schema-storage.md` | DDL-INV-*, DDL-SCHEMA-*, DDL-APPLY-*, DDL-META-*, DDL-REPLAY-* |
+| P0-4 | `01-foundation.md` (§Documentation status and evidence rules), ingestion/action dossiers | `BROKER-MD-*`, `BROKER-PB-*`, stale-term CI gate |
+| P1-1 | Component dossiers, `12-version-compatibility-evidence.md` (+ `01-foundation.md` §Software versions and compatibility) | Build entry-point and artifact tests |
 | P1-2 | Governance and cross-cutting invariants | Stale-term CI gate |
-| P1-3 | `03-schema-lifecycle.md` | `COMPAT-FLUSS-*`, schema workflow tests |
-| P1-4, P1-5 | `03-schema-lifecycle.md`, release evidence | `PERF-EOD-*`, `REL-RET-*` |
+| P1-3 | `02-schema-storage.md` | `COMPAT-FLUSS-*`, schema workflow tests |
+| P1-4, P1-5 | `02-schema-storage.md`, release evidence | `PERF-EOD-*`, `REL-RET-*` |
 | P1-6, P1-18 | Local/production deployment dossiers | Health/readiness/startup tests |
 | P1-7, P1-19 | Local and production deployment dossiers | Volume/replication/one-VM tests |
-| P1-8 | `deployment/02-production-swarm.md` | `REL-HA-*` |
+| P1-8 | `09-production-swarm.md` | `REL-HA-*` |
 | P1-9, P2-1 | Version dossier, production deployment | Image/digest/SBOM CI gates |
 | P1-10, P1-11 | Version/schema/local/production dossiers | Effective-config/S3/checkpoint tests |
-| P1-12 | `03-schema-lifecycle.md` | Routing/null/skew tests |
+| P1-12 | `02-schema-storage.md` | Routing/null/skew tests |
 | P1-13 | Schema and cross-cutting invariants | Immutable duplicate/mutation tests |
 | P1-14 | Schema and Action Capture dossiers | State precedence/stale/conflict tests |
 | P1-15, P1-16 | Executor and cross-cutting invariants | Correlation/attempt/concurrency tests |
@@ -552,19 +576,19 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 
 | Plan phase | Dossiers |
 | --- | --- |
-| 0 Governance | `01-documentation-governance.md`, `testing/02-release-evidence.md` |
-| 1 Reconciliation | Governance, cross-cutting invariants, component dossiers |
-| 2 Versions | `02-version-compatibility.md` |
-| 3 Data model | `03-schema-lifecycle.md`, `04-cross-cutting-invariants.md` |
-| 4 Ingestion | `components/01-ingestion.md` |
-| 5 Signal job | `components/02-signal-job.md` |
-| 6 Action/Babysitter | `components/03-action-capture.md`, `components/04-babysitter.md` |
-| 7 Executor | `components/05-executor.md` |
-| 8 Local runtime | `deployment/01-local-compose.md` |
-| 9 Production runtime | `deployment/02-production-swarm.md` |
-| 10 Observability | `deployment/03-observability-operations.md` |
-| 11 Testing | `testing/01-test-catalog.md` |
-| 12 Release | `testing/02-release-evidence.md` |
+| 0 Governance | `01-foundation.md` (§Build plan, §Documentation status and evidence rules), `11-testing-and-release.md` (§Release evidence) |
+| 1 Reconciliation | `01-foundation.md`, cross-cutting invariants, component dossiers |
+| 2 Versions | `01-foundation.md` (§Software versions and compatibility), `12-version-compatibility-evidence.md` |
+| 3 Data model | `02-schema-storage.md`, `01-foundation.md` (§Shared safety rules) |
+| 4 Ingestion | `03-ingestion.md` |
+| 5 Signal job | `04-signal-job.md` |
+| 6 Action/Babysitter | `05-action-capture.md`, `06-babysitter.md` |
+| 7 Executor | `07-executor.md` |
+| 8 Local runtime | `08-local-compose.md` |
+| 9 Production runtime | `09-production-swarm.md` |
+| 10 Observability | `10-observability.md` |
+| 11 Testing | `11-testing-and-release.md` |
+| 12 Release | `11-testing-and-release.md` (§Release evidence) |
 
 ### Requirements traceability
 

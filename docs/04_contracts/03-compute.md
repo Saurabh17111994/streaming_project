@@ -4,6 +4,8 @@
 
 The Signal Flink job consumes `raw_table_1`, performs bounded fingerprint deduplication, computes final 15-second event-time candles, and passes forming-bar state directly to Business Logic in the same job.
 
+**Tier-scoped deployment (current testing phase):** the current phase builds and validates the Signal job on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 60,000 ticks/s variable baseline and 90,000 ticks/s peak remain the deferred production target (`PERF-PROD-60000-001` / `PERF-PROD-90000-001`); per-instrument windowing, dedup, and candle logic are identical across envelopes — only the load/acceptance profile differs.
+
 ## State
 
 - Fingerprint dedup state with configured, bounded TTL covering the declared ingestion retry/replay horizon plus watermark delay; deployment rejects shorter or unbounded values
@@ -17,7 +19,7 @@ Production checkpoints/savepoints use encrypted S3. The exact state backend and 
 
 The deployed watermark, allowed-lateness, and source-idleness values are configuration parameters, not universal protocol constants. The default profile is bounded out-of-orderness of five seconds, allowed lateness of five seconds, and source idleness of fifteen seconds, as specified by the requirements; each value may be changed only through a tested deployment profile. A source without a verified event timestamp cannot advance the watermark.
 
-A candle emits once after `window_end + allowed_lateness`; later records are discarded and measured. No correction/update row exists in MVP.
+A candle is final from its first write: the final row emits at first window fire (watermark ≥ `window_end`), an `emitted` window-state flag makes any allowed-lateness re-trigger a no-op (late-within-lateness folds into the accumulator and is counted, never re-written), and no correction/update row exists in MVP. The "final after `window_end + allowed_lateness`" phrasing means the finalization boundary — the candle is not corrected after that point.
 
 Open/close tie ordering is deterministic from the versioned fingerprint specification, not broker `seq_no`.
 
@@ -25,7 +27,7 @@ Open/close tie ordering is deterministic from the versioned fingerprint specific
 
 The deployed watermark, allowed-lateness, and source-idleness values are configuration parameters, not universal protocol constants. The default profile is bounded out-of-orderness of five seconds, allowed lateness of five seconds, and source idleness of fifteen seconds. Each value may be changed only through a tested deployment profile. A source without a verified event timestamp cannot advance the watermark.
 
-A candle emits once after `window_end + allowed_lateness`; later records are discarded and measured. No correction/update row exists in MVP. The finalization contract SHALL separately name the watermark out-of-orderness bound, source-partition idleness threshold, allowed/finalization delay, source split identity, reconnect/reassignment behavior, and late-event classification. The term `allowed lateness` SHALL not imply correction/update rows.
+A candle is final from its first write: the final row emits at first window fire (watermark ≥ `window_end`), an `emitted` window-state flag makes any allowed-lateness re-trigger a no-op (late-within-lateness folds into the accumulator and is counted, never re-written), and no correction/update row exists in MVP. The "final after `window_end + allowed_lateness`" phrasing means the finalization boundary — the candle is not corrected after that point. The finalization contract SHALL separately name the watermark out-of-orderness bound, source-partition idleness threshold, allowed/finalization delay, source split identity, reconnect/reassignment behavior, and late-event classification. The term `allowed lateness` SHALL not imply correction/update rows.
 
 ## Deduplication horizon
 

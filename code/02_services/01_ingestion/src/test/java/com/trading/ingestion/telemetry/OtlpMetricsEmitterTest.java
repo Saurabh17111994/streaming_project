@@ -35,6 +35,30 @@ class OtlpMetricsEmitterTest {
 
             emitter.setSlotCapacityUsedPercent("hft-0", 87.5);
             assertEquals(87.5, s.capacityUsedPercent, 0.001);
+
+            // Safety + capacity evidence (Step 5): unsafe stamp, duration
+            // source, and remaining capacity.
+            emitter.setSlotCapacityRemaining("hft-0", 256);
+            assertEquals(256, s.capacityRemaining);
+            assertEquals(0, s.safetyState, "fresh slot must be SAFE");
+            assertEquals(0, s.unsafeSinceNanos);
+
+            long now = System.nanoTime();
+            emitter.setSlotSafetyState("hft-0", 1, now);
+            assertEquals(1, s.safetyState);
+            assertEquals(now, s.unsafeSinceNanos, "first unsafe transition stamps the clock");
+            // Re-emission of the same unsafe state must NOT reset the stamp —
+            // the unsafe-duration gauge keeps counting from the first transition.
+            Thread.sleep(5);
+            emitter.setSlotSafetyState("hft-0", 1, System.nanoTime());
+            assertEquals(now, s.unsafeSinceNanos, "re-emitted unsafe state must keep the first stamp");
+            // SAFE clears the stamp.
+            emitter.setSlotSafetyState("hft-0", 0, 0);
+            assertEquals(0, s.safetyState);
+            assertEquals(0, s.unsafeSinceNanos);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
         } finally {
             emitter.close();
         }
@@ -98,6 +122,8 @@ class OtlpMetricsEmitterTest {
         try {
             emitter.setProcessFdUsagePercent(42.5);
             emitter.setSlotCapacityUsedPercent("hft-0", 12.75);
+            emitter.setSlotCapacityRemaining("hft-0", 768);
+            emitter.setSlotSafetyState("hft-0", 1, System.nanoTime());
             emitter.recordAppendLatencyMs(5);
             emitter.recordAppendLatencyMs(7);
             emitter.incrementDecodeError("Malformed\nJSON");
@@ -121,6 +147,17 @@ class OtlpMetricsEmitterTest {
                     assertTrue(dp.path("asDouble").isNumber(),
                             "labeled asDouble must be a JSON number (R-036)");
                     assertEquals(12.75, dp.path("asDouble").asDouble(), 0.001);
+                }
+                if (name.equals("bridge.slot.capacity_remaining")) {
+                    assertEquals(768, dp.path("asInt").asLong(),
+                            "capacity_remaining = connection limit − assigned");
+                }
+                if (name.equals("bridge.slot.safety_state")) {
+                    assertEquals(1, dp.path("asInt").asInt(), "unsafe slot must export 1");
+                }
+                if (name.equals("bridge.slot.unsafe_duration_ms")) {
+                    long ms = dp.path("asInt").asLong();
+                    assertTrue(ms >= 0, "unsafe_duration_ms must be non-negative");
                 }
             }
 

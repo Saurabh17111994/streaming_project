@@ -24,10 +24,11 @@ tables.
 ## Prerequisites
 
 1. `versions.pin` contains the pinned platform versions (done: Flink 2.2.1,
-   Fluss 0.9.1-incubating, Java 17.0.19, Python 3.11.9, pinned images).
+   Fluss 0.9.1-incubating, ZooKeeper 3.9.2, Java 17.0.19, Python 3.11.9,
+   pinned images).
 2. A runnable local stack (Docker + Compose) per `08-local-compose.md` using the
    pinned images.
-3. `make ddl` already emits `schema_manifest.json` (18 tables) — confirmed; it
+3. `make ddl` already emits `schema_manifest.json` (20 tables) — confirmed; it
    still refuses application by design.
 4. For external rows, a sandbox broker and Arrow REST stub (no real credentials).
 
@@ -44,8 +45,11 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 1 | Java 17.0.19 | VM-JAVA-001 | `LOCAL-INT-002`; build smoke on Java 17 | `common` + services compile/run on the pinned JVM; effective config reports `17.0.19`; no module fails to start |
 | 2 | Python 3.11.9 | VM-PYTHON-002 | run `ddl_apply.py` + `version_matrix_verify.py` on 3.11 | Both scripts execute; matrix parses; verifier passes |
 | 3 | Flink 2.2.1 | VM-FLINK-SRV-003, VM-FLINK-API-004 | `COMPAT-FLINK-001`; `SIG-HARNESS-003`, `SIG-HARNESS-005`; `STATE-COMPAT-001` | Source/sink checkpoint, restore, rescale correct on 2.2.1; savepoint restores through the approved compatibility path |
-| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`004`; `SCHEMA-UNIT-001`/`002`/`003` | All 18 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited |
+| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`004`; `SCHEMA-UNIT-001`/`002`/`003` | All 20 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited |
 | 5 | Fluss connector (fluss-flink-2.2:0.9.1) | VM-FLUSS-CONN-007 | `COMPAT-FLINK-001`; `SIG-INT-001` | Pinned connector checkpoint/restore on the 2.2.1 boundary works with the Fluss source/sink |
+| 5a | ZooKeeper ensemble (3.9.2) | VM-ZK-013 | `SWARM-INT-002`; `SWARM-FAIL-001`; `PERF-NODELOSS-001` | 3-node ensemble starts; quorum 2-of-3 survives one node loss; Fluss coordinator/tablet register via `zookeeper.address`; Flink JobManager HA leader election + failover works |
+
+**Partial evidence recorded (2026-08-09, SAFETY-INT-001):** `fluss-flink-2.2:0.9.1-incubating` resolves from Maven Central; `FlussSource.build()` performs a live `Admin.getTableInfo` (fail-fast); live KV upsert → primary-key lookup → `RowDataDeserializationSchema` read worked against Fluss 0.9.1-incubating. This covers the connector boundary partially (VM-FLUSS-CONN-007 remains `UNKNOWN` — full checkpoint/restore `COMPAT-FLINK-001` / `SIG-INT-001` still pending). Evidence: `docs/08_implementation/04-signal-job.md` §Connector and compile evidence, `logs/safety-int-001/`.
 | 6 | Broker market feed | VM-BROKER-MKT-008 | `BROKER-MD-001` | Sandbox corpus decodes to typed fields; unknown protocol version quarantined; behavior recorded as evidence — `TO_BE_VERIFIED` |
 | 7 | Broker postback | VM-BROKER-PBK-009 | `BROKER-PB-001` | Postback status/identity/timestamp/optional-field behavior recorded; unsupported behavior quarantined — `TO_BE_VERIFIED` |
 | 8 | Arrow REST API | VM-ARROW-010 | `ARROW-REST-001`, `ARROW-REST-002` | Request/response/auth/timeout captured; client-reference correlates one attempt to one broker order — `TO_BE_VERIFIED` |

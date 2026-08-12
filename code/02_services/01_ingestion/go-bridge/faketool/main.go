@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -205,13 +206,29 @@ func main() {
 						frame := make([]byte, hftSizeFull)
 						binary.LittleEndian.PutUint16(frame[0:2], hftSizeFull)
 						frame[2] = hftPktFull
-						binary.LittleEndian.PutUint32(frame[8:12], 15050)
+						// R-275: per-token mean-reverting random-walk LTP (paise).
+						// A constant 15050 made every candle flat (o=h=l=c), so the
+						// compute job's 20-candle breakout rule (close > open) could
+						// never fire. The price walks around a token-distinct anchor
+						// with ±10 paise noise: OHLC varies per candle, and a close
+						// above the trailing-20 high stays a ~1-2% tail event instead
+						// of a monotone drift that floods Signal_Candidates.
+						prices := make(map[uint32]int32)
 						for range t.C {
 							subMu.Lock()
 							ids := append([]uint32(nil), subscribed...)
 							subMu.Unlock()
 							for _, tok := range ids {
+								p, ok := prices[tok]
+								anchor := int32(15050 + tok%1000)
+								if !ok {
+									p = anchor
+								}
+								p += (anchor - p) / 20 // pull back toward the anchor
+								p += int32(rand.IntN(21) - 10) // ±10 paise noise
+								prices[tok] = p
 								binary.LittleEndian.PutUint32(frame[4:8], tok)
+								binary.LittleEndian.PutUint32(frame[8:12], uint32(p))
 								binary.LittleEndian.PutUint64(frame[180:188], uint64(time.Now().UnixNano()))
 								if err := send(frame); err != nil {
 									logf("real-rate send failed: %v", err)

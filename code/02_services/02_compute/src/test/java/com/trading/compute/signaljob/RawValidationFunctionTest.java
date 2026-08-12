@@ -73,6 +73,47 @@ class RawValidationFunctionTest {
     }
 
     @Test
+    void rejectsBlankFingerprint() {
+        // Tracker 14 P6.3: a blank fingerprint collapses every blank row of a
+        // token into one dedup key for the whole TTL — distinct ticks would be
+        // silently dropped. Both null and whitespace-only fingerprints reject.
+        RowData row = TestRawRows.row(2885L, 1_750_000_000_000L, "fp-1", "TRADE", 100, 5);
+        assertEquals("blank-fingerprint",
+                fn.invalidReason(TestRawRows.withFingerprint(row, null)));
+        assertEquals("blank-fingerprint",
+                fn.invalidReason(TestRawRows.withFingerprint(row, "   ")));
+    }
+
+    @Test
+    void rejectsNonPositiveEventTime() {
+        // Tracker 14 P6.3: a non-positive epoch-millis event time would keep the
+        // bounded-out-of-orderness watermark near Long.MIN_VALUE and fire windows
+        // early. Zero (null-field read) and negatives must reject.
+        RowData row = TestRawRows.row(2885L, 1_750_000_000_000L, "fp-1", "TRADE", 100, 5);
+        assertEquals("non-positive-event-time",
+                fn.invalidReason(TestRawRows.withEventTime(row, 0L)));
+        assertEquals("non-positive-event-time",
+                fn.invalidReason(TestRawRows.withEventTime(row, -1L)));
+        assertEquals("non-positive-event-time",
+                fn.invalidReason(TestRawRows.withEventTime(row, Long.MIN_VALUE)));
+    }
+
+    @Test
+    void rejectsEventTimeInWindowArithmeticOverflowRange() {
+        // Tracker 14 P6.3: EventTimeTrigger computes window.maxTimestamp() +
+        // allowedLateness; a near-Long.MAX_VALUE event time overflows that sum to
+        // a negative timer and fires the window early on one tick. Cap =
+        // Long.MAX_VALUE - candleWindowMs - allowedLatenessMs - 1 (15000/5000
+        // defaults -> Long.MAX_VALUE - 20001). At-or-below the cap is accepted.
+        RowData row = TestRawRows.row(2885L, 1_750_000_000_000L, "fp-1", "TRADE", 100, 5);
+        assertEquals("event-time-overflow-window",
+                fn.invalidReason(TestRawRows.withEventTime(row, Long.MAX_VALUE)));
+        assertEquals("event-time-overflow-window",
+                fn.invalidReason(TestRawRows.withEventTime(row, Long.MAX_VALUE - 20_000L)));
+        assertNull(fn.invalidReason(TestRawRows.withEventTime(row, Long.MAX_VALUE - 20_001L)));
+    }
+
+    @Test
     void rejectsNonInsertRowKind() {
         RowData row = TestRawRows.row(2885L, 1_750_000_000_000L, "fp-1", "TRADE", 100, 5);
         ((org.apache.flink.table.data.GenericRowData) row).setRowKind(RowKind.UPDATE_AFTER);

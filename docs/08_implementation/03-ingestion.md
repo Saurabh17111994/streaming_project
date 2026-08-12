@@ -55,7 +55,7 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `ARROW_USE_STANDARD` | No | Set `true` for standard ds.arrow.trade; default `false` (HFT socket.arrow.trade) |
 | `ARROW_HFT_LATENCY_MS` | No | HFT tick interval ms (default 50, range 50-60000) |
 | `ARROW_INSTRUMENT_TOKENS` | No | Comma-separated instrument tokens; empty = synthetic 50-instrument dev set |
-| `GO_ARROW_SDK_VERSION` | Yes | Pinned go-arrow SDK version tag (replaces DECODER_VERSION) |
+| `GO_ARROW_SDK_VERSION` | Yes | Pinned go-arrow SDK version tag `v0.0.0-20260622-7cce1630` (replaces DECODER_VERSION) |
 | `FLUSS_BOOTSTRAP_SERVERS` | Yes | Pinned environment endpoint |
 | `RAW_TABLE_NAME` | Yes | Must equal reconciled schema manifest |
 | `INSTRUMENT_MANIFEST_VERSION` | Yes | Approved subscription snapshot |
@@ -176,6 +176,20 @@ Logs include service, instance, connection scope, decoder/protocol version, mani
 - `ING-FAIL-003` forced shutdown and uncertainty accounting.
 - `ING-PERF-001` variable 60,000 ticks/s average-baseline full session; broker_receive_to_fluss_ack p99 <50 ms.
 - `ING-PERF-002` 90,000 ticks/s peak with every instrument ≤30 ticks/s; bounded append backlog/memory and no acknowledged loss.
+
+Current golden-corpus coverage (Step 2 of the ingestion audit):
+
+- `go-bridge/testdata/golden/` — committed wire frames + NDJSON-format golden records (full-tick 196B, ltp-tick 40B, response 540B wire-only fixture never emitted as NDJSON, unknown-packet 64B), generated reproducibly by `go-bridge/cmd/gen-corpus`.
+- Go (`go-bridge/golden_corpus_test.go`): the real bridge path (SDK connect + `runHFT` against a fake broker) decodes the golden frames to NDJSON matching the golden records byte-for-byte, including the full depth ladder; the unknown packet is rejected at SDK decode and never emitted; `raw_payload`/`payload_hash` preserve the exact frame bytes + SHA-256.
+- Java (`GoldenCorpusPayloadHashTest`): `PayloadHashValidator` accepts every golden packet and decodes it to the exact frame bytes; a tampered frame is rejected with `HASH_MISMATCH`.
+- Java service: unknown `feed` values are quarantined (`UNKNOWN_VERSION`) before trade classification (`IngestionService` step 3, `AC-ING-002` defense-in-depth; the SDK already rejects unknown packet types at decode).
+
+ING-RES-001 resilience coverage (Step 3 of the ingestion audit, `go-bridge/resilience_100_test.go`):
+
+- `TestINGRES001OneHundredForcedDisconnectReconnectCycles` — drives `runReconnectLoop` with the real SDK connect path (`streamFactoryFor` → `ConnectHFTDataStreamURL`) through 100 forced disconnect/reconnect cycles against a wire drop broker (subscription response + one tick, then abrupt TCP close). Asserts ≥ 100 cycles complete, final goroutine count ≤ baseline + 2, final open-FD count ≤ baseline + 2, and a connection high-water mark ≤ 1 (no orphan sockets). Backoff is suppressed for wall-clock speed (~33s); backoff timing itself is unit-tested separately (`TestReconnectLoopEpochAndBackoffAfterForcedDisconnect`).
+- `TestINGRES001HealthySlotNotInterruptedByPeerReconnect` — real supervisor (`runHFTSupervisorWithFactory`) with slot `hft-0` on the real SDK + drop broker and slot `hft-1` on a healthy fake stream: the healthy slot stays `ACTIVE` with ticks flowing while the peer slot disconnects/reconnects through the supervisor's real 1s→2s backoff.
+- Java live-thread clause (within baseline + 2 after reconnects) is exercised by the JVM-level crash-restart harness `04_scripts/soak-reconnect-loop.sh` (restart budget 1, FD/thread baseline assertions after restart); the full wall-clock 100-cycle supervisor soak with real backoff remains the deferred mechanical run.
+
 
 ### Implementation checklist (from [`01_plan.md`](./01-foundation.md) Task 2)
 

@@ -1,5 +1,6 @@
 package com.trading.ingestion;
 
+import com.trading.common.config.PlatformConfig;
 import com.trading.ingestion.model.RawTick;
 import com.trading.ingestion.model.TickPacket;
 import com.trading.ingestion.model.ValidityClassification;
@@ -36,7 +37,7 @@ public final class TickPacketFixtures {
                 .connectionId("test")
                 .connectionEpoch(0L)
                 .instanceId("test-instance")
-                .schemaVersion(1)
+                .schemaVersion(Integer.parseInt(PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION))
                 .build();
     }
 }

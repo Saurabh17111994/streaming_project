@@ -87,8 +87,8 @@ Proposed routing review:
 | ---------------------------- | --------------------------------------------------------- | ---------------------------------------- |
 | `raw_table_1`                | `instrument_token` after validation                       | Per-instrument processing order          |
 | `feature_candles_15s`        | `instrument_token`                                        | Per-instrument window history            |
-| `Signal_Candidates`          | `instrument_token` or non-null candidate routing identity | Strategy locality                        |
-| `Ranking_Results`            | Non-null evaluation/candidate routing identity            | Avoid cross-instrument/null ambiguity    |
+| `Signal_Candidates`          | `candidate_id` (KV primary key, R-084 — was LOG)                     | Strategy locality                        |
+| `Ranking_Results`            | `evaluation_id` (R-136 — was `candidate_id`)                         | Avoid cross-instrument/null ambiguity    |
 | `Fills`                      | `postback_event_id` when broker ID may be absent          | Every delivery is routable               |
 | `Execution_Audit`            | `audit_event_id`                                          | Gate-only events may lack instruction ID |
 | `Portfolio_Reservations`     | `reservation_id`                                          | Authoritative reservation state          |
@@ -205,10 +205,14 @@ upstream is complete.
 
 | ID | Task | Status | Location / Evidence |
 | --- | --- | --- | --- |
-| SCH-01 | Write DDL SQL for all 19 tables: `raw_table_1`, `feature_candles_15s`, `forming_bar`, `Signal_Candidates`, `Ranking_Results`, `Trade_Decisions`, `Fills`, `Order_Lifecycle`, `Positions`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Portfolio_Reservations`, `Postback_Quarantine`, `Postback_Projection_Ledger`, `Safety_Halt_Requests`, `suspected_discontinuities`, `instruments` | [x] | `code/01_platform/02_sql/ddl/` — 19 SQL files (02_raw_table_1 through 20_instruments) with column definitions, bucket keys, retention policies from contracts |
-| SCH-02 | Compute SHA-256 checksum for every DDL file; populate `schema_manifest.json` entries | [x] | `schema_manifest.json` (19 entries with table_name, ddl_sha256, table_kind LOG/KV, primary_key, bucket_key, schema_state=PROPOSED); `ddl_apply.py` computes + validates checksums |
-| SCH-03 | Stale DDL paths removed from `make ddl` application workflow; manifest drift check runs clean | [x] | `ddl_apply.py` — manifest is current, no DDL drift detected (19 tables, all checksums match); stale duplicates removed |
+| SCH-01 | Write DDL SQL for all 20 tables: `raw_table_1`, `feature_candles_15s`, `forming_bar`, `Signal_Candidates`, `Ranking_Results`, `Trade_Decisions`, `Fills`, `Order_Lifecycle`, `Positions`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Portfolio_Reservations`, `Postback_Quarantine`, `Postback_Projection_Ledger`, `Safety_Halt_Requests`, `suspected_discontinuities`, `instruments`, `ingestion_quarantine` | [x] | `code/01_platform/02_sql/ddl/` — 20 SQL files (02_raw_table_1 through 21_ingestion_quarantine) with column definitions, bucket keys, retention policies from contracts |
+| SCH-02 | Compute SHA-256 checksum for every DDL file; populate `schema_manifest.json` entries | [x] | `schema_manifest.json` (20 entries with table_name, ddl_sha256, table_kind LOG/KV, primary_key, bucket_key, schema_state=PROPOSED); `ddl_apply.py` computes + validates checksums |
+| SCH-03 | Stale DDL paths removed from `make ddl` application workflow; manifest drift check runs clean | [x] | `ddl_apply.py` — manifest is current, no DDL drift detected (20 tables; checksum + `table_kind` + `primary_key`/`bucket_key` field-level validation since 2026-08-10); stale duplicates removed |
 | SCH-04 | Version-gate: `make ddl` refuses to apply when any Fluss/Flink version is unpinned | [x] | `version_matrix_verify.py` + `VersionGate.requirePinned()` + `versions.pin` |
+
+> **Note (2026-08-09):** `forming_bar` has a DDL and a manifest entry but no requirement, contract, or consumer defines its role — the compute contract (`04_contracts/03-compute.md`) explicitly keeps forming-bar state in-process with no Fluss round trip. It stays `PROPOSED`/unowned until a consumer requirement (e.g. per-instrument freshness, DEC-028) is written; do not treat it as owned.
+>
+> **Note (2026-08-10):** `Signal_Candidates` is now **owned and written** by the Signal job's Slice 2.1 (DEC-034) — closed-candle detection appends immutable candidate records via the KV upsert writer (`DdlBootstrap` carries the full 22-column KV descriptor; dev table created DDL-faithful). `Ranking_Results` / `Trade_Decisions` / `Portfolio_Reservations` remain unwritten (ranking postponed).
 
 #### Phase B: Static schema validation (unit level, no cluster)
 
@@ -271,10 +275,10 @@ Each SCH task maps to a test ID from `11-testing-and-release.md`:
 ### Completion checklist
 
 - [x] Schema manifest format is implemented. ✓ `SchemaManifest.java` + `SchemaManifestEntry.java` (SCH-05)
-- [x] All DDLs have checksums and compatibility classes. ✓ `schema_manifest.json` (19 tables, SHA-256 per file), `ddl_apply.py` validates checksums (SCH-01, SCH-02)
+- [x] All DDLs have checksums and compatibility classes. ✓ `schema_manifest.json` (20 tables, SHA-256 per file), `ddl_apply.py` validates checksums (SCH-01, SCH-02)
 - [x] Stale DDL paths are removed from application workflow. ✓ `ddl_apply.py` manifest drift check runs clean; stale duplicates removed (SCH-03)
 - [ ] Pinned dialect tests pass. _(blocked — needs live Fluss cluster; SCH-12-17)_
-- [x] Every table has a non-null routing strategy. ✓ `RoutingKeyRule.java` + all 19 DDLs have `bucket.key` or `PRIMARY KEY` (SCH-07)
+- [x] Every table has a non-null routing strategy. ✓ `RoutingKeyRule.java` + all 20 DDLs have `bucket.key` or `PRIMARY KEY` (SCH-07)
 - [x] Immutability and stale-update protocols are implemented and tested. ✓ `ImmutabilityProtocol.java` + `KvStateUpdateProtocol.java` + unit tests (SCH-08, SCH-09)
 - [ ] Retention extension is executable, not just documented. _(deferred — needs EOD controller, SCH-23)_
 - [ ] Audit-lake retention and reconstruction evidence exist. _(deferred — post-MVP, SCH-24, SCH-25)

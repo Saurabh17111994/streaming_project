@@ -75,17 +75,17 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 
 | Area | Design status | Implementation status | Evidence status | Live-money status |
 | --- | --- | --- | --- | --- |
-| Architecture and ownership | Design-ready | Scaffold | Untested | Blocked |
-| Broker protocols | Evidence-blocked | Not-implemented | Untested | Blocked |
-| DDL/schema | Design-ready | Not-implemented | Untested | Blocked |
-| Ingestion | Design-ready | Implementing | Untested | Blocked |
-| Signal job | Design-ready | Not-implemented | Untested | Blocked |
+| Architecture and ownership | Design-ready | Implemented | Tested-in-sandbox | Blocked |
+| Broker protocols | Evidence-blocked | Implementing | Untested | Blocked |
+| DDL/schema | Design-ready | Implementing | Untested | Blocked |
+| Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
+| Signal job | Design-ready | Implementing (Slice 1 compute path done, 25 tests green, live smoke verified; Slices 2/3 pending) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001) | Blocked |
 | Action Capture | Design-ready | Not-implemented | Untested | Blocked |
 | Babysitter | Design-ready | Not-implemented | Untested | Blocked |
 | Executor | Design-ready | Not-implemented | Untested | Blocked |
-| Local runtime | Design-ready | Not-implemented | Untested | Blocked |
+| Local runtime | Design-ready | Implementing | Tested-in-sandbox | Blocked |
 | Production runtime | Design-ready | Not-implemented | Untested | Blocked |
-| Test/evidence program | Design-ready | Not-implemented | Untested | Blocked |
+| Test/evidence program | Design-ready | Implementing | Tested-in-sandbox | Blocked |
 
 ## Mandatory implementation order
 
@@ -127,11 +127,13 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 | Contract | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (MKT data section) | Read |
 | Dossier | [`11-testing-and-release.md`](./11-testing-and-release.md#performance-benchmark-procedure) | Read |
 | Code | `code/02_services/05_mock_arrow/src/.../MockArrowServer.java` | ✅ Implemented |
-| Tests | `MOCK-UNIT-001`, `MOCK-UNIT-002`, `MOCK-UNIT-003`, `MOCK-PERF-001` | Not yet run |
+| Tests | `MOCK-UNIT-001`, `MOCK-UNIT-002`, `MOCK-UNIT-003`, `MOCK-PERF-001` | Suite present (`SyntheticWorkloadTest`); executed indirectly via ingestion E2E; standalone MOCK-* evidence report pending |
 
 ---
 
-### Phase 2: Ingestion 🔴 NEXT
+### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
+
+Status: Phases 2a-2g done — 149/155 tasks (96%); 78 tests (43 ingestion + 35 common), 0 failures; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Remaining: 3 evidence-gated, 3 blocked on Fluss multi-node cluster — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 
@@ -155,7 +157,9 @@ Read these **in order** before writing any code:
 
 ---
 
-### Phase 3: Signal Job
+### Phase 3: Signal Job 🔴 NEXT
+
+- > Head start: Slice 1 (raw source → validation → dedup → 15 s candles → `feature_candles_15s`) is implemented with 25 green tests and live-smoke-verified 2026-08-09 (205,146 candles, 1,074 instruments, 48 checkpoints); see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence. The slot-scoped safety consumer shell (`SafetyHaltJob` + `SafetyStateTracker` + `SuppressionGate` in `common`) is also implemented and live-verified — SAFETY-INT-001 passed 2026-08-09. Remaining: forming-bar handoff + Business Logic (Slice 2), Ranking/Reservations/Decisions (Slice 3).
 
 Read these **in order** before writing any code:
 
@@ -165,7 +169,7 @@ Read these **in order** before writing any code:
 | **Contract** | [`../04_contracts/04-business-logic.md`](../04_contracts/04-business-logic.md) | Feature compute, candidate detection, filtering rules |
 | **Contract** | [`../04_contracts/10-ranking.md`](../04_contracts/10-ranking.md) | In-operator ranking, no Fluss round-trip, MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1 |
 | **Dossier** | [`04-signal-job.md`](./04-signal-job.md) | How to build — state layout, dedup, candle, ranking, reservation, decisions |
-| **DDL** | `code/01_platform/02_sql/ddl/03_candles*.sql`, `07_signal_candidates.sql`, `08_ranking_results.sql`, `09_trade_decisions.sql`, `17_portfolio_reservations.sql` | Physical schemas |
+| **DDL** | `code/01_platform/02_sql/ddl/03_feature_candles_15s.sql`, `05_signal_candidates.sql`, `06_ranking_results.sql`, `07_trade_decisions.sql`, `15_portfolio_reservations.sql` | Physical schemas |
 
 **What to build (in-order, inside one Flink job):**
 
@@ -188,7 +192,7 @@ Read these **in order** before writing any code:
 | **Contract** | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (postback section) | Postback protocol — WS JSON, identity mapping |
 | **Dossier** | [`05-action-capture.md`](./05-action-capture.md) | Action Capture engineering plan |
 | **Dossier** | [`06-babysitter.md`](./06-babysitter.md) | Babysitter engineering plan |
-| **DDL** | `05_order_lifecycle.sql`, `06_positions.sql`, `16_postback_quarantine.sql`, `18_postback_projection_ledger.sql` | Physical schemas |
+| **DDL** | `09_order_lifecycle.sql`, `10_positions.sql`, `16_postback_quarantine.sql`, `17_postback_projection_ledger.sql` | Physical schemas |
 
 **Action Capture — what to build:**
 
@@ -216,7 +220,7 @@ Read these **in order** before writing any code:
 | **Contract** | [`../04_contracts/07-executor.md`](../04_contracts/07-executor.md) | Executor contract — gates, attempts, audit, safe-halt |
 | **Contract** | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (REST section) | Arrow REST — `POST /order/regular`, auth, response, idempotency |
 | **Dossier** | [`07-executor.md`](./07-executor.md) | How to build — gates, fencing, changelog consumer, retry rules |
-| **DDL** | `12_execution_gate.sql`, `13_execution_attempts.sql`, `14_order_correlation.sql`, `15_execution_audit.sql`, `19_safety_halt_requests.sql` | Physical schemas |
+| **DDL** | `11_execution_gate.sql`, `12_execution_attempts.sql`, `13_order_correlation.sql`, `14_execution_audit.sql`, `18_safety_halt_requests.sql` | Physical schemas |
 
 **What to build:**
 
@@ -236,7 +240,7 @@ Read these **in order** before writing any code:
 
 | Step | Artifact | Purpose |
 | --- | --- | --- |
-| **Contract** | [`../04_contracts/08-observability.md`](../04_contracts/08-observability.md) | OTLP metrics/logs/traces, alert thresholds |
+| **Contract** | [`../04_contracts/openobserve.md`](../04_contracts/openobserve.md) | OpenObserve OTLP metrics/logs/traces, alert thresholds |
 | **Contract** | [`../04_contracts/09-platform-runtime.md`](../04_contracts/09-platform-runtime.md) | Compose/Swarm topology, health checks |
 | **Dossier** | [`08-local-compose.md`](./08-local-compose.md) | Local Docker Compose integration |
 | **Dossier** | [`09-production-swarm.md`](./09-production-swarm.md) | Production Swarm deployment |
@@ -244,8 +248,8 @@ Read these **in order** before writing any code:
 | **Dossier** | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, release evidence |
 
 1. Wire all services in Docker Compose (already scaffolded)
-2. Run the 30-min variable-baseline perf test (60k ticks/s average)
-3. Run 90k ticks/s peak-capacity campaign
+2. Run the 30-min variable-baseline perf test — current phase envelope: 1,024 instruments / 20,480 ticks/s average; the 3,000-instrument / 60k ticks/s average baseline is the deferred production target
+3. Run the peak-capacity campaign — current phase: sustained 20,480 ticks/s with ≤30 ticks/s per instrument; the 90k ticks/s peak campaign is the deferred production target
 4. Capability evidence: Fluss LOG/KV/changelog, Flink checkpoint/savepoint/rescale, Arrow REST sandbox
 5. Record evidence per `EvidenceRecord` format
 6. Produce release evidence package (`11-testing-and-release.md`)

@@ -1204,6 +1204,7 @@ Do not apply live DDL.
 cd code/02_services/02_compute
 mvn -q test
 ```
+
   (2026-08-10: `Tests run: 81, Failures: 0, Errors: 0, Skipped: 1` — the 1 skip is
   the env-gated `CandleCurrentKvIdempotencyTest` without `COMPUTE_INT_TEST_CANDLE_KV`;
   run separately with the gate + `FLUSS_BOOTSTRAP` → PASSED, see P7 integration evidence.)
@@ -1216,6 +1217,7 @@ mvn -q install -DskipTests
 cd ../02_services/02_compute
 mvn -q test
 ```
+
   (2026-08-10: not needed — common was installed; common suite itself: 104 green,
   incl. `CandleCurrentDdlContractTest`; `CanonicalCandlePolicyTest` is a compute-module
   test (P2) and runs in the compute suite.)
@@ -1245,6 +1247,7 @@ python3 code/01_platform/04_scripts/ddl_apply.py --force
 ```bash
 make cep-check
 ```
+
   (2026-08-10: passed in the P1/P7 sweep — no `flink-cep` dependency or import.)
 
 - [x] Run `make static-check` only if relevant shell files changed.
@@ -1342,7 +1345,7 @@ The original incident is not considered fully resolved until:
   remains the operator's step.)
 - [ ] LOG duplicate count and KV unique-key count are monitored separately.
   `DEFERRED: dedicated KV-replay metrics deferred; offline CandleMigrationTool audits
-  + existing telemetry cover convergence checks until then (Phase 9 item).`
+  - existing telemetry cover convergence checks until then (Phase 9 item).`
 - [x] Rollback procedure has been rehearsed or explicitly accepted as pending.
   (REHEARSED 2026-08-10 dev — full B8.7 runbook executed end-to-end: graceful
   stop at chk-1732, both tables kept, single-LOG restore `4527918b…` from
@@ -1360,6 +1363,7 @@ The original incident is not considered fully resolved until:
 | `STARTUP-GATE-001` | Unit tests proving explicit RESTORE/FULL_REPLAY modes | `COMPLETE` | 2026-08-10: `SignalJobConfigTest` (19 tests) + `ComputeOtlpEmitterTest` |
 | `CHECKPOINT-RESTORE-001` | Copied-checkpoint restore with dual-sink graph | `COMPLETE` | 2026-08-10: `logs/candle-kv-replay-001/rehearsal-2026-08-10.log` + `p6-evidence-2026-08-10.md` (restore chk-1538, checkpoint 1539 at 990ms) + B8.4 live restore `87c48642…` (chk-1538→1541) |
 | `CANDLE-MIGRATION-001` | Dry-run audit and canonical LOG→KV load | `COMPLETE` (dev) — audit COMPLETE; 25 conflicts resolved by recorded decision (accept list); dry-run re-run exit 0; load EXECUTED (1,351,301 rows, 10.76 s, DEST_ROWS_AFTER=1,351,301); production data-plane remains operator step | 2026-08-10: `CandleMigrationTool` audit + load output, `logs/candle-kv-replay-001/accept-keys-2026-08-10.csv`, Phase 8 dev-run evidence |
+| `CANDLE-MIGRATION-003` | Bounded Flink batch/Table-API union-read audit+load (P3.3 preferred path) | `COMPLETE` (dev) — `CandleMigrationBatchJob` audit exit 0 on the lake-enabled cluster: 2,382,814 union rows (Iceberg lake + log tail), 2,167,194 distinct keys, 0 conflicts, `STATUS=OK`; load exit 0 with KV convergence (§4/§5 of evidence file); required fluss-flink 0.9.1 connector fix (`FlinkSourceSplitReader` log-split finish now unsubscribes — class sha `1f14812d…`→`e2d4ae3a…`, upstream apache/fluss `main` still unfixed) | 2026-08-12: `logs/tracker-14/p3-3-batch-2026-08-12.md`, `logs/tracker-14/batch-audit-20260812-042559.log`, `logs/tracker-14/batch-load-*.log` |
 | `CANDLE-CUTOVER-001` | Consumer cutover and bounded replay proof | `COMPLETE` (dev) — bounded replay proof PASSED (scratch); live dual-sink cutover EXECUTED (`87c48642…` restore chk-1538); B8.7 rollback rehearsal EXECUTED + re-cutover `92104dac…` from chk-1732 | 2026-08-10: B8.5 scratch proof, B8.7 runbook + rehearsal evidence |
 
 ---

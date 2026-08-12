@@ -36,7 +36,11 @@ public final class SafetyHaltWriter implements AutoCloseable {
     private static final String TABLE_NAME = "Safety_Halt_Requests";
     private static final String CONTRACT_VERSION = "2";
 
-    /** Ingestion safety reason codes (plan Amendment — exact list). */
+    /**
+     * Ingestion safety reason codes (plan Amendment — exact list, extended
+     * additively 2026-08-08 with the market-data quality-class codes; the
+     * extension is additive so existing halt_request_id tuples are stable).
+     */
     public enum ReasonCode {
         FEED_STALLED,
         HEARTBEAT_FAILED,
@@ -46,7 +50,13 @@ public final class SafetyHaltWriter implements AutoCloseable {
         AUTH_FAILURE,
         DECODE_ERROR_BURST,
         BRIDGE_EXIT,
-        RESOURCE_EXHAUSTED
+        RESOURCE_EXHAUSTED,
+        // Market-data quality class (plan §Market-data quality classification):
+        // slot-unsafe evidence for records the broker itself mis-dated or
+        // mis-priced. Mirrors QuarantineWriter.Reason vocabulary.
+        FUTURE_BROKER_TIMESTAMP,
+        STALE_BROKER_TIMESTAMP,
+        BROKER_LIMIT_VIOLATION
     }
 
     /** Safety state of a slot as seen by the Signal job. */

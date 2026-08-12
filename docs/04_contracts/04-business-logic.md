@@ -4,6 +4,8 @@
 
 A stateful operator inside the Signal Flink job consumes closed-candle and forming-bar events. Candidate detection is keyed by `instrument_token`. Eligible candidates are then repartitioned by `portfolio_id` to a serialized ranking/reservation scope inside the same job. The operator never calls Arrow REST or mutates broker/position lifecycle.
 
+> **MVP scope (Slice 2.1, DEC-034):** the implemented subset is closed-candle signal detection → `Signal_Candidates` KV records (side BUY / action ENTRY / order MARKET, execution-engine-ready; ranking fields NULL by design). Forming-bar events, candidate lifecycle (bounds, supersession, expiry), ranking/reservation repartitioning, and `Trade_Decisions` are postponed — the sections below define the full-phase contract.
+
 ## Identities and state
 
 - Immutable `candidate_id` and `evaluation_id`

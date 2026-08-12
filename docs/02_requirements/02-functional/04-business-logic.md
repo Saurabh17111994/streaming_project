@@ -4,6 +4,8 @@
 
 Business Logic is a stateful operator inside the Signal Flink job. It consumes Compute's in-job closed-candle and forming-bar events, detects patterns, creates immutable candidates, requests portfolio reservations, and passes eligible candidates to in-operator Ranking. It never calls a broker and never mutates lifecycle or position state.
 
+> **MVP scope (Slice 2.1, DEC-034, implemented 2026-08-10):** the implemented subset is closed-candle signal detection → `Signal_Candidates` records per REQ-SS-003 (immutable append; ranking fields null by design). REQ-SS-001/002/004-011 (forming-bar detection, reservations, ranking handoff, lifecycle, bounds) remain future; the requirements below define the full-phase contract and stay the acceptance target for the postponed slices.
+
 ## Constraints
 
 - Business Logic SHALL NOT call a broker, submit an order, or interact with Arrow REST. Order execution is owned by the Executor.

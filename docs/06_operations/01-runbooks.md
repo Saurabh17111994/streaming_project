@@ -129,6 +129,247 @@ Automatic resume and approval reuse across epochs are prohibited.
 4. If required safety evidence or alerting is unavailable, mark trading readiness false and halt according to policy.
 5. Recover telemetry, replay buffered data where supported, and verify alert delivery before closure.
 
+## SignalJob (compute) operations
+
+Environment: the distributed SignalJob runs on the compose Flink cluster as a
+`flink run -d` job. Pinned envs are REQUIRED at submit
+(`requirePinnedLong` fails the job when missing):
+
+| Env | Pinned value | Meaning |
+| --- | --- | --- |
+| `DEDUP_TTL_MS` | `300000` | dedup expiry TTL |
+| `CANDLE_WINDOW_MS` | `15000` | candle aggregation window |
+| `CHECKPOINT_INTERVAL_MS` | `10000` | checkpoint cadence |
+| `CHECKPOINT_TIMEOUT_MS` | `30000` | checkpoint timeout |
+| `MAX_CONCURRENT_CHECKPOINTS` | `1` | no concurrent checkpoints |
+
+Additional required envs: `RAW_TABLE`, `CANDLE_TABLE`, `CANDLE_CURRENT_TABLE`,
+`SIGNAL_CANDIDATES_TABLE`, `FLUSS_BOOTSTRAP_SERVERS` (coordinator port `9123` —
+the tablet's client port is `9124` and `9123` on a tablet is nothing),
+`CHECKPOINT_DIR` (MUST include a scheme: `file:///tmp/p8-checkpoints`; a bare
+path throws `StringIndexOutOfBoundsException` at `SignalJob.java:310`).
+`STATE_RECOVERY_PATH`/`ALLOW_FULL_REPLAY` are runtime-only and absent from
+`.env`; the fail-closed A3.3 gate governs both (no normal launch path supplies
+`ALLOW_FULL_REPLAY=true`).
+
+### Start (normal RESTORE path)
+
+1. Build: `mvn -f code/02_services/02_compute/pom.xml -pl . package` (jar lands
+   at the path the launcher expects; the distributed cluster uses
+   `/opt/flink/jobs/compute.jar`).
+2. Copy the jar into the jobmanager container if rebuilt.
+3. Submit with the pinned env set (exact working dev command):
+   `docker exec -e RAW_TABLE=… -e CANDLE_TABLE=… -e CANDLE_CURRENT_TABLE=… -e SIGNAL_CANDIDATES_TABLE=… -e ALLOW_FULL_REPLAY=true -e CHECKPOINT_DIR=file:///tmp/p8-checkpoints -e FLUSS_BOOTSTRAP_SERVERS=fluss-coordinator:9123 -e DEDUP_TTL_MS=300000 -e CANDLE_WINDOW_MS=15000 -e CHECKPOINT_INTERVAL_MS=10000 -e CHECKPOINT_TIMEOUT_MS=30000 -e MAX_CONCURRENT_CHECKPOINTS=1 01_docker-flink-jobmanager-1 flink run -d -c com.trading.compute.signaljob.SignalJob /opt/flink/jobs/compute.jar`
+   (Restore mode: omit `ALLOW_FULL_REPLAY` and set `STATE_RECOVERY_PATH` to the
+   previous run's last checkpoint; the log line `signal-job: startup mode =
+   RESTORE (restore=…, fullReplay=false)` at INFO confirms restore.)
+4. Health: verify via `ps`, log evidence (`Restoring job`, `Completed
+   checkpoint`, sink `RUNNING`), and checkpoint continuity — NOT the hub
+   readiness report, which false-alarms "NOT ready" while the job is healthy.
+
+### Stop
+
+Graceful: cancel via the Flink UI/REST with a savepoint/checkpoint capture, or
+`flink cancel -s <target> <jobid>`. Never SIGKILL the jobmanager.
+
+### Restart without losing state
+
+Set `STATE_RECOVERY_PATH` to the PREVIOUS RUN's last checkpoint directory
+(`file:///tmp/p8-checkpoints/<previous-jobid>/chk-N`). Scope any log grep to
+new log lines after restart. Verify `Restoring job` appears, then completed
+checkpoints advance.
+
+**JM/TM container recreate destroys container-local `/tmp` checkpoints** (not on a
+named volume; 2026-08-11 incident: a `docker cp` preserve raced live checkpointing,
+captured a metadata-only checkpoint, and the job had to FULL_REPLAY). Before any
+`docker compose up -d flink-jobmanager flink-taskmanager`:
+1. Stop the job (`flink cancel` — a running job keeps subsuming checkpoints while
+   you copy, so the preserved snapshot may be incomplete).
+2. Preserve `docker cp 01_docker-flink-jobmanager-1:/tmp/p8-checkpoints/. <host>`.
+3. After recreate, copy back and `docker exec -u root … chown -R flink:flink
+   /tmp/p8-checkpoints` (docker cp restores as root; flink cannot create the
+   checkpoint store otherwise).
+4. Re-deploy the jar (`docker cp compute.jar …:/opt/flink/jobs/` — also
+   container-local) and resubmit with `STATE_RECOVERY_PATH` pointing at the
+   preserved `chk-N`. Restore-only submit must NOT set `ALLOW_FULL_REPLAY`
+   (A3.3 gate rejects the combination).
+
+## Replay incident (SignalJob)
+
+Trigger: an approved FULL_REPLAY is started, or a restart is forced to replay
+history (`ALLOW_FULL_REPLAY=true` accepted via A3.4).
+
+1. Confirm the A3.4 WARN log line: `signal-job: startup mode = FULL_REPLAY
+   (restore=false, fullReplay=true)` — a full replay without this line is a
+   configuration error.
+2. Record JobID, artifact hash, checkpoint directory, and the replay reason
+   (approved operator step).
+3. The storm test (2026-08-11, job `5f41f0c5`, 204,800 ticks) proves a replay
+   produces zero alert storms: checkpoints complete (0 failed), and the
+   schema-rejection rules do not fire on valid historical data.
+4. Verify the replayed candle/sink counts match the deterministic expectation
+   for the input snapshot; candidates = 0 on replay is deterministic (no
+   detection during historical catch-up).
+5. Closure: replay drained, checkpoints advancing, no unintended alert fires.
+
+## Checkpoint failure (SignalJob)
+
+Trigger: `SIGNAL-crit-checkpoint-failed` (failed checkpoints > 0) or
+`SIGNAL-error-checkpoint-slow` (duration >= 240000 ms = 80% of the pinned
+300000 ms timeout).
+
+1. Capture JobID, failed checkpoint count, last completed checkpoint, source
+   offsets, state size, and sink status.
+2. Verify the job is still producing completed checkpoints; one transient
+   failure restarts the task automatically (configured restart strategy).
+3. If checkpoints stop completing: restore from the last good checkpoint
+   (`STATE_RECOVERY_PATH` = `file:///tmp/p8-checkpoints/<jobid>/chk-N`), never
+   from a checkpoint at/after the failure.
+4. `allowNonRestoredState` is forbidden — the restore must be exact.
+5. Verify dedup, window, forming-bar, and source state consistency, then resume
+   normal operation. Closure: checkpoints advancing, 0 failed, alert recovered.
+
+## Schema-preflight failure
+
+Trigger: DDL/version preflight blocks startup (validation/contract gate).
+
+1. Capture the failing table, expected vs actual schema, and version matrix
+   state.
+2. Check the candle contract (`CandleTableContractValidator`) fields: PK,
+   routing, bucket count, and the full 15-column/type/nullability set.
+3. Do NOT bypass the gate; reconcile the DDL/schema with the manifest
+   (`ddl_apply.py --force` regeneration must be byte-identical) and re-run.
+4. Closure: preflight passes, job starts in the intended mode.
+
+## Migration conflict (CandleMigrationTool)
+
+Trigger: `CandleMigrationTool` audit/load exits 2 (unaccepted conflicts) or 1
+(accept-list entries match no canonical key).
+
+1. Read the stdout fields: `ACCEPT_KEYS_FILE`, `ACCEPTED_KEYS`,
+   `UNACCEPTED_KEYS`, `ACCEPT_KEYS_NOT_FOUND`.
+2. Re-run the read-only audit; every conflict must be on the operator-approved
+   accept list (`CANDLE_MIGRATION_ACCEPT_KEYS_FILE`: `token,windowStart` per
+   line, `#` comments allowed) or the load fails closed.
+3. Accepted keys merge by `MAX(output_ts)` (last-write-wins — the same
+   convergence the live KV sink applies); unknown conflicts abort.
+4. Entries matching no canonical key abort exit 1 (typo/stale list).
+5. Closure: `UNACCEPTED_KEYS=0`, `NOT_FOUND=0`, exit 0, DEST_ROWS_AFTER ==
+   DISTINCT_KEYS.
+
+## Fluss coordinator/tablet failure (compose)
+
+Trigger: `SIGNAL-error-flink-jm-scrape-down` / `SIGNAL-error-flink-tm-scrape-down`
+(collector cannot scrape), or `up == 0` for a Fluss service, or
+`SIGNAL-crit-taskmanager-down`.
+
+1. Record the failed service, leader/replica state, and quorum.
+2. Compose: `docker compose up -d --force-recreate <svc>` (coordinator/tablet);
+   Fluss data persists in named volumes.
+3. Verify the coordinator (`fluss-coordinator:9123`) and each tablet are
+   reachable from the jobmanager container before restarting the job.
+4. If the SignalJob lost its Fluss connections, restart it from its last
+   checkpoint (see SignalJob restart) — never from offset 0 without the
+   approved replay path.
+5. Closure: scrapes return to 1, checkpoints advance, alerts recover.
+
+## Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001)
+
+Exact dev-rehearsed registry (2026-08-10, tracker
+`docs/08_implementation/13-candle-log-kv-replay-safety.md`):
+
+| Job | Graph | Restore target | Last checkpoint |
+| --- | --- | --- | --- |
+| `0417068d` | pre-cutover single-LOG | — | chk-1538 (rollback restore target) |
+| `87c48642` | dual-sink cutover | chk-1538 | chk-1732 (re-cutover restore target) |
+| `4527918b` | rollback rehearsal (single-LOG, KV sink stripped, restore wiring + candle-contract preflight kept) | chk-1538 | chk-1572 |
+| `92104dac` | current re-cutover | chk-1732 | chk-1827+ |
+
+Tables: `feature_candles_15s` (LOG, never touched by rollback) and
+`feature_candles_15s_current` (KV — writes freeze on rollback).
+**Rollback cutoff = chk-1539** (the FIRST dual-sink checkpoint): restoring
+any checkpoint at/after it into a single-LOG graph leaks KV state.
+
+Rollback procedure:
+
+1. Build the single-LOG artifact from CURRENT source with the KV-sink operator
+   stripped (restore wiring + candle-contract preflight kept). Verify via
+   `javap`: 0 kv-sink refs, restore + preflight present. The old pre-restore
+   jars lack `STATE_RECOVERY_PATH` support and would offset-0 full-replay.
+2. Submit with `STATE_RECOVERY_PATH=<pre-cutover job's last checkpoint>` =
+   `file:///tmp/p8-checkpoints/0417068d…/chk-1538` (dev) — NEVER a checkpoint
+   >= chk-1539.
+3. Verify: KV frozen (key count constant), LOG continues to grow, checkpoints
+   <= 30 s, `Restoring job` + completed checkpoints in the log.
+4. Re-cutover (when safe): restore the dual-sink job from ITS OWN last
+   checkpoint (`87c48642…/chk-1732`), not the rehearsal run's checkpoints
+   (single-LOG graph → dual-sink restore fails).
+5. Closure: KV count resumes growing, LOG/KV diverge only by design, alerts
+   clear.
+
+## Telemetry retention and data lifecycle
+
+OpenObserve v0.91.5 retention contract (`docs/04_contracts/openobserve.md`):
+logs 30 days, metrics 90 days, traces 14 days, alert definitions 180 days.
+
+- Mechanism (source-verified, `src/service/compact/retention.rs`): per-stream
+  `data_retention` (days) overrides the global
+  `ZO_COMPACT_DATA_RETENTION_DAYS` default (3650 = 10 years). New metric
+  streams inherit the global until the provisioning sync re-runs.
+- Applied 2026-08-11 via `o2-provision.py` (idempotent `provision_retention`):
+  all logs streams = 30, all 335 metric streams = 90. Re-run the provisioner
+  after any new metric family appears.
+- Alert rules are NOT streams: definitions + trigger history live in the O2
+  meta store (`metadata.sqlite`), not subject to stream retention.
+- The seven-year money-moving audit retention is a SEPARATE S3/object-store
+  control (EOD/lake tier) and must NEVER be attributed to OpenObserve.
+- When retention changes are needed: `PUT /api/{org}/streams/{stream}/settings`
+  with `{"data_retention": N}` (partial update; other settings survive);
+  minimum allowed is 3 days.
+
+## Alert response catalogue
+
+All rules route to the `dev-webhook` destination in dev (receiver logs:
+`docker logs 01_docker-webhook-receiver-1 | grep 'POST /noop'`). O2 v0.91.5 v2
+alerts have no first-class severity field — severity rides the rule-name prefix
+(`SIGNAL-crit`/`error`/`warn`, `ING-crit`/`warn`). Realtime rules evaluate
+continuously; while a condition holds, fires repeat on the ~30–75 s window
+cadence. 24 rules provisioned (9 ING- ingestion + 15 SIGNAL- compute).
+
+Compute/SignalJob rules:
+
+| Rule | Severity | Condition | Response | Recovery |
+| --- | --- | --- | --- | --- |
+| SIGNAL-crit-checkpoint-failed | Critical | failed checkpoints > 0 | Checkpoint failure runbook | checkpoint completes, count resets |
+| SIGNAL-error-checkpoint-slow | Error | duration >= 240000 ms | Checkpoint failure runbook | duration back under 80% of timeout |
+| SIGNAL-error-job-restarting | Error | restarts > 0 | Check flink_logs for the restart cause | restarts stop |
+| SIGNAL-error-source-stalled | Error | source rate == 0 (2 min) | Check feed/bridge; **false-fires on quiesced dev feed** | feed resumes |
+| SIGNAL-warn-kv-sink-zero | Warning | kv-sink rate == 0 (2 min) | Check KV sink task; **false-fires on quiesced dev feed** | sink writes resume |
+| SIGNAL-warn-dedup-state | Warning | dedup state count > 250000 | Check dedup memory envelope (P5/P4 scope) | count drops |
+| SIGNAL-warn-dedup-expiry | Warning | expiry index > 250000 | Check expiry index growth | index shrinks |
+| SIGNAL-warn-schema-rejected-rate | Warning | rejects per flush > 10 | Check raw_table_1 schema vs validator | rejects stop |
+| SIGNAL-crit-schema-version-rejected | Critical | any schema-version reject | Schema-preflight runbook | zero rejects |
+| SIGNAL-crit-full-replay-started | Critical | startup mode == FULL_REPLAY | Replay incident runbook (fires only when the emitter ships in production) | replay drains, job runs |
+| SIGNAL-error-flink-jm-scrape-down | Error | `up{instance=flink-jobmanager:9249} == 0` (2 min) | Check JM + collector scrape | scrape resumes |
+| SIGNAL-error-flink-tm-scrape-down | Error | `up{instance=flink-taskmanager:9249} == 0` (2 min) | Check TM + collector scrape | scrape resumes |
+| SIGNAL-warn-jvm-heap-high | Warning | JM heap >= 900 MB | GC/restart; check task slots | heap drops |
+| SIGNAL-crit-taskmanager-down | Critical | registered TMs < 1 | Fluss/Flink cluster runbook | TM registers |
+| SIGNAL-warn-scrape-slow | Warning | scrape duration >= 1 s | Reporter load check | duration drops |
+| SIGNAL-warn-source-lag | Warning | event-time lag >= 600 s | Replay incident / source-stall check; **fires on stopped dev feed** (baseline ~244 s with the historical-timestamp dev feed) | feed resumes / replay drains |
+
+Ingestion rules (existing): ING-crit-telemetry-delivery-failed (collector
+export failures persist; degraded-delivery signal — absence-based conditions do
+NOT fire, see the collector-outage limitation), ING-crit-fd-90,
+ING-warn-fd-80, ING-crit-orphan-process, ING-warn-reconnect-streak-5,
+ING-warn-capacity-80, and the slot/health rules defined in
+`02-ingestion-alerting.md`.
+
+Collector/O2 outage limitation (measured 2026-08-11): stopping the collector
+2.5 minutes produces ZERO alert fires — O2 cannot alert on data it is not
+receiving. Coverage for full outage = compose/supervisor restart policy +
+`ING-crit-telemetry-delivery-failed` (degraded delivery while the collector is
+up).
+
 ## Security or credential incident
 
 1. Halt affected order flow.

@@ -140,6 +140,32 @@ boundaries:
     date: 2026-07-31
     status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
 
+  - compatibility_id: VM-ZK-013
+    boundary: ZooKeeper ensemble
+    proposed_version: "3.9.2"
+    evidence_source: >-
+      Apache ZooKeeper 3.9.2 (zookeeper.apache.org); official Docker image
+      zookeeper:3.9.2; Fluss 0.9.1 requires ZooKeeper >= 3.6.0 and
+      recommends replicated ensemble for production; Flink 2.2.1 ZK HA
+      (high-availability.type: zookeeper)
+    compatibility_class: UNKNOWN
+    evidence_owner: Platform
+    evidence_method: >-
+      Start 3-node ZooKeeper ensemble; verify quorum 2-of-3 survives one
+      node loss; Fluss coordinator/tablet register via zookeeper.address;
+      Flink JobManager HA leader election and failover to standby.
+    source_artifact: >-
+      docker-compose up (zookeeper + fluss-coordinator + fluss-tablet,
+      apache/fluss:0.9.1-incubating) registers coordinator leader and
+      tablet via zookeeper.address zookeeper:2181 (dev single-node).
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: null
+    date: null
+    status: PINNED_AWAITING_EVIDENCE
+
   - compatibility_id: VM-FLUSS-CLI-006
     boundary: Fluss Java client
     proposed_version: "0.9.1-incubating"
@@ -188,14 +214,33 @@ boundaries:
     evidence_method: >-
       Lock fluss-flink-2.2 connector dep; assert matches Flink 2.2 +
       server; run connector checkpoint/restore test.
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    source_artifact: >-
+      fluss-flink-2.2:0.9.1-incubating (Maven Central, shaded 69 MB);
+      SignalJob (FlussSource + RowDataDeserializationSchema +
+      OffsetsInitializer.full()) and SafetyHaltJob live integration test
+      (code/02_services/02_compute)
+    fixture: >-
+      Dev Fluss 0.9.1-incubating cluster (docker-compose: coordinator,
+      tablet server, ZooKeeper 3.9.2), 2026-08-09
+    scenario: >-
+      SignalJob Slice 1 live smoke: consume raw_table_1 (15,219,441 rows) via
+      FlussSource exactly-once, compute 15s candles, append 205,146 rows to
+      feature_candles_15s via connector sink. SAFETY-INT-001: live KV upsert of
+      an UNSAFE halt row + primary-key lookup + FlussSource current-value read.
+    result: >-
+      COMPATIBLE (source consume + sink append live; KV upsert/lookup; 48
+      EXACTLY_ONCE checkpoints)
+    observed_behavior: >-
+      FlussSource.build() performs live Admin.getTableInfo (fail-fast startup);
+      source read raw_table_1 end-to-end; sink appended 205,146 candle rows /
+      1,074 instruments; SAFETY-INT-001 passed 2026-08-09
+      (logs/safety-int-001/safety-int-001-20260809-122201.out).
+    limitations: >-
+      Checkpoint/restore-rescale of the connector boundary, serializer change,
+      and sink partial-visibility remain UNKNOWN (STATE-COMPAT-001,
+      COMPAT-FLINK-001, SIG-INT-002 pending; 2026-08-10 resolution plan).
+    date: 2026-08-09
+    status: PARTIAL_EVIDENCE_CONNECTOR_SOURCE_SINK
 
   - compatibility_id: VM-BROKER-MKT-008
     boundary: Broker market protocol

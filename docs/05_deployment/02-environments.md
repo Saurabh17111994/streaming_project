@@ -16,8 +16,9 @@ Environment definitions must remain separate. Local Compose settings must never 
 
 The three workload VMs host:
 
-- Fluss coordinator/tablet capacity and three-node replication/quorum
-- Flink JobManager/TaskManager workload capacity according to the proven placement plan
+- A ZooKeeper ensemble node (one per VM; 3-node ensemble, quorum 2-of-3; Fluss metadata store — required by Fluss 0.9.1 — and Flink JobManager HA leadership)
+- Fluss coordinator/tablet capacity and three-node replication/quorum (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Flink checkpoints + Fluss remote storage + rebuild from audit)
+- Flink JobManager (HA standby + leader via ZooKeeper)/TaskManager workload capacity according to the proven placement plan
 - Ingestion, Action Capture, Executor, and job deployment control as assigned by the Swarm stack
 
 Fluss replicas cannot co-locate on one workload VM. All three replicas of any critical Fluss/Flink role SHALL be placed across separate workload VMs via anti-co-location constraints. The placement plan must specify resources, update order, restart policy, shutdown grace, health checks, and persistent volume ownership.
@@ -35,7 +36,7 @@ Production readiness requires:
 - Pinned immutable image digests and exact dependency versions
 - Version-reconciled Fluss schemas and connector configuration
 - Broker/Arrow REST protocol evidence and valid credentials
-- Fluss quorum/replication health
+- ZooKeeper ensemble quorum (2-of-3) health and Fluss quorum/replication health
 - Signal and Babysitter jobs running and checkpointing
 - Executor durable state, fencing, changelog continuity, and known gate state
 - OpenObserve delivery or an approved durable telemetry degradation mode
@@ -67,8 +68,8 @@ Local configuration:
 ## Production startup order
 
 1. Validate Swarm secrets, network, S3, and durable storage access.
-2. Validate Fluss quorum, replication, tablets, and required schemas.
-3. Start Flink control/workers and verify checkpoint storage.
+2. Validate ZooKeeper ensemble quorum (2-of-3), then Fluss quorum, replication, tablets, and required schemas.
+3. Start Flink control/workers (JobManager HA leader elected via ZooKeeper) and verify checkpoint + HA metadata storage.
 4. Deploy Signal and Babysitter jobs from pinned artifacts.
 5. Verify ingestion manifest/subscriptions and Action Capture protocol readiness.
 6. Start Executor with gate `HALTED`; verify durable state, mappings, continuity, Arrow REST, and telemetry.
@@ -80,8 +81,8 @@ Startup dependencies and health checks never automatically enable order placemen
 
 ## Failure and maintenance behavior
 
-- Loss of any workload VM is tested at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak.
-- Fluss quorum degradation, checkpoint failure, changelog discontinuity, or uncertain Executor state halts new money-moving calls.
+- Loss of any one workload VM is tested at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak; ZooKeeper ensemble holds quorum (2-of-3) through that loss.
+- ZooKeeper quorum loss, Fluss quorum degradation, checkpoint failure, changelog discontinuity, or uncertain Executor state halts new money-moving calls. A single ZooKeeper node loss is tolerated while quorum holds.
 - Broker/authentication failure makes affected services not ready and alerts operations.
 - Planned maintenance begins with the gate halted, drains or reconciles attempts, checkpoints jobs, and verifies durable state.
 - Forced termination creates an audit event and requires reconciliation before resumption.

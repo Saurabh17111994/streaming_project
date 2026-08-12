@@ -30,6 +30,15 @@ public final class PlatformConfig {
     public static final int MAX_PENDING_APPEND_RECORDS = 10000;
     public static final int PENDING_APPEND_WARNING_PERCENT = 80;
 
+    // ---- raw_table_1 schema contract ----
+    /**
+     * Authoritative {@code raw_table_1.schema_version} value — DDL 02_raw_table_1.sql
+     * "Schema version: 2" (the 20-column v2 layout, R-054/R-231). Ingestion writes
+     * this value and SignalJob's {@code RAW_SCHEMA_VERSION} default derives from it,
+     * so the producer label and the consumer default cannot drift apart.
+     */
+    public static final String RAW_TABLE_1_SCHEMA_VERSION = "2";
+
     // ---- dedup / candles (reject-startup values) ----
     public static final long DEDUP_TTL_MS = 300_000L;
     public static final long CANDLE_WINDOW_MS = 15_000L;
@@ -38,6 +47,20 @@ public final class PlatformConfig {
     public static final long CHECKPOINT_INTERVAL_MS = 10_000L;
     public static final long CHECKPOINT_TIMEOUT_MS = 30_000L;
     public static final int MAX_CONCURRENT_CHECKPOINTS = 1;
+
+    // ---- sink write-path (tracker 14 box 682/116, 2026-08-12) ----
+    /**
+     * Governed pin: the sink write-path stall bound. Any single
+     * write/flush/close on the candle sinks that does not complete within
+     * this window throws (StallGuardedSink) — the Flink-side watchdog that
+     * turns a hanging Fluss client write (client.request-timeout default
+     * 30 s, observed ~31 s failure cycles) into a bounded task failure so
+     * the configured restart policy can drive the job to terminal FAILED.
+     * Healthy-path writes complete in milliseconds; 15000 ms is ~10x
+     * headroom. Change via the PlatformConfig/tracker governed-change
+     * process, not a tuning knob.
+     */
+    public static final long SINK_WRITE_STALL_TIMEOUT_MS = 15_000L;
 
     // ---- JVM / container memory ----
     public static final int JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT = 65;

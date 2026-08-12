@@ -21,6 +21,9 @@ Compose is not production HA evidence. Production placement, resources, restart 
 ```text
 Arrow market-data endpoint ─TLS─► Ingestion
 Ingestion ─Fluss client─► Fluss coordinator/tablets
+Fluss coordinator/tablets ─ZooKeeper client (2181)─► ZooKeeper ensemble
+ZooKeeper ensemble members ─2888/3888─► ZooKeeper peers (leader election, quorum)
+Flink JobManagers ─ZooKeeper client (2181)─► ZooKeeper ensemble (HA leadership)
 Signal and Babysitter jobs ─version-pinned connector─► Fluss
 Arrow postback endpoint ─TLS─► Action Capture
 Executor ─Fluss changelog─► execution inputs/state
@@ -35,7 +38,7 @@ Exact ports, endpoint paths, authentication fields, compression, subscription li
 
 ## Network exposure rules
 
-Production exposes only explicitly required operator, health, or API endpoints through controlled ingress and firewall rules. Fluss tablet/internal RPC, checkpoint storage, service-to-service data paths, and execution state are not publicly exposed.
+Production exposes only explicitly required operator, health, or API endpoints through controlled ingress and firewall rules. Fluss tablet/internal RPC, ZooKeeper client/peer ports (2181/2888/3888 — internal-only, never publicly exposed), checkpoint storage, service-to-service data paths, and execution state are not publicly exposed.
 
 The observability VM cannot authorize orders, change the Executor gate, or erase execution audit if OpenObserve is unavailable. Local UI exposure is for development only and is not a production security model.
 

@@ -102,6 +102,13 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
         public volatile long rejected;
         public volatile long lastFrameNanos;
         public volatile double capacityUsedPercent;
+        // Safety evidence (plan Amendment §Slot-scoped safety propagation):
+        // safetyState is 0 (SAFE) or 1 (UNSAFE); unsafeSinceNanos is the
+        // monotonic (System.nanoTime) instant the slot turned unsafe, 0 when
+        // safe. unsafe_duration_ms is derived at flush time from it.
+        public volatile int safetyState;       // 0 or 1 (UNSAFE)
+        public volatile long unsafeSinceNanos; // monotonic; 0 when safe
+        public volatile long capacityRemaining;
     }
 
     // ---- Resource metrics (plan Amendment §Resource) ----
@@ -214,6 +221,32 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
     public void setSlotCapacityUsedPercent(String slotId, double percent) {
         SlotMetricState s = slotStates.computeIfAbsent(slotId, ignored -> new SlotMetricState());
         s.capacityUsedPercent = percent;
+    }
+
+    /**
+     * Slot safety evidence (plan Amendment). safetyState 1 = UNSAFE, 0 =
+     * SAFE; unsafeSinceNanos is the monotonic timestamp the slot turned
+     * unsafe (0 when safe) — the flush derives unsafe_duration_ms from it, so
+     * re-emitting the same unsafe state must not reset the clock. Callers
+     * pass the value stamped by HealthProbe.
+     */
+    public void setSlotSafetyState(String slotId, int safetyState, long unsafeSinceNanos) {
+        SlotMetricState s = slotStates.computeIfAbsent(slotId, ignored -> new SlotMetricState());
+        s.safetyState = safetyState;
+        if (safetyState == 1) {
+            // Keep the FIRST unsafe timestamp for the duration gauge — only a
+            // safe→unsafe transition may stamp it.
+            if (s.unsafeSinceNanos == 0) s.unsafeSinceNanos = unsafeSinceNanos;
+        } else {
+            s.unsafeSinceNanos = 0;
+        }
+    }
+
+    /** Remaining subscription capacity for a slot (plan ING-CAP-001):
+     *  arrowHftMaxTokensPerConnection − assigned. */
+    public void setSlotCapacityRemaining(String slotId, long remaining) {
+        SlotMetricState s = slotStates.computeIfAbsent(slotId, ignored -> new SlotMetricState());
+        s.capacityRemaining = remaining;
     }
 
     public void setReconnectConsecutive(long v) { reconnectConsecutive = v; }
@@ -339,6 +372,16 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
             appendGaugeLongLabeled(sb, "bridge.slot.last_frame_age_ms", "ms", frameAgeMs, slotId, nowNanos);
             appendGaugeDoubleLabeled(sb, "bridge.slot.capacity_used_percent", "%",
                     s.capacityUsedPercent, slotId, nowNanos);
+            // Safety + capacity evidence (plan Amendment §Resource/capacity):
+            // safety_state 0/1, unsafe_duration_ms since the first unsafe
+            // transition (0 while safe), capacity_remaining tokens.
+            appendGaugeIntLabeled(sb, "bridge.slot.safety_state", "1", s.safetyState, slotId, nowNanos);
+            long unsafeMs = s.safetyState == 1 && s.unsafeSinceNanos > 0
+                    ? Math.max(0, (System.nanoTime() - s.unsafeSinceNanos) / 1_000_000L)
+                    : 0;
+            appendGaugeLongLabeled(sb, "bridge.slot.unsafe_duration_ms", "ms", unsafeMs, slotId, nowNanos);
+            appendGaugeLongLabeled(sb, "bridge.slot.capacity_remaining", "tokens",
+                    s.capacityRemaining, slotId, nowNanos);
         });
 
         // ---- Resource + capacity gauges (Amendment §Resource) ----

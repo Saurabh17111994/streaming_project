@@ -770,7 +770,6 @@ public final class IngestionService {
                     .connectionId(gt.connection_id == null || gt.connection_id.isBlank() ? "arrow-bridge" : gt.connection_id)
                     .connectionEpoch(gt.connection_epoch)
                     .instanceId(instanceId)
-                    .schemaVersion(1)
                     .build();
 
             // 7. Submit to bounded writer (async append — each tick is its

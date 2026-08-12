@@ -20,12 +20,12 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Node class | Required workload | Disk |
 | --- | --- | --- |
-| Workload VM 1 | Fluss replica/quorum, Flink capacity, assigned services | 500 GB SSD |
-| Workload VM 2 | Fluss replica/quorum, Flink capacity, assigned services | 500 GB SSD |
-| Workload VM 3 | Fluss replica/quorum, Flink capacity, assigned services | 500 GB SSD |
+| Workload VM 1 | Fluss replica/quorum, ZooKeeper ensemble member (1 of 3), Flink capacity (JobManager/TaskManager), assigned services | 500 GB SSD |
+| Workload VM 2 | Fluss replica/quorum, ZooKeeper ensemble member (2 of 3), Flink capacity (JobManager/TaskManager), assigned services | 500 GB SSD |
+| Workload VM 3 | Fluss replica/quorum, ZooKeeper ensemble member (3 of 3), Flink capacity (JobManager/TaskManager), assigned services | 500 GB SSD |
 | Observability VM | OpenObserve and telemetry storage/collection | 500 GB SSD |
 
-Fluss replicas cannot co-locate. All three replicas of any critical Fluss/Flink role SHALL be placed across separate workload VMs via anti-co-location constraints. OpenObserve loss must not authorize orders or erase local durable audit.
+Fluss replicas cannot co-locate, and ZooKeeper ensemble members cannot co-locate: exactly one ZooKeeper node per workload VM. All three replicas of any critical Fluss/Flink role SHALL be placed across separate workload VMs via anti-co-location constraints. The 3-node ZooKeeper ensemble (quorum 2-of-3) and 3-node Fluss LOG-table replication survive loss of any single workload VM. OpenObserve loss must not authorize orders or erase local durable audit.
 
 The final service-to-node placement, CPU, RAM, SSD IOPS/throughput, and network bandwidth are `EVIDENCE-BLOCKED` until `PERF-PROD-60000-001` and `FAIL-VM-LOSS-60000-001` pass. Current allocations (500 GB SSD per VM) are a starting point, not a proven sizing result.
 
@@ -35,6 +35,7 @@ The production stack must define:
 
 - Immutable image digests for every image.
 - Exact Java/Python/Flink/Fluss/connector/protocol versions.
+- 3-node ZooKeeper ensemble (`zookeeper:3.9.2`), one member per workload VM, quorum 2-of-3, durable per-node data volume, internal-only ports (2181 client, 2888/3888 peer/leader).
 - Placement constraints and anti-co-location.
 - Resource reservations/limits.
 - Health checks and readiness dependencies.
@@ -50,8 +51,8 @@ The production stack must define:
 ### Readiness sequence
 
 1. Verify image digests, Swarm secrets, encrypted networks, volumes, and S3.
-2. Verify Fluss quorum, replication, tablets, placement, and schema manifest.
-3. Verify Flink control/workers and checkpoint storage.
+2. Verify ZooKeeper ensemble quorum (2-of-3), then Fluss quorum, replication, tablets, placement, and schema manifest.
+3. Verify Flink control/workers (JobManager HA leader elected via ZooKeeper), checkpoint storage, and HA metadata storage.
 4. Deploy Signal and Babysitter artifacts; verify running/checkpointing.
 5. Verify Ingestion manifest/subscriptions and Action Capture protocol readiness.
 6. Start Executor `HALTED`; verify state, mappings, continuity, Arrow REST contract, fencing, and telemetry.
@@ -61,14 +62,27 @@ The production stack must define:
 
 A container or service becoming healthy never enables order placement.
 
+### Bootstrap and scaling (config-driven)
+
+The production stack is config-driven: the same stack files, environment variables, secrets, and artifacts run at any node count. Bootstrap on one production-like VM first, then scale to three by configuration and node addition, not by rewriting the stack.
+
+| Stage | Nodes | ZooKeeper | Fluss replication | Flink HA | Status |
+| --- | --- | --- | --- | --- | --- |
+| Bootstrap | 1 workload VM + observability VM | Single node (no quorum) | Replication factor 1 (LOG and KV) | JobManager HA disabled | Validates config/DDL/connectors/jobs only; NOT HA evidence |
+| Target | 3 workload VMs + observability VM | 3-node ensemble, quorum 2-of-3 | LOG replication ≥2, anti-co-located | `high-availability.type: zookeeper`, standby JobManagers | Production HA topology |
+
+Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert ZooKeeper single-node to the 3-member ensemble (update `server.X` entries and quorum config), raise Fluss LOG-table replication factor, enable Flink ZK HA with the ensemble quorum, and re-verify the readiness sequence. The single-VM bootstrap stage SHALL NOT be cited as quorum, replication, or HA evidence.
+
 ### Storage and recovery
 
-- Fluss data uses durable per-node volumes and tested replication.
-- Flink checkpoints/savepoints use encrypted versioned S3.
+- Fluss data uses durable per-node volumes and tested replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Flink checkpoints + Fluss remote storage + rebuild from audit).
+- ZooKeeper ensemble members use durable per-node volumes; loss of one member is tolerated while quorum (2-of-3) holds.
+- Flink checkpoints/savepoints use encrypted versioned S3; Flink JobManager HA metadata (`high-availability.storageDir`) uses the same encrypted S3 store, with leadership in ZooKeeper.
 - Iceberg/audit storage uses encryption, versioning, and approved retention/lifecycle policy.
 - Operational projections are rebuildable from immutable events/audit or a tested backup.
 - Loss of any one workload VM is tested at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average).
 - RPO/RTO is recorded per failure scenario; no untested global claim is made.
+- Flink JobManager HA: `high-availability.type: zookeeper` with `high-availability.zookeeper.quorum` = the 3-node ensemble, `high-availability.storageDir` = encrypted S3, `high-availability.zookeeper.path.root: /flink`, per-cluster `high-availability.cluster-id`. Multiple standby JobManagers run across workload VMs; ZooKeeper elects the leader, and a standby takes over JobManager failure without a full job re-submission.
 - Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`, estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time.]
 
 ### Security and networking
@@ -144,7 +158,8 @@ For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 
 
 - [ ] Production stack is separate from Compose.
 - [ ] No mutable image tags or unpinned dependencies remain.
-- [ ] Placement prevents Fluss replica co-location.
+- [ ] Placement prevents Fluss replica and ZooKeeper ensemble-member co-location.
+- [ ] ZooKeeper ensemble quorum 2-of-3 verified; one ZK node loss tolerated.
 - [ ] Secret/identity/network tests pass.
 - [ ] S3 checkpoint/lake/audit recovery passes.
 - [ ] One-VM loss passes with documented RPO/RTO.

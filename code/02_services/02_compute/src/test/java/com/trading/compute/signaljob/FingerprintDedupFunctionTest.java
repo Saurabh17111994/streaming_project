@@ -2,15 +2,20 @@ package com.trading.compute.signaljob;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.api.operators.KeyedProcessOperator;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -149,5 +154,167 @@ class FingerprintDedupFunctionTest {
         harness.processWatermark(T0 + TTL_MS);
         assertEquals(0, harness.numKeyedStateEntries(), "shared expiry timer must clear every listed key");
         assertEquals(0, harness.numEventTimeTimers());
+    }
+
+    // ── tracker 14 P5.3 hot-path boundary tests ───────────────────────────
+
+    @Test
+    void differentFingerprintVersionDoesNotCollide() throws Exception {
+        openHarness();
+        GenericRowData v1 = TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1);
+        v1.setField(RawTableColumns.FINGERPRINT_VERSION, StringData.fromString("1"));
+        process(v1);
+        GenericRowData v2 = TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 1);
+        v2.setField(RawTableColumns.FINGERPRINT_VERSION, StringData.fromString("2"));
+        process(v2); // same fingerprint, different version → distinct state key
+
+        assertEquals(2, emittedCount(harness), "version is part of the state key — v2 must pass");
+    }
+
+    @Test
+    void stateDoesNotGrowWhenAllRowsAreDuplicates() throws Exception {
+        openHarness();
+        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
+        for (int i = 0; i < 10_000; i++) {
+            process(TestRawRows.row(1L, T0 + i, "fp-1", "TRADE", 100 + i, i));
+        }
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+                "10k duplicates of one fingerprint must not grow state");
+        assertEquals(1, harness.numEventTimeTimers());
+    }
+
+    @Test
+    void idleSourceDoesNotAccumulateState() throws Exception {
+        openHarness();
+        // Nothing processed: the operator must add no state and no timers of
+        // its own — an idle source cannot grow the dedup map.
+        assertEquals(0, harness.numKeyedStateEntries());
+        assertEquals(0, harness.numEventTimeTimers());
+    }
+
+    @Test
+    void highCardinalityFingerprintsAllPass() throws Exception {
+        openHarness();
+        int n = 5_000;
+        for (int i = 0; i < n; i++) {
+            process(TestRawRows.row(1L, T0 + i, "fp-hc-" + i, "TRADE", 100 + i, i));
+        }
+        assertEquals(n, emittedCount(harness), "every distinct fingerprint passes");
+        assertEquals(n, ComputeOtlpEmitter.dedupStateCount(),
+                "state holds exactly one entry per live fingerprint");
+    }
+
+    @Test
+    void malformedEmptyFingerprintIsScopedNotCrashed() throws Exception {
+        openHarness();
+        process(TestRawRows.row(1L, T0, "", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "", "TRADE", 101, 2));
+
+        assertEquals(1, emittedCount(harness),
+                "empty fingerprint is a valid (if malformed) state key — first passes, duplicate drops");
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
+    }
+
+    @Test
+    void eventTimeOverflowExpiryClampsToMaxValue() throws Exception {
+        openHarness();
+        long nearMax = Long.MAX_VALUE - 1_000L;
+        GenericRowData row = TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1);
+        row.setField(RawTableColumns.EVENT_TIME, nearMax);
+        process(row); // nominal expiry would wrap negative — must clamp, not crash
+
+        assertEquals(1, emittedCount(harness));
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
+        assertEquals(1, harness.numEventTimeTimers(),
+                "clamped MAX_VALUE timer registered once");
+        // Advance the watermark beyond the clamped instant — the timer fires,
+        // the entry is cleared (a negative expiry would have fired immediately
+        // at open and dropped the entry before the watermark ever moved).
+        harness.processWatermark(Long.MAX_VALUE);
+        assertEquals(0, ComputeOtlpEmitter.dedupStateCount());
+    }
+
+    // ── tracker 14 P5.1 gauge mirrors ─────────────────────────────────────
+
+    @BeforeEach
+    void resetGaugeMirrors() {
+        // JVM-wide statics — every test starts from a clean mirror.
+        ComputeOtlpEmitter.resetDedupGaugesForTest();
+    }
+
+    @Test
+    void dedupGaugesTrackInsertAndExpiry() throws Exception {
+        openHarness(); // gauges register at open; mirrors start at zero
+        assertEquals(0, ComputeOtlpEmitter.dedupStateCount());
+        assertEquals(0, ComputeOtlpEmitter.dedupExpiryIndexCount());
+        assertEquals(0, ComputeOtlpEmitter.dedupBytesEstimate());
+
+        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "fp-2", "TRADE", 101, 2));
+        process(TestRawRows.row(1L, T0 + 2_000L, "fp-1", "TRADE", 102, 3)); // duplicate
+
+        assertEquals(2, ComputeOtlpEmitter.dedupStateCount(),
+                "two live fingerprints, duplicate adds nothing");
+        assertEquals(2, ComputeOtlpEmitter.dedupExpiryIndexCount());
+        assertEquals(2 * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES
+                        + 2 * FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES,
+                ComputeOtlpEmitter.dedupBytesEstimate());
+
+        harness.processWatermark(T0 + TTL_MS);
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+                "first expiry removes fp-1; fp-2's timer is later");
+        assertEquals(1, ComputeOtlpEmitter.dedupExpiryIndexCount());
+
+        harness.processWatermark(T0 + 1_000L + TTL_MS);
+        assertEquals(0, ComputeOtlpEmitter.dedupStateCount(), "expiry clears the mirrors too");
+        assertEquals(0, ComputeOtlpEmitter.dedupExpiryIndexCount());
+        assertEquals(0, ComputeOtlpEmitter.dedupBytesEstimate());
+    }
+
+    @Test
+    void dedupGaugesFoldRestoredStateExactly() throws Exception {
+        openHarness();
+        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
+
+        // Checkpoint the harness, then restore it into a NEW operator — the
+        // restored MapState holds fp-1 but the fresh mirrors start at zero.
+        OperatorSubtaskState state = harness.snapshot(0L, 0L);
+        harness.close();
+        ComputeOtlpEmitter.resetDedupGaugesForTest();
+
+        // forKeyedProcessFunction already initializes the harness (empty) —
+        // a RESTORE needs a manually constructed harness: initializeState
+        // must run before open.
+        KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> restored =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        new KeyedProcessOperator<>(
+                                new FingerprintDedupFunction(SignalJobConfig.from(env()))),
+                        row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
+                        Types.LONG);
+        restored.initializeState(state);
+        restored.open();
+        try {
+            // First row for token 1: replace-tracked(0) with actual-restored(1).
+            processOn(restored, TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
+            assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+                    "restored fp-1 folded in exactly (replace, not add)");
+
+            // A brand-new fingerprint adds one.
+            processOn(restored, TestRawRows.row(1L, T0 + 2_000L, "fp-2", "TRADE", 102, 3));
+            assertEquals(2, ComputeOtlpEmitter.dedupStateCount());
+
+            // Restored fp-1 is still deduplicated.
+            processOn(restored, TestRawRows.row(1L, T0 + 3_000L, "fp-1", "TRADE", 103, 4));
+            assertEquals(2, ComputeOtlpEmitter.dedupStateCount());
+        } finally {
+            restored.close();
+        }
+    }
+
+    private static void processOn(
+            KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> h, GenericRowData row)
+            throws Exception {
+        h.processElement(row, row.getLong(RawTableColumns.EVENT_TIME));
     }
 }

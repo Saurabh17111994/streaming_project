@@ -1,6 +1,13 @@
 # =============================================================================
 # Docker Compose — Trading_project platform runtime (Phase 4.2 MVP topology)
 #
+# DEV-ONLY configuration (tracker 14 P9 box: explicitly marked). This file is
+# for the local/single-host dev stack only: secrets come from .env (never
+# committed), Fluss advertised listeners are compose-DNS names, checkpoints
+# use the flink-checkpoints dev volume (NOT durable cross-VM storage — P4.2
+# requires s3:// URIs in production), and the JM/TM reporter port mappings are
+# dev-only. Production topology lives in docs/08_implementation/09-production-swarm.md.
+#
 # Services: fluss (coordinator + tablet), flink (jobmanager + taskmanager),
 # ingestion, action-capture, compute, executor, otel-collector, openobserve.
 #
@@ -26,6 +33,29 @@ x-flink-common: &flink-common
       jobmanager.rpc.address: flink-jobmanager
       rest.address: flink-jobmanager
       rest.bind-address: 0.0.0.0
+      # P8 (tracker 14): distributed-safe metrics via PrometheusReporter —
+      # /metrics on :9249 inside each container; the otel-collector scrapes
+      # flink-jobmanager:9249 + flink-taskmanager:9249 and remote-writes to
+      # OpenObserve. flink-metrics-prometheus ships in the image under
+      # /opt/flink/plugins/metrics-prometheus and is auto-loaded by
+      # PluginManager — no lib copy needed.
+      metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+      metrics.reporter.prom.port: 9249
+      metrics.reporter.prom.interval: 15 SECONDS
+      taskmanager.numberOfTaskSlots: 8
+      # P9 (tracker 14 box 1007): explicit JM/TM memory envelopes. JM process
+      # 1600m = heap 1024m (the 1 GiB cap the SIGNAL-warn-jvm-heap-high 900 MB
+      # threshold was verified against) + off-heap 128m + metaspace 256m +
+      # jvm-overhead 192m (min). TM 2g = framework 256m + managed (0.4
+      # fraction) + task heap + jvm-overhead — derived by the Flink memory
+      # model at startup.
+      jobmanager.memory.process.size: 1600m
+      taskmanager.memory.process.size: 2g
+      # Note: the image default env.java.opts.all already includes
+      # --add-opens=java.base/java.nio=ALL-UNNAMED (arrow-compatible JVM
+      # options) — do NOT set env.java.opts here: it collides with the
+      # nested env.java.opts.all key in YamlParserUtils and aborts startup
+      # (ClassCastException: String cannot be cast to Map).
     FLUSS_BOOTSTRAP: fluss-coordinator:9123
 
 networks:
@@ -34,7 +64,21 @@ networks:
 
 volumes:
   fluss-data:
+  # P3.2: lake-snapshot offsets files must be readable by whichever server
+  # serves the getLakeSnapshot RPC (coordinator OR tablet) — keep them on a
+  # shared volume, not per-container /tmp.
+  fluss-remote-data:
+  # P3.2: tablet /tmp/fluss/data (log segments + KV state) must survive
+  # container recreation (previous recreation lost dev data).
+  fluss-tablet-data:
   flink-checkpoints:
+  # P8.2 (tracker 14): flink_logs stream — JobManager/TaskManager file logs
+  # land here and are read by the collector's filelog receiver.
+  flink-logs:
+  # P8.1 (tracker 14 box 827): fluss_logs stream — CoordinatorServer /
+  # TabletServer logs (/opt/fluss/log/fluss--*.log) land here and are read by
+  # the collector's filelog/fluss receiver.
+  fluss-logs:
   openobserve-data:
   # R-171: persistent ingestion JSON logs.
   ingestion-logs:
@@ -54,64 +98,169 @@ services:
     command: ["coordinatorServer"]
     depends_on: [zookeeper]
     ports: ["9123:9123"]
-    volumes: [fluss-data:/data]
+    volumes:
+      - fluss-data:/data
+      - fluss-remote-data:/tmp/fluss/remote-data
+      # P8.1 (tracker 14 box 827): fluss_logs stream — server logs volume.
+      - fluss-logs:/opt/fluss/log
+      # P3.2 lake tiering: the iceberg plugin classloader needs hadoop-aws/S3A
+      # (fluss-fs-s3) AND hadoop-hdfs HdfsConfiguration (fluss-fs-hdfs) — the
+      # image ships both in their own plugin dirs; bind-mount them into the
+      # iceberg plugin dir (docs: "add other jars required by datalake to
+      # plugins/<fmt>/").
+      - ./fluss-plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:ro
+      - ./fluss-plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:ro
     environment:
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       FLUSS_COORDINATOR_HOST: fluss-coordinator
       FLUSS_TABLET_HOST: fluss-tablet
+      # S3A credentials via env only (never in FLUSS_PROPERTIES — see below).
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID for lake tiering}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY for lake tiering}
       FLUSS_PROPERTIES: |
         zookeeper.address: zookeeper:2181
         bind.listeners: INTERNAL://fluss-coordinator:0,CLIENT://fluss-coordinator:9123
-        advertised.listeners: CLIENT://localhost:9123
+        # P8: advertise the compose service name, not localhost — in-docker
+        # clients (Flink cluster, collector-adjacent tools) resolve it via the
+        # compose DNS. Host clients keep working via /etc/hosts aliases
+        # (127.0.0.1 fluss-coordinator fluss-tablet) + the host port mappings.
+        advertised.listeners: CLIENT://fluss-coordinator:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
+        # Lake tiering (tracker 14 P3.2): datalake.* is the server-side lakehouse
+        # config; datalake.iceberg.* becomes the Iceberg catalog properties and
+        # iceberg.hadoop.* the Hadoop fs.s3a.* config (R2). Credentials arrive
+        # ONLY via .env interpolation — never hardcoded; missing values fail
+        # closed at `docker compose up`.
+        datalake.format: ${DATALAKE_FORMAT:-iceberg}
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.warehouse: ${S3_WAREHOUSE_PATH:?set S3_WAREHOUSE_PATH for lake tiering}
+        # Hadoop fs.s3a.* keys must carry the datalake.iceberg. prefix too:
+        # extractLakeProperties strips datalake.<format>. before HadoopUtils
+        # scans for the iceberg.hadoop. prefix.
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: ${R2_ENDPOINT:?set R2_ENDPOINT for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint.region: ${AWS_REGION:-auto}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: "true"
+        # fluss-fs-s3's hadoop FileSystem service file registers only s3native —
+        # pin S3A explicitly or FileSystem.get fails with "No FileSystem for
+        # scheme s3".
+        datalake.iceberg.iceberg.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
         # R2 stall containment (2026-08-12): a wedged R2 socket must fail the
-        # lake reader fast, not hang forever (plan Phase 3; 30000 ms default,
-        # matching the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env).
-        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: "30000"
-        datalake.iceberg.iceberg.hadoop.fs.s3a.socket.timeout: "30000"
+        # lake reader fast, not hang forever (plan Phase 3). In hadoop-aws
+        # 3.3.x fs.s3a.connection.timeout maps to the SDK SOCKET read timeout
+        # (S3A default 200000 ms) and fs.s3a.connection.establish.timeout to
+        # the TCP connect timeout (default 50000 ms); fs.s3a.socket.timeout is
+        # NOT read by S3AUtils.initConnectionSettings and must not be set.
+        # Values are unquoted integers: S3AUtils.intOption parses them and a
+        # quoted string raises NumberFormatException on first S3 access.
+        # Match the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env defaults.
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: 30000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout: 30000
+        # Credentials NOT set here: GlobalConfiguration logs every property value
+        # at INFO, so fs.s3a.access.key/secret.key would leak into docker logs.
+        # S3A's default provider chain (EnvironmentVariableCredentialsProvider)
+        # reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the container env.
 
   fluss-tablet:
     <<: *fluss-common
     image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
     command: ["tabletServer"]
     depends_on: [fluss-coordinator]
-    ports: ["9124:9123"]
-    volumes: [fluss-data:/data]
+    ports: ["9124:9124"]
+    volumes:
+      - fluss-data:/data
+      # P3.2: shared lake-snapshot dir — the tablet also serves getLakeSnapshot.
+      - fluss-remote-data:/tmp/fluss/remote-data
+      # P3.2: tablet log data must survive container recreation.
+      - fluss-tablet-data:/tmp/fluss/data
+      # P8.1 (tracker 14 box 827): fluss_logs stream — server logs volume.
+      - fluss-logs:/opt/fluss/log
+      # P3.2 lake tiering — same S3A + hdfs plugin overlay as the coordinator.
+      - ./fluss-plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:ro
+      - ./fluss-plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:ro
     environment:
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       FLUSS_COORDINATOR_HOST: fluss-coordinator
       FLUSS_TABLET_HOST: fluss-tablet
+      # S3A credentials via env only (never in FLUSS_PROPERTIES — see below).
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID for lake tiering}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY for lake tiering}
       FLUSS_PROPERTIES: |
         zookeeper.address: zookeeper:2181
-        bind.listeners: INTERNAL://fluss-tablet:0, CLIENT://fluss-tablet:9123
-        advertised.listeners: CLIENT://localhost:9124
+        bind.listeners: INTERNAL://fluss-tablet:0, CLIENT://fluss-tablet:9124
+        # P8: advertise fluss-tablet:9124 (service name + host-mapped port) so
+        # in-docker Flink clients reach the tablet; host clients resolve the
+        # name via /etc/hosts (127.0.0.1 fluss-tablet) and port 9124 mapping.
+        advertised.listeners: CLIENT://fluss-tablet:9124
         internal.listener.name: INTERNAL
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
+        # Lake tiering (tracker 14 P3.2) — same datalake.* block as the
+        # coordinator: datalake.iceberg.* → Iceberg catalog props,
+        # iceberg.hadoop.* → Hadoop fs.s3a.* (R2). Credentials only via .env.
+        datalake.format: ${DATALAKE_FORMAT:-iceberg}
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.warehouse: ${S3_WAREHOUSE_PATH:?set S3_WAREHOUSE_PATH for lake tiering}
+        # Hadoop fs.s3a.* keys must carry the datalake.iceberg. prefix too:
+        # extractLakeProperties strips datalake.<format>. before HadoopUtils
+        # scans for the iceberg.hadoop. prefix.
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: ${R2_ENDPOINT:?set R2_ENDPOINT for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint.region: ${AWS_REGION:-auto}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: "true"
+        # fluss-fs-s3's hadoop FileSystem service file registers only s3native —
+        # pin S3A explicitly or FileSystem.get fails with "No FileSystem for
+        # scheme s3".
+        datalake.iceberg.iceberg.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
         # R2 stall containment (2026-08-12): a wedged R2 socket must fail the
-        # lake reader fast, not hang forever (plan Phase 3; 30000 ms default,
-        # matching the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env).
-        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: "30000"
-        datalake.iceberg.iceberg.hadoop.fs.s3a.socket.timeout: "30000"
-    # Lake tiering requires S3 creds (see .env.example).
+        # lake reader fast, not hang forever (plan Phase 3). In hadoop-aws
+        # 3.3.x fs.s3a.connection.timeout maps to the SDK SOCKET read timeout
+        # (S3A default 200000 ms) and fs.s3a.connection.establish.timeout to
+        # the TCP connect timeout (default 50000 ms); fs.s3a.socket.timeout is
+        # NOT read by S3AUtils.initConnectionSettings and must not be set.
+        # Values are unquoted integers: S3AUtils.intOption parses them and a
+        # quoted string raises NumberFormatException on first S3 access.
+        # Match the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env defaults.
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: 30000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout: 30000
+        # Credentials NOT set here: GlobalConfiguration logs every property value
+        # at INFO, so fs.s3a.access.key/secret.key would leak into docker logs.
+        # S3A's default provider chain (EnvironmentVariableCredentialsProvider)
+        # reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the container env.
 
   # ---- Flink: compute (feature + signal + babysitter jobs) -----------------
   flink-jobmanager:
     <<: *flink-common
     image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
+    # The image ships flink-metrics-prometheus under plugins/metrics-prometheus/
+    # (auto-loaded by PluginManager) — no lib copy needed.
     command: ["jobmanager"]
-    ports: ["8081:8081"]
-    volumes: [flink-checkpoints:/checkpoints]
+    ports:
+      - "8081:8081"
+      # Host-side reporter port for verification (collector scrapes the
+      # internal name flink-jobmanager:9249; this mapping is dev-only).
+      - "9249:9249"
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - flink-logs:/opt/flink/log
+      - ./flink-log4j-console.properties:/opt/flink/conf/log4j-console.properties:ro
 
   flink-taskmanager:
     <<: *flink-common
     image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
     command: ["taskmanager"]
     depends_on: [flink-jobmanager]
-    volumes: [flink-checkpoints:/checkpoints]
+    ports:
+      # Host-side reporter port for verification (container-internal 9249;
+      # 9250 mapping is dev-only).
+      - "9250:9249"
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - flink-logs:/opt/flink/log
+      - ./flink-log4j-console.properties:/opt/flink/conf/log4j-console.properties:ro
 
   # ---- Services -----------------------------------------------------------
   #
@@ -191,27 +340,70 @@ services:
   #     EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
   #     FLUSS_BOOTSTRAP: fluss-coordinator:9123
 
-  # ---- Observability (disabled for Phase 1) -------------------------------
-  # otel-collector:
-  #   image: otel/opentelemetry-collector-contrib:0.123.0
-  #   restart: unless-stopped
-  #   networks: [trading-net]
-  #   command: ["--config=/etc/otel-collector-config.yaml"]
-  #   ports:
-  #     - "4317:4317"
-  #     - "4318:4318"
-  #   volumes:
-  #     - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
-  #   environment:
-  #     O2_AUTH_BASIC: ${O2_AUTH_BASIC}
-  #   depends_on: [openobserve]
-  #
-  # openobserve:
-  #   <<: *fluss-common
-  #   image: ${OPENOBSERVE_IMAGE:?set OPENOBSERVE_IMAGE to an immutable digest}
-  #   restart: unless-stopped
-  #   ports: ["5080:5080"]
-  #   environment:
-  #     ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@example.com}
-  #     ZO_ROOT_USER_PASSWORD: ${O2_PASSWORD}
-  #   volumes: [openobserve-data:/data]
+  # ---- Observability ------------------------------------------------------
+  # OpenObserve = single source of truth (Option A, user-approved 2026-08-08):
+  # metrics + dashboards + alert rules in one org (`default`), folders/prefix
+  # per phase (INGESTION now; SIGNAL / EXECUTOR later). The collector is the
+  # standard OTel transport — deliberately NOT in the ingestion critical path.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    restart: unless-stopped
+    networks: [trading-net]
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      # R-171/P8.2: collector reads the same ingestion JSON logs the ingestion
+      # service writes (filelog receiver, /data/ingestion/logs/*.json).
+      - ingestion-logs:/data/ingestion/logs:ro
+      # P8.2 (tracker 14): flink_logs stream — JobManager/TaskManager file
+      # logs (flink-logs volume, /opt/flink/log/*.log inside the flink
+      # containers) read by the flink_filelog receiver.
+      - flink-logs:/data/flink/logs:ro
+      # P8.1 (tracker 14 box 827): fluss_logs stream — CoordinatorServer /
+      # TabletServer logs (fluss-logs volume, /opt/fluss/log/*.log inside the
+      # fluss containers) read by the filelog/fluss receiver.
+      - fluss-logs:/data/fluss/logs:ro
+    environment:
+      O2_AUTH_BASIC: ${O2_AUTH_BASIC}
+    depends_on: [openobserve]
+
+  openobserve:
+    restart: unless-stopped
+    networks: [trading-net]
+    image: ${OPENOBSERVE_IMAGE:?set OPENOBSERVE_IMAGE to an immutable digest}
+    ports:
+      - "5080:5080"
+      - "5081:5081"
+    environment:
+      ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@example.com}
+      ZO_ROOT_USER_PASSWORD: ${O2_PASSWORD}
+      # Dev: O2 default holds data 600s in the WAL before it is searchable
+      # (ZO_MAX_FILE_RETENTION_TIME=600). 60s keeps dev data visible within
+      # a minute; production overrides this via .env.
+      ZO_MAX_FILE_RETENTION_TIME: ${ZO_MAX_FILE_RETENTION_TIME:-60}
+      ZO_MAX_FILE_SIZE_ON_DISK: ${ZO_MAX_FILE_SIZE_ON_DISK:-128}
+      ZO_MAX_FILE_SIZE_IN_MEMORY: ${ZO_MAX_FILE_SIZE_IN_MEMORY:-128}
+      # Dev: alert destination dev-webhook posts to http://localhost:9999
+      # (receiver shares this netns); the SSRF guard blocks loopback by
+      # default (dev only — remove in prod).
+      ZO_SSRF_ALLOW_LOOPBACK: ${ZO_SSRF_ALLOW_LOOPBACK:-true}
+    volumes: [openobserve-data:/data]
+
+  # Dev-only alert webhook receiver. Shares OpenObserve's network namespace so
+  # the alert destination URL http://localhost:9999/noop resolves inside O2
+  # (localhost would otherwise mean the O2 container itself, and O2 v0.91.5's
+  # SSRF DNS resolver blocks every private-ranged target — 10/8, 172.16/12,
+  # 192.168/16 — even with ZO_SSRF_ALLOW_LOOPBACK=true, which only exempts
+  # 127/8). Logs each delivery; replace with the real alert consumer when
+  # routing is approved.
+  webhook-receiver:
+    restart: unless-stopped
+    image: python:3.11-slim
+    network_mode: "service:openobserve"
+    depends_on: [openobserve]
+    volumes:
+      - ./webhook-receiver.py:/app/webhook-receiver.py:ro
+    command: ["python3", "/app/webhook-receiver.py"]

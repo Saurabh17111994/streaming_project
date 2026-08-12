@@ -5,7 +5,9 @@ import java.time.Duration;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ExternalizedCheckpointRetention;
 import org.apache.flink.configuration.RestartStrategyOptions;
+import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -68,6 +70,27 @@ public final class SignalJob {
         ComputeOtlpEmitter.recordStartupMode(
                 config.startupMode() == SignalJobConfig.StartupMode.RESTORE ? 0 : 1);
 
+        // Tracker 14 P8.0 box 828: ship the startup-mode event to the
+        // trading_alerts stream (synchronous — the periodic emitter flush
+        // never runs for these client-side lifecycle events under
+        // `flink run -d`). Best-effort: collector outage never fails the job.
+        ComputeOtlpEmitter.emitAlertLog(config.otelCollectorHost(),
+                config.startupMode() == SignalJobConfig.StartupMode.FULL_REPLAY ? "WARN" : "INFO",
+                "startup-mode",
+                "mode=" + config.startupMode() + " restore=" + (config.stateRecoveryPath() != null)
+                        + " fullReplay=" + config.allowFullReplay());
+
+        // Tracker 14 P8.0/831 — resource attributes (environment, host,
+        // deployment version, job name, execution mode) ride every payload so
+        // OpenObserve queries can slice by env/host/version. Only known-safe
+        // config fields + hostname; never credentials.
+        ComputeOtlpEmitter.configureResourceAttributes(
+                "deployment.environment", config.deploymentEnv(),
+                "host.name", hostName(),
+                "deployment.version", config.configurationVersion(),
+                "job.name", "signal-job",
+                "flink.execution.mode", "embedded");
+
         // Process rule 2 (2026-08-10): ship the schema-version rejection counter
         // to OpenObserve via the OTel collector (delta per 10 s flush). Static
         // holder + same-JVM drain is exact for the embedded dev run.
@@ -93,7 +116,17 @@ public final class SignalJob {
         // Read-only metadata preflight (CANDLE-KV-REPLAY-001 P4): prove the
         // deployed candle tables match the dual-write contract before any graph
         // is built — fail closed on contract drift, never write degraded.
-        preflightTableContracts(config);
+        try {
+            preflightTableContracts(config);
+        } catch (CandleTableContractValidator.ContractViolation e) {
+            // Tracker 14 P8.0 box 828: record the fail-closed startup event on
+            // the trading_alerts stream before rethrowing — the job exits
+            // right after, so this is the only chance to ship it.
+            ComputeOtlpEmitter.emitAlertLog(config.otelCollectorHost(), "ERROR",
+                    "schema-preflight-failed",
+                    String.valueOf(e.getMessage()));
+            throw e;
+        }
 
         // Flink 2.x configures restart strategies declaratively via Configuration —
         // the programmatic RestartStrategies API was removed (verified against
@@ -122,12 +155,22 @@ public final class SignalJob {
         if (config.stateRecoveryPath() != null) {
             flinkConfig.set(StateRecoveryOptions.SAVEPOINT_PATH, config.stateRecoveryPath());
         }
+        // Production runtime options (tracker 14 P4.1/P4.2): state backend,
+        // incremental checkpoints, RocksDB local dirs / managed memory, savepoint
+        // directory, parallelism. Backend + storage are Configuration-driven in
+        // Flink 2.2.1; applied before the environment is created.
+        applyRuntimeOptions(config, flinkConfig);
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+        env.setParallelism(config.parallelism());
 
         env.enableCheckpointing(config.checkpointIntervalMs(), CheckpointingMode.EXACTLY_ONCE);
         env.getCheckpointConfig().setCheckpointTimeout(config.checkpointTimeoutMs());
         env.getCheckpointConfig().setMaxConcurrentCheckpoints(config.maxConcurrentCheckpoints());
+        // A deliberate cancel/restart must retain the completed checkpoint named by
+        // STATE_RECOVERY_PATH; deleting it would silently force an unsafe offset-0 replay.
+        env.getCheckpointConfig().setExternalizedCheckpointRetention(
+                ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION);
 
         FlussSource<RowData> source = FlussSource.<RowData>builder()
                 .setBootstrapServers(config.bootstrapServers())
@@ -159,13 +202,41 @@ public final class SignalJob {
                 .returns(CandleTableColumns.ROW_TYPE_INFO)
                 .name("candle-15s");
 
+        // Tracker 14 box 682/116 (2026-08-12): both candle sinks (LOG here,
+        // KV below) are wrapped in StallGuardedSink — a Flink-side watchdog
+        // that runs every delegate write/flush/close on a worker thread and
+        // bounds the CALL ITSELF at SINK_WRITE_STALL_TIMEOUT_MS. This is
+        // required because the Fluss client has two unbounded hang points a
+        // post-hoc check cannot see (bytecode-verified in
+        // fluss-client-0.9.1-incubating): flush() blocks forever in
+        // RecordAccumulator.awaitFlushCompletion() (latch never counts down
+        // while the deleted table's batch stays undrained) and close() blocks
+        // forever in awaitTermination(Long.MAX_VALUE) — the sender's shutdown
+        // drain loop needs forceClose=true, which close() only sets AFTER
+        // awaitTermination returns (circular deadlock). On timeout the guard
+        // interrupts the worker (both hang points exit fast on interrupt) and
+        // throws, failing the task so the configured restart policy drives the
+        // job to terminal FAILED instead of cycling FAILING forever.
+        // client.request-timeout (spike-verified: FlussSinkBuilder.build() ->
+        // Configuration.fromMap(configOptions) -> ConnectionFactory, so
+        // sink-scoped options reach the writer client) and
+        // client.writer.retries=2 (default Integer.MAX_VALUE, verified in
+        // Sender.canRetry: attempts < retries) bound transient failures; the
+        // deleted-table case never consults retries (its batch never fails),
+        // so the interrupt-based call bound is the actual unblock.
+        // Shared fate preserved: identical guard on both sinks.
         candles
-                .sinkTo(FlussSink.<RowData>builder()
-                        .setBootstrapServers(config.bootstrapServers())
-                        .setDatabase(config.database())
-                        .setTable(config.candleTable())
-                        .setSerializationSchema(new RowDataSerializationSchema(true, true))
-                        .build())
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.candleTable())
+                                .setSerializationSchema(new RowDataSerializationSchema(true, true))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
                 .name("feature-candles-15s-sink");
 
         // Slice 2.1 (DEC-034): closed candles -> MVP signal detection ->
@@ -202,16 +273,118 @@ public final class SignalJob {
         // node-counter, and emitting this sink earlier shifts the hash of the
         // stateful signal-detection operator (StreamGraphHasherV2) —
         // CHECKPOINT-RESTORE-001 pins detection's ID across the change.
+        // Tracker 14 P2 (CANDLE-CANONICAL-001): the KV twin is the canonical
+        // current-state projection — only rows whose version pair equals the
+        // canonical pair exactly may upsert. The filter is created AFTER
+        // signal-detection in source order, so no operator ID before it shifts
+        // (CHECKPOINT-RESTORE-001 pins detection's hash; the KV sink remains
+        // the last-added node of the candles stream).
         candles
-                .sinkTo(FlussSink.<RowData>builder()
-                        .setBootstrapServers(config.bootstrapServers())
-                        .setDatabase(config.database())
-                        .setTable(config.candleCurrentTable())
-                        .setSerializationSchema(new RowDataSerializationSchema(false, false))
-                        .build())
+                .filter(new CanonicalCandleFilterFunction())
+                .name("canonical-candle-filter")
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.candleCurrentTable())
+                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
                 .name("feature-candles-15s-current-kv-sink");
 
         return env;
+    }
+
+    /**
+     * Production runtime options (tracker 14 P4.1/P4.2), extracted from the
+     * config into the Flink {@link Configuration}: state backend (rocksdb in
+     * production, hashmap dev-only — validated by
+     * {@code SignalJobConfig.from}), incremental checkpoints for RocksDB,
+     * RocksDB local state dirs + managed memory, the savepoint directory, and
+     * the explicit checkpoint directory (kept from the caller, above).
+     *
+     * <p>Never sets {@code allowNonRestoredState} — a restore that cannot
+     * fully match the graph fails closed (P4.3, CHECKPOINT-RESTORE-001), it
+     * does not degrade to a silent full replay.
+     *
+     * <p>Package-visible so {@code RuntimeOptionsTest} can assert the exact
+     * Configuration a run would use, without a Flink cluster.
+     */
+    static void applyRuntimeOptions(SignalJobConfig config, Configuration flinkConfig) {
+        if ("rocksdb".equals(config.stateBackend())) {
+            // Shortcut names per StateBackendOptions: 'rocksdb' (or 'hashmap').
+            flinkConfig.set(StateBackendOptions.STATE_BACKEND, "rocksdb");
+            // Incremental checkpoints are enabled only on the RocksDB backend
+            // (Flink ignores them on heap state) and only for the keyed
+            // MapState + timer state this graph uses — both fully supported.
+            flinkConfig.set(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, true);
+            if (config.stateBackendLocalDirs() != null) {
+                // RocksDBOptions.LOCAL_DIRECTORIES ("state.backend.rocksdb.localdir",
+                // singular) is the live key in Flink 2.2.1; the older
+                // "state.backend.rocksdb.local_directories" key is dead in this
+                // version and would silently drop the fast-disk pin (tracker 14
+                // P4.1 — verified against the pinned
+                // flink-statebackend-rocksdb-2.2.1.jar).
+                flinkConfig.setString(
+                        "state.backend.rocksdb.localdir", config.stateBackendLocalDirs());
+            }
+            if (!config.stateBackendManagedMemory()) {
+                flinkConfig.setString("state.backend.rocksdb.memory.managed", "false");
+            }
+            // Tracker 14 box 906 (2026-08-12): export RocksDB native-memory
+            // gauges via the per-property boolean keys (verified against
+            // RocksDBProperty in the pinned flink-statebackend-rocksdb-2.2.1
+            // jar: block-cache-usage / cur-size-all-mem-tables /
+            // estimate-table-readers-mem are valid enum kebab names). The
+            // gauges register on the keyed-state operator metric group and
+            // land on the TM reporter output as
+            // flink_taskmanager_job_task_operator_<state.backend.rocksdb.<prop>>
+            // series. RocksDB-only by construction — the hashmap branch sets
+            // none of these keys.
+            flinkConfig.setString("state.backend.rocksdb.metrics.block-cache-usage", "true");
+            flinkConfig.setString(
+                    "state.backend.rocksdb.metrics.cur-size-all-mem-tables", "true");
+            flinkConfig.setString(
+                    "state.backend.rocksdb.metrics.estimate-table-readers-mem", "true");
+        } else {
+            flinkConfig.set(StateBackendOptions.STATE_BACKEND, "hashmap");
+        }
+        if (config.savepointDir() != null) {
+            flinkConfig.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, config.savepointDir());
+        }
+        // Tracker 14 P4.2 — object-store (S3/R2) checkpoint access. The
+        // endpoint/credentials/region go into the Flink Configuration ONLY
+        // when a checkpoint/savepoint URI is an object-store URI (config
+        // validation in SignalJobConfig.s3Endpoint already failed closed
+        // otherwise). Credentials come from secret injection via env — never
+        // committed files — and the effective-backend log below prints URI
+        // schemes only, never the endpoint path or keys.
+        if (config.s3Endpoint() != null) {
+            flinkConfig.setString("fs.s3a.endpoint", config.s3Endpoint());
+            flinkConfig.setString("fs.s3a.access.key", config.s3AccessKey());
+            flinkConfig.setString("fs.s3a.secret.key", config.s3SecretKey());
+            flinkConfig.setString("fs.s3a.endpoint.region", config.s3Region());
+            flinkConfig.setString("fs.s3a.path.style.access", String.valueOf(config.s3PathStyle()));
+            flinkConfig.setString("fs.s3a.aws.credentials.provider",
+                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        }
+        // Effective-backend log WITHOUT secrets: the checkpoint URI is printed
+        // as its scheme only, never the full path (credentials may be embedded
+        // in S3 URIs — tracker 14 P4.2 "never committed files").
+        String cpScheme = config.checkpointDir() == null ? "none"
+                : config.checkpointDir().substring(0, config.checkpointDir().indexOf(':'));
+        LOG.info("signal-job: effective state backend = {} (dev={}, incremental={}), "
+                + "checkpoint URI class = {}, savepoint URI class = {}, parallelism = {}",
+                config.stateBackend(), config.deploymentEnv(),
+                "rocksdb".equals(config.stateBackend())
+                        && flinkConfig.get(CheckpointingOptions.INCREMENTAL_CHECKPOINTS),
+                cpScheme,
+                config.savepointDir() == null ? "none"
+                        : config.savepointDir().substring(0, config.savepointDir().indexOf(':')),
+                config.parallelism());
     }
 
     /**
@@ -236,14 +409,38 @@ public final class SignalJob {
                     .getTable(org.apache.fluss.metadata.TablePath.of(config.database(), config.candleCurrentTable()))
                     .getTableInfo();
             CandleTableContractValidator.validateCanonicalKvTable(kvInfo);
+            // Tracker 14 P1 (CANDLE-SCHEMA-002): log the validated schema report —
+            // exact live columns/types (and the DDL-vs-live nullability
+            // divergence where Fluss does not carry NOT NULL) as startup evidence.
             LOG.info("signal-job: candle table contracts OK ({} LOG, {} KV)",
                     config.candleTable(), config.candleCurrentTable());
+            LOG.info("signal-job: {}", CandleTableContractValidator.schemaReport(logInfo));
+            LOG.info("signal-job: {}", CandleTableContractValidator.schemaReport(kvInfo));
         } catch (CandleTableContractValidator.ContractViolation e) {
             throw e; // contract drift: fail closed, do not build a degraded graph
         } catch (Exception e) {
             throw new IllegalStateException(
                     "signal-job: candle-table preflight failed — is the dev Fluss cluster reachable at "
                             + config.bootstrapServers() + "? (" + e.getMessage() + ")", e);
+        }
+    }
+
+    /**
+     * Best-effort host name for the {@code host.name} resource attribute
+     * (tracker 14 P8.0/831): the container/OS hostname, never a secret.
+     * Fallback chain: {@code HOSTNAME} env (containers/shells) →
+     * {@code InetAddress} → {@code "unknown"} — a resolve failure must not
+     * fail the job (telemetry is off the critical path).
+     */
+    static String hostName() {
+        String env = System.getenv("HOSTNAME");
+        if (env != null && !env.isBlank()) {
+            return env;
+        }
+        try {
+            return java.net.InetAddress.getLocalHost().getHostName();
+        } catch (java.net.UnknownHostException e) {
+            return "unknown";
         }
     }
 }

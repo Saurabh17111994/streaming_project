@@ -28,7 +28,7 @@ Cross-cutting requirements apply to every contract:
 | Babysitter | `05-babysitter.md` | Separate checkpointed no-op in MVP |
 | Action Capture | `06-action-capture.md` | Immutable postbacks, projection ledger recovery, lifecycle and position projections |
 | Executor | `07-executor.md` | Durable gate, attempts, mappings, fencing, halt consumption, reconciliation, Arrow REST |
-| Observability | `08-observability.md` | Proof of every safety/release gate |
+| Observability | `openobserve.md` | OpenObserve-backed proof of every safety/release gate |
 | Platform | `09-platform-runtime.md` | Compose local, four-VM Swarm production |
 | Ranking | `10-ranking.md` | Pure in-operator scoring/selection; no separate job |
 

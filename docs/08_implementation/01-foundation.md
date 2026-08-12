@@ -136,12 +136,12 @@ Implementation is complete only when all conditions below are true:
   - Design: Design-ready | Implementation: Implemented | Evidence: N/A | Live-money: N/A
   - Location: docs/08_implementation/01-foundation.md
 
-- Ingestion: `components/01-ingestion.md`
-- Signal job: `components/02-signal-job.md`
-- Babysitter: `components/04-babysitter.md`
-- Production deployment: `deployment/02-production-swarm.md`
-- Observability: `deployment/03-observability-operations.md`
-- Test catalog: `testing/01-test-catalog.md`
+- Ingestion: [`03-ingestion.md`](./03-ingestion.md)
+- Signal job: [`04-signal-job.md`](./04-signal-job.md)
+- Babysitter: [`06-babysitter.md`](./06-babysitter.md)
+- Production deployment: [`09-production-swarm.md`](./09-production-swarm.md)
+- Observability: [`10-observability.md`](./10-observability.md)
+- Test catalog: [`11-testing-and-release.md`](./11-testing-and-release.md)
 - Throughput tests: [`11-testing-and-release.md`](./11-testing-and-release.md#performance-benchmark-procedure)
 
 ## Documentation status and evidence rules
@@ -435,6 +435,7 @@ Canonical draft artifact: `code/01_platform/04_scripts/version_matrix.yaml` (pro
 | Flink server/image | `2.2.1` | Official artifact/digest | Must match job API and connector | Platform | Pinned, awaiting evidence |
 | Flink Java API | `2.2.1` | Dependency lock | Must match server | Platform | Pinned, awaiting evidence |
 | Fluss server | `0.9.1-incubating` | Official artifact/digest | DDL/features tested | Platform | Pinned, awaiting evidence |
+| ZooKeeper server | `3.9.2` | Official artifact/digest | Fluss metadata/coordination + Flink JobManager HA work (ensemble quorum 2-of-3) | Platform | Pinned, awaiting evidence |
 | Fluss Java client | `0.9.1-incubating` | Dependency lock | Must match server | Platform | Pinned, awaiting evidence |
 | Fluss Flink connector | `0.9.1-incubating` (flink-2.2) | Dependency lock | Must match Flink and server | Platform | Pinned, awaiting evidence |
 | Broker market protocol | Arrow `ds.arrow.trade` (binary) + `socket.arrow.trade` (WS JSON) | `docs/04_contracts/arrow_broker.md` | Decoder compatibility | Ingestion | Pinned, awaiting evidence |
@@ -677,8 +678,8 @@ Proposed routing review:
 | --- | --- | --- |
 | `raw_table_1` | `instrument_token` after validation | Per-instrument processing order |
 | `feature_candles_15s` | `instrument_token` | Per-instrument window history |
-| `Signal_Candidates` | `instrument_token` or non-null candidate routing identity | Strategy locality |
-| `Ranking_Results` | Non-null evaluation/candidate routing identity | Avoid cross-instrument/null ambiguity |
+| `Signal_Candidates` | `candidate_id` (KV primary key, R-084 — was LOG) | Strategy locality |
+| `Ranking_Results` | `evaluation_id` (R-136 — was `candidate_id`) | Avoid cross-instrument/null ambiguity |
 | `Fills` | `postback_event_id` when broker ID may be absent | Every delivery is routable |
 | `Execution_Audit` | `audit_event_id` | Gate-only events may lack instruction ID |
 | `Portfolio_Reservations` | `reservation_id` | Authoritative reservation state |

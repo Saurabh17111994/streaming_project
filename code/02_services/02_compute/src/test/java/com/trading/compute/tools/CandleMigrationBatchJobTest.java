@@ -509,7 +509,7 @@ class CandleMigrationBatchJobTest {
                 CandleMigrationBatchJob.lakeCatalogProperties("30000", "30000");
         assertEquals(2, props.size());
         assertEquals("30000", props.get("iceberg.iceberg.hadoop.fs.s3a.connection.timeout"));
-        assertEquals("30000", props.get("iceberg.iceberg.hadoop.fs.s3a.socket.timeout"));
+        assertEquals("30000", props.get("iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout"));
     }
 
     @Test
@@ -551,7 +551,7 @@ class CandleMigrationBatchJobTest {
         assertEquals(2, catalogProps.size());
         for (String expected : List.of(
                 "iceberg.hadoop.fs.s3a.connection.timeout",
-                "iceberg.hadoop.fs.s3a.socket.timeout")) {
+                "iceberg.hadoop.fs.s3a.connection.establish.timeout")) {
             assertEquals("30000", catalogProps.get(expected), "missing catalog property " + expected);
             assertTrue(expected.startsWith("iceberg.hadoop."), expected);
             assertEquals("fs.s3a." + expected.substring("iceberg.hadoop.fs.s3a.".length()),

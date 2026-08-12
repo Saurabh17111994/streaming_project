@@ -4,6 +4,8 @@
 
 The Signal Flink job consumes `raw_table_1`, performs bounded best-effort deduplication, assigns event-time semantics, emits final MVP candles, and passes closed-candle plus forming-bar state to Business Logic within the same job. It does not read feature tables back from Fluss for signal generation.
 
+**Tier-scoped deployment (current testing phase):** the current phase builds and validates Compute on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 60,000 ticks/s variable baseline and 90,000 ticks/s peak remain the deferred production target; `PERF-PROD-60000-001` / `PERF-PROD-90000-001` and the 3,000-instrument acceptance rows (AC-FC-007/011, NFR-PERF-002) are not part of this phase's acceptance. Windowing, dedup, and candle logic are envelope-independent — only the load/acceptance profile differs.
+
 ## Constraints
 
 - Compute SHALL NOT read `feature_candles_15s` or any other feature table back from Fluss for signal generation. All feature state flows in-process within the Signal job.
@@ -68,7 +70,7 @@ The `feature_candles_15s` table name fixes the deployed MVP granularity at 15 se
 
 Compute reads only accepted rows from `raw_table_1`. It SHALL:
 
-1. Use **trades + quotes** for OHLCV candle state. Every Full-mode binary packet updates the forming candle's open/high/low/close from bid/ask price movement. Volume and `tick_count` only increment on actual trades (`ltq > 0`).
+1. Use **trades + quotes** for OHLCV candle state. Every accepted row updates the forming candle's open/high/low/close from `last_price_paise` — `raw_table_1` schema v2 (R-054/R-231) carries no bid/ask columns, so quote rows contribute via their last-price field; bid/ask-driven OHLC returns only with quote columns in a future schema v3. Volume and `tick_count` increment only on `tick_type = 'TRADE'` rows with `last_qty > 0`.
 2. Key state by `instrument_token` and preserve connection/fingerprint metadata for diagnostics.
 3. Exclude invalid rows (price ≤ 0, negative volume) from aggregation while preserving their raw audit and reason metrics.
 
@@ -94,18 +96,18 @@ A late event within allowed lateness may affect an in-memory window before emiss
 
 ## REQ-FC-005: Candle aggregation
 
-For each instrument and 15-second event-time window containing at least one eligible trade:
+For each instrument and 15-second event-time window containing at least one eligible accepted row (trades + quotes; volume/tick_count only from `TRADE` rows with `last_qty > 0`):
 
 | Field                       | Rule                                                                                         |
 | --------------------------- | -------------------------------------------------------------------------------------------- |
-| `open`                      | Lowest event-time accepted trade in the window; ties use deterministic fingerprint ordering  |
-| `high`                      | Maximum accepted trade price                                                                 |
-| `low`                       | Minimum accepted trade price                                                                 |
-| `close`                     | Highest event-time accepted trade in the window; ties use deterministic fingerprint ordering |
-| `volume`                    | Sum of accepted non-negative trade quantities                                                |
-| `tick_count`                | Count of accepted trade events after deduplication                                           |
-| `window_start`/`window_end` | UTC epoch-millisecond window boundaries                                                      |
-| `visible_at`               | Timestamp of final output acknowledgement path                                               |
+| `open`                      | Lowest event-time accepted row in the window; ties use deterministic fingerprint ordering     |
+| `high`                      | Maximum accepted row price                                                                    |
+| `low`                       | Minimum accepted row price                                                                    |
+| `close`                     | Highest event-time accepted row in the window; ties use deterministic fingerprint ordering    |
+| `volume`                    | Sum of accepted trade quantities with `last_qty > 0` (quote rows and zero-quantity trades contribute nothing) |
+| `tick_count`                | Count of accepted `TRADE` rows with `last_qty > 0` after deduplication                        |
+| `window_start`/`window_end` | UTC epoch-millisecond window boundaries                                                       |
+| `output_ts`                 | Processing-time instant the final row was emitted (DDL column name; ack-path timestamp is not measured in MVP) |
 
 The implementation SHALL define the exact tie ordering in the fingerprint specification. It SHALL NOT use incomparable per-connection sequence values.
 
@@ -113,7 +115,7 @@ Empty windows and windows containing only invalid/late-discarded events produce 
 
 ## REQ-FC-006: Final-on-emission policy
 
-A candle becomes final when the watermark passes `window_end + allowed_lateness` and the output is acknowledged by the tested Fluss sink boundary. Subsequent events for that window are discarded in MVP.
+A candle is final from its first write: it emits at first window fire (watermark ≥ `window_end`), an `emitted` window-state flag makes any allowed-lateness re-trigger a no-op (late-within-lateness folds into the accumulator and is counted, never re-written), and the output is written through the tested Fluss sink boundary. `window_end + allowed_lateness` is the finalization/cleanup boundary — the candle is never corrected or updated after that point. Subsequent events for that window are discarded in MVP.
 
 The discard metric SHALL include instrument, window, lateness, and reason. A future correction policy requires a new versioned table/contract and is outside MVP.
 

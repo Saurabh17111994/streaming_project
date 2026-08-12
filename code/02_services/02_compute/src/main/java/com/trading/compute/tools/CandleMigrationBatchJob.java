@@ -41,6 +41,7 @@ import org.apache.flink.util.OutputTag;
 import org.apache.fluss.flink.catalog.FlinkCatalog;
 import org.apache.fluss.flink.sink.FlussSink;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -145,10 +146,16 @@ public final class CandleMigrationBatchJob {
      */
     static Map<String, String> lakeCatalogProperties(
             String connectionTimeoutRaw, String socketTimeoutRaw) {
+        // In hadoop-aws 3.3.x (fs-s3.jar) S3AUtils.initConnectionSettings maps
+        // fs.s3a.connection.timeout -> SDK ClientConfiguration.setSocketTimeout
+        // (SOCKET READ timeout; S3A default 200000) and
+        // fs.s3a.connection.establish.timeout -> setConnectionTimeout (TCP
+        // connect; default 50000). fs.s3a.socket.timeout is NOT read — it would
+        // be a silent no-op, so the second env pin targets the connect timeout.
         return Map.of(
                 "iceberg.iceberg.hadoop.fs.s3a.connection.timeout",
                 s3TimeoutMs("CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS", connectionTimeoutRaw),
-                "iceberg.iceberg.hadoop.fs.s3a.socket.timeout",
+                "iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout",
                 s3TimeoutMs("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS", socketTimeoutRaw));
     }
 
@@ -197,7 +204,7 @@ public final class CandleMigrationBatchJob {
         System.out.println("CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS="
                 + lakeProps.get("iceberg.iceberg.hadoop.fs.s3a.connection.timeout"));
         System.out.println("CANDLE_MIGRATION_S3_SOCKET_TIMEOUT_MS="
-                + lakeProps.get("iceberg.iceberg.hadoop.fs.s3a.socket.timeout"));
+                + lakeProps.get("iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout"));
         System.out.println("CANDLE_MIGRATION_READ_TS=" + Instant.now());
         System.out.println("CANDLE_MIGRATION_CUTOVER=single-scan boundary "
                 + "(OffsetsInitializer.latest at enumeration); rows appended during the run "
@@ -234,6 +241,45 @@ public final class CandleMigrationBatchJob {
         // resolves the existing table and injects connector + bootstrap + lake
         // options from the server-side table properties.
         Table sourceTable = tEnv.from(cfg.sourceTable);
+
+        // R2 lake-read stall diagnostic (tracker 14): print the effective hadoop
+        // conf the lake source builds from the PLANNER-RESOLVED table options —
+        // the exact chain LakeSourceUtils -> DataLakeUtils.extractLakeCatalogProperties
+        // -> HadoopUtils.getHadoopConfiguration used at read time. The supplier
+        // pins must be visible here or the S3A reads stay unbounded.
+        try {
+            org.apache.flink.table.catalog.Catalog resolvedCatalog =
+                    tEnv.getCatalog("fluss").get();
+            org.apache.flink.table.catalog.CatalogBaseTable resolvedTable =
+                    resolvedCatalog.getTable(
+                            new org.apache.flink.table.catalog.ObjectPath(
+                                    "default", cfg.sourceTable));
+            Map<String, String> resolvedOptions = resolvedTable.getOptions();
+            System.out.println("CANDLE_MIGRATION_RESOLVED_OPTION_COUNT=" + resolvedOptions.size());
+            for (String k : new String[]{
+                    "table.datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout",
+                    "table.datalake.iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout"}) {
+                System.out.println("CANDLE_MIGRATION_RESOLVED_OPTION_" + k + "="
+                        + resolvedOptions.get(k));
+            }
+            Map<String, String> lakeCatalogProps =
+                    DataLakeUtils.extractLakeCatalogProperties(
+                            org.apache.fluss.config.Configuration.fromMap(resolvedOptions));
+            Class<?> hadoopUtils =
+                    Class.forName("org.apache.fluss.lake.iceberg.conf.HadoopUtils");
+            Object hadoopConf = hadoopUtils.getMethod("getHadoopConfiguration",
+                    org.apache.fluss.config.Configuration.class)
+                    .invoke(null, org.apache.fluss.config.Configuration.fromMap(lakeCatalogProps));
+            java.lang.reflect.Method confGet = hadoopConf.getClass()
+                    .getMethod("get", String.class, String.class);
+            System.out.println("CANDLE_MIGRATION_EFFECTIVE_CONNECTION_TIMEOUT_MS="
+                    + confGet.invoke(hadoopConf, "fs.s3a.connection.timeout", "<unset>"));
+            System.out.println("CANDLE_MIGRATION_EFFECTIVE_ESTABLISH_TIMEOUT_MS="
+                    + confGet.invoke(hadoopConf, "fs.s3a.connection.establish.timeout", "<unset>"));
+        } catch (Throwable t) {
+            System.out.println("CANDLE_MIGRATION_EFFECTIVE_CONF_DIAGNOSTIC_FAILED="
+                    + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
         DataStream<RowData> rows = tEnv.toDataStream(sourceTable)
                 .map(CandleMigrationBatchJob::toRowData)
                 .returns(CandleTableColumns.ROW_TYPE_INFO)

@@ -210,6 +210,18 @@ def diff_manifests(existing, computed):
                 f"  ~ KIND:    {path} ({c['table_name']}) "
                 f"{e.get('table_kind')} -> {c.get('table_kind')}"
             )
+        elif (
+            e is not None
+            and c is not None
+            and (
+                e.get("primary_key") != c.get("primary_key")
+                or e.get("bucket_key") != c.get("bucket_key")
+            )
+        ):
+            diffs.append(
+                f"  ~ FIELD:   {path} ({c['table_name']}) primary_key/bucket_key "
+                "differs from DDL (manifest vs generator)"
+            )
 
     return diffs
 

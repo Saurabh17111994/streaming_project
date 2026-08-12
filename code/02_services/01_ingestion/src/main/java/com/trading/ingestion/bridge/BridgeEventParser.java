@@ -25,11 +25,37 @@ public final class BridgeEventParser {
                 node.path("connection_epoch").asLong(-1), node.path("state").asText(""),
                 node.path("assigned_tokens").asInt(0), node.path("acknowledged_tokens").asInt(0),
                 node.path("rejected_tokens").asInt(0), node.path("reason").asText(""),
-                node.path("received_ts_ms").asLong(0)));
+                node.path("received_ts_ms").asLong(0),
+                required(node, "manifest_fingerprint"), required(node, "assigned_token_set_hash")));
     }
 
     public Optional<BridgeEvent> parse(String line) throws Exception {
         return parse(mapper.readTree(line));
+    }
+
+    /**
+     * Parse a supervisor health snapshot ({@code bridge_metrics}). Returns
+     * empty for any other record type so the caller can fall through — a
+     * {@code bridge_metrics} line must never be misparsed as a GoTick (it has
+     * no feed/state and would be quarantined as INVALID_SCHEMA).
+     */
+    public Optional<BridgeMetrics> parseMetrics(JsonNode node) {
+        if (node == null || !"bridge_metrics".equals(node.path("record_type").asText())) {
+            return Optional.empty();
+        }
+        int contractVersion = node.path("contract_version").asInt(-1);
+        if (contractVersion != BridgeEvent.CONTRACT_VERSION) {
+            throw new IllegalArgumentException("unsupported bridge contract version: " + contractVersion);
+        }
+        return Optional.of(new BridgeMetrics(
+                node.path("ts_ms").asLong(-1),
+                node.path("reconnect_consecutive").asInt(0),
+                node.path("active_sockets").asInt(0),
+                node.path("go_goroutines").asLong(0)));
+    }
+
+    public Optional<BridgeMetrics> parseMetrics(String line) throws Exception {
+        return parseMetrics(mapper.readTree(line));
     }
 
     /** R-214: parse from an already-parsed tree. */

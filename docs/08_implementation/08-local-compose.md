@@ -20,6 +20,7 @@ Build this phase, then implement the tests in the second section before moving o
 Compose may run one development instance of:
 
 ```text
+ZooKeeper (single node — dev simplification; production = 3-node ensemble)
 Fluss coordinator/tablet
 Flink JobManager/TaskManager
 Signal and Babysitter job submitter
@@ -59,6 +60,7 @@ A repository file that is not mounted or passed to a process is not effective co
 
 | Service | Liveness | Readiness |
 | --- | --- | --- |
+| ZooKeeper | Client port responds | Quorum semantics available for local profile (single-node is acceptable locally) |
 | Fluss coordinator | Process/RPC responds | Metadata and quorum semantics available for local profile |
 | Fluss tablet | Process/RPC responds | Required test tables readable/writable |
 | Flink JobManager | REST/RPC responds | Job submission accepted |
@@ -81,7 +83,7 @@ LOCAL_SERVICE_ONLY
 SANDBOX_CALLBACK
 ```
 
-Bind operator interfaces to localhost by default. Do not expose Fluss internal RPC, Flink administrative APIs, or Arrow REST order APIs beyond the local test boundary.
+Bind operator interfaces to localhost by default. Do not expose Fluss internal RPC, ZooKeeper client/peer ports (2181/2888/3888 — `LOCAL_SERVICE_ONLY`), Flink administrative APIs, or Arrow REST order APIs beyond the local test boundary.
 
 ### Local secret rules
 
