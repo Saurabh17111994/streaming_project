@@ -64,6 +64,11 @@ services:
         advertised.listeners: CLIENT://localhost:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
+        # R2 stall containment (2026-08-12): a wedged R2 socket must fail the
+        # lake reader fast, not hang forever (plan Phase 3; 30000 ms default,
+        # matching the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env).
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: "30000"
+        datalake.iceberg.iceberg.hadoop.fs.s3a.socket.timeout: "30000"
 
   fluss-tablet:
     <<: *fluss-common
@@ -85,6 +90,11 @@ services:
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
+        # R2 stall containment (2026-08-12): a wedged R2 socket must fail the
+        # lake reader fast, not hang forever (plan Phase 3; 30000 ms default,
+        # matching the batch job's CANDLE_MIGRATION_S3_*_TIMEOUT_MS env).
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: "30000"
+        datalake.iceberg.iceberg.hadoop.fs.s3a.socket.timeout: "30000"
     # Lake tiering requires S3 creds (see .env.example).
 
   # ---- Flink: compute (feature + signal + babysitter jobs) -----------------
