@@ -40,7 +40,6 @@ import org.apache.fluss.flink.sink.FlussSink;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
@@ -59,14 +58,17 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Tracker 14 P6 (docs/08_implementation/14-candle-log-kv-replay-safety_2.md) —
- * end-to-end harness for the CANDLE-KV-REPLAY-001 replay contract.
+ * end-to-end harness for the replay contract, re-scoped 2026-08-13 (DEC-035)
+ * to the signal dual-sink: candle LOG-only + signal LOG/KV.
  *
  * <p>The harness runs the <b>actual production graph</b>
  * ({@link SignalJob#buildTopology(SignalJobConfig)}: Fluss source → raw
- * validation → fingerprint dedup → 15s event-time window → LOG sink + KV
- * upsert sink → breakout detection → candidates KV sink) inside a Flink
+ * validation → fingerprint dedup → 15s event-time window → candle LOG sink →
+ * breakout detection → signal dual-sink: {@code Signal_Candidates} LOG append
+ * + {@code Signal_Candidates_current} KV upsert behind the canonical-signal
+ * filter) inside a Flink
  * {@link MiniClusterWithClientResource} against <b>scratch Fluss tables</b>
- * (unique per test: {@code p6_<epoch>_raw|_log|_kv|_cand}, created and
+ * (unique per test: {@code p6_<epoch>_raw|_log|_cand|_cur}, created and
  * dropped by this test). Production tables and the live dev signaljob are
  * never touched.
  *
@@ -95,20 +97,22 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Assertions:
  * <ul>
- *   <li><b>P6.1</b> — phase 1: LOG=46 rows / KV=46 distinct keys / 2
- *       candidates. Phase 2 (full replay from the same raw LOG, fresh state):
- *       LOG grows to 92 (append-only evidence trail re-emits), KV stays 46
- *       distinct keys with <i>identical business fields</i> (idempotent
- *       upsert), and candidates stay 2. Phase 3 (restore from the last
- *       completed checkpoint of phase 2 + 4 new ticks per token): LOG grows to
- *       exactly 96, including the two pending w23 pusher ticks held in
- *       checkpointed window state and two w24 candles; KV grows to 50. An
- *       offset-0 fallback would re-emit the original 46 windows and reach 142
- *       LOG rows. Existing KV business fields remain unchanged.</li>
+ *   <li><b>P6.1</b> — phase 1: candle LOG=46 rows, signal LOG=2 rows (one per
+ *       token), signal KV=2 keys. Phase 2 (full replay from the same raw LOG,
+ *       fresh state): candle LOG grows to 92 (append-only evidence trail
+ *       re-emits), signal LOG grows to 4 (replay re-emits the two signals —
+ *       the LOG twin is audit, it may grow), and the signal KV key count
+ *       stays FROZEN at 2 with unchanged content. Phase 3 (restore from the
+ *       last completed checkpoint of phase 2 + 4 new ticks per token): candle
+ *       LOG grows to exactly 96, including the two pending w23 pusher ticks
+ *       held in checkpointed window state and two w24 candles; signal LOG
+ *       stays 4 and KV stays 2 (no new signal fires). An offset-0 fallback
+ *       would re-emit the original 46 windows and reach 142 LOG rows.</li>
  *   <li><b>P6.2</b> — {@link SignalJob#preflightTableContracts} fails closed
- *       on: KV missing, LOG missing, KV wrong kind (LOG as current), KV
- *       schema drift (20-col raw as current), unreachable coordinator; and
- *       passes for the scratch pair.</li>
+ *       on: candle LOG missing, candle LOG schema drift (20-col raw as candle
+ *       target), signal LOG missing/schema drift, signal KV current table
+ *       missing, unreachable coordinator; and passes for the three scratch
+ *       tables.</li>
  *   <li><b>P6.3</b> — invalid rows produce no candle; in-window late arrival
  *       folds in; beyond-lateness arrival is dropped and never corrects the
  *       emitted candle; per-token idle windows still close; emitted rows carry
@@ -124,7 +128,7 @@ import org.slf4j.LoggerFactory;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "COMPUTE_INT_TEST_P6", matches = "true")
-@DisplayName("CANDLE-KV-REPLAY-001 P6: dual-sink graph replay + failure + data-quality")
+@DisplayName("CANDLE-KV-REPLAY-001 P6: candle LOG + signal dual-sink replay + failure + data-quality")
 class CandleGraphReplayIntegrationTest {
 
 
@@ -143,8 +147,6 @@ class CandleGraphReplayIntegrationTest {
 
     private static final String CANONICAL_ALGORITHM = "candle-15s-v1";
     private static final String CANONICAL_CONFIGURATION = "1.0.0";
-
-    private static final List<String> CREATED_TABLES = new ArrayList<>();
 
     private static String bootstrap;
     private static Connection connection;
@@ -184,14 +186,8 @@ class CandleGraphReplayIntegrationTest {
 
     @AfterAll
     static void cleanup() throws Exception {
-        for (String table : CREATED_TABLES) {
-            try {
-                admin.dropTable(TablePath.of("default", table), false)
-                        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                LOG.info("p6: dropped scratch table {}", table);
-            } catch (Exception e) {
-                LOG.warn("p6: drop {} failed: {}", table, e.getMessage());
-            }
+        if (admin != null) {
+            ScratchTables.dropCreated(admin, TIMEOUT);
         }
         if (admin != null) {
             admin.close();
@@ -209,27 +205,32 @@ class CandleGraphReplayIntegrationTest {
     void preflightFailureInjection() throws Exception {
         ScratchSet s = createSet();
 
-        // Happy path: the scratch pair satisfies the dual-write contract.
+        // Happy path: the three scratch tables satisfy the write contracts.
         SignalJob.preflightTableContracts(SignalJobConfig.from(envFor(s, null)));
 
-        // KV table missing.
-        assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
-                SignalJobConfig.from(envFor(s, null, "CANDLE_CURRENT_TABLE",
-                        "p6_" + s.suffix() + "_missing_kv"))),
-                "missing KV current-state table must fail preflight");
-        // LOG table missing.
+        // Candle LOG missing.
         assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
                 SignalJobConfig.from(envFor(s, null, "CANDLE_TABLE",
                         "p6_" + s.suffix() + "_missing_log"))),
-                "missing LOG twin must fail preflight");
-        // Wrong kind: the candle LOG (no PK) must never pass as the KV target.
-        assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
-                SignalJobConfig.from(envFor(s, null, "CANDLE_CURRENT_TABLE", s.logName()))),
-                "LOG table as current-state target must fail preflight");
+                "missing candle LOG must fail preflight");
         // Schema drift: the 20-column raw LOG must never pass the 15-column check.
         assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
-                SignalJobConfig.from(envFor(s, null, "CANDLE_CURRENT_TABLE", s.rawName()))),
-                "schema-drifted target must fail preflight");
+                SignalJobConfig.from(envFor(s, null, "CANDLE_TABLE", s.rawName()))),
+                "schema-drifted candle target must fail preflight");
+        // Signal LOG missing.
+        assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
+                SignalJobConfig.from(envFor(s, null, "SIGNAL_CANDIDATES_TABLE",
+                        "p6_" + s.suffix() + "_missing_sig"))),
+                "missing signal LOG must fail preflight");
+        // Signal LOG schema drift: the 20-column raw LOG must never pass the 22-column check.
+        assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
+                SignalJobConfig.from(envFor(s, null, "SIGNAL_CANDIDATES_TABLE", s.rawName()))),
+                "schema-drifted signal LOG must fail preflight");
+        // Signal KV current table missing.
+        assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
+                SignalJobConfig.from(envFor(s, null, "SIGNAL_CURRENT_TABLE",
+                        "p6_" + s.suffix() + "_missing_cur"))),
+                "missing signal KV current table must fail preflight");
         // Unreachable coordinator — fail closed, never build a degraded graph.
         assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
                 SignalJobConfig.from(envFor(s, null, "FLUSS_BOOTSTRAP_SERVERS", "127.0.0.1:1"))),
@@ -239,32 +240,37 @@ class CandleGraphReplayIntegrationTest {
     // ── P6.1 ───────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("P6.1 replay + restore: KV converges to one row per key with equal business "
-            + "fields; LOG grows; restore resumes at offsets (no offset-0)")
-    void dualSinkReplayAndRestoreIdempotency() throws Exception {
+    @DisplayName("P6.1 replay + restore: LOG grows deterministically; restore resumes at "
+            + "offsets (no offset-0)")
+    void logReplayAndRestoreIdempotency() throws Exception {
         ScratchSet s = createSet();
         appendFeed(s);
 
         // ── Phase 1: first pass ────────────────────────────────────────────
         JobClient job1 = startJob(envFor(s, null), "p6-phase1");
-        awaitTrue(() -> safe(() -> kvCount(s) == 46), "phase-1 KV = 46 distinct keys", 180);
+        awaitLogCount(s, 46, "phase-1 LOG = 46 rows", 180);
+        awaitSignalLogCount(s, 2, "phase-1 signal LOG = 2 rows", 120);
+        awaitCurrentKeyCount(s, 2, "phase-1 signal KV = 2 keys", 120);
+        Map<Long, SignalCurrent> cur1 = readCurrentMap(s);
         Map<CandleKey, List<CandleRow>> log1 = readLogMap(s);
-        Map<CandleKey, CandleRow> kv1 = readKvMap(s);
-        assertFirstPass(s, log1, kv1);
+        assertFirstPass(s, log1);
         cancelAndFinish(job1, "phase1");
-        LOG.info("p6: phase 1 done — LOG={} rows, KV={} keys, candidates={}",
-                log1.size(), kv1.size(), candidateIds(s).size());
+        LOG.info("p6: phase 1 done — LOG={} rows, signalLog={}, signalKv={}",
+                log1.size(), signalLogRows(s), currentKeyCount(s));
 
         // ── Phase 2: full replay (fresh state, same raw LOG) ───────────────
         JobClient job2 = startJob(envFor(s, null), "p6-phase2");
         awaitTrue(() -> safe(() -> logCount(s) == 92), "phase-2 LOG = 92 rows (46 re-emitted)", 180);
+        awaitSignalLogCount(s, 4, "phase-2 signal LOG = 4 rows (2 re-emitted)", 120);
+        awaitCurrentKeyCount(s, 2, "phase-2 signal KV stays at 2 keys", 120);
+        assertEquals(cur1, readCurrentMap(s),
+                "replay must leave the KV current rows unchanged (idempotent convergence)");
         Map<CandleKey, List<CandleRow>> log2 = readLogMap(s);
-        Map<CandleKey, CandleRow> kv2 = readKvMap(s);
-        assertReplayConverges(s, log1, log2, kv1, kv2);
+        assertReplayConverges(s, log1, log2);
         String restore = awaitStableCheckpoint(s, job2.getJobID(), 180);
         cancelAndFinish(job2, "phase2");
-        LOG.info("p6: phase 2 done — LOG={} rows, KV={} keys, candidates={}, restore={}",
-                log2.size(), kv2.size(), candidateIds(s).size(), restore);
+        LOG.info("p6: phase 2 done — LOG={} rows, signalLog={}, signalKv={}, restore={}",
+                log2.size(), signalLogRows(s), currentKeyCount(s), restore);
 
         // The phase-2 checkpoint retains the valid pusher tick in w23. New w24
         // data closes that pending window, and the w25 pusher closes w24.
@@ -272,22 +278,26 @@ class CandleGraphReplayIntegrationTest {
         appendPusher(s, 25, 10025L); // advance the watermark past w24's end
         JobClient job3 = startJob(envFor(s, restore), "p6-phase3");
         awaitLogCount(s, 96, "phase-3 restore must emit pending w23 and new w24", 180);
-        Map<CandleKey, CandleRow> kv3 = readKvMap(s);
-        assertEquals(50, kv3.size(),
-                "phase-3 KV must hold 46 old keys + pending w23 + new w24 for both tokens");
-        assertExistingKeysAndBusinessFields(kv2, kv3,
+        Map<CandleKey, List<CandleRow>> log3 = readLogMap(s);
+        assertEquals(50, log3.size(),
+                "phase-3 LOG must hold 46 old keys + pending w23 + new w24 for both tokens");
+        assertExistingKeysAndBusinessFields(log2, log3,
                 "restore must not change the business fields of already-written keys");
         for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-            assertEquals(1, kv3.get(new CandleKey(token, BASE + 23 * WINDOW_MS)).tickCount(),
-                    "restored pending pusher tick must close w23 exactly once");
-            assertEquals(4, kv3.get(new CandleKey(token, BASE + 24 * WINDOW_MS)).tickCount(),
-                    "post-restore w24 must contain its four ticks");
+            List<CandleRow> w23 = log3.get(new CandleKey(token, BASE + 23 * WINDOW_MS));
+            assertTrue(w23 != null && w23.size() == 1, "w23 must close exactly once for " + token);
+            assertEquals(1, w23.get(0).tickCount(), "restored pending pusher tick closes w23 alone");
+            List<CandleRow> w24 = log3.get(new CandleKey(token, BASE + 24 * WINDOW_MS));
+            assertTrue(w24 != null && w24.size() == 1, "w24 must close exactly once for " + token);
+            assertEquals(4, w24.get(0).tickCount(), "post-restore w24 must contain its four ticks");
         }
+        awaitSignalLogCount(s, 4, "phase-3 signal LOG must stay at 4 rows", 120);
+        awaitCurrentKeyCount(s, 2, "phase-3 signal KV must stay at 2 keys", 120);
         assertEquals(2, candidateIds(s).size(),
                 "the pending and flat windows must not fire a new signal");
         cancelAndFinish(job3, "phase3");
-        LOG.info("p6: phase 3 done — LOG={} rows, KV={} keys, candidates={}",
-                logCount(s), kv3.size(), candidateIds(s).size());
+        LOG.info("p6: phase 3 done — LOG={} rows, signalLog={}, signalKv={}",
+                logCount(s), signalLogRows(s), currentKeyCount(s));
     }
 
 
@@ -300,30 +310,29 @@ class CandleGraphReplayIntegrationTest {
         ScratchSet s = createSet();
         appendFeed(s);
         JobClient job = startJob(envFor(s, null), "p6-data-quality");
-        awaitTrue(() -> safe(() -> kvCount(s) == 46), "KV = 46 distinct keys", 180);
+        awaitLogCount(s, 46, "first-pass LOG = 46 rows", 180);
+        awaitSignalLogCount(s, 2, "data-quality signal LOG = 2 rows", 120);
+        awaitCurrentKeyCount(s, 2, "data-quality signal KV = 2 keys", 120);
 
         Map<CandleKey, List<CandleRow>> log = readLogMap(s);
-        Map<CandleKey, CandleRow> kv = readKvMap(s);
-        assertFirstPass(s, log, kv);
+        assertFirstPass(s, log);
 
-        // Invalid rows never become candles — token 2000 absent from LOG and KV.
-        assertTrue(kv.keySet().stream().noneMatch(k -> k.token() == TOKEN_BAD),
-                "invalid rows must not produce KV candles");
+        // Invalid rows never become candles — token 2000 absent from LOG.
         assertTrue(log.keySet().stream().noneMatch(k -> k.token() == TOKEN_BAD),
                 "invalid rows must not produce LOG candles");
         // LOG first pass: exactly one row per key (no duplicates yet).
         for (Map.Entry<CandleKey, List<CandleRow>> e : log.entrySet()) {
             assertEquals(1, e.getValue().size(), "first-pass LOG must hold one row per key: " + e.getKey());
         }
-        // Emitted rows carry the canonical version triple (KV filter passes all).
-        CandleRow sample = kv.get(new CandleKey(TOKEN_A, BASE + 10 * WINDOW_MS));
+        // Emitted rows carry the canonical version triple.
+        CandleRow sample = log.get(new CandleKey(TOKEN_A, BASE + 10 * WINDOW_MS)).get(0);
         assertEquals(CANONICAL_ALGORITHM, sample.algorithmVersion());
         assertEquals(CANONICAL_CONFIGURATION, sample.configurationVersion());
         assertEquals("2", sample.schemaVersion());
 
         cancelAndFinish(job, "data-quality");
-        LOG.info("p6: data-quality done — LOG={} rows, KV={} keys, candidates={}",
-                log.size(), kv.size(), candidateIds(s).size());
+        LOG.info("p6: data-quality done — LOG={} rows, signalLog={}, signalKv={}",
+                log.size(), signalLogRows(s), currentKeyCount(s));
     }
 
     // ── feed ───────────────────────────────────────────────────────────────
@@ -458,8 +467,8 @@ class CandleGraphReplayIntegrationTest {
         e.put("FLUSS_DATABASE", "default");
         e.put("RAW_TABLE", s.rawName());
         e.put("CANDLE_TABLE", s.logName());
-        e.put("CANDLE_CURRENT_TABLE", s.kvName());
         e.put("SIGNAL_CANDIDATES_TABLE", s.candName());
+        e.put("SIGNAL_CURRENT_TABLE", s.curName());
         e.put("DEDUP_TTL_MS", "300000");
         e.put("CANDLE_WINDOW_MS", "15000");
         e.put("WATERMARK_OUT_OF_ORDER_MS", "5000");
@@ -548,26 +557,25 @@ class CandleGraphReplayIntegrationTest {
     // ── assertions ─────────────────────────────────────────────────────────
 
     /** P6.3 (first pass) + the phase-1 half of P6.1. */
-    private static void assertFirstPass(ScratchSet s, Map<CandleKey, List<CandleRow>> log,
-            Map<CandleKey, CandleRow> kv) throws Exception {
-        assertEquals(46, kv.size(), "first pass: 23 windows x 2 tokens");
+    private static void assertFirstPass(ScratchSet s, Map<CandleKey, List<CandleRow>> log)
+            throws Exception {
         assertEquals(46, log.size(), "first pass: LOG must hold one row per key");
         for (long token : new long[] {TOKEN_A, TOKEN_B}) {
             // In-window late arrival folds in (arrival-order close semantics).
-            assertEquals(7004, kv.get(new CandleKey(token, BASE + 4 * WINDOW_MS)).close(),
+            assertEquals(7004, log.get(new CandleKey(token, BASE + 4 * WINDOW_MS)).get(0).close(),
                     "in-window late tick must fold into the w4 candle");
             // Beyond-lateness arrival dropped, candle uncorrected.
-            CandleRow w5 = kv.get(new CandleKey(token, BASE + 5 * WINDOW_MS));
+            CandleRow w5 = log.get(new CandleKey(token, BASE + 5 * WINDOW_MS)).get(0);
             assertEquals(10005, w5.close(), "beyond-lateness tick must be dropped (close uncorrected)");
             assertEquals(4, w5.tickCount(), "beyond-lateness tick must not reach the accumulator");
             // Breakout window 22 fires.
-            CandleRow w22 = kv.get(new CandleKey(token, BASE + 22 * WINDOW_MS));
+            CandleRow w22 = log.get(new CandleKey(token, BASE + 22 * WINDOW_MS)).get(0);
             assertEquals(11000, w22.open());
             assertEquals(15000, w22.close());
         }
         // Token 1000's w17 has only 3 ticks — its window still closes on the
         // shared watermark advanced by token 1001 (idle bucket does not block).
-        assertNotNull(kv.get(new CandleKey(TOKEN_A, BASE + 17 * WINDOW_MS)),
+        assertNotNull(log.get(new CandleKey(TOKEN_A, BASE + 17 * WINDOW_MS)),
                 "idle token's window must close on the shared watermark");
         // Exactly one candidate per token, deterministic id.
         Set<String> ids = candidateIds(s);
@@ -577,14 +585,14 @@ class CandleGraphReplayIntegrationTest {
                             + ", got " + ids);
         }
         assertEquals(2, ids.size(), "exactly one candidate per token");
+        assertEquals(2, currentKeyCount(s),
+                "first pass: exactly one KV current row per token");
     }
 
-    /** P6.1 phase-2 replay convergence: LOG re-emits, KV stays one row per key, equal fields. */
+    /** P6.1 phase-2 replay convergence: LOG re-emits each window once with equal fields. */
     private static void assertReplayConverges(ScratchSet s, Map<CandleKey, List<CandleRow>> log1,
-            Map<CandleKey, List<CandleRow>> log2, Map<CandleKey, CandleRow> kv1,
-            Map<CandleKey, CandleRow> kv2) throws Exception {
+            Map<CandleKey, List<CandleRow>> log2) throws Exception {
         assertEquals(46, log1.size());
-        assertEquals(46, kv1.size());
         // Map size is the distinct-key count; the LOG contract is its row count.
         int firstPassLogRows = log1.values().stream().mapToInt(List::size).sum();
         int replayLogRows = log2.values().stream().mapToInt(List::size).sum();
@@ -597,29 +605,27 @@ class CandleGraphReplayIntegrationTest {
             assertBusinessFieldsEqual(e.getValue().get(0), replayed.get(1),
                     "replayed LOG row must carry the same business fields");
         }
-        assertSameKeysAndBusinessFields(kv1, kv2, "replay must not change KV business fields");
-        assertEquals(46, kv2.size(), "replay must not add KV keys");
         assertEquals(2, candidateIds(s).size(), "replay must not create extra candidates");
+        assertEquals(4, signalLogRows(s),
+                "replay must re-emit the two signals — the signal LOG twin grows (audit)");
+        assertEquals(2, currentKeyCount(s),
+                "replay must NOT grow the signal KV — same-instrument upserts converge");
     }
 
-    /** KV keys and all business fields (output_ts excluded) must be identical. */
-    private static void assertSameKeysAndBusinessFields(Map<CandleKey, CandleRow> before,
-            Map<CandleKey, CandleRow> after, String what) {
-        assertEquals(before.keySet(), after.keySet(), what + " — key set must be unchanged");
-        for (Map.Entry<CandleKey, CandleRow> e : before.entrySet()) {
-            assertBusinessFieldsEqual(e.getValue(), after.get(e.getKey()),
-                    what + " — key " + e.getKey());
-        }
-    }
-
-    /** Existing KV rows survive a restore unchanged; new post-restore keys may be added. */
-    private static void assertExistingKeysAndBusinessFields(Map<CandleKey, CandleRow> before,
-            Map<CandleKey, CandleRow> after, String what) {
+    /** Existing LOG rows survive a restore unchanged; new post-restore keys may be added. */
+    private static void assertExistingKeysAndBusinessFields(Map<CandleKey, List<CandleRow>> before,
+            Map<CandleKey, List<CandleRow>> after, String what) {
         assertTrue(after.keySet().containsAll(before.keySet()),
-                what + " — restored KV must retain every existing key");
-        for (Map.Entry<CandleKey, CandleRow> e : before.entrySet()) {
-            assertBusinessFieldsEqual(e.getValue(), after.get(e.getKey()),
-                    what + " — key " + e.getKey());
+                what + " — restored LOG must retain every existing key");
+        for (Map.Entry<CandleKey, List<CandleRow>> e : before.entrySet()) {
+            List<CandleRow> afterRows = after.get(e.getKey());
+            assertNotNull(afterRows, what + " — key " + e.getKey());
+            assertTrue(afterRows.size() >= e.getValue().size(),
+                    what + " — key " + e.getKey() + " must keep every prior row");
+            for (int i = 0; i < e.getValue().size(); i++) {
+                assertBusinessFieldsEqual(e.getValue().get(i), afterRows.get(i),
+                        what + " — key " + e.getKey() + " row " + i);
+            }
         }
     }
 
@@ -669,6 +675,42 @@ class CandleGraphReplayIntegrationTest {
         }
         fail("Timed out after " + timeoutSeconds + "s waiting for " + what
                 + " (expected " + expected + " LOG rows, observed " + latest + ")");
+    }
+
+    private static void awaitSignalLogCount(ScratchSet s, long expected, String what,
+            long timeoutSeconds) throws Exception {
+        long latest = -1;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            latest = signalLogRows(s);
+            if (latest == expected) {
+                return;
+            }
+            if (latest > expected) {
+                fail(what + ": expected " + expected + " signal LOG rows but observed " + latest);
+            }
+            Thread.sleep(1_000L);
+        }
+        fail("Timed out after " + timeoutSeconds + "s waiting for " + what
+                + " (expected " + expected + " signal LOG rows, observed " + latest + ")");
+    }
+
+    private static void awaitCurrentKeyCount(ScratchSet s, long expected, String what,
+            long timeoutSeconds) throws Exception {
+        long latest = -1;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            latest = currentKeyCount(s);
+            if (latest == expected) {
+                return;
+            }
+            if (latest > expected) {
+                fail(what + ": expected " + expected + " KV keys but observed " + latest);
+            }
+            Thread.sleep(1_000L);
+        }
+        fail("Timed out after " + timeoutSeconds + "s waiting for " + what
+                + " (expected " + expected + " KV keys, observed " + latest + ")");
     }
 
     private static boolean safe(ThrowingBooleanSupplier c) {
@@ -757,9 +799,6 @@ class CandleGraphReplayIntegrationTest {
         return scanAll(s.log(), s.logInfo()).size();
     }
 
-    private static long kvCount(ScratchSet s) throws Exception {
-        return scanAll(s.kv(), s.kvInfo()).size();
-    }
 
     private static Map<CandleKey, List<CandleRow>> readLogMap(ScratchSet s) throws Exception {
         Map<CandleKey, List<CandleRow>> map = new HashMap<>();
@@ -767,18 +806,6 @@ class CandleGraphReplayIntegrationTest {
             CandleKey k = new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
                     r.getLong(CandleTableColumns.WINDOW_START));
             map.computeIfAbsent(k, ignored -> new ArrayList<>()).add(candleRow(r));
-        }
-        return map;
-    }
-
-    private static Map<CandleKey, CandleRow> readKvMap(ScratchSet s) throws Exception {
-        Map<CandleKey, CandleRow> map = new HashMap<>();
-        for (InternalRow r : scanAll(s.kv(), s.kvInfo())) {
-            CandleKey k = new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
-                    r.getLong(CandleTableColumns.WINDOW_START));
-            if (map.put(k, candleRow(r)) != null) {
-                fail("KV table holds more than one row for " + k + " — upsert idempotency broken");
-            }
         }
         return map;
     }
@@ -791,7 +818,7 @@ class CandleGraphReplayIntegrationTest {
         return ids;
     }
 
-    /** Scans every bucket of a table (works for LOG and KV — CountCandles probe precedent). */
+    /** Scans every bucket of a table (CountCandles probe precedent). */
     private static List<InternalRow> scanAll(Table table, TableInfo info) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         for (int b = 0; b < info.getNumBuckets(); b++) {
@@ -806,6 +833,26 @@ class CandleGraphReplayIntegrationTest {
             }
         }
         return rows;
+    }
+
+    private static long signalLogRows(ScratchSet s) throws Exception {
+        return scanAll(s.cand(), s.candInfo()).size();
+    }
+
+    private static long currentKeyCount(ScratchSet s) throws Exception {
+        return scanAll(s.cur(), s.curInfo()).size();
+    }
+
+    /** Current-state projection: instrument_token -> (candidate_id, detection_ts). */
+    private static Map<Long, SignalCurrent> readCurrentMap(ScratchSet s) throws Exception {
+        Map<Long, SignalCurrent> map = new HashMap<>();
+        for (InternalRow r : scanAll(s.cur(), s.curInfo())) {
+            map.put(r.getLong(SignalCandidatesTableColumns.INSTRUMENT_TOKEN),
+                    new SignalCurrent(
+                            r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString(),
+                            r.getLong(SignalCandidatesTableColumns.DETECTION_TS)));
+        }
+        return map;
     }
 
     private static CandleRow candleRow(InternalRow r) {
@@ -833,39 +880,25 @@ class CandleGraphReplayIntegrationTest {
         Path cpDir = Path.of(System.getProperty("java.io.tmpdir"), "p6-cp-" + suffix);
         String rawName = "p6_" + suffix + "_raw";
         String logName = "p6_" + suffix + "_log";
-        String kvName = "p6_" + suffix + "_kv";
         String candName = "p6_" + suffix + "_cand";
+        String curName = "p6_" + suffix + "_cur";
         // One raw bucket gives this event-time test one source watermark; Fluss's
         // production 16-bucket routing is covered independently by bucket tests.
-        Table raw = createTable(rawName, rawSchema(), null, 1, "raw LOG");
-        Table log = createTable(logName, candleSchema(null), null, 16, "candle LOG");
-        Table kv = createTable(kvName, candleSchema(List.of("instrument_token", "window_start")),
-                List.of("instrument_token", "window_start"), 16, "candle KV");
-        Table cand = createTable(candName, candidatesSchema(), List.of("candidate_id"), 16,
-                "candidates KV");
+        Table raw = ScratchTables.create(connection, admin, rawName, rawSchema(), null, 1,
+                "raw LOG", TIMEOUT);
+        Table log = ScratchTables.create(connection, admin, logName, ScratchTables.candleSchema(),
+                null, 16, "candle LOG", TIMEOUT);
+        Table cand = ScratchTables.create(connection, admin, candName,
+                ScratchTables.signalLogSchema(), null, 16, "signal LOG", TIMEOUT);
+        Table cur = ScratchTables.create(connection, admin, curName,
+                ScratchTables.signalCurrentSchema(), List.of("instrument_token"), 16,
+                "signal current KV", TIMEOUT);
         TableInfo rawInfo = tableInfo(rawName);
         TableInfo logInfo = tableInfo(logName);
-        TableInfo kvInfo = tableInfo(kvName);
         TableInfo candInfo = tableInfo(candName);
-        return new ScratchSet(suffix, rawName, logName, kvName, candName,
-                raw, log, kv, cand, rawInfo, logInfo, kvInfo, candInfo, cpDir);
-    }
-
-    private static Table createTable(String name, Schema schema, List<String> pk, int bucketCount,
-            String what) throws Exception {
-        TableDescriptor td = TableDescriptor.builder()
-                .schema(schema)
-                // LOG tables: instrument_token routing (mirrors raw_table_1 /
-                // feature_candles_15s). KV tables: bucket key must be a subset of
-                // the PK — candles use (instrument_token, window_start), candidates
-                // use candidate_id (mirrors DDL 05).
-                .distributedBy(bucketCount, pk == null ? "instrument_token" : pk.get(0))
-                .build();
-        TablePath path = TablePath.of("default", name);
-        admin.createTable(path, td, false).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        CREATED_TABLES.add(name);
-        LOG.info("p6: created scratch {} table {}", what, name);
-        return connection.getTable(path);
+        TableInfo curInfo = tableInfo(curName);
+        return new ScratchSet(suffix, rawName, logName, candName, curName,
+                raw, log, cand, cur, rawInfo, logInfo, candInfo, curInfo, cpDir);
     }
 
     private static TableInfo tableInfo(String name) throws Exception {
@@ -899,59 +932,6 @@ class CandleGraphReplayIntegrationTest {
                 .build();
     }
 
-    /** 15-column candle schema (both twins); PK set only for the KV twin. */
-    private static Schema candleSchema(List<String> pk) {
-        Schema.Builder b = Schema.newBuilder()
-                .column("instrument_token", DataTypes.BIGINT())
-                .column("exchange", DataTypes.STRING())
-                .column("symbol", DataTypes.STRING())
-                .column("window_start", DataTypes.BIGINT())
-                .column("window_end", DataTypes.BIGINT())
-                .column("open_paise", DataTypes.BIGINT())
-                .column("high_paise", DataTypes.BIGINT())
-                .column("low_paise", DataTypes.BIGINT())
-                .column("close_paise", DataTypes.BIGINT())
-                .column("volume", DataTypes.BIGINT())
-                .column("tick_count", DataTypes.INT())
-                .column("algorithm_version", DataTypes.STRING())
-                .column("configuration_version", DataTypes.STRING())
-                .column("output_ts", DataTypes.BIGINT())
-                .column("schema_version", DataTypes.STRING());
-        if (pk != null) {
-            b.primaryKey(pk.toArray(new String[0]));
-        }
-        return b.build();
-    }
-
-    /** 22-column candidates KV schema mirroring DDL 05 (PK candidate_id). */
-    private static Schema candidatesSchema() {
-        return Schema.newBuilder()
-                .column("candidate_id", DataTypes.STRING())
-                .column("instruction_id", DataTypes.STRING())
-                .column("trade_context_id", DataTypes.STRING())
-                .column("instrument_token", DataTypes.BIGINT())
-                .column("exchange", DataTypes.STRING())
-                .column("symbol", DataTypes.STRING())
-                .column("strategy_id", DataTypes.STRING())
-                .column("strategy_version", DataTypes.STRING())
-                .column("rule_id", DataTypes.STRING())
-                .column("detection_ts", DataTypes.BIGINT())
-                .column("evaluation_ts", DataTypes.BIGINT())
-                .column("action", DataTypes.STRING())
-                .column("side", DataTypes.STRING())
-                .column("quantity", DataTypes.BIGINT())
-                .column("order_type", DataTypes.STRING())
-                .column("limit_price_paise", DataTypes.BIGINT())
-                .column("score_inputs", DataTypes.STRING())
-                .column("formation_snapshot_ref", DataTypes.STRING())
-                .column("validity_reason", DataTypes.STRING())
-                .column("supersedes_candidate_id", DataTypes.STRING())
-                .column("superseded_by_candidate_id", DataTypes.STRING())
-                .column("schema_version", DataTypes.STRING())
-                .primaryKey("candidate_id")
-                .build();
-    }
-
     private static BinaryString bs(String s) {
         return s != null ? BinaryString.fromString(s) : BinaryString.EMPTY_UTF8;
     }
@@ -961,20 +941,23 @@ class CandleGraphReplayIntegrationTest {
             String suffix,
             String rawName,
             String logName,
-            String kvName,
             String candName,
+            String curName,
             Table raw,
             Table log,
-            Table kv,
             Table cand,
+            Table cur,
             TableInfo rawInfo,
             TableInfo logInfo,
-            TableInfo kvInfo,
             TableInfo candInfo,
+            TableInfo curInfo,
             Path checkpointDir) {}
 
     /** Candle row identity = (instrument_token, window_start). */
     private record CandleKey(long token, long windowStart) {}
+
+    /** KV current-state row content (identity + emit instant). */
+    private record SignalCurrent(String candidateId, long detectionTs) {}
 
     /** Business fields + output_ts of a candle row (output_ts excluded from equality checks). */
     private record CandleRow(
