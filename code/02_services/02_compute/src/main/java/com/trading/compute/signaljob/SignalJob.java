@@ -29,12 +29,11 @@ import org.slf4j.LoggerFactory;
  * <p>Topology: {@code raw_table_1} (Fluss LOG source, full offsets) → raw
  * schema/validity gate → bounded fingerprint dedup → 15-second event-time
  * tumbling window (OHLCV aggregate) → {@code feature_candles_15s} (Fluss LOG
- * sink) + {@code feature_candles_15s_current} (Fluss KV upsert sink, the
- * idempotent current-state twin — CANDLE-KV-REPLAY-001 P5) and → MVP signal
- * detection (Slice 2.1, DEC-034) → {@code Signal_Candidates} (Fluss KV upsert
- * sink). Business Logic operator internals (candidate lifecycle, max-one-active)
- * and Ranking/decision sinks stay disabled at those boundaries — postponed
- * with the ranking phase.
+ * sink, the sole candle output — the KV current-state twin retired 2026-08-13)
+ * → MVP signal detection (Slice 2.1, DEC-034) → {@code Signal_Candidates} (Fluss
+ * KV upsert sink). Business Logic operator internals (candidate lifecycle,
+ * max-one-active) and Ranking/decision sinks stay disabled at those boundaries
+ * — postponed with the ranking phase.
  *
  * <p>Checkpointing: EXACTLY_ONCE, pinned interval/timeout/max-concurrent
  * (REQ-FC-006); fixed-delay restart 3 × 30s. The sink is the Fluss
@@ -113,9 +112,6 @@ public final class SignalJob {
      * by the same code path the running job uses.
      */
     public static StreamExecutionEnvironment buildTopology(SignalJobConfig config) {
-        // Read-only metadata preflight (CANDLE-KV-REPLAY-001 P4): prove the
-        // deployed candle tables match the dual-write contract before any graph
-        // is built — fail closed on contract drift, never write degraded.
         try {
             preflightTableContracts(config);
         } catch (CandleTableContractValidator.ContractViolation e) {
@@ -202,8 +198,8 @@ public final class SignalJob {
                 .returns(CandleTableColumns.ROW_TYPE_INFO)
                 .name("candle-15s");
 
-        // Tracker 14 box 682/116 (2026-08-12): both candle sinks (LOG here,
-        // KV below) are wrapped in StallGuardedSink — a Flink-side watchdog
+        // Tracker 14 box 682/116 (2026-08-12): the candle LOG sink is
+        // wrapped in StallGuardedSink — a Flink-side watchdog
         // that runs every delegate write/flush/close on a worker thread and
         // bounds the CALL ITSELF at SINK_WRITE_STALL_TIMEOUT_MS. This is
         // required because the Fluss client has two unbounded hang points a
@@ -224,7 +220,6 @@ public final class SignalJob {
         // Sender.canRetry: attempts < retries) bound transient failures; the
         // deleted-table case never consults retries (its batch never fails),
         // so the interrupt-based call bound is the actual unblock.
-        // Shared fate preserved: identical guard on both sinks.
         candles
                 .sinkTo(new StallGuardedSink<>(
                         FlussSink.<RowData>builder()
@@ -259,41 +254,6 @@ public final class SignalJob {
                         .setSerializationSchema(new RowDataSerializationSchema(false, false))
                         .build())
                 .name("signal-candidates-sink");
-
-        // CANDLE-KV-REPLAY-001 P5: idempotent current-state twin. The LOG
-        // sink above stays the immutable audit trail (append-only
-        // serialization); this KV sink overwrites the same
-        // (instrument_token, window_start) key via
-        // RowDataSerializationSchema(false, false) — isAppendOnly=false maps
-        // INSERT RowKinds to UPSERT operations for the KV writer — so
-        // replay/restart duplicates converge instead of accumulating (the
-        // 2026-08-10 replay appended ~550k duplicate rows to the LOG; the KV
-        // twin would have stayed at one row per key). Added LAST to the
-        // candles stream on purpose: operator IDs are derived from a BFS
-        // node-counter, and emitting this sink earlier shifts the hash of the
-        // stateful signal-detection operator (StreamGraphHasherV2) —
-        // CHECKPOINT-RESTORE-001 pins detection's ID across the change.
-        // Tracker 14 P2 (CANDLE-CANONICAL-001): the KV twin is the canonical
-        // current-state projection — only rows whose version pair equals the
-        // canonical pair exactly may upsert. The filter is created AFTER
-        // signal-detection in source order, so no operator ID before it shifts
-        // (CHECKPOINT-RESTORE-001 pins detection's hash; the KV sink remains
-        // the last-added node of the candles stream).
-        candles
-                .filter(new CanonicalCandleFilterFunction())
-                .name("canonical-candle-filter")
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
-                                .setBootstrapServers(config.bootstrapServers())
-                                .setDatabase(config.database())
-                                .setTable(config.candleCurrentTable())
-                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
-                                .setOption("client.request-timeout",
-                                        config.sinkWriteStallTimeoutMs() + "ms")
-                                .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
-                .name("feature-candles-15s-current-kv-sink");
 
         return env;
     }
@@ -389,11 +349,10 @@ public final class SignalJob {
 
     /**
      * Read-only metadata preflight (CANDLE-KV-REPLAY-001 P4): opens a short
-     * Fluss connection, checks the deployed candle tables against the
-     * dual-write contract (LOG twin: no PK, instrument_token routing; KV twin:
-     * PK exactly (instrument_token, window_start), same routing), and closes.
+     * Fluss connection, checks the deployed candle table against the
+     * LOG contract (no PK, instrument_token routing), and closes.
      * Any violation — or an unreachable cluster — fails startup before the
-     * graph is built: the job never writes to tables that contradict the
+     * graph is built: the job never writes to a table that contradicts the
      * contract it was compiled against.
      */
     static void preflightTableContracts(SignalJobConfig config) {
@@ -405,17 +364,12 @@ public final class SignalJob {
                     .getTable(org.apache.fluss.metadata.TablePath.of(config.database(), config.candleTable()))
                     .getTableInfo();
             CandleTableContractValidator.validateLogTable(logInfo);
-            org.apache.fluss.metadata.TableInfo kvInfo = conn
-                    .getTable(org.apache.fluss.metadata.TablePath.of(config.database(), config.candleCurrentTable()))
-                    .getTableInfo();
-            CandleTableContractValidator.validateCanonicalKvTable(kvInfo);
             // Tracker 14 P1 (CANDLE-SCHEMA-002): log the validated schema report —
             // exact live columns/types (and the DDL-vs-live nullability
             // divergence where Fluss does not carry NOT NULL) as startup evidence.
-            LOG.info("signal-job: candle table contracts OK ({} LOG, {} KV)",
-                    config.candleTable(), config.candleCurrentTable());
+            LOG.info("signal-job: candle table contract OK ({} LOG)",
+                    config.candleTable());
             LOG.info("signal-job: {}", CandleTableContractValidator.schemaReport(logInfo));
-            LOG.info("signal-job: {}", CandleTableContractValidator.schemaReport(kvInfo));
         } catch (CandleTableContractValidator.ContractViolation e) {
             throw e; // contract drift: fail closed, do not build a degraded graph
         } catch (Exception e) {

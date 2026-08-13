@@ -16,7 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** OTLP payload contract for the rejection counter (process rule 2) and the KV-boundary filter. */
+/** OTLP payload contract for the rejection counter (process rule 2). */
 @DisplayName("ComputeOtlpEmitter JSON shape")
 class ComputeOtlpEmitterTest {
 
@@ -33,7 +33,6 @@ class ComputeOtlpEmitterTest {
         // container suite).
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
         emitter.drainDelta();
-        emitter.drainKvFilteredDelta();
         emitter.drainSourceIdleAtTailDelta();
         ComputeOtlpEmitter.resetStartupModeForTest();
     }
@@ -53,16 +52,6 @@ class ComputeOtlpEmitterTest {
         // DELTA + non-monotonic: a replay of legacy rows never re-fires value > 0.
         assertThat(json).doesNotContain("AGGREGATION_TEMPORALITY_CUMULATIVE");
         assertThat(json).doesNotContain("\"isMonotonic\":true");
-    }
-
-    @Test
-    @DisplayName("KV boundary drops ride the payload as their own DELTA sum (tracker 14 P2)")
-    void kvFilteredShipsAsDeltaSum() {
-        String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0, 3);
-        assertThat(json).contains("\"name\":\"compute.kv.filtered.noncanonical\"");
-        assertThat(json).contains("\"asInt\":3");
-        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
-        assertThat(json).contains("\"isMonotonic\":false");
     }
 
     @Test
@@ -93,20 +82,16 @@ class ComputeOtlpEmitterTest {
 
         // no increments yet -> empty window emits 0 (alert stays quiet)
         assertThat(emitter.drainDelta()).isZero();
-        assertThat(emitter.drainKvFilteredDelta()).isZero();
         assertThat(emitter.drainSourceIdleAtTailDelta()).isZero();
 
         ComputeOtlpEmitter.recordSchemaVersionRejection();
         ComputeOtlpEmitter.recordSchemaVersionRejection();
-        ComputeOtlpEmitter.recordKvFilteredNonCanonical();
         ComputeOtlpEmitter.recordSourceIdleAtTail();
         // each counter is drained independently
         assertThat(emitter.drainDelta()).isEqualTo(2);
-        assertThat(emitter.drainKvFilteredDelta()).isEqualTo(1);
         assertThat(emitter.drainSourceIdleAtTailDelta()).isEqualTo(1);
         // flush 2 sees nothing new — a historical increment never re-fires
         assertThat(emitter.drainDelta()).isZero();
-        assertThat(emitter.drainKvFilteredDelta()).isZero();
         assertThat(emitter.drainSourceIdleAtTailDelta()).isZero();
     }
 
@@ -147,7 +132,6 @@ class ComputeOtlpEmitterTest {
         String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(7, 2);
 
         assertThat(json).contains("\"unit\":\"rejections\"");
-        assertThat(json).contains("\"unit\":\"drops\"");
         assertThat(json).contains("\"unit\":\"entries\"");
         assertThat(json).contains("\"unit\":\"buckets\"");
         assertThat(json).contains("\"unit\":\"bytes\"");
@@ -202,7 +186,6 @@ class ComputeOtlpEmitterTest {
 
         assertThat(metrics).containsKeys(
                 ComputeOtlpEmitter.SCHEMA_VERSION_REJECTED_METRIC,
-                ComputeOtlpEmitter.KV_FILTERED_NON_CANONICAL_METRIC,
                 ComputeOtlpEmitter.DEDUP_STATE_COUNT_METRIC,
                 ComputeOtlpEmitter.DEDUP_EXPIRY_INDEX_COUNT_METRIC,
                 ComputeOtlpEmitter.DEDUP_STATE_BYTES_METRIC);
@@ -327,13 +310,11 @@ class ComputeOtlpEmitterTest {
             ComputeOtlpEmitter recovered = new ComputeOtlpEmitter(
                     "127.0.0.1:" + server.getAddress().getPort());
             ComputeOtlpEmitter.recordSchemaVersionRejection(); // new increment after recovery
-            ComputeOtlpEmitter.recordKvFilteredNonCanonical();
             int code = recovered.flushOnce();
             assertThat(code).isEqualTo(200);
             // Exactly the NEW delta — the failed pre-outage increment is not retried
             // (drained-once semantics: no duplicate/unbounded telemetry buffering).
             assertThat(lastBody.get()).contains("\"asInt\":1")
-                    .contains("compute.kv.filtered.noncanonical")
                     .doesNotContain("\"asInt\":2");
         } finally {
             server.stop(0);

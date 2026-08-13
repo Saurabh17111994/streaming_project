@@ -37,7 +37,6 @@ public record SignalJobConfig(
         String database,
         String rawTable,
         String candleTable,
-        String candleCurrentTable,
         String rawSchemaVersion,
         String algorithmVersion,
         String configurationVersion,
@@ -88,7 +87,6 @@ public record SignalJobConfig(
                 env.getOrDefault("FLUSS_DATABASE", "default"),
                 env.getOrDefault("RAW_TABLE", "raw_table_1"),
                 env.getOrDefault("CANDLE_TABLE", "feature_candles_15s"),
-                env.getOrDefault("CANDLE_CURRENT_TABLE", "feature_candles_15s_current"),
                 env.getOrDefault("RAW_SCHEMA_VERSION", PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION),
                 requireCanonicalVersion(env, "ALGORITHM_VERSION",
                         CandleTableSchema.CANONICAL_ALGORITHM_VERSION),
@@ -248,14 +246,13 @@ public record SignalJobConfig(
 
     /**
      * Canonical version-column gate (tracker 14 P2 — CANDLE-CANONICAL-001).
-     * The KV current-state projection and the migration audit are valid only
-     * for rows whose algorithm/configuration pair equals the canonical pair
-     * exactly ({@code CanonicalCandlePolicy}). A <em>deviating</em> pair must
-     * fail startup rather than silently poison the projection. A missing key
-     * falls back to the canonical default (documented in the record javadoc —
-     * the default IS the canonical pair); a blank or non-canonical value is
-     * fatal. Changing the pair is a governed change in {@link CandleTableSchema},
-     * not a tuning knob.
+     * The emitted candle LOG rows carry the algorithm/configuration pair; a
+     * <em>deviating</em> pair must fail startup rather than silently change
+     * row identity for replay evidence. A missing key falls back to the
+     * canonical default (documented in the record javadoc — the default IS
+     * the canonical pair); a blank or non-canonical value is fatal. Changing
+     * the pair is a governed change in {@link CandleTableSchema}, not a
+     * tuning knob.
      */
     private static String requireCanonicalVersion(Map<String, String> env, String key,
             String canonical) {
@@ -271,8 +268,8 @@ public record SignalJobConfig(
         if (!canonical.equals(trimmed)) {
             throw new IllegalStateException("Config " + key + " must equal the canonical value '"
                     + canonical + "' (tracker 14 P2, CANDLE-CANONICAL-001), got '" + trimmed
-                    + "' — a deviating version column would be dropped from the KV "
-                    + "current-state projection and fail the migration audit");
+                    + "' — a deviating version column would change emitted row identity "
+                    + "and corrupt replay evidence");
         }
         return trimmed;
     }

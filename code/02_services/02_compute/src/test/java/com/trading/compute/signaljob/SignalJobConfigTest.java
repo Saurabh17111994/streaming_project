@@ -119,14 +119,6 @@ class SignalJobConfigTest {
     }
 
     @Test
-    void defaultsCandleCurrentTableAndHonorsOverride() {
-        assertEquals("feature_candles_15s_current", SignalJobConfig.from(env()).candleCurrentTable());
-        Map<String, String> env = env();
-        env.put("CANDLE_CURRENT_TABLE", "candles_current_dev");
-        assertEquals("candles_current_dev", SignalJobConfig.from(env).candleCurrentTable());
-    }
-
-    @Test
     void trimsRestorePathWhitespace() {
         Map<String, String> env = env();
         env.remove("ALLOW_FULL_REPLAY");

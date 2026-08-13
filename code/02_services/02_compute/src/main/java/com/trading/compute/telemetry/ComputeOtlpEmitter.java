@@ -58,16 +58,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public static final String STARTUP_MODE_METRIC = "compute.startup.mode";
 
     /**
-     * KV-boundary filter counter (tracker 14 P2 — CANDLE-CANONICAL-001):
-     * candles dropped before the {@code feature_candles_15s_current} upsert
-     * because their algorithm/configuration pair deviates from the canonical
-     * pair. DELTA non-monotonic, like the rejection counter — fires on new
-     * drops, never on replay.
-     */
-    public static final String KV_FILTERED_NON_CANONICAL_METRIC =
-            "compute.kv.filtered.noncanonical";
-
-    /**
      * Source idle-at-tail episode counter (tracker 14 P7/P10 — 2026-08-13
      * misdiagnosis lesson): incremented once per idle EPISODE by the
      * {@code SourceIdleWatchdogGenerator} watermark-level watchdog inside the
@@ -98,9 +88,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
 
     /** Incremented by RawValidationFunction; drained (delta) by the flush thread. */
     private static final AtomicLong SCHEMA_VERSION_REJECTED = new AtomicLong();
-
-    /** Incremented by CanonicalCandleFilterFunction; drained (delta) by the flush thread. */
-    private static final AtomicLong KV_FILTERED_NON_CANONICAL = new AtomicLong();
 
     /**
      * Incremented by SourceIdleWatchdogGenerator (once per idle episode);
@@ -168,11 +155,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     /** Called by {@code RawValidationFunction} on each schema-version rejection. */
     public static void recordSchemaVersionRejection() {
         SCHEMA_VERSION_REJECTED.incrementAndGet();
-    }
-
-    /** Called by {@code CanonicalCandleFilterFunction} on each dropped non-canonical candle. */
-    public static void recordKvFilteredNonCanonical() {
-        KV_FILTERED_NON_CANONICAL.incrementAndGet();
     }
 
     /**
@@ -243,11 +225,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         return SCHEMA_VERSION_REJECTED.getAndSet(0);
     }
 
-    /** Deltas the KV-boundary filter counter (public: cross-package filter tests read it). */
-    public long drainKvFilteredDelta() {
-        return KV_FILTERED_NON_CANONICAL.getAndSet(0);
-    }
-
     /**
      * Called by {@code SourceIdleWatchdogGenerator} once per source idle-at-tail
      * episode. NEVER called from the source task's processing-time thread in a
@@ -298,9 +275,8 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      */
     public int flushOnce() throws java.io.IOException {
         long delta = drainDelta();
-        long kvFiltered = drainKvFilteredDelta();
         long sourceIdleAtTail = drainSourceIdleAtTailDelta();
-        String json = buildMetricsJson(delta, kvFiltered, sourceIdleAtTail);
+        String json = buildMetricsJson(delta, sourceIdleAtTail);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -408,16 +384,7 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      * plus (when the startup mode was recorded) a GAUGE for the run's startup
      * mode.
      */
-    /**
-     * 2-arg convenience kept for the ~8 existing payload-test call sites:
-     * delegates with a zero source-idle delta (the metric still appears in
-     * the payload at 0).
-     */
-    String buildMetricsJson(long delta, long kvFiltered) {
-        return buildMetricsJson(delta, kvFiltered, 0L);
-    }
-
-    String buildMetricsJson(long delta, long kvFiltered, long sourceIdleAtTail) {
+    String buildMetricsJson(long delta, long sourceIdleAtTail) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -435,12 +402,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
           .append("\"isMonotonic\":false,")
           .append("\"dataPoints\":[{\"asInt\":").append(delta).append(",")
-          .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
-        sb.append(",{\"name\":\"").append(KV_FILTERED_NON_CANONICAL_METRIC).append("\",")
-          .append("\"unit\":\"drops\",")
-          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
-          .append("\"isMonotonic\":false,")
-          .append("\"dataPoints\":[{\"asInt\":").append(kvFiltered).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
         sb.append(",{\"name\":\"").append(SOURCE_IDLE_AT_TAIL_METRIC).append("\",")
           .append("\"unit\":\"episodes\",")
