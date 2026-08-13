@@ -2,9 +2,9 @@
 -- Owner: Ingestion
 -- Type: LOG (no primary key)
 -- Bucket key: instrument_token
--- Retention: ≤7 calendar days via table.log.ttl (R-011); the "trading days"
+-- Retention: ≤2 calendar days via table.log.ttl (R-011); the "trading days"
 -- ceiling in earlier headers was unverifiable — Fluss TTL is calendar-based,
--- so the honest claim is 7 calendar days. Extend once EOD offload is verified.
+-- so the honest claim is 2 calendar days. Extend once EOD offload is verified.
 -- Lake: EOD Iceberg offload (R-011: datalake options restored — they were
 -- dropped in a rewrite while the header still claimed offload)
 -- Scope: account_scope_id
@@ -41,7 +41,7 @@ CREATE TABLE raw_table_1 (
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

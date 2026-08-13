@@ -12,10 +12,11 @@ import org.apache.fluss.metadata.TableInfo;
  * deployed tables match the contracts the write paths rely on.
  *
  * <ul>
- *   <li>{@code feature_candles_15s} — immutable candle LOG: <b>no</b> primary
- *       key (append-only; a PK would turn it into a KV table and silently
- *       change replay semantics), bucket.key exactly {@code instrument_token},
- *       16 buckets, exact 15-column v2 schema
+ *   <li>{@code feature_candles_15s} — candle KV current-state table
+ *       (user requirement 2026-08-13: candle tables are KV-only, no LOG+KV
+ *       twin): primary key exactly {@code [instrument_token, window_start]},
+ *       bucket.key exactly {@code instrument_token} (a subset of the PK, so
+ *       per-ticker colocation holds), 16 buckets, exact 15-column v2 schema
  *       (tracker 14 P1 — CANDLE-SCHEMA-002).</li>
  *   <li>{@code Signal_Candidates} — immutable signal LOG (DEC-035, v3):
  *       <b>no</b> primary key, bucket.key exactly {@code instrument_token},
@@ -60,9 +61,24 @@ public final class TableContractValidator {
 
     private TableContractValidator() {}
 
-    /** Candle LOG: append-only, no primary key, instrument_token routing, exact 15-col schema. */
-    public static void validateCandleLogTable(TableInfo info) {
-        requireNoPrimaryKey(info, "append-only candle LOG", CANDLE_CONTRACT);
+    /**
+     * Candle KV: PK exactly [instrument_token, window_start],
+     * instrument_token routing, exact 15-col schema.
+     */
+    public static void validateCandleKvTable(TableInfo info) {
+        List<String> expectedPk = CandleTableSchema.PRIMARY_KEY_COLUMNS;
+        if (!info.hasPrimaryKey()) {
+            throw new ContractViolation(
+                    "KV table " + info.getTablePath() + " must carry primary key exactly "
+                            + expectedPk + " (one row per closed window per instrument), "
+                            + "but has NO primary key (" + CANDLE_CONTRACT + ")");
+        }
+        if (!expectedPk.equals(info.getPrimaryKeys())) {
+            throw new ContractViolation(
+                    "KV table " + info.getTablePath() + " must carry primary key exactly "
+                            + expectedPk + " (one row per closed window per instrument), got "
+                            + info.getPrimaryKeys() + " (" + CANDLE_CONTRACT + ")");
+        }
         validateSchema(info, CandleTableSchema.COLUMNS, CandleTableSchema.COLUMN_TYPE_ROOTS,
                 "15-column v2 candle", CANDLE_CONTRACT);
         validateRouting(info, CANDLE_CONTRACT);
@@ -174,14 +190,14 @@ public final class TableContractValidator {
         if (!List.of(bucketKey).equals(bucketKeys)) {
             throw new ContractViolation(
                     "table " + info.getTablePath() + " must be distributed by bucket.key exactly ["
-                            + bucketKey + "] (per-ticker colocation with the LOG twin), got "
+                            + bucketKey + "] (per-ticker colocation), got "
                             + bucketKeys + " (" + contractId + ")");
         }
         int buckets = info.getNumBuckets();
         if (buckets != CandleTableSchema.BUCKET_COUNT) {
             throw new ContractViolation(
                     "table " + info.getTablePath() + " must have " + CandleTableSchema.BUCKET_COUNT
-                            + " buckets (mirrors the LOG twin), got " + buckets
+                            + " buckets (per-ticker colocation), got " + buckets
                             + " (" + contractId + ")");
         }
     }

@@ -285,7 +285,7 @@ class CandleFailureInjectionIntegrationTest {
             Thread.sleep(3_000L);
             assertEquals(20, logCount(s),
                     "post-resume LOG must stay at 20 — no duplicates, no continued growth");
-            LOG.info("p63: stall freeze + resume + overflow-rejection verified — LOG=20, "
+            LOG.info("p63: stall freeze + resume + overflow-rejection verified — KV=20, "
                     + "candidates=0, no TOKEN_BAD candle");
             cancelAndFinish(job, "stall");
         } finally {
@@ -663,9 +663,9 @@ class CandleFailureInjectionIntegrationTest {
         String logName = "p63_" + suffix + "_log";
         String candName = "p63_" + suffix + "_cand";
         Table raw = createTable(rawName, rawSchema(), null, 1, "raw LOG");
-        Table log = createTable(logName, candleSchema(), null, 16, "candle LOG");
-        Table cand = createTable(candName, candidatesSchema(), List.of("candidate_id"), 16,
-                "candidates KV");
+        Table log = createTable(logName, candleSchema(), List.of("instrument_token", "window_start"),
+                16, "candle KV");
+        Table cand = createTable(candName, candidatesSchema(), null, 16, "signal LOG");
         return new ScratchSet(suffix, rawName, logName, candName,
                 raw, log, cand,
                 tableInfo(rawName), tableInfo(logName), tableInfo(candName),
@@ -732,6 +732,7 @@ class CandleFailureInjectionIntegrationTest {
                 .column("configuration_version", DataTypes.STRING())
                 .column("output_ts", DataTypes.BIGINT())
                 .column("schema_version", DataTypes.STRING())
+                .primaryKey("instrument_token", "window_start")
                 .build();
     }
 
@@ -759,7 +760,6 @@ class CandleFailureInjectionIntegrationTest {
                 .column("supersedes_candidate_id", DataTypes.STRING())
                 .column("superseded_by_candidate_id", DataTypes.STRING())
                 .column("schema_version", DataTypes.STRING())
-                .primaryKey("candidate_id")
                 .build();
     }
 

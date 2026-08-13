@@ -23,5 +23,5 @@ CREATE TABLE Portfolio_Reservations (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'reservation_id',
-    'table.log.ttl' = '7d'
+    'table.log.ttl' = '2d'
 );

@@ -97,8 +97,8 @@ class SignalJobOperatorUidTest {
         String candleName = "p6_uid_" + suffix + "_candle";
         String signalName = "p6_uid_" + suffix + "_sig";
         String currentName = "p6_uid_" + suffix + "_cur";
-        ScratchTables.create(connection, admin, candleName, ScratchTables.candleSchema(), null,
-                16, "candle LOG", TIMEOUT);
+        ScratchTables.create(connection, admin, candleName, ScratchTables.candleSchema(),
+                List.of("instrument_token", "window_start"), 16, "candle KV", TIMEOUT);
         ScratchTables.create(connection, admin, signalName, ScratchTables.signalLogSchema(), null,
                 16, "signal LOG", TIMEOUT);
         ScratchTables.create(connection, admin, currentName,

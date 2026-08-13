@@ -2,8 +2,8 @@
 -- Owner: Action Capture
 -- Type: KV (primary key on account_scope_id, broker_order_id)
 -- Bucket key: account_scope_id, broker_order_id
--- Retention: current state + rebuild window; rebuildable from Fills audit
---   (Fills retains 7d — matches this table's rebuild window; see 08_fills.sql)
+-- Retention: current state + short rebuild buffer (2 calendar days);
+--   rebuildable from Fills audit (Fills retains 7d; see 08_fills.sql)
 -- Scope: account_scope_id (R-013: column materialized + composite PK)
 -- Schema version: 2
 --
@@ -34,7 +34,7 @@ CREATE TABLE Order_Lifecycle (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'account_scope_id,broker_order_id',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

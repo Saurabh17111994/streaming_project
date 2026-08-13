@@ -14,5 +14,5 @@ CREATE TABLE ingestion_quarantine (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'quarantine_id',
-    'table.log.ttl' = '7d'
+    'table.log.ttl' = '2d'
 );

@@ -4,21 +4,22 @@ import java.util.List;
 
 /**
  * Shared, versioned contract for the feature-candle table
- * (CANDLE-KV-REPLAY-001, docs/08_implementation/13-candle-log-kv-replay-safety.md).
+ * (docs/08_implementation/13-candle-log-kv-replay-safety.md).
  *
  * <p>One table carries the 15-column v2 candle row
  * ({@code code/01_platform/02_sql/ddl/03_feature_candles_15s.sql},
  * R-012):
  * <ul>
- *   <li>{@link #LOG_TABLE} — immutable LOG, one final row per non-empty 15s
- *       window. The append-only evidence trail; duplicates from a full replay
- *       are permanent (no row-level delete on a LOG). The sole candle output
- *       since the KV current-state twin was retired 2026-08-13.</li>
+ *   <li>{@link #TABLE} — KV current-state, one row per non-empty 15s
+ *       window per instrument (PK {@code instrument_token, window_start}).
+ *       A replay/restart re-emits the same key as an idempotent upsert
+ *       instead of a duplicate LOG append (user requirement 2026-08-13:
+ *       candle tables are KV-only, no LOG+KV twin).</li>
  * </ul>
  *
- * <p>{@code output_ts} is emit metadata, not row identity: two rows for the
- * same key that agree on the business fields are the same canonical candle
- * re-emitted (replay / restart), regardless of {@code output_ts}
+ * <p>{@code output_ts} is emit metadata, not row identity: an upsert for
+ * the same key that agrees on the business fields is the same canonical
+ * candle re-emitted (replay / restart), regardless of {@code output_ts}
  * ({@code CanonicalCandlePolicy}, compute module).
  */
 public final class CandleTableSchema {
@@ -28,8 +29,16 @@ public final class CandleTableSchema {
     /** DDL schema version of the candle row (v2 since R-012). */
     public static final String ROW_SCHEMA_VERSION = "2";
 
-    /** Immutable LOG table (evidence trail). */
-    public static final String LOG_TABLE = "feature_candles_15s";
+    /** KV current-state table (upsert on PK instrument_token, window_start). */
+    public static final String TABLE = "feature_candles_15s";
+
+    /**
+     * The table's primary key columns, in PK order (KV upsert identity) —
+     * mirrors the DDL 03 PRIMARY KEY clause. Bucket key
+     * {@link #BUCKET_KEY} is a strict subset (Fluss requires pk ⊇ bucketKey).
+     */
+    public static final List<String> PRIMARY_KEY_COLUMNS =
+            List.of("instrument_token", "window_start");
 
     /** The table uses 16 buckets. */
     public static final int BUCKET_COUNT = 16;

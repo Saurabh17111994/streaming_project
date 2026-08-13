@@ -4,7 +4,7 @@
 -- Bucket key: evaluation_id (R-136 — was candidate_id, which scattered one
 -- evaluation's rows across all buckets; a consumer reading per evaluation now
 -- reads a single bucket)
--- Retention: ≤7 calendar days via table.log.ttl
+-- Retention: ≤2 calendar days via table.log.ttl
 -- Lake: EOD Iceberg offload
 -- Scope: portfolio_id
 -- Schema version: 2
@@ -32,7 +32,7 @@ CREATE TABLE Ranking_Results (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'evaluation_id',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

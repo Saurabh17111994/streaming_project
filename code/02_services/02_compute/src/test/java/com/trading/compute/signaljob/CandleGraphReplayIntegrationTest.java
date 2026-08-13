@@ -58,13 +58,13 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Tracker 14 P6 (docs/08_implementation/14-candle-log-kv-replay-safety_2.md) —
- * end-to-end harness for the replay contract, re-scoped 2026-08-13 (DEC-035)
- * to the signal dual-sink: candle LOG-only + signal LOG/KV.
+ * end-to-end harness for the replay contract, re-scoped 2026-08-13 (DEC-035 +
+ * user requirement: candle tables are KV-only): candle KV + signal LOG/KV.
  *
  * <p>The harness runs the <b>actual production graph</b>
  * ({@link SignalJob#buildTopology(SignalJobConfig)}: Fluss source → raw
- * validation → fingerprint dedup → 15s event-time window → candle LOG sink →
- * breakout detection → signal dual-sink: {@code Signal_Candidates} LOG append
+ * validation → fingerprint dedup → 15s event-time window → candle KV upsert
+ * sink → breakout detection → signal dual-sink: {@code Signal_Candidates} LOG append
  * + {@code Signal_Candidates_current} KV upsert behind the canonical-signal
  * filter) inside a Flink
  * {@link MiniClusterWithClientResource} against <b>scratch Fluss tables</b>
@@ -97,19 +97,21 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Assertions:
  * <ul>
- *   <li><b>P6.1</b> — phase 1: candle LOG=46 rows, signal LOG=2 rows (one per
- *       token), signal KV=2 keys. Phase 2 (full replay from the same raw LOG,
- *       fresh state): candle LOG grows to 92 (append-only evidence trail
- *       re-emits), signal LOG grows to 4 (replay re-emits the two signals —
- *       the LOG twin is audit, it may grow), and the signal KV key count
- *       stays FROZEN at 2 with unchanged content. Phase 3 (restore from the
- *       last completed checkpoint of phase 2 + 4 new ticks per token): candle
- *       LOG grows to exactly 96, including the two pending w23 pusher ticks
- *       held in checkpointed window state and two w24 candles; signal LOG
- *       stays 4 and KV stays 2 (no new signal fires). An offset-0 fallback
- *       would re-emit the original 46 windows and reach 142 LOG rows.</li>
+ *   <li><b>P6.1</b> — phase 1: candle KV=46 rows (one per key), signal LOG=2
+ *       rows (one per token), signal KV=2 keys. Phase 2 (full replay from the
+ *       same raw LOG, fresh state): candle KV stays FROZEN at 46 (upsert
+ *       convergence — replay re-emits the same keys, no duplicate rows),
+ *       signal LOG grows to 4 (replay re-emits the two signals — the LOG twin
+ *       is audit, it may grow), and the signal KV key count stays FROZEN at 2
+ *       with unchanged content. Phase 3 (restore from the last completed
+ *       checkpoint of phase 2 + 4 new ticks per token): candle KV grows to
+ *       exactly 50 (46 old keys + the two pending w23 pusher ticks held in
+ *       checkpointed window state + two w24 candles); signal LOG stays 4 and
+ *       KV stays 2 (no new signal fires). An offset-0 fallback would re-emit
+ *       the original 46 windows and reach 92 KV rows (46 keys re-upserted —
+ *       no row growth, content unchanged).</li>
  *   <li><b>P6.2</b> — {@link SignalJob#preflightTableContracts} fails closed
- *       on: candle LOG missing, candle LOG schema drift (20-col raw as candle
+ *       on: candle KV missing, candle KV schema drift (20-col raw as candle
  *       target), signal LOG missing/schema drift, signal KV current table
  *       missing, unreachable coordinator; and passes for the three scratch
  *       tables.</li>
@@ -128,7 +130,7 @@ import org.slf4j.LoggerFactory;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "COMPUTE_INT_TEST_P6", matches = "true")
-@DisplayName("CANDLE-KV-REPLAY-001 P6: candle LOG + signal dual-sink replay + failure + data-quality")
+@DisplayName("CANDLE-KV-REPLAY-001 P6: candle KV + signal dual-sink replay + failure + data-quality")
 class CandleGraphReplayIntegrationTest {
 
 
@@ -212,7 +214,7 @@ class CandleGraphReplayIntegrationTest {
         assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
                 SignalJobConfig.from(envFor(s, null, "CANDLE_TABLE",
                         "p6_" + s.suffix() + "_missing_log"))),
-                "missing candle LOG must fail preflight");
+                "missing candle KV must fail preflight");
         // Schema drift: the 20-column raw LOG must never pass the 15-column check.
         assertThrows(IllegalStateException.class, () -> SignalJob.preflightTableContracts(
                 SignalJobConfig.from(envFor(s, null, "CANDLE_TABLE", s.rawName()))),
@@ -248,7 +250,7 @@ class CandleGraphReplayIntegrationTest {
 
         // ── Phase 1: first pass ────────────────────────────────────────────
         JobClient job1 = startJob(envFor(s, null), "p6-phase1");
-        awaitLogCount(s, 46, "phase-1 LOG = 46 rows", 180);
+        awaitLogCount(s, 46, "phase-1 KV = 46 rows", 180);
         awaitSignalLogCount(s, 2, "phase-1 signal LOG = 2 rows", 120);
         awaitCurrentKeyCount(s, 2, "phase-1 signal KV = 2 keys", 120);
         Map<Long, SignalCurrent> cur1 = readCurrentMap(s);
@@ -260,7 +262,7 @@ class CandleGraphReplayIntegrationTest {
 
         // ── Phase 2: full replay (fresh state, same raw LOG) ───────────────
         JobClient job2 = startJob(envFor(s, null), "p6-phase2");
-        awaitTrue(() -> safe(() -> logCount(s) == 92), "phase-2 LOG = 92 rows (46 re-emitted)", 180);
+        awaitTrue(() -> safe(() -> logCount(s) == 46), "phase-2 KV stays at 46 rows (replay upserts converge)", 180);
         awaitSignalLogCount(s, 4, "phase-2 signal LOG = 4 rows (2 re-emitted)", 120);
         awaitCurrentKeyCount(s, 2, "phase-2 signal KV stays at 2 keys", 120);
         assertEquals(cur1, readCurrentMap(s),
@@ -277,7 +279,7 @@ class CandleGraphReplayIntegrationTest {
         appendWindow(s, 24, 10024L); // 4 ticks per token in w24 (flat, no signal)
         appendPusher(s, 25, 10025L); // advance the watermark past w24's end
         JobClient job3 = startJob(envFor(s, restore), "p6-phase3");
-        awaitLogCount(s, 96, "phase-3 restore must emit pending w23 and new w24", 180);
+        awaitLogCount(s, 50, "phase-3 restore must upsert pending w23 and new w24 (46 old + 4 new keys)", 180);
         Map<CandleKey, List<CandleRow>> log3 = readLogMap(s);
         assertEquals(50, log3.size(),
                 "phase-3 LOG must hold 46 old keys + pending w23 + new w24 for both tokens");
@@ -589,21 +591,21 @@ class CandleGraphReplayIntegrationTest {
                 "first pass: exactly one KV current row per token");
     }
 
-    /** P6.1 phase-2 replay convergence: LOG re-emits each window once with equal fields. */
+    /** P6.1 phase-2 replay convergence: KV upserts re-emit each window once with equal fields (no row growth). */
     private static void assertReplayConverges(ScratchSet s, Map<CandleKey, List<CandleRow>> log1,
             Map<CandleKey, List<CandleRow>> log2) throws Exception {
         assertEquals(46, log1.size());
-        // Map size is the distinct-key count; the LOG contract is its row count.
-        int firstPassLogRows = log1.values().stream().mapToInt(List::size).sum();
-        int replayLogRows = log2.values().stream().mapToInt(List::size).sum();
-        assertEquals(firstPassLogRows * 2, replayLogRows,
-                "full replay must re-emit every window exactly once");
+        // KV: row count == distinct-key count; replay upserts must not grow it.
+        int firstPassRows = log1.values().stream().mapToInt(List::size).sum();
+        int replayRows = log2.values().stream().mapToInt(List::size).sum();
+        assertEquals(firstPassRows, replayRows,
+                "full replay must not grow the candle KV — same-key upserts converge");
         for (Map.Entry<CandleKey, List<CandleRow>> e : log1.entrySet()) {
             List<CandleRow> replayed = log2.get(e.getKey());
-            assertNotNull(replayed, "replay must re-emit key " + e.getKey());
-            assertEquals(2, replayed.size(), "replay must re-emit key exactly once more: " + e.getKey());
-            assertBusinessFieldsEqual(e.getValue().get(0), replayed.get(1),
-                    "replayed LOG row must carry the same business fields");
+            assertNotNull(replayed, "replay must re-upsert key " + e.getKey());
+            assertEquals(1, replayed.size(), "replay must not add a row for key " + e.getKey());
+            assertBusinessFieldsEqual(e.getValue().get(0), replayed.get(0),
+                    "replayed KV row must carry the same business fields");
         }
         assertEquals(2, candidateIds(s).size(), "replay must not create extra candidates");
         assertEquals(4, signalLogRows(s),
@@ -612,7 +614,7 @@ class CandleGraphReplayIntegrationTest {
                 "replay must NOT grow the signal KV — same-instrument upserts converge");
     }
 
-    /** Existing LOG rows survive a restore unchanged; new post-restore keys may be added. */
+    /** Existing KV rows survive a restore unchanged; new post-restore keys may be added. */
     private static void assertExistingKeysAndBusinessFields(Map<CandleKey, List<CandleRow>> before,
             Map<CandleKey, List<CandleRow>> after, String what) {
         assertTrue(after.keySet().containsAll(before.keySet()),
@@ -887,7 +889,7 @@ class CandleGraphReplayIntegrationTest {
         Table raw = ScratchTables.create(connection, admin, rawName, rawSchema(), null, 1,
                 "raw LOG", TIMEOUT);
         Table log = ScratchTables.create(connection, admin, logName, ScratchTables.candleSchema(),
-                null, 16, "candle LOG", TIMEOUT);
+                List.of("instrument_token", "window_start"), 16, "candle KV", TIMEOUT);
         Table cand = ScratchTables.create(connection, admin, candName,
                 ScratchTables.signalLogSchema(), null, 16, "signal LOG", TIMEOUT);
         Table cur = ScratchTables.create(connection, admin, curName,

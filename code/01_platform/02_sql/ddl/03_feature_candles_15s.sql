@@ -1,15 +1,18 @@
--- feature_candles_15s: Immutable LOG — one final row per non-empty 15s window
+-- feature_candles_15s: KV current-state — one row per non-empty 15s window
+--   per instrument (PK instrument_token, window_start)
 -- Owner: Signal job
--- Type: LOG (no primary key)
--- Bucket key: instrument_token
--- Retention: 7 calendar days via table.log.ttl (R-055 — Fluss TTL is
+-- Type: KV (primary key on instrument_token, window_start)
+-- Bucket key: instrument_token (strict subset of the PK — per-ticker
+--   colocation, and the Fluss connector requires bucket.key ⊆ primary key)
+-- Retention: 2 calendar days via table.log.ttl (R-055 — Fluss TTL is
 -- calendar-based; the previous '7 trading days' header was unverifiable and
 -- table.retention.days is not a Fluss option). Extend once EOD offload is
 -- verified.
 -- Lake: EOD Iceberg offload (R-168: datalake options restored — dropped in a
 -- rewrite while the header still claimed offload)
 -- Scope: account_scope_id
--- Schema version: 2
+-- Schema version: 2 (columns unchanged; LOG -> KV conversion 2026-08-13 —
+--   user requirement: candle tables are KV-only, no LOG+KV twin)
 
 CREATE TABLE feature_candles_15s (
     instrument_token        BIGINT      NOT NULL,
@@ -26,11 +29,12 @@ CREATE TABLE feature_candles_15s (
     algorithm_version       STRING      NOT NULL,
     configuration_version   STRING      NOT NULL,
     output_ts               BIGINT      NOT NULL,
-    schema_version          STRING      NOT NULL
+    schema_version          STRING      NOT NULL,
+    PRIMARY KEY (instrument_token, window_start) NOT ENFORCED
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

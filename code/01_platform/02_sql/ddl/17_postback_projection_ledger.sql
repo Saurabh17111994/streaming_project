@@ -22,5 +22,5 @@ CREATE TABLE Postback_Projection_Ledger (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'postback_event_id',
-    'table.log.ttl' = '7d'
+    'table.log.ttl' = '2d'
 );

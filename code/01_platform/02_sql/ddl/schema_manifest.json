@@ -4,18 +4,22 @@
     {
       "table_name": "raw_table_1",
       "ddl_path": "02_raw_table_1.sql",
-      "ddl_sha256": "faa2aee272fdd857f4723aa6810d81121e9ed9e3f046d3d2e78888922ded14fe",
+      "ddl_sha256": "0acc83665940a08ee7f40e09110212485c57fa6957565783614b17eb75332456",
       "table_kind": "LOG",
       "bucket_key": "instrument_token",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "feature_candles_15s",
       "ddl_path": "03_feature_candles_15s.sql",
-      "ddl_sha256": "1df858b5b8f75ccdde4ca5e54fcec630e2b1040c8126f4fb6c69fdca2b4864ab",
-      "table_kind": "LOG",
-      "bucket_key": "instrument_token",
-      "primary_key": null
+      "ddl_sha256": "8392129dc3f1eff8c16c9df1f3d268f34cc60171630697f2667540713faa35b8",
+      "table_kind": "KV",
+      "primary_key": "instrument_token, window_start",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007"
     },
     {
       "table_name": "forming_bar",
@@ -23,7 +27,9 @@
       "ddl_sha256": "e557ff69d3350d6333985ef4d079b8cdac9b90f555f60b415ce1b0ecefecd201",
       "table_kind": "KV",
       "primary_key": "instrument_token",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Signal_Candidates",
@@ -31,23 +37,29 @@
       "ddl_sha256": "be17c643173f496a508799d872382a4eabe702d35f88c9c000f9e2d71f100435",
       "table_kind": "LOG",
       "bucket_key": "instrument_token",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007"
     },
     {
       "table_name": "Ranking_Results",
       "ddl_path": "06_ranking_results.sql",
-      "ddl_sha256": "5ebedb134293e4fa2e6f3c9d97332320e4d7803f3052b9c6a09e1ca63cc99d6e",
+      "ddl_sha256": "570ebff579234252380a28a65235758eb751553cae182e00b16f219759695216",
       "table_kind": "LOG",
       "bucket_key": "evaluation_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Trade_Decisions",
       "ddl_path": "07_trade_decisions.sql",
-      "ddl_sha256": "52d7b1357b387d1f5b459be62f46f3129078949c022eb3163c093643c185fff9",
+      "ddl_sha256": "7e46d8068b484046b951d8c94242699b981746d1c6437525b9454a16b02f05b4",
       "table_kind": "LOG",
       "bucket_key": "instruction_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Fills",
@@ -55,15 +67,19 @@
       "ddl_sha256": "2a15db548fe13d5a4be6f08825627ac77f597a25bde58d0567b809cb3c9d4fd0",
       "table_kind": "LOG",
       "bucket_key": "postback_event_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Order_Lifecycle",
       "ddl_path": "09_order_lifecycle.sql",
-      "ddl_sha256": "efd9f585bd89176f7258d2da24410cee8f0a7d58ffb99ededb7a1c7fe2752cfe",
+      "ddl_sha256": "d83996791d468dd49bcac997b0f775028bdd0f4d496ac710f66869d1bcd27e2c",
       "table_kind": "KV",
       "primary_key": "account_scope_id, broker_order_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Positions",
@@ -71,7 +87,9 @@
       "ddl_sha256": "de2ba840b387c9240c3edfb71926986a9dbec62996701a4f7cece897c053d3e6",
       "table_kind": "KV",
       "primary_key": "position_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Execution_Gate",
@@ -79,7 +97,9 @@
       "ddl_sha256": "63ba828d21657bd6859c54f8357b89a73a2b1bc97a0c4108feddd636542b5ef2",
       "table_kind": "KV",
       "primary_key": "execution_partition_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Execution_Attempts",
@@ -87,7 +107,9 @@
       "ddl_sha256": "556b7d514f61780f139f6063672a87c26827454954b2f6105a95cfd1ea382eb2",
       "table_kind": "KV",
       "primary_key": "execution_attempt_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Order_Correlation",
@@ -95,7 +117,9 @@
       "ddl_sha256": "dc51ddc30fae5b9425231924e64d9c93a3288d370ceea121d5089c3e7e0652bc",
       "table_kind": "KV",
       "primary_key": "instruction_id, execution_attempt_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Execution_Audit",
@@ -103,31 +127,39 @@
       "ddl_sha256": "b6e6ec3d7aa1c8a302fd603de3fc2ea28bafc67473cb88faad2d8c05eb7669a3",
       "table_kind": "LOG",
       "bucket_key": "audit_event_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Portfolio_Reservations",
       "ddl_path": "15_portfolio_reservations.sql",
-      "ddl_sha256": "86a0661d8087700d1fc7a9d4ffcda52757e399d68a062a5f8edadb362d9c7835",
+      "ddl_sha256": "45eb359c17a0e182ffe8267d48bb9fdd611499a2ce76c6926226d0276ccbf72d",
       "table_kind": "KV",
       "primary_key": "reservation_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Postback_Quarantine",
       "ddl_path": "16_postback_quarantine.sql",
-      "ddl_sha256": "6bdedc9499d4a66fb35c3ecf640400d0ec7c8859c7694ee1bd2c02dd7a947eb1",
+      "ddl_sha256": "a5a3ffa443bd47db8a7403348558b0827b95f94ea44268bb2bfa528c114a2a2d",
       "table_kind": "LOG",
       "bucket_key": "quarantine_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Postback_Projection_Ledger",
       "ddl_path": "17_postback_projection_ledger.sql",
-      "ddl_sha256": "a3dd25326fe93b1782a5a390eccbc7e13b791f68e44c9909a44fc5069dbed32b",
+      "ddl_sha256": "be74733755de075be50ebbb1556a302bddc8ca5d8f6cd93b9bd65ea4a8c3f12b",
       "table_kind": "KV",
       "primary_key": "postback_event_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Safety_Halt_Requests",
@@ -135,15 +167,19 @@
       "ddl_sha256": "d9acc14567a267f8387dd748abc9afc6072201844feb367403b3adbdce5e3ece",
       "table_kind": "KV",
       "primary_key": "halt_request_id",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "suspected_discontinuities",
       "ddl_path": "19_suspected_discontinuities.sql",
-      "ddl_sha256": "0007415f9a3020c0e941e1cc70f5dc82f19b5766c371d6b41b819d8d59621583",
+      "ddl_sha256": "504081da72b39798c5d882adaa468ab6311407b06742a060a72cedf6fe752634",
       "table_kind": "LOG",
       "bucket_key": "discontinuity_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "instruments",
@@ -151,15 +187,19 @@
       "ddl_sha256": "40ee17d8c17b14935996bbc5948ed1e0e408ffbc1c3fe2b852f921aded2baf60",
       "table_kind": "KV",
       "primary_key": "instrument_token, manifest_version",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "ingestion_quarantine",
       "ddl_path": "21_ingestion_quarantine.sql",
-      "ddl_sha256": "b599f3dbf6b0d9ab1ea3aeea5b4ee94443e0b79fe7aa0b1ff6c88379e012947d",
+      "ddl_sha256": "d130586cbd63b221b162a5f778c6b3ac1a3cff639a368e294ca3c1c2aa1c7bbc",
       "table_kind": "LOG",
       "bucket_key": "quarantine_id",
-      "primary_key": null
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005"
     },
     {
       "table_name": "Signal_Candidates_current",
@@ -167,7 +207,9 @@
       "ddl_sha256": "0672d0f9bc4c1f6d5f88ae746b7a1fb8df5b6d7db915d703cf88998c8ea81573",
       "table_kind": "KV",
       "primary_key": "instrument_token",
-      "bucket_key": null
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007"
     }
   ]
 }

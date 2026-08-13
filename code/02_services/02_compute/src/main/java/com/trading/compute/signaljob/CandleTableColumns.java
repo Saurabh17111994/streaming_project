@@ -11,8 +11,9 @@ import org.apache.flink.table.types.logical.VarCharType;
 
 /**
  * Physical column layout of the feature-candle rows written by the Signal job
- * to the LOG sink ({@code feature_candles_15s}) — the sole candle output
- * since the KV current-state twin was retired 2026-08-13.
+ * to the KV upsert sink ({@code feature_candles_15s}) — the sole candle
+ * output (user requirement 2026-08-13: candle tables are KV-only, no LOG+KV
+ * twin).
  *
  * <p>Must mirror {@link CandleTableSchema} (the shared 15-column v2 contract,
  * CANDLE-KV-REPLAY-001) — {@link #FIELD_COUNT} and {@link #NAMES} derive from

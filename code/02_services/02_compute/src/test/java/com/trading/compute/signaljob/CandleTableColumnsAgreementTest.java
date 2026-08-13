@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
  * Drift guard between the compute column layout and the shared schema
  * (CANDLE-KV-REPLAY-001 P1/A4.1): {@code CandleTableColumns} must stay a
  * faithful mirror of {@link CandleTableSchema#COLUMNS} in both name order and
- * count — the LOG sink, the KV sink, and the migration tool all serialize
- * against this layout.
+ * count — the candle KV sink and the migration tool both serialize against
+ * this layout.
  */
 @DisplayName("CandleTableColumns mirrors CandleTableSchema.COLUMNS")
 class CandleTableColumnsAgreementTest {

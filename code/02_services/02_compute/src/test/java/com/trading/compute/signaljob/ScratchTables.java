@@ -32,7 +32,7 @@ final class ScratchTables {
 
     private ScratchTables() {}
 
-    /** 15-column candle LOG schema (mirrors feature_candles_15s, DDL 03). */
+    /** 15-column candle KV schema (mirrors feature_candles_15s, DDL 03). */
     static Schema candleSchema() {
         return Schema.newBuilder()
                 .column("instrument_token", DataTypes.BIGINT())
@@ -50,6 +50,7 @@ final class ScratchTables {
                 .column("configuration_version", DataTypes.STRING())
                 .column("output_ts", DataTypes.BIGINT())
                 .column("schema_version", DataTypes.STRING())
+                .primaryKey("instrument_token", "window_start")
                 .build();
     }
 

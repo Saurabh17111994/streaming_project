@@ -2,7 +2,7 @@
 -- Owner: Action Capture
 -- Type: LOG (no primary key)
 -- Bucket key: quarantine_id
--- Retention: until disposition + buffer (7 calendar days via table.log.ttl —
+-- Retention: until disposition + buffer (2 calendar days via table.log.ttl —
 --   R-088: table.retention.days is not a Fluss option; table.log.ttl is)
 -- Lake: encrypted evidence per policy (R-146: datalake options restored — they
 --   were dropped in a rewrite while the header still claimed lake storage)
@@ -32,7 +32,7 @@ CREATE TABLE Postback_Quarantine (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'quarantine_id',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

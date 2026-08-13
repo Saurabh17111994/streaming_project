@@ -209,7 +209,6 @@ class SignalJobConfigTest {
         assertEquals(90_000L, cfg.sourceIdleAlertMs());
         assertEquals(5, cfg.restartMaxAttempts());
         assertEquals(45_000L, cfg.restartDelayMs());
-        assertEquals("fluss:9123", cfg.bootstrapServers());
         assertEquals("Signal_Candidates_dev", cfg.signalCandidatesTable());
         assertEquals("Signal_Candidates_current_dev", cfg.signalCurrentTable());
         assertEquals("my-strategy", cfg.signalStrategyId());

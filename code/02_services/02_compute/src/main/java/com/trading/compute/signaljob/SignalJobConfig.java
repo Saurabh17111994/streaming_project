@@ -262,7 +262,7 @@ public record SignalJobConfig(
 
     /**
      * Canonical version-column gate (tracker 14 P2 — CANDLE-CANONICAL-001).
-     * The emitted candle LOG rows carry the algorithm/configuration pair; a
+     * The emitted candle KV rows carry the algorithm/configuration pair; a
      * <em>deviating</em> pair must fail startup rather than silently change
      * row identity for replay evidence. A missing key falls back to the
      * canonical default (documented in the record javadoc — the default IS

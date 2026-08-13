@@ -18,9 +18,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Table-contract validator (tracker 14 P1 — CANDLE-SCHEMA-002 for the candle
- * LOG; tracker 14 re-scoped P2 — SIGNAL-SCHEMA-001 for the signal LOG/KV
+ * KV; tracker 14 re-scoped P2 — SIGNAL-SCHEMA-001 for the signal LOG/KV
  * pair): each deployed table must carry the exact contract the write path
- * relies on — append-only LOG (no PK), KV current-state PK exactly
+ * relies on — candle KV PK exactly {@code [instrument_token, window_start]},
+ * signal LOG (no PK), signal current-state KV PK exactly
  * {@code [instrument_token]}, per-ticker routing (bucket.key
  * {@code instrument_token}, 16 buckets), and the exact frozen column schema
  * (names in DDL order, Fluss type root per column) — or startup fails
@@ -39,30 +40,44 @@ class TableContractValidatorTest {
     private static final List<String> SIGNAL_NAMES = Arrays.asList(SignalCandidatesTableColumns.NAMES);
     private static final List<String> SIGNAL_TYPES = SignalCandidatesTableColumns.TYPE_ROOTS;
 
-    // ── candle LOG (CANDLE-SCHEMA-002) ──
+    // ── candle KV (CANDLE-SCHEMA-002) ──
+
+    private static final List<String> CANDLE_PK = List.of(TOKEN, "window_start");
 
     @Test
-    @DisplayName("candle LOG without primary key and with instrument_token routing passes")
-    void candleLogTableWithoutPkPasses() {
-        assertDoesNotThrow(() -> TableContractValidator.validateCandleLogTable(
-                candle(LOG, null, List.of(TOKEN), 16)));
+    @DisplayName("candle KV with PK exactly [instrument_token, window_start] and matching routing passes")
+    void candleKvTableExactPkPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateCandleKvTable(
+                candle(LOG, CANDLE_PK, List.of(TOKEN), 16)));
     }
 
     @Test
-    @DisplayName("candle LOG that gained a primary key is rejected (append-only contract)")
-    void candleLogTableWithPkIsRejected() {
+    @DisplayName("candle KV without a primary key is rejected (one row per closed window)")
+    void candleKvTableNoPkRejected() {
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(
-                        candle(LOG, List.of(TOKEN, "window_start"), List.of(TOKEN), 16)));
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, null, List.of(TOKEN), 16)));
     }
 
     @Test
-    @DisplayName("candle LOG with exact 15-column v2 schema and all-nullable live metadata passes")
-    void candleLogExactSchemaPasses() {
-        // Live LOG metadata reports every column nullable (DDL NOT NULL is not
-        // carried into LOG metadata — verified 2026-08-10); that must pass.
-        assertDoesNotThrow(() -> TableContractValidator.validateCandleLogTable(
-                candle(LOG, null, List.of(TOKEN), 16)));
+    @DisplayName("candle KV with a narrower PK is rejected (exact (instrument_token, window_start))")
+    void candleKvTableWrongPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, List.of(TOKEN), List.of(TOKEN), 16)));
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, List.of(TOKEN, "window_start", "output_ts"),
+                                List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("candle KV with exact 15-column v2 schema and all-nullable live metadata passes")
+    void candleKvExactSchemaPasses() {
+        // Live metadata reports every column nullable (DDL NOT NULL is not
+        // carried into Fluss metadata — verified 2026-08-10); that must pass.
+        assertDoesNotThrow(() -> TableContractValidator.validateCandleKvTable(
+                candle(LOG, CANDLE_PK, List.of(TOKEN), 16)));
     }
 
     @Test
@@ -71,13 +86,13 @@ class TableContractValidatorTest {
         List<String> shortTypes = new java.util.ArrayList<>(CANDLE_TYPES);
         shortTypes.remove(14); // drop schema_version -> 14 columns
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(
-                        candle(LOG, null, List.of(TOKEN), 16, shortTypes, false)));
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, CANDLE_PK, List.of(TOKEN), 16, shortTypes, false)));
         List<String> longTypes = new java.util.ArrayList<>(CANDLE_TYPES);
         longTypes.add("BIGINT"); // extra column -> 16
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(
-                        candle(LOG, null, List.of(TOKEN), 16, longTypes, false)));
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, CANDLE_PK, List.of(TOKEN), 16, longTypes, false)));
     }
 
     @Test
@@ -88,9 +103,10 @@ class TableContractValidatorTest {
             String col = i == 1 ? "exchng" : CANDLE_NAMES.get(i);
             sb.column(col, dataType(CANDLE_TYPES.get(i), false));
         }
+        sb.primaryKey(CANDLE_PK);
         TableInfo info = info(LOG, sb, List.of(TOKEN), 16);
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(info));
+                () -> TableContractValidator.validateCandleKvTable(info));
     }
 
     @Test
@@ -103,9 +119,10 @@ class TableContractValidatorTest {
                     : CANDLE_NAMES.get(i);
             sb.column(col, dataType(CANDLE_TYPES.get(i), false));
         }
+        sb.primaryKey(CANDLE_PK);
         TableInfo info = info(LOG, sb, List.of(TOKEN), 16);
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(info));
+                () -> TableContractValidator.validateCandleKvTable(info));
     }
 
     @Test
@@ -114,8 +131,8 @@ class TableContractValidatorTest {
         List<String> types = new java.util.ArrayList<>(CANDLE_TYPES);
         types.set(1, "BIGINT"); // exchange must be STRING
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(
-                        candle(LOG, null, List.of(TOKEN), 16, types, false)));
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, CANDLE_PK, List.of(TOKEN), 16, types, false)));
     }
 
     @Test
@@ -124,15 +141,15 @@ class TableContractValidatorTest {
         List<String> types = new java.util.ArrayList<>(CANDLE_TYPES);
         types.set(10, "BIGINT");
         assertThrows(TableContractValidator.ContractViolation.class,
-                () -> TableContractValidator.validateCandleLogTable(
-                        candle(LOG, null, List.of(TOKEN), 16, types, false)));
+                () -> TableContractValidator.validateCandleKvTable(
+                        candle(LOG, CANDLE_PK, List.of(TOKEN), 16, types, false)));
     }
 
     @Test
     @DisplayName("candle schemaReport never throws and names the DDL-vs-live nullability divergence")
     void candleSchemaReportIsInformational() {
-        TableInfo log = candle(LOG, null, List.of(TOKEN), 16);
-        String report = TableContractValidator.schemaReport(log, CandleTableSchema.COLUMN_NULLABLE_IN_DDL);
+        TableInfo kv = candle(LOG, CANDLE_PK, List.of(TOKEN), 16);
+        String report = TableContractValidator.schemaReport(kv, CandleTableSchema.COLUMN_NULLABLE_IN_DDL);
         assertNotNull(report);
         assertTrue(report.contains("instrument_token:BIGINT"),
                 "report must name live type roots, got: " + report);

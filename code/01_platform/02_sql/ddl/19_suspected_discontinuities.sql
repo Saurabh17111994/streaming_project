@@ -22,7 +22,7 @@ CREATE TABLE suspected_discontinuities (
 ) WITH (
     'bucket.num' = '4',
     'bucket.key' = 'discontinuity_id',
-    'table.log.ttl' = '7d',
+    'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',
