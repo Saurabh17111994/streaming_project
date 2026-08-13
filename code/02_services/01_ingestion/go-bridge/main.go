@@ -163,6 +163,31 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// Count-based losslessness evidence (ING-TCP-001): ARROW_TICK_COUNTS=<sec>
+	// enables per-token emitted-tick counters, reported on the interval and at
+	// shutdown. Reconciliation is done against per-token row counts in Fluss.
+	if v := os.Getenv("ARROW_TICK_COUNTS"); v != "" {
+		interval := 60
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			interval = n
+		}
+		tickCountsOn = true
+		go func() {
+			ticker := time.NewTicker(time.Duration(interval) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					reportTickCounts()
+				case <-ctx.Done():
+					reportTickCounts() // final counts at shutdown
+					return
+				}
+			}
+		}()
+		logf("tick counters enabled (interval=%ds)", interval)
+	}
+
 	if useHFT {
 		runHFT(ctx, cancel, client, plan, latencyMs, responseTimeout, refreshAuth, logf)
 	} else {

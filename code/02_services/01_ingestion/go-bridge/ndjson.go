@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -120,6 +122,67 @@ func (e *BridgeEmitter) resetSeq(slotID string) {
 	e.seqBySlot[slotID] = 0
 }
 
+// ── Per-token tick counters (count-based losslessness evidence) ─────────────
+//
+// ARROW_TICK_COUNTS=<intervalSeconds> enables a per-token count of every
+// emitted tick. The wire protocol has no sequence numbers, so losslessness is
+// verified by reconciling these counts (source of truth: the bytes read off
+// the broker TCP socket) against the rows actually stored in Fluss per token.
+// The counts are reported to stderr on the interval AND once at shutdown as:
+//
+//	arrow-tick-counts: total=N t=TOKEN:n t=TOKEN:n ...
+//
+var (
+	tickCountsOn bool
+	tickCountsMu sync.Mutex
+	tickCounts   map[int32]int64
+)
+
+func recordTickCount(token int32) {
+	tickCountsMu.Lock()
+	if tickCounts == nil {
+		tickCounts = map[int32]int64{}
+	}
+	tickCounts[token]++
+	tickCountsMu.Unlock()
+}
+
+// Java's log handler truncates bridge stderr lines (measured 603 B), so the
+// per-token report is emitted as multiple bounded lines:
+//
+//	arrow-tick-counts: total=N chunk=0/52 t=TOKEN:n ...(20 per line)
+
+var tickCountChunkSize = 20
+
+func reportTickCounts() {
+	tickCountsMu.Lock()
+	keys := make([]int32, 0, len(tickCounts))
+	for t := range tickCounts {
+		keys = append(keys, t)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	total := int64(0)
+	for _, t := range keys {
+		total += tickCounts[t]
+	}
+	lines := (len(keys) + tickCountChunkSize - 1) / tickCountChunkSize
+	for c := 0; c < lines; c++ {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "arrow-tick-counts: total=%d chunk=%d/%d", total, c, lines)
+		lo, hi := c*tickCountChunkSize, (c+1)*tickCountChunkSize
+		if hi > len(keys) {
+			hi = len(keys)
+		}
+		for _, t := range keys[lo:hi] {
+			fmt.Fprintf(&sb, " t=%d:n=%d", t, tickCounts[t])
+		}
+		tickCountsMu.Unlock()
+		fmt.Fprintln(os.Stderr, sb.String())
+		tickCountsMu.Lock()
+	}
+	tickCountsMu.Unlock()
+}
+
 func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint64, received time.Time, rawPayload []byte) error {
 	value := struct {
 		Tick
@@ -139,6 +202,9 @@ func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint
 		ReceivedTsMs:      received.UnixMilli(),
 		RawPayload:        base64.StdEncoding.EncodeToString(rawPayload),
 		PayloadHash:       sha256Hex(rawPayload),
+	}
+	if tickCountsOn {
+		recordTickCount(t.Token)
 	}
 	return e.write(value)
 }
