@@ -54,7 +54,7 @@ The Signal job contains Compute, Business Logic, and Ranking. Ranking is not a s
 The deployment must provision or reconcile these logical tables before readiness:
 
 - Market: `raw_table_1`, `feature_candles_15s`, `suspected_discontinuities`, `instruments`
-- Strategy: `Signal_Candidates`, `Ranking_Results`, immutable `Trade_Decisions`, `Portfolio_Reservations`
+- Strategy: `Signal_Candidates`, `Signal_Candidates_current`, `Ranking_Results`, immutable `Trade_Decisions`, `Portfolio_Reservations`
 - Postback/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine` (no `Postback_Projection_Ledger` in MVP)
 - Execution: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`
 - EOD: EOD controller durable manifest state

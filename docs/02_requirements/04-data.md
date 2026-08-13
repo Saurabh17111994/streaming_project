@@ -89,6 +89,7 @@ An overloaded `order_id` is prohibited.
 | `raw_table_1`               | LOG            | Ingestion            | ≤7 complete trading days (ceiling); extend while offload unverified | EOD Iceberg                            |
 | `feature_candles_15s`       | LOG            | Signal job           | ≤7 complete trading days (ceiling); extend while offload unverified | EOD Iceberg                            |
 | `Signal_Candidates`         | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |
+| `Signal_Candidates_current` | KV             | Signal job           | Current state plus rebuild window                         | Rebuilt from LOG audit                |
 | `Ranking_Results`           | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |
 | `Trade_Decisions`           | immutable feed | Signal job           | Until consumed plus replay/reconciliation buffer          | Execution audit links retained 7 years |
 | `Fills`               | LOG            | Action Capture       | ≥3 complete trading days                                  | Encrypted 7-year audit                 |
@@ -123,6 +124,10 @@ Required fields: instrument, window start/end, OHLCV, tick count, algorithm/conf
 ### `Signal_Candidates`
 
 Required fields: `candidate_id`, nullable `instruction_id`, nullable `trade_context_id`, instrument, strategy/rule/version, event/evaluation timestamps, action/request fields, score inputs, formation snapshot reference, validity/detection reason, supersession relation, and schema version.
+
+### `Signal_Candidates_current`
+
+Current-state KV projection of the signal stream, keyed by `(instrument_token)`: one row per instrument holding the latest/active candidate (same field set as the LOG row, plus supersession relation); supersession overwrites in place. Rebuildable from the immutable `Signal_Candidates` LOG.
 
 ### `Ranking_Results`
 

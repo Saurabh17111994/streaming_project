@@ -43,6 +43,7 @@ Arrow market-data WebSocket
       ├─ in-operator ranking by portfolio_id
       ├─ Portfolio_Reservations management
       ├─ Signal_Candidates LOG
+      ├─ Signal_Candidates_current KV
       ├─ Ranking_Results LOG
       └─ immutable Trade_Decisions
           → Executor durable order gate
@@ -193,6 +194,7 @@ The architecture mandates these logical tables before physical DDL generation:
 | `raw_table_1` | LOG | Ingestion |
 | `feature_candles_15s` | LOG | Signal job |
 | `Signal_Candidates` | LOG | Signal job |
+| `Signal_Candidates_current` | KV | Signal job |
 | `Ranking_Results` | LOG | Signal job |
 | `Trade_Decisions` | Immutable feed | Signal job |
 | `Portfolio_Reservations` | KV/logical state | Signal job ranking/reservation operator |

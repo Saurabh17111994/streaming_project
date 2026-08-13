@@ -87,7 +87,8 @@ Proposed routing review:
 | ---------------------------- | --------------------------------------------------------- | ---------------------------------------- |
 | `raw_table_1`                | `instrument_token` after validation                       | Per-instrument processing order          |
 | `feature_candles_15s`        | `instrument_token`                                        | Per-instrument window history            |
-| `Signal_Candidates`          | `candidate_id` (KV primary key, R-084 — was LOG)                     | Strategy locality                        |
+| `Signal_Candidates`          | `instrument_token` (LOG append; R-084 KV conversion reversed 2026-08-13) | Per-instrument signal locality          |
+| `Signal_Candidates_current`  | `instrument_token` (KV primary key)                            | Colocated current-state per instrument  |
 | `Ranking_Results`            | `evaluation_id` (R-136 — was `candidate_id`)                         | Avoid cross-instrument/null ambiguity    |
 | `Fills`                      | `postback_event_id` when broker ID may be absent          | Every delivery is routable               |
 | `Execution_Audit`            | `audit_event_id`                                          | Gate-only events may lack instruction ID |
@@ -213,6 +214,8 @@ upstream is complete.
 > **Note (2026-08-09):** `forming_bar` has a DDL and a manifest entry but no requirement, contract, or consumer defines its role — the compute contract (`04_contracts/03-compute.md`) explicitly keeps forming-bar state in-process with no Fluss round trip. It stays `PROPOSED`/unowned until a consumer requirement (e.g. per-instrument freshness, DEC-028) is written; do not treat it as owned.
 >
 > **Note (2026-08-10):** `Signal_Candidates` is now **owned and written** by the Signal job's Slice 2.1 (DEC-034) — closed-candle detection appends immutable candidate records via the KV upsert writer (`DdlBootstrap` carries the full 22-column KV descriptor; dev table created DDL-faithful). `Ranking_Results` / `Trade_Decisions` / `Portfolio_Reservations` remain unwritten (ranking postponed).
+>
+> **Note (2026-08-13):** REQUIREMENT CHANGE re-scope — `Signal_Candidates` becomes an append-only LOG (one row per fired signal, routed by `instrument_token`) and a NEW `Signal_Candidates_current` KV (PK `(instrument_token)`) holds the latest/active candidate per instrument; the R-084 KV conversion is reversed and the candle KV projection (`feature_candles_15s_current`) is retired. DDL/Java updates are pending implementation (plan section: `08_implementation/04-signal-job.md` → "Current build plan — Signal LOG/KV dual-sink", Stages 2–4); the 2026-08-10 note above describes the pre-change state.
 
 #### Phase B: Static schema validation (unit level, no cluster)
 

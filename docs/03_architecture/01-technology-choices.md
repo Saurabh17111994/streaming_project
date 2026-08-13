@@ -21,7 +21,7 @@ Fluss is the live streaming bus and operational storage layer.
 - `partial_update` is permitted only with tested column ownership, stale-update rejection, and merge semantics.
 - No cross-table atomicity is assumed without a version-specific connector test.
 
-Required logical tables include `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills`, `Portfolio_Reservations`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`, `Postback_Quarantine`, `suspected_discontinuities`, and `instruments`. `Position_Actions` is future phase only.
+Required logical tables include `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Signal_Candidates_current`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills`, `Portfolio_Reservations`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`, `Postback_Quarantine`, `suspected_discontinuities`, and `instruments`. `Position_Actions` is future phase only.
 
 **Confirmed version:** Fluss 0.9.0 (incubating). Features: `BYTES` column type, KV tables with `partial_update` and FULL changelog images, `$changelog` virtual tables for CDC/audit, Aggregation Merge Engine, Auto-Increment columns for dictionary tables, ARRAY/MAP/ROW/nested complex types, ALTER TABLE schema evolution (zero-copy append), Snapshot Leases for consumer-safe snapshots, Cluster Rebalance, Compacted LogFormat, Iceberg/Parquet/Lance lake formats, Azure Blob + ADLS Gen2 support, POJO Java client API. See [Fluss 0.9 release blog](https://fluss.apache.org/blog/releases/0.9/).
 

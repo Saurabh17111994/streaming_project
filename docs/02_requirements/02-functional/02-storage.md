@@ -81,8 +81,9 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | --------------------------- | ------------------------------------- | --------------------------- | -------------------------------------------- |
 | `raw_table_1`               | LOG                                   | Ingestion                   | Original bytes plus normalized market ticks  |
 | `feature_candles_15s`       | LOG                                   | Signal job                  | Final MVP candles (immutable evidence trail) |
-| `feature_candles_15s_current` | KV                                  | Signal job                  | Canonical candle projection, PK `(instrument_token, window_start)`; same 15-column schema and 16-bucket layout as `feature_candles_15s` (CANDLE-KV-REPLAY-001) |
-| `Signal_Candidates`         | KV (v2, R-084)                        | Business Logic              | Idempotent candidate current-state projection (KV since DDL v2) |
+| `feature_candles_15s_current` | KV (RETIRED 2026-08-13)            | Signal job                  | Was canonical candle projection PK `(instrument_token, window_start)`; candle output is now LOG-only, projection dropped, live-table teardown pending |
+| `Signal_Candidates`         | LOG (v3; KV v2 R-084 reversed)       | Business Logic              | Immutable append-only candidate audit; one row per fired signal |
+| `Signal_Candidates_current` | KV                                    | Business Logic              | Current-state projection, PK `(instrument_token)`; latest/active candidate per instrument, supersession overwrites in place |
 | `Ranking_Results`           | LOG                                   | Signal job ranking operator | Immutable score/selection audit              |
 | `Trade_Decisions`           | LOG (DECIDED)                         | Signal job                  | Immutable instructions; no Executor fields    |
 | `Order_Lifecycle`           | KV                                    | Action Capture              | Broker-order lifecycle projection            |
@@ -122,17 +123,17 @@ Event/audit tables SHALL use the identities applicable to their domain:
 
 Distribution SHALL preserve per-instrument affinity using tested Fluss bucketing. Retention is at least three complete trading days and is extended automatically while the relevant EOD manifest is unverified or retryable.
 
-## REQ-FLS-006: Candle log and current-state projection
+## REQ-FLS-006: Candle log
 
 `feature_candles_15s` is append-only final MVP candle output. It contains instrument, UTC window boundaries, OHLCV, tick count, source/algorithm version, and output timestamp. Late corrections are not written in MVP. Retention is at least three complete trading days plus offload safety extension.
 
-`feature_candles_15s_current` is the canonical KV projection of the same candle stream, keyed by `(instrument_token, window_start)` with the same 15-column schema (schema version 2) and the same 16-bucket / `instrument_token` bucket-key layout as the LOG. It is written by the same Signal job (dual sink) and by the offline `CandleMigrationTool` historical load. Because it is an upsert table, offset-0 replay or duplicate LOG rows converge to one row per key instead of duplicating candles; the LOG remains the immutable evidence trail for audits and migrations. Replay-incident candle rows with conflicting business values are rejected by the migration audit (see `docs/08_implementation/13-candle-log-kv-replay-safety.md`).
+The `feature_candles_15s_current` KV projection, its dual sink, and the offline `CandleMigrationTool` historical load are RETIRED (2026-08-13 re-scope): candle output is LOG-only, and replay/duplicate handling is derived from the LOG alone. The current-state projection requirement moves to `Signal_Candidates_current` under REQ-FLS-007. The candle-KV replay-safety line (CANDLE-KV-REPLAY-001) is decommissioned — see tracker `14-candle-log-kv-replay-safety_2.md` for the measured close-out.
 
 ## REQ-FLS-007: Strategy and ranking audit
 
-`Signal_Candidates` is a KV table (converted from LOG in DDL v2, R-084) holding the idempotent current-state candidate projection keyed by `candidate_id`; `Ranking_Results` is an immutable LOG table. They include candidate/evaluation/instruction identity, strategy/rule/configuration versions, score inputs, normalized components, ranking model version, selection/rank/rejection reason, and timestamps.
+`Signal_Candidates` is an immutable append-only LOG table (v3, re-scoped 2026-08-13 — the R-084 KV conversion is reversed, resolving the dead-supersede-chain problem): one new row per fired signal, routed by `instrument_token`, never updated; corrections are new rows with an explicit supersession relation. `Signal_Candidates_current` is the companion KV current-state projection keyed by `(instrument_token)`: one row per instrument holding the latest/active candidate, where supersession overwrites in place and the table rebuilds from the LOG. `Ranking_Results` is an immutable LOG table. All three include candidate/evaluation/instruction identity, strategy/rule/configuration versions, score inputs, normalized components, ranking model version, selection/rank/rejection reason, and timestamps.
 
-Ranking is written by the Signal job operator, not a separate Ranking job. Both tables are EOD-tiered and retained in encrypted lake storage for the approved analytics/audit period.
+Ranking is written by the Signal job operator, not a separate Ranking job. The tables are EOD-tiered and retained in encrypted lake storage for the approved analytics/audit period.
 
 ## REQ-FLS-008: Immutable instruction feed
 

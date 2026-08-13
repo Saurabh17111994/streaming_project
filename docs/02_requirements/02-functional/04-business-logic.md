@@ -13,7 +13,7 @@ Business Logic is a stateful operator inside the Signal Flink job. It consumes C
 - Business Logic SHALL NOT publish an executable instruction when the portfolio reservation view is missing, stale, conflicting, or contains unresolved `UNKNOWN` state.
 - Business Logic SHALL NOT reuse `instruction_id` for different quantity, side, symbol, price, strategy version, or trade context. A changed winning parameter creates a new `instruction_id`.
 - Business Logic SHALL NOT treat cross-table visibility as atomic ordering. Executor is authoritative for submission eligibility and supersession sequencing.
-- `Signal_Candidates` records SHALL NOT be updated. Corrections are new records with an explicit supersession relation.
+- `Signal_Candidates` LOG records SHALL NOT be updated. Corrections are new records with an explicit supersession relation. The companion `Signal_Candidates_current` KV projection IS updated in place: supersession overwrites the per-instrument row (RE-SCOPED 2026-08-13).
 - The ranking/reservation operator SHALL be a serialized scope per `portfolio_id` inside the Signal Flink job. It SHALL NOT become a separate deployment or Fluss round trip.
 
 ## Assumptions
@@ -33,7 +33,7 @@ Assumptions are validated by the owner and method recorded in the project risks 
 These behaviors are conscious trade-offs accepted by the platform:
 
 - **Forming-bar detection fires on incomplete data:** Patterns may fire on the forming bar before window close. This enables low-latency entry but means a signal may be invalidated later if the bar reverses. The operator defines one-shot, repeatable, or updated detection semantics per strategy.
-- **Immutable instructions are never corrected in-place:** A `Signal_Candidates` record is never updated. If parameters change, a new candidate and new `instruction_id` are created with a supersession relation. The old candidate remains as audit evidence.
+- **Immutable instructions are never corrected in-place:** A `Signal_Candidates` LOG record is never updated; the `Signal_Candidates_current` KV row is overwritten in place by supersession. If parameters change, a new candidate and new `instruction_id` are created with a supersession relation. The old candidate remains as audit evidence.
 - **Reservations are conservative:** Capacity is held through `UNKNOWN` states and only released after terminal correlation or explicit reconciliation. This prevents over-trading at the cost of potentially unused capacity during uncertain states.
 - **Deterministic replay is bounded:** Replay determinism is guaranteed only under identical ordered input, fingerprint version, strategy version, configuration version, and lifecycle/reservation snapshot. Different arrival order or missing external state may produce different results.
 - **In-operator ranking with no Fluss round trip:** Ranking is an in-memory function call within the Signal job, not a separate deployment. This keeps latency low but means ranking state lives entirely in the Signal job's checkpoint.

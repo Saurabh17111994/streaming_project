@@ -12,9 +12,9 @@ Three Fluss replicas/quorum are placed across the three workload VMs with anti-c
 
 ## Required schemas
 
-Market: `raw_table_1`, `feature_candles_15s`, `feature_candles_15s_current` (canonical KV projection of the candle stream, PK `(instrument_token, window_start)`, same schema/bucket layout as the LOG), `suspected_discontinuities`, `instruments`.
+Market: `raw_table_1`, `feature_candles_15s`, `feature_candles_15s_current` (KV projection of the candle stream — RETIRED 2026-08-13 re-scope: candle output is LOG-only, KV dropped, live-table teardown pending), `suspected_discontinuities`, `instruments`.
 
-Strategy: `Signal_Candidates` (KV, idempotent candidate current-state projection), `Ranking_Results`, immutable `Trade_Decisions`. `Trade_Decisions` SHALL be an immutable Signal-owned LOG feed with no Executor-assigned fields, execution status, or KV partial-update behavior.
+Strategy: `Signal_Candidates` (immutable append-only LOG — RE-SCOPED 2026-08-13, pending implementation; one row per fired signal), `Signal_Candidates_current` (candidate current-state KV, PK `(instrument_token)`, supersession overwrites — NEW 2026-08-13, pending implementation), `Ranking_Results`, immutable `Trade_Decisions`. `Trade_Decisions` SHALL be an immutable Signal-owned LOG feed with no Executor-assigned fields, execution status, or KV partial-update behavior.
 
 Order/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Projection_Ledger`, `Postback_Quarantine`.
 

@@ -19,6 +19,7 @@ Arrow market-data stream
       ├─ forming-bar typed in-process handoff
       ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
+      ├─ Signal_Candidates_current KV
       ├─ in-operator Ranking (repartitioned by portfolio_id; single partition with MVP's one portfolio)
       ├─ Portfolio_Reservations management
       ├─ Ranking_Results LOG
@@ -101,6 +102,7 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `raw_table_1` | LOG | Ingestion | Signal job | ≥3 trading days; EOD Iceberg |
 | `feature_candles_15s` | LOG | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
+| `Signal_Candidates_current` | KV | Signal job | Current-state readers/reconciliation | Current state; rebuildable from LOG |
 | `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Trade_Decisions` | Immutable feed | Signal job | Executor | Replay/reconciliation buffer; audit-linked |
 | `Portfolio_Reservations` | KV/logical state | Signal job | Executor/reconciliation | Active + rebuild window |
