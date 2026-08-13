@@ -105,6 +105,24 @@ def parse_table_name(ddl_text):
     return match.group(1) if match else None
 
 
+def matrix_boundary(table_name):
+    """Map a table to its version-matrix boundary id (version_matrix.yaml).
+
+    Candle/signal tables ride the Fluss-Flink connector boundary (they are
+    written by the Signal job); every other table rides the Fluss server
+    boundary. Both are seeded UNKNOWN — classification moves to COMPATIBLE
+    only via capability evidence (docs/08_implementation/01-foundation.md
+    L848: "All DDLs have checksums and compatibility classes").
+    """
+    if table_name in (
+        "feature_candles_15s",
+        "Signal_Candidates",
+        "Signal_Candidates_current",
+    ):
+        return "VM-FLUSS-CONN-007"
+    return "VM-FLUSS-SRV-005"
+
+
 def load_existing_manifest():
     """Return the committed schema_manifest.json as a dict, or None if absent/unreadable."""
     if not os.path.exists(MANIFEST_PATH):
@@ -162,6 +180,8 @@ def compute_manifest_entries():
                     "table_kind": "KV",
                     "primary_key": primary_key,
                     "bucket_key": None,
+                    "compatibility_class": "UNKNOWN",
+                    "validated_matrix": matrix_boundary(parse_table_name(text)),
                 }
             )
             continue
@@ -181,6 +201,8 @@ def compute_manifest_entries():
                 "table_kind": "LOG",
                 "bucket_key": bucket_key,
                 "primary_key": None,
+                "compatibility_class": "UNKNOWN",
+                "validated_matrix": matrix_boundary(parse_table_name(text)),
             }
         )
     return entries
@@ -209,6 +231,16 @@ def diff_manifests(existing, computed):
             diffs.append(
                 f"  ~ KIND:    {path} ({c['table_name']}) "
                 f"{e.get('table_kind')} -> {c.get('table_kind')}"
+            )
+        elif (
+            e is not None
+            and c is not None
+            and e.get("compatibility_class") != c.get("compatibility_class")
+        ):
+            diffs.append(
+                f"  ~ COMPAT:  {path} ({c['table_name']}) "
+                f"compatibility_class {e.get('compatibility_class')} -> "
+                f"{c.get('compatibility_class')}"
             )
         elif (
             e is not None
@@ -294,6 +326,21 @@ def main():
             print(f"Wrote {MANIFEST_PATH} ({len(entries)} tables).")
         else:
             print(f"{MANIFEST_PATH} unchanged ({len(entries)} tables).")
+
+        # --- Contract check on the final on-disk manifest (post-regen):
+        # every entry must carry a compatibility class (foundation L848).
+        final_manifest = load_existing_manifest()
+        missing_compat = [
+            e.get("table_name", "?")
+            for e in (final_manifest or {}).get("tables", [])
+            if not e.get("compatibility_class")
+        ]
+        if missing_compat:
+            print(
+                "MANIFEST CONTRACT VIOLATION: entries missing "
+                f"compatibility_class: {missing_compat}"
+            )
+            return 2
 
         # --- Gated apply (R-014): runs, or is refused, regardless of drift
         # state. A caller that passes --apply-verified in the synced state

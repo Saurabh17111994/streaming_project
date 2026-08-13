@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion gate static-check
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion gate static-check docs-audit pin-check
 
 help:
 	@echo "Targets:"
@@ -22,6 +22,10 @@ help:
 	@echo "  test-ingestion  run only the ingestion module tests"
 	@echo "  gate        run the full Monday verification gate (static + compose + go + java + schema/perf)"
 	@echo "  static-check  bash -n + shellcheck every repo shell script"
+	@echo "  docs-audit  doc-vs-code truth gate (foundation L388): manifest, ownership matrix,"
+	@echo "              schema-state diagram, compat vocabulary, stale phrases, test counts, version pins"
+	@echo "  pin-check   pin discipline (foundation L548/553/554): matrix shape, corpus integrity,"
+	@echo "              external-SNAPSHOT ban, platform version pins"
 
 env:
 	@if [ ! -f code/01_platform/01_docker/.env ]; then \
@@ -72,6 +76,16 @@ static-check:
 		fi; \
 	done; \
 	echo "static-check: $$fail failures"; [ "$$fail" -eq 0 ]
+
+# Foundation L388: docs must not silently contradict code. Runs the machine-
+# verifiable invariant set established by the 2026-08-13 ground-truth audit.
+docs-audit:
+	@python3 code/01_platform/04_scripts/docs_audit.py
+
+# Foundation L548/553/554: pin discipline — matrix shape, corpus integrity,
+# external-SNAPSHOT ban, platform version pins. CI SHALL run this.
+pin-check:
+	@bash code/01_platform/04_scripts/pin-check.sh
 
 clean:
 	$(COMPOSE) down -v

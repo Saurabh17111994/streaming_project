@@ -310,37 +310,19 @@ DASHBOARDS = [
     },
     {
         "title": "COMPUTE - Candle Health",
-        "description": "LOG physical rows vs KV unique keys/upserts, replay ratio, unexplained divergence (tracker 14 P8.4 boxes LOG-vs-KV + candle divergence). LOG rows = candle LOG sink numRecordsIn; KV upserts = KV sink numRecordsIn (unique-key counts come from Fluss KV scans / CandleMigrationTool audits — no live counter in this build).",
+        "description": "Candle KV sink health (user requirement 2026-08-13: candle tables are KV-only, no LOG+KV twin — the LOG-vs-KV divergence view was removed with the KV twin). Upserts = feature_candles_15s sink numRecordsIn (one upsert per closed window).",
         "folder": "COMPUTE",
         "panels": [
             (
-                "LOG sink total records",
+                "Candle sink upserts (total)",
                 "promql",
                 'max(flink_taskmanager_job_task_numrecordsin{task_name="feature_candles_15s_sink:_Writer"})',
                 "flink_taskmanager_job_task_numrecordsin",
             ),
             (
-                "KV sink total upserts",
-                "promql",
-                'max(flink_taskmanager_job_task_numrecordsin{task_name="feature_candles_15s_current_kv_sink:_Writer"})',
-                "flink_taskmanager_job_task_numrecordsin",
-            ),
-            (
-                "LOG sink rate (records/s)",
+                "Candle sink rate (upserts/s)",
                 "promql",
                 'max(flink_taskmanager_job_task_numrecordsinpersecond{task_name="feature_candles_15s_sink:_Writer"})',
-                "flink_taskmanager_job_task_numrecordsinpersecond",
-            ),
-            (
-                "KV sink rate (records/s; 0 while running = divergence)",
-                "promql",
-                'max(flink_taskmanager_job_task_numrecordsinpersecond{task_name="feature_candles_15s_current_kv_sink:_Writer"})',
-                "flink_taskmanager_job_task_numrecordsinpersecond",
-            ),
-            (
-                "LOG:KV rate ratio (1.0 = in lockstep)",
-                "promql",
-                'sum(flink_taskmanager_job_task_numrecordsinpersecond{task_name="feature_candles_15s_current_kv_sink:_Writer"}) / clamp_min(sum(flink_taskmanager_job_task_numrecordsinpersecond{task_name="feature_candles_15s_sink:_Writer"}), 1)',
                 "flink_taskmanager_job_task_numrecordsinpersecond",
             ),
             (
@@ -711,14 +693,14 @@ ALERTS = [
         desc="[Error/compute] Source task consuming 0 records/s for 2 min while the job runs: ingestion/feed stall; recovery = next records > 0 (quiesced dev feeds false-fire by design)",
     ),
     dict(
-        name="SIGNAL-warn-kv-sink-zero",
+        name="SIGNAL-warn-candle-sink-zero",
         stream="flink_taskmanager_job_task_numrecordsinpersecond",
         conditions=[
-            ("task_name", "=", "feature_candles_15s_current_kv_sink:_Writer"),
+            ("task_name", "=", "feature_candles_15s_sink:_Writer"),
             ("value", "=", 0),
         ],
         period=2,
-        desc="[Warning/compute] KV sink writing 0 records/s for 2 min while running: LOG/KV divergence candidate; recovery = kv sink resumes (quiesced dev feeds false-fire by design)",
+        desc="[Warning/compute] Candle KV sink writing 0 records/s for 2 min while running: window-close stall / watermark freeze; recovery = sink resumes (quiesced dev feeds false-fire by design)",
     ),
     dict(
         name="SIGNAL-warn-dedup-state",

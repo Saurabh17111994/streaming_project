@@ -1,0 +1,35 @@
+# docker-compose.p10.yml — P10 isolated-rehearsal overlay (tracker 14).
+#
+# Run: docker compose -p p10 -f docker-compose.yml \
+#      -f docker-compose.p10.yml up -d
+# The -p p10 project name isolates the network (p10_trading-net), container
+# names (p10-fluss-coordinator-1, ...), and volumes (p10_fluss-data, ...) from
+# the live 01_docker stack. This overlay ONLY remaps host-published ports so the
+# rehearsal stack can run alongside live without a host-port conflict; the
+# in-compose service names + ports are unchanged (fluss-coordinator:9123 etc.
+# still resolve inside p10_trading-net, so in-docker clients + the compute jar
+# work with the same FLUSS_BOOTSTRAP name as production).
+#
+# `ports: !override [...]` replaces the base list (compose appends `ports` by
+# default, so a plain override would bind BOTH the base and rehearsal host
+# ports and collide with live). Requires compose >= 2.24 (host has 2.35.1).
+#
+# Data copy is done separately (live tablet data dirs + ZK metadata -> the
+# rehearsal volumes) — this overlay does NOT mount the live volumes.
+services:
+  zookeeper:
+    ports: !override ["12181:2181"]
+
+  fluss-coordinator:
+    ports: !override ["19123:9123"]
+
+  fluss-tablet:
+    ports: !override ["19124:9124"]
+
+  flink-jobmanager:
+    ports: !override
+      - "18081:8081"
+      - "19249:9249"
+
+  flink-taskmanager:
+    ports: !override ["19250:9249"]

@@ -1,0 +1,13 @@
+# docker-compose.p7.yml — P7 SignalJob bench override (tracker 14).
+#
+# Host-network ingestion instances (soak recipe) cannot resolve the tablet's
+# advertised compose-DNS name `fluss-tablet:9124` (compose DNS exists only
+# inside trading-net). host-gateway maps it to the Docker host; the tablet's
+# 9124:9124 publish then serves the client port. Per-instance faketool port
+# via ARROW_HFT_URL (soak.yml pins ws://127.0.0.1:8899 — overridden here).
+services:
+  ingestion:
+    extra_hosts:
+      - "fluss-tablet:host-gateway"
+    environment:
+      ARROW_HFT_URL: ${ARROW_HFT_URL:-ws://127.0.0.1:8899}

@@ -2,7 +2,12 @@ package com.trading.common.schema;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,6 +20,7 @@ import org.junit.jupiter.api.Test;
  *   <li>SCHEMA-UNIT-003 — unknown/placeholder schema version blocks executable authority</li>
  *   <li>COMPAT-FLUSS-004 — stale / conflict KV updates rejected (halt on conflict)</li>
  *   <li>immutable LOG — duplicate dropped, mutation violation</li>
+ *   <li>foundation L848 — every committed DDL entry carries ddl_sha256 + compatibility_class</li>
  * </ul>
  */
 class SchemaComplianceFullSuiteTest {
@@ -52,5 +58,28 @@ class SchemaComplianceFullSuiteTest {
     assertThat(SchemaState.PROPOSED.isExecutableAuthority()).isFalse();
     assertThat(SchemaState.REJECTED.isExecutableAuthority()).isFalse();
     assertThat(SchemaState.OBSERVED.isExecutableAuthority()).isFalse();
+  }
+
+  @Test
+  void committedManifestCarriesChecksumsAndCompatibilityClasses() throws Exception {
+    // Foundation L848: every DDL entry must have a checksum AND a compatibility
+    // class; candle/signal tables ride the Fluss-Flink connector boundary.
+    Path manifestPath = Path.of("..", "01_platform", "02_sql", "ddl", "schema_manifest.json");
+    assertThat(Files.exists(manifestPath))
+        .as("committed schema_manifest.json must exist at %s", manifestPath.toAbsolutePath())
+        .isTrue();
+    SchemaManifest manifest =
+        new ObjectMapper().readValue(Files.readAllBytes(manifestPath), SchemaManifest.class);
+    assertThat(manifest.tables).hasSize(21);
+    Map<String, String> boundaries = new HashMap<>();
+    for (SchemaManifestEntry e : manifest.tables) {
+      assertThat(e.ddlSha256).as(e.tableName + " ddl_sha256").isNotBlank();
+      assertThat(e.compatibilityClass).as(e.tableName + " compatibility_class").isNotBlank();
+      assertThat(e.validatedMatrix).as(e.tableName + " validated_matrix").isNotBlank();
+      boundaries.put(e.tableName, e.validatedMatrix);
+    }
+    assertThat(boundaries.get("feature_candles_15s")).isEqualTo("VM-FLUSS-CONN-007");
+    assertThat(boundaries.get("Signal_Candidates_current")).isEqualTo("VM-FLUSS-CONN-007");
+    assertThat(boundaries.get("raw_table_1")).isEqualTo("VM-FLUSS-SRV-005");
   }
 }

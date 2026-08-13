@@ -136,7 +136,11 @@ boundaries:
     limitations: >-
       Local single-tablet evidence. Replication/failover, checkpoint/restore,
       FULL changelog image, and 7-year lake reconstruction remain UNKNOWN
-      (need multi-node + tiered storage).
+      (need multi-node + tiered storage). Retention live-alter NOT supported:
+      Admin.alterTable rejects table.log.ttl ("not supported to alter yet");
+      log.retention.ms/comment alters are silent no-ops (getLogTTLMs
+      unchanged, verified 2026-08-13); only table.datalake.enabled applies —
+      TTL is set at create time only (foundation L853).
     date: 2026-07-31
     status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
 
