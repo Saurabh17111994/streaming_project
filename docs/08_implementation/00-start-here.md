@@ -134,7 +134,7 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 
 ### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
 
-Status: Phases 2a-2g done — 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred — see [`03-ingestion.md`](./03-ingestion.md) Status.
+Status: Phases 2a-2g done — 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak running (100-cycle, ~48 min, hub res001-soak); 3,000-instrument / 3-connection envelope deferred — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 

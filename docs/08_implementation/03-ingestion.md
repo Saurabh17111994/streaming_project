@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation active; Phases 2a-2g complete; 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; 90k peak campaign retired, DEC-036); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred |
+| Status | Implementation active; Phases 2a-2g complete; 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; 90k peak campaign retired, DEC-036); ING-RES-001 real-backoff soak running (100-cycle, ~48 min, launched 2026-08-13); 3,000-instrument / 3-connection envelope deferred |
 | Owner | Ingestion Team |
 | Requirements | `REQ-ING-001`–`REQ-ING-016` |
 | Build contract | `docs/04_contracts/01-ingestion.md` |
