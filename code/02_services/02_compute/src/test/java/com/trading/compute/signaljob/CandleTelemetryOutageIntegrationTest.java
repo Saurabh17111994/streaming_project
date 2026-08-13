@@ -56,8 +56,8 @@ import org.slf4j.LoggerFactory;
  * <p>The emitter is pointed at {@code 127.0.0.1:1} (refused port — the collector
  * is fully absent), mirroring {@code SignalJob.run}: {@code recordStartupMode}
  * then {@code start()} before {@code executeAsync}. The graph must close every
- * candle window of the canonical 46-row feed, the LOG and KV must both reach 46
- * rows (dual-write unaffected), the scheduler flush thread must stay alive, and
+ * candle window of the canonical 46-row feed, the LOG must reach 46 rows
+ * (write path unaffected), the scheduler flush thread must stay alive, and
  * a synchronous {@code flushOnce()} must surface the transport failure as an
  * {@link IOException} while {@code flush()} swallows it — telemetry off the
  * critical path.
@@ -152,16 +152,12 @@ class CandleTelemetryOutageIntegrationTest {
             }
 
             // Telemetry must not stop SignalJob processing: the canonical feed
-            // closes every window on the LOG and the KV despite the outage.
+            // closes every window on the LOG despite the outage.
             awaitLogCount(s, WINDOWS * 2L,
                     "candles close with the collector down (46 rows)", 180);
-            long kv = kvCount(s);
-            assertEquals(WINDOWS * 2L, kv,
-                    "KV dual-write must be complete despite the telemetry outage");
             assertTrue(flushThreadAlive(),
                     "emitter scheduler thread must survive the outage (swallow, no rethrow)");
-            LOG.info("p82-outage: LOG=46 KV={} with collector absent — processing unaffected",
-                    kv);
+            LOG.info("p82-outage: LOG=46 with collector absent — processing unaffected");
         } finally {
             if (otlp != null) {
                 otlp.close();
@@ -198,7 +194,6 @@ class CandleTelemetryOutageIntegrationTest {
         e.put("FLUSS_DATABASE", "default");
         e.put("RAW_TABLE", s.rawName());
         e.put("CANDLE_TABLE", s.logName());
-        e.put("CANDLE_CURRENT_TABLE", s.kvName());
         e.put("SIGNAL_CANDIDATES_TABLE", s.candName());
         e.put("DEDUP_TTL_MS", "300000");
         e.put("CANDLE_WINDOW_MS", "15000");
@@ -316,11 +311,7 @@ class CandleTelemetryOutageIntegrationTest {
         return scanAll(s.log(), s.logInfo()).size();
     }
 
-    private static long kvCount(ScratchSet s) throws Exception {
-        return scanAll(s.kv(), s.kvInfo()).size();
-    }
-
-    /** Scans every bucket of a table (LOG and KV both work — P6 precedent). */
+    /** Scans every bucket of a table (P6 precedent). */
     private static List<InternalRow> scanAll(Table table, TableInfo info) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         for (int b = 0; b < info.getNumBuckets(); b++) {
@@ -344,16 +335,13 @@ class CandleTelemetryOutageIntegrationTest {
         Path cpDir = Path.of(System.getProperty("java.io.tmpdir"), "p82-cp-" + suffix);
         String rawName = "p82_" + suffix + "_raw";
         String logName = "p82_" + suffix + "_log";
-        String kvName = "p82_" + suffix + "_kv";
         String candName = "p82_" + suffix + "_cand";
         Table raw = createTable(rawName, rawSchema(), null, 1, "raw LOG");
-        Table log = createTable(logName, candleSchema(null), null, 16, "candle LOG");
-        Table kv = createTable(kvName, candleSchema(List.of("instrument_token", "window_start")),
-                List.of("instrument_token", "window_start"), 16, "candle KV");
+        Table log = createTable(logName, candleSchema(), null, 16, "candle LOG");
         Table cand = createTable(candName, candidatesSchema(), List.of("candidate_id"), 16,
                 "candidates KV");
-        return new ScratchSet(rawName, logName, kvName, candName, raw, log, kv, cand,
-                tableInfo(rawName), tableInfo(logName), tableInfo(kvName), tableInfo(candName),
+        return new ScratchSet(rawName, logName, candName, raw, log, cand,
+                tableInfo(rawName), tableInfo(logName), tableInfo(candName),
                 cpDir);
     }
 
@@ -400,7 +388,7 @@ class CandleTelemetryOutageIntegrationTest {
                 .build();
     }
 
-    private static Schema candleSchema(List<String> pk) {
+    private static Schema candleSchema() {
         Schema.Builder b = Schema.newBuilder()
                 .column("instrument_token", DataTypes.BIGINT())
                 .column("exchange", DataTypes.STRING())
@@ -417,9 +405,6 @@ class CandleTelemetryOutageIntegrationTest {
                 .column("configuration_version", DataTypes.STRING())
                 .column("output_ts", DataTypes.BIGINT())
                 .column("schema_version", DataTypes.STRING());
-        if (pk != null) {
-            b.primaryKey(pk.toArray(new String[0]));
-        }
         return b.build();
     }
 
@@ -458,15 +443,12 @@ class CandleTelemetryOutageIntegrationTest {
     private record ScratchSet(
             String rawName,
             String logName,
-            String kvName,
             String candName,
             Table raw,
             Table log,
-            Table kv,
             Table cand,
             TableInfo rawInfo,
             TableInfo logInfo,
-            TableInfo kvInfo,
             TableInfo candInfo,
             Path checkpointDir) {}
 }

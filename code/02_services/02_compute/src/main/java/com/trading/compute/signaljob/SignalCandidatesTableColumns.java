@@ -1,5 +1,6 @@
 package com.trading.compute.signaljob;
 
+import java.util.List;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
@@ -8,14 +9,15 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.VarCharType;
 
 /**
- * Physical column layout of {@code Signal_Candidates} as written by the
- * Signal job.
+ * Physical column layout of the signal tables as written by the Signal job.
  *
- * <p>Must mirror {@code code/01_platform/02_sql/ddl/05_signal_candidates.sql}
- * v2 (22 columns, KV primary key {@code candidate_id} — R-084) exactly. The
- * Fluss KV sink's {@code RowDataSerializationSchema} projects by column name
- * and upserts on the primary key, so emitted {@code GenericRowData} fields
- * must be positioned in DDL column order.
+ * <p>Must mirror the frozen 22-column layout of
+ * {@code code/01_platform/02_sql/ddl/05_signal_candidates.sql} v3
+ * (LOG, DEC-035) and its KV current-state companion
+ * {@code 23_signal_candidates_current.sql} column-for-column. The Fluss
+ * sinks' {@code RowDataSerializationSchema} projects by column name, so
+ * emitted {@code GenericRowData} fields must be positioned in DDL column
+ * order.
  */
 public final class SignalCandidatesTableColumns {
 
@@ -53,6 +55,46 @@ public final class SignalCandidatesTableColumns {
     public static final String VALIDITY_REASON_VALID = "VALID";
     public static final String SCHEMA_VERSION_V2 = "2";
 
+    /**
+     * Canonical signal identity (DEC-035, tracker 14 re-scoped P2 —
+     * SIGNAL-SCHEMA-001): the only {@code (schema_version, strategy_id,
+     * strategy_version, rule_id)} combination allowed into the
+     * {@code Signal_Candidates_current} KV projection. The config defaults
+     * for {@code SIGNAL_STRATEGY_ID}/{@code SIGNAL_STRATEGY_VERSION}/
+     * {@code SIGNAL_RULE_ID} are exactly these values (the default IS the
+     * canonical identity, mirroring the candle pair policy); the LOG sink
+     * keeps every emitted signal regardless.
+     */
+    public static final String CANONICAL_STRATEGY_ID = "simple-breakout";
+    public static final String CANONICAL_STRATEGY_VERSION = "1.0.0";
+    public static final String CANONICAL_RULE_ID = "breakout-20-bullish-trend";
+
+    /**
+     * Fluss {@code DataTypeRoot} name per column, DDL index order (frozen
+     * 22-column v3 layout). The re-targeted table contract validator compares
+     * live metadata roots against this list column by column.
+     */
+    public static final List<String> TYPE_ROOTS = List.of(
+            "STRING", "STRING", "STRING", "BIGINT", "STRING", "STRING", "STRING",
+            "STRING", "STRING", "BIGINT", "BIGINT", "STRING", "STRING", "BIGINT",
+            "STRING", "BIGINT", "STRING", "STRING", "STRING", "STRING", "STRING",
+            "STRING");
+
+    /**
+     * DDL nullability per column (05/23 DDLs): {@code true} = nullable,
+     * {@code false} = NOT NULL. The KV PK column {@code instrument_token}
+     * plus the identity/decision columns are NOT NULL; audit linkage columns
+     * are nullable. Same semantic as
+     * {@link com.trading.common.schema.CandleTableSchema#COLUMN_NULLABLE_IN_DDL}
+     * — used only for the schema-report divergence marker (live LOG metadata
+     * does not carry NOT NULL).
+     */
+    public static final List<Boolean> COLUMN_NULLABLE_IN_DDL = List.of(
+            false, true, true, false, false, false, false, false, false, false,
+            false, false, false, false, true, true, true, true, true, true,
+            true, false);
+
+
     /** DDL column names in index order (diagnostics). */
     public static final String[] NAMES = {
         "candidate_id", "instruction_id", "trade_context_id", "instrument_token",
@@ -64,10 +106,10 @@ public final class SignalCandidatesTableColumns {
     };
 
     /**
-     * Stream type info for emitted candidate rows, derived from the v2 DDL
-     * column order. Declared explicitly because TypeExtractor cannot resolve a
-     * bare {@code RowData} to a schema — it would fall back to GenericTypeInfo
-     * and route RowData through Kryo at operator boundaries.
+     * Stream type info for emitted candidate rows, derived from the frozen
+     * v3 DDL column order. Declared explicitly because TypeExtractor cannot
+     * resolve a bare {@code RowData} to a schema — it would fall back to
+     * GenericTypeInfo and route RowData through Kryo at operator boundaries.
      */
     public static final TypeInformation<RowData> ROW_TYPE_INFO = InternalTypeInfo.ofFields(
             new LogicalType[] {

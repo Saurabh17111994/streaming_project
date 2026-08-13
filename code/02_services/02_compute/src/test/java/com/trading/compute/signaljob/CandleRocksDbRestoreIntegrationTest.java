@@ -69,15 +69,15 @@ import org.slf4j.LoggerFactory;
  *       the completed checkpoint contains {@code .sst} files — incremental
  *       RocksDB artifacts a heap-state checkpoint never produces.</li>
  *   <li>Dedup state restores: the restored job resumes at the checkpointed
- *       source offsets and dedup/window state — LOG reaches exactly 96 (the
- *       two pending w23 windows held in checkpointed window state + the new
- *       w24 windows), never 142, which an offset-0 fallback would emit.</li>
+ *       source offsets and dedup/window state — LOG reaches exactly 50 (the
+ *       46 phase-1 rows + the two pending w23 windows held in checkpointed
+ *       window state + the new w24 windows), never 92, which an offset-0
+ *       fallback would emit.</li>
  *   <li>Window state restores: the pending w23 windows close exactly once
  *       (tickCount=1) and w24 folds its four ticks.</li>
- *   <li>Existing sink state restores / new KV sink starts clean: KV keeps all
- *       46 pre-restore keys byte-identical in business fields and gains
- *       exactly the 4 post-restore keys (w23+w24 × 2 tokens) — no duplicates,
- *       no re-upserts, no lost keys.</li>
+ *   <li>Existing LOG rows survive the restore byte-identical in business
+ *       fields, and the restored job appends exactly the 4 post-restore rows
+ *       (w23+w24 × 2 tokens) — no duplicates, no lost rows.</li>
  *   <li>Restore failure cannot fall back: startup mode is RESTORE (config
  *       gate, P6-proven) and the restore is strict (no {@code
  *       allowNonRestoredState}).</li>
@@ -157,24 +157,22 @@ class CandleRocksDbRestoreIntegrationTest {
 
         // ── Phase 1: RocksDB graph on worker A ────────────────────────────
         Map<CandleKey, List<CandleRow>> log1;
-        Map<CandleKey, CandleRow> kv1;
         String restore;
         MiniClusterWithClientResource clusterA = newMiniCluster();
         clusterA.before();
         try {
             appendFeed(s);
             JobClient job1 = startJob(envFor(s, null, rocksDir), "p4.3-phase1");
-            awaitTrue(() -> safe(() -> kvCount(s) == 46), "phase-1 KV = 46 distinct keys", 180);
+            awaitLogCount(s, 46, "phase-1 LOG = 46 rows", 180);
             log1 = readLogMap(s);
-            kv1 = readKvMap(s);
-            assertFirstPass(s, log1, kv1);
+            assertFirstPass(s, log1);
             restore = awaitStableCheckpoint(s, job1.getJobID(), 180);
             // Live RocksDB store must exist WHILE the job runs — RocksDB dispose
             // removes the store at cancel, so asserting after cancel proves nothing.
             assertRocksDbStore(rocksDir, "state.backend.rocksdb.localdir");
             cancelAndFinish(job1, "phase1");
-            LOG.info("p4.3: phase 1 done — LOG={} rows, KV={} keys, candidates={}, restore={}",
-                    log1.size(), kv1.size(), candidateIds(s).size(), restore);
+            LOG.info("p4.3: phase 1 done — LOG={} rows, candidates={}, restore={}",
+                    log1.size(), candidateIds(s).size(), restore);
 
             // The completed checkpoint holds state files in shared/ (the
             // incremental-RocksDB layout; names are MD5 hashes, so no
@@ -196,22 +194,26 @@ class CandleRocksDbRestoreIntegrationTest {
             JobClient job2 = startJob(envFor(s, restore, rocksDir), "p4.3-phase2");
             awaitLogCount(s, 50,
                     "restored RocksDB job must emit pending w23 and new w24 (46 + 2 + 2)", 180);
-            Map<CandleKey, CandleRow> kv2 = readKvMap(s);
-            assertEquals(50, kv2.size(),
-                    "restored KV must hold 46 old keys + pending w23 + new w24 for both tokens");
-            assertExistingKeysAndBusinessFields(kv1, kv2,
+            Map<CandleKey, List<CandleRow>> log2 = readLogMap(s);
+            assertEquals(50, log2.size(),
+                    "restored LOG must hold 46 old keys + pending w23 + new w24 for both tokens");
+            assertExistingKeysAndBusinessFields(log1, log2,
                     "restore must not change the business fields of already-written keys");
             for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-                assertEquals(1, kv2.get(new CandleKey(token, BASE + 23 * WINDOW_MS)).tickCount(),
+                List<CandleRow> w23 = log2.get(new CandleKey(token, BASE + 23 * WINDOW_MS));
+                assertTrue(w23 != null && w23.size() == 1, "w23 must close exactly once for " + token);
+                assertEquals(1, w23.get(0).tickCount(),
                         "restored pending pusher tick must close w23 exactly once");
-                assertEquals(4, kv2.get(new CandleKey(token, BASE + 24 * WINDOW_MS)).tickCount(),
+                List<CandleRow> w24 = log2.get(new CandleKey(token, BASE + 24 * WINDOW_MS));
+                assertTrue(w24 != null && w24.size() == 1, "w24 must close exactly once for " + token);
+                assertEquals(4, w24.get(0).tickCount(),
                         "post-restore w24 must contain its four ticks");
             }
             assertEquals(2, candidateIds(s).size(),
                     "the pending and flat windows must not fire a new signal");
             cancelAndFinish(job2, "phase2");
-            LOG.info("p4.3: phase 2 done — LOG={} rows, KV={} keys, candidates={}",
-                    logCount(s), kv2.size(), candidateIds(s).size());
+            LOG.info("p4.3: phase 2 done — LOG={} rows, candidates={}",
+                    logCount(s), candidateIds(s).size());
         } finally {
             clusterB.after();
         }
@@ -388,7 +390,6 @@ class CandleRocksDbRestoreIntegrationTest {
         e.put("FLUSS_DATABASE", "default");
         e.put("RAW_TABLE", s.rawName());
         e.put("CANDLE_TABLE", s.logName());
-        e.put("CANDLE_CURRENT_TABLE", s.kvName());
         e.put("SIGNAL_CANDIDATES_TABLE", s.candName());
         e.put("DEDUP_TTL_MS", "300000");
         e.put("CANDLE_WINDOW_MS", "15000");
@@ -451,35 +452,41 @@ class CandleRocksDbRestoreIntegrationTest {
 
     // ── assertions ─────────────────────────────────────────────────────────
 
-    private static void assertFirstPass(ScratchSet s, Map<CandleKey, List<CandleRow>> log,
-            Map<CandleKey, CandleRow> kv) throws Exception {
-        assertEquals(46, kv.size(), "first pass: 23 windows x 2 tokens");
+    private static void assertFirstPass(ScratchSet s, Map<CandleKey, List<CandleRow>> log)
+            throws Exception {
         assertEquals(46, log.size(), "first pass: LOG must hold one row per key");
         for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-            assertEquals(7004, kv.get(new CandleKey(token, BASE + 4 * WINDOW_MS)).close(),
+            assertEquals(7004, log.get(new CandleKey(token, BASE + 4 * WINDOW_MS)).get(0).close(),
                     "in-window late tick must fold into the w4 candle");
-            CandleRow w5 = kv.get(new CandleKey(token, BASE + 5 * WINDOW_MS));
+            CandleRow w5 = log.get(new CandleKey(token, BASE + 5 * WINDOW_MS)).get(0);
             assertEquals(10005, w5.close(), "beyond-lateness tick must be dropped");
             assertEquals(4, w5.tickCount(), "beyond-lateness tick must not reach the accumulator");
-            CandleRow w22 = kv.get(new CandleKey(token, BASE + 22 * WINDOW_MS));
+            CandleRow w22 = log.get(new CandleKey(token, BASE + 22 * WINDOW_MS)).get(0);
             assertEquals(11000, w22.open());
             assertEquals(15000, w22.close());
-            CandleRow sample = kv.get(new CandleKey(token, BASE + 10 * WINDOW_MS));
+            CandleRow sample = log.get(new CandleKey(token, BASE + 10 * WINDOW_MS)).get(0);
             assertEquals(CANONICAL_ALGORITHM, sample.algorithmVersion());
             assertEquals(CANONICAL_CONFIGURATION, sample.configurationVersion());
             assertEquals("2", sample.schemaVersion());
         }
-        assertNotNull(kv.get(new CandleKey(TOKEN_A, BASE + 17 * WINDOW_MS)),
+        assertNotNull(log.get(new CandleKey(TOKEN_A, BASE + 17 * WINDOW_MS)),
                 "idle token's window must close on the shared watermark");
         assertEquals(2, candidateIds(s).size(), "exactly one candidate per token");
     }
 
-    private static void assertExistingKeysAndBusinessFields(Map<CandleKey, CandleRow> before,
-            Map<CandleKey, CandleRow> after, String what) {
+    private static void assertExistingKeysAndBusinessFields(Map<CandleKey, List<CandleRow>> before,
+            Map<CandleKey, List<CandleRow>> after, String what) {
         assertTrue(after.keySet().containsAll(before.keySet()),
-                what + " — restored KV must retain every existing key");
-        for (Map.Entry<CandleKey, CandleRow> e : before.entrySet()) {
-            assertBusinessFieldsEqual(e.getValue(), after.get(e.getKey()), what + " — key " + e.getKey());
+                what + " — restored LOG must retain every existing key");
+        for (Map.Entry<CandleKey, List<CandleRow>> e : before.entrySet()) {
+            List<CandleRow> afterRows = after.get(e.getKey());
+            assertNotNull(afterRows, what + " — key " + e.getKey());
+            assertTrue(afterRows.size() >= e.getValue().size(),
+                    what + " — key " + e.getKey() + " must keep every prior row");
+            for (int i = 0; i < e.getValue().size(); i++) {
+                assertBusinessFieldsEqual(e.getValue().get(i), afterRows.get(i),
+                        what + " — key " + e.getKey() + " row " + i);
+            }
         }
     }
 
@@ -529,19 +536,6 @@ class CandleRocksDbRestoreIntegrationTest {
         }
         fail("Timed out after " + timeoutSeconds + "s waiting for " + what
                 + " (expected " + expected + " LOG rows, observed " + latest + ")");
-    }
-
-    private static boolean safe(ThrowingBooleanSupplier c) {
-        try {
-            return c.getAsBoolean();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    @FunctionalInterface
-    private interface ThrowingBooleanSupplier {
-        boolean getAsBoolean() throws Exception;
     }
 
     /** Waits until the LOG is stable for ≥3 polls AND a completed chk-N exists; returns it. */
@@ -600,28 +594,12 @@ class CandleRocksDbRestoreIntegrationTest {
         return scanAll(s.log(), s.logInfo()).size();
     }
 
-    private static long kvCount(ScratchSet s) throws Exception {
-        return scanAll(s.kv(), s.kvInfo()).size();
-    }
-
     private static Map<CandleKey, List<CandleRow>> readLogMap(ScratchSet s) throws Exception {
         Map<CandleKey, List<CandleRow>> map = new HashMap<>();
         for (InternalRow r : scanAll(s.log(), s.logInfo())) {
             CandleKey k = new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
                     r.getLong(CandleTableColumns.WINDOW_START));
             map.computeIfAbsent(k, ignored -> new ArrayList<>()).add(candleRow(r));
-        }
-        return map;
-    }
-
-    private static Map<CandleKey, CandleRow> readKvMap(ScratchSet s) throws Exception {
-        Map<CandleKey, CandleRow> map = new HashMap<>();
-        for (InternalRow r : scanAll(s.kv(), s.kvInfo())) {
-            CandleKey k = new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
-                    r.getLong(CandleTableColumns.WINDOW_START));
-            if (map.put(k, candleRow(r)) != null) {
-                fail("KV table holds more than one row for " + k + " — upsert idempotency broken");
-            }
         }
         return map;
     }
@@ -634,7 +612,7 @@ class CandleRocksDbRestoreIntegrationTest {
         return ids;
     }
 
-    /** Scans every bucket of a table (LOG and KV both work — P6 precedent). */
+    /** Scans every bucket of a table (P6 precedent). */
     private static List<InternalRow> scanAll(Table table, TableInfo info) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         for (int b = 0; b < info.getNumBuckets(); b++) {
@@ -676,17 +654,14 @@ class CandleRocksDbRestoreIntegrationTest {
         Path cpDir = Path.of(System.getProperty("java.io.tmpdir"), "rocks-cp-" + suffix);
         String rawName = "rocks_" + suffix + "_raw";
         String logName = "rocks_" + suffix + "_log";
-        String kvName = "rocks_" + suffix + "_kv";
         String candName = "rocks_" + suffix + "_cand";
         Table raw = createTable(rawName, rawSchema(), null, 1, "raw LOG");
-        Table log = createTable(logName, candleSchema(null), null, 16, "candle LOG");
-        Table kv = createTable(kvName, candleSchema(List.of("instrument_token", "window_start")),
-                List.of("instrument_token", "window_start"), 16, "candle KV");
+        Table log = createTable(logName, candleSchema(), null, 16, "candle LOG");
         Table cand = createTable(candName, candidatesSchema(), List.of("candidate_id"), 16,
                 "candidates KV");
-        return new ScratchSet(suffix, rawName, logName, kvName, candName,
-                raw, log, kv, cand,
-                tableInfo(rawName), tableInfo(logName), tableInfo(kvName), tableInfo(candName),
+        return new ScratchSet(suffix, rawName, logName, candName,
+                raw, log, cand,
+                tableInfo(rawName), tableInfo(logName), tableInfo(candName),
                 cpDir);
     }
 
@@ -733,8 +708,8 @@ class CandleRocksDbRestoreIntegrationTest {
                 .build();
     }
 
-    private static Schema candleSchema(List<String> pk) {
-        Schema.Builder b = Schema.newBuilder()
+    private static Schema candleSchema() {
+        return Schema.newBuilder()
                 .column("instrument_token", DataTypes.BIGINT())
                 .column("exchange", DataTypes.STRING())
                 .column("symbol", DataTypes.STRING())
@@ -749,11 +724,8 @@ class CandleRocksDbRestoreIntegrationTest {
                 .column("algorithm_version", DataTypes.STRING())
                 .column("configuration_version", DataTypes.STRING())
                 .column("output_ts", DataTypes.BIGINT())
-                .column("schema_version", DataTypes.STRING());
-        if (pk != null) {
-            b.primaryKey(pk.toArray(new String[0]));
-        }
-        return b.build();
+                .column("schema_version", DataTypes.STRING())
+                .build();
     }
 
     private static Schema candidatesSchema() {
@@ -793,15 +765,12 @@ class CandleRocksDbRestoreIntegrationTest {
             String suffix,
             String rawName,
             String logName,
-            String kvName,
             String candName,
             Table raw,
             Table log,
-            Table kv,
             Table cand,
             TableInfo rawInfo,
             TableInfo logInfo,
-            TableInfo kvInfo,
             TableInfo candInfo,
             Path checkpointDir) {}
 

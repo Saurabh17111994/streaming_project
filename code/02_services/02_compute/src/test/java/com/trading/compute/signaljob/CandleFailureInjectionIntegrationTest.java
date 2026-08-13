@@ -53,8 +53,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Tracker 14 P6.2/P6.3 failure injection against the REAL {@link SignalJob#buildTopology}
  * graph on a Flink MiniCluster + scratch Fluss tables (same harness as P4.3). No live
- * cluster is disturbed: injections are job-scoped (read-only checkpoint dir, deleted
- * scratch KV table) or feed-scoped (watermark stall, overflow event time).
+ * cluster is disturbed: injections are job-scoped (read-only checkpoint dir)
+ * or feed-scoped (watermark stall, overflow event time).
  *
  * <ul>
  *   <li><b>P6.2 616</b> — checkpoint failure triggers the CONFIGURED fixed-delay restart
@@ -65,14 +65,6 @@ import org.slf4j.LoggerFactory;
  *       via env (config gate), so the failure is provoked by a read-only checkpoint
  *       directory — a checkpoint failure mode, the same path Flink's timeout uses
  *       (timeout == checkpoint failure from the restart-strategy perspective).</li>
- *   <li><b>P6.2 612/613</b> — a sink write failure (KV table deleted mid-run) fails the
- *       WHOLE job: final status FAILED, and the LOG stops growing after the job dies —
- *       there is no LOG-only degraded mode (shared job fate; no per-sink error
- *       isolation exists in {@code buildTopology}). The StallGuardedSink watchdog
- *       (tracker 14 box 682/116) bounds every write/flush at 15 s so FAILED is reached
- *       deterministically — previously the Fluss client's 30 s request timeout plus
- *       unbounded writer retries could keep failover spinning past the observation
- *       window (FAILING/FAILING→RESTARTING, never terminal FAILED).</li>
  *   <li><b>P6.3 618</b> — watermark stall: with the feed stopped (under the 15s
  *       {@code SOURCE_IDLE_MS}), the watermark freezes and NOTHING closes (no phantom
  *       candles); resuming the feed closes exactly the windows whose end the watermark
@@ -197,76 +189,6 @@ class CandleFailureInjectionIntegrationTest {
         }
     }
 
-    // ── P6.2 612/613: KV sink write failure -> whole job fails, no LOG-only mode ──
-
-    @Test
-    @DisplayName("KV sink write failure fails the whole job; no LOG-only degraded mode")
-    void kvTableDeletionFailsWholeJobNotLogOnlyDegraded() throws Exception {
-        ScratchSet s = createSet();
-        MiniClusterWithClientResource cluster = newMiniCluster();
-        JobClient job = null;
-        cluster.before();
-        try {
-            appendFeed(s);
-            job = startJob(baseEnv(s, null, "hashmap",
-                    "file://" + s.checkpointDir().toAbsolutePath(), "0"), "p63-kv-drop");
-            awaitLogCount(s, 46, "healthy baseline before injection", 180);
-            awaitStableCheckpoint(s, job.getJobID(), 180);
-            assertEquals(46, kvCount(s), "healthy baseline KV");
-            LOG.info("p63: baseline healthy — LOG=46, KV=46, then dropping the KV table");
-
-            // Inject: delete the KV table the running job writes to (scratch table —
-            // no live-cluster impact). Preflight already passed at startup; the next
-            // upsert must fail the sink -> the whole job (shared fate — buildTopology
-            // has no LOG-only degraded path, no per-sink error isolation).
-            admin.dropTable(TablePath.of("default", s.kvName()), false)
-                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            AppendWriter writer = s.raw().newAppend().createWriter();
-            try {
-                appendWindow(writer, 23, 10_023L);
-                appendWindow(writer, 24, 10_024L);
-                appendPusher(writer, 25, 10_025L);
-            } finally {
-                writer.flush();
-            }
-
-            Set<JobStatus> seen = new HashSet<>();
-            long t0 = System.currentTimeMillis();
-            // Tracker 14 box 682/116 (2026-08-12): the stall guard bounds every
-            // sink write/flush at SINK_WRITE_STALL_TIMEOUT_MS=15000, so the job
-            // MUST reach terminal FAILED — no FAILING hang, no unbounded
-            // FAILING→RESTARTING cycle (previously the Fluss client's 30 s
-            // request timeout + infinite writer retries let the failover spin
-            // past the 90 s observation window).
-            JobStatus terminal = awaitTerminal(job, seen, 180);
-            long afterMs = System.currentTimeMillis() - t0;
-            // No LOG-only degraded mode: once the job has left RUNNING the LOG must
-            // stop growing (fail-fast config: RESTART_MAX_ATTEMPTS=0).
-            long frozen = logCount(s);
-            Thread.sleep(3_000L);
-            long after = logCount(s);
-            assertEquals(frozen, after,
-                    "LOG must not continue growing after the job left RUNNING (no LOG-only degraded mode)");
-            System.out.println("p63[kv-drop] terminal=" + terminal + " seen=" + seen
-                    + " elapsed=" + afterMs + "ms LOG-frozen=" + frozen + " cause="
-                    + jobFailureCause(job).replace('\n', ' '));
-            assertEquals(JobStatus.FAILED, terminal,
-                    "a sink write failure must take the WHOLE job down to terminal FAILED "
-                            + "(stall guard bounds the write/flush at 15 s), terminal="
-                            + terminal + " seen=" + seen);
-            assertTrue(seen.contains(JobStatus.FAILING) || seen.contains(JobStatus.RESTARTING),
-                    "job must visibly leave RUNNING before FAILED (shared-fate evidence), seen="
-                            + seen);
-        } finally {
-            try {
-                job.cancel().get(5, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // best-effort: unblocks MiniCluster teardown when failover hangs
-            }
-            cluster.after();
-        }
-    }
-
     // ── P6.3 618 + 623: watermark stall freezes output; overflow event time rejected ──
 
     @Test
@@ -320,12 +242,14 @@ class CandleFailureInjectionIntegrationTest {
             }
             awaitLogCount(s, 18,
                     "resume must close exactly the windows whose end the watermark passes", 120);
-            Map<CandleKey, CandleRow> kv = readKvMap(s);
-            assertEquals(18, kv.size(), "KV must hold exactly the 18 closed windows");
+            Map<CandleKey, List<CandleRow>> log = readLogMap(s);
+            assertEquals(18, log.size(), "LOG must hold exactly the 18 closed windows");
             for (int w = 0; w <= 8; w++) {
                 for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-                    CandleRow row = kv.get(new CandleKey(token, BASE + w * WINDOW_MS));
-                    assertTrue(row != null, "window " + w + " token " + token + " must have closed");
+                    List<CandleRow> rows = log.get(new CandleKey(token, BASE + w * WINDOW_MS));
+                    assertTrue(rows != null && rows.size() == 1,
+                            "window " + w + " token " + token + " must have closed exactly once");
+                    CandleRow row = rows.get(0);
                     assertEquals(3, row.tickCount(),
                             "window " + w + " must fold exactly its 3 pre-stall ticks");
                     assertEquals(9_950L + w, row.close(),
@@ -348,20 +272,20 @@ class CandleFailureInjectionIntegrationTest {
                 overflow.flush();
             }
             awaitLogCount(s, 20, "overflow watermark must close w9 (single pusher tick)", 60);
-            Map<CandleKey, CandleRow> kv2 = readKvMap(s);
-            assertEquals(20, kv2.size(), "KV = 18 pre-overflow + w9 for both tokens");
+            Map<CandleKey, List<CandleRow>> log2 = readLogMap(s);
+            assertEquals(20, log2.size(), "LOG = 18 pre-overflow + w9 for both tokens");
             for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-                CandleRow w9 = kv2.get(new CandleKey(token, BASE + 9 * WINDOW_MS));
-                assertTrue(w9 != null, "w9 must close for token " + token);
-                assertEquals(1, w9.tickCount(), "w9 must contain only the pusher tick");
-                assertEquals(10_009L, w9.close(), "w9 close = the pusher tick price");
+                List<CandleRow> w9 = log2.get(new CandleKey(token, BASE + 9 * WINDOW_MS));
+                assertTrue(w9 != null && w9.size() == 1, "w9 must close for token " + token);
+                assertEquals(1, w9.get(0).tickCount(), "w9 must contain only the pusher tick");
+                assertEquals(10_009L, w9.get(0).close(), "w9 close = the pusher tick price");
             }
-            assertTrue(kv2.keySet().stream().noneMatch(k -> k.token() == TOKEN_BAD),
+            assertTrue(log2.keySet().stream().noneMatch(k -> k.token() == TOKEN_BAD),
                     "the overflow row must never produce a TOKEN_BAD candle");
             Thread.sleep(3_000L);
             assertEquals(20, logCount(s),
                     "post-resume LOG must stay at 20 — no duplicates, no continued growth");
-            LOG.info("p63: stall freeze + resume + overflow-rejection verified — LOG=20, KV=20, "
+            LOG.info("p63: stall freeze + resume + overflow-rejection verified — LOG=20, "
                     + "candidates=0, no TOKEN_BAD candle");
             cancelAndFinish(job, "stall");
         } finally {
@@ -391,7 +315,6 @@ class CandleFailureInjectionIntegrationTest {
         e.put("FLUSS_DATABASE", "default");
         e.put("RAW_TABLE", s.rawName());
         e.put("CANDLE_TABLE", s.logName());
-        e.put("CANDLE_CURRENT_TABLE", s.kvName());
         e.put("SIGNAL_CANDIDATES_TABLE", s.candName());
         e.put("DEDUP_TTL_MS", "300000");
         e.put("CANDLE_WINDOW_MS", "15000");
@@ -554,15 +477,6 @@ class CandleFailureInjectionIntegrationTest {
         }
     }
 
-    private static void appendWindow(AppendWriter writer, int w, long base) throws Exception {
-        for (long token : new long[] {TOKEN_A, TOKEN_B}) {
-            appendTick(writer, token, w, 0L, base, "");
-            appendTick(writer, token, w, 5_000L, base + 50L, "");
-            appendTick(writer, token, w, 10_000L, base - 50L, "");
-            appendTick(writer, token, w, 14_900L, base, "");
-        }
-    }
-
     private static void appendPusher(AppendWriter writer, int w, long base) throws Exception {
         for (long token : new long[] {TOKEN_A, TOKEN_B}) {
             appendTick(writer, token, w, 5_000L, base, "P");
@@ -685,15 +599,13 @@ class CandleFailureInjectionIntegrationTest {
         return scanAll(s.log(), s.logInfo()).size();
     }
 
-    private static long kvCount(ScratchSet s) throws Exception {
-        return scanAll(s.kv(), s.kvInfo()).size();
-    }
-
-    private static Map<CandleKey, CandleRow> readKvMap(ScratchSet s) throws Exception {
-        Map<CandleKey, CandleRow> map = new HashMap<>();
-        for (InternalRow r : scanAll(s.kv(), s.kvInfo())) {
-            map.put(new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
-                    r.getLong(CandleTableColumns.WINDOW_START)), candleRow(r));
+    /** Every closed candle in the LOG keyed by (token, window_start). */
+    private static Map<CandleKey, List<CandleRow>> readLogMap(ScratchSet s) throws Exception {
+        Map<CandleKey, List<CandleRow>> map = new HashMap<>();
+        for (InternalRow r : scanAll(s.log(), s.logInfo())) {
+            map.computeIfAbsent(new CandleKey(r.getLong(CandleTableColumns.INSTRUMENT_TOKEN),
+                    r.getLong(CandleTableColumns.WINDOW_START)), k -> new ArrayList<>())
+                    .add(candleRow(r));
         }
         return map;
     }
@@ -706,7 +618,7 @@ class CandleFailureInjectionIntegrationTest {
         return ids;
     }
 
-    /** Scans every bucket of a table (LOG and KV both work — P6 precedent). */
+    /** Scans every bucket of a table (P6 precedent). */
     private static List<InternalRow> scanAll(Table table, TableInfo info) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         for (int b = 0; b < info.getNumBuckets(); b++) {
@@ -749,17 +661,14 @@ class CandleFailureInjectionIntegrationTest {
         Path rocksDir = Path.of(System.getProperty("java.io.tmpdir"), "p63-rocks-" + suffix);
         String rawName = "p63_" + suffix + "_raw";
         String logName = "p63_" + suffix + "_log";
-        String kvName = "p63_" + suffix + "_kv";
         String candName = "p63_" + suffix + "_cand";
         Table raw = createTable(rawName, rawSchema(), null, 1, "raw LOG");
-        Table log = createTable(logName, candleSchema(null), null, 16, "candle LOG");
-        Table kv = createTable(kvName, candleSchema(List.of("instrument_token", "window_start")),
-                List.of("instrument_token", "window_start"), 16, "candle KV");
+        Table log = createTable(logName, candleSchema(), null, 16, "candle LOG");
         Table cand = createTable(candName, candidatesSchema(), List.of("candidate_id"), 16,
                 "candidates KV");
-        return new ScratchSet(suffix, rawName, logName, kvName, candName,
-                raw, log, kv, cand,
-                tableInfo(rawName), tableInfo(logName), tableInfo(kvName), tableInfo(candName),
+        return new ScratchSet(suffix, rawName, logName, candName,
+                raw, log, cand,
+                tableInfo(rawName), tableInfo(logName), tableInfo(candName),
                 cpDir, rocksDir);
     }
 
@@ -806,8 +715,8 @@ class CandleFailureInjectionIntegrationTest {
                 .build();
     }
 
-    private static Schema candleSchema(List<String> pk) {
-        Schema.Builder b = Schema.newBuilder()
+    private static Schema candleSchema() {
+        return Schema.newBuilder()
                 .column("instrument_token", DataTypes.BIGINT())
                 .column("exchange", DataTypes.STRING())
                 .column("symbol", DataTypes.STRING())
@@ -822,11 +731,8 @@ class CandleFailureInjectionIntegrationTest {
                 .column("algorithm_version", DataTypes.STRING())
                 .column("configuration_version", DataTypes.STRING())
                 .column("output_ts", DataTypes.BIGINT())
-                .column("schema_version", DataTypes.STRING());
-        if (pk != null) {
-            b.primaryKey(pk.toArray(new String[0]));
-        }
-        return b.build();
+                .column("schema_version", DataTypes.STRING())
+                .build();
     }
 
     private static Schema candidatesSchema() {
@@ -866,15 +772,12 @@ class CandleFailureInjectionIntegrationTest {
             String suffix,
             String rawName,
             String logName,
-            String kvName,
             String candName,
             Table raw,
             Table log,
-            Table kv,
             Table cand,
             TableInfo rawInfo,
             TableInfo logInfo,
-            TableInfo kvInfo,
             TableInfo candInfo,
             Path checkpointDir,
             Path rocksDir) {}
