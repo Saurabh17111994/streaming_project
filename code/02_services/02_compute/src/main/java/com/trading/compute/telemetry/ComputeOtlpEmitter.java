@@ -72,6 +72,19 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public static final String SOURCE_IDLE_AT_TAIL_METRIC = "compute.source.idle.at.tail";
 
     /**
+     * Non-canonical-signal filter counter (DEC-035, tracker 14 re-scoped P2):
+     * incremented once per signal row the {@code CanonicalSignalFilterFunction}
+     * drops from the {@code Signal_Candidates_current} KV projection (the LOG
+     * twin keeps every row — this metric only proves the KV filter is doing
+     * what the canonical-identity policy says). DELTA non-monotonic, like the
+     * rejection counter — fires on NEW filtered rows, never on replay.
+     * OpenObserve renames '.' to '_', so the stream is
+     * {@code compute_signal_kv_filtered_noncanonical}.
+     */
+    public static final String SIGNAL_KV_FILTERED_NON_CANONICAL_METRIC =
+            "compute.signal.kv.filtered.noncanonical";
+
+    /**
      * Dedup-state gauges (tracker 14 P5.1). Mirrors of the
      * {@code FingerprintDedupFunction} state sizes, resynced to the actual
      * {@code MapState} contents at operator {@code open()} (which runs AFTER
@@ -85,6 +98,12 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public static final String DEDUP_EXPIRY_INDEX_COUNT_METRIC =
             "compute.dedup.expiry.index.count";
     public static final String DEDUP_STATE_BYTES_METRIC = "compute.dedup.state.bytes.estimate";
+
+    /**
+     * Incremented by CanonicalSignalFilterFunction (once per non-canonical
+     * signal row); drained (delta) by the flush thread.
+     */
+    private static final AtomicLong SIGNAL_KV_FILTERED_NON_CANONICAL = new AtomicLong();
 
     /** Incremented by RawValidationFunction; drained (delta) by the flush thread. */
     private static final AtomicLong SCHEMA_VERSION_REJECTED = new AtomicLong();
@@ -242,6 +261,21 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         return SOURCE_IDLE_AT_TAIL.getAndSet(0);
     }
 
+    /**
+     * Called by {@code CanonicalSignalFilterFunction} once per signal row
+     * dropped from the KV current-state projection. NEVER called from the
+     * filter's hot path in a blocking way — this is a nanosecond static
+     * increment.
+     */
+    public static void recordSignalKvFilteredNonCanonical() {
+        SIGNAL_KV_FILTERED_NON_CANONICAL.incrementAndGet();
+    }
+
+    /** Deltas the signal KV non-canonical filter counter (public: cross-package filter tests read it). */
+    public long drainSignalKvFilteredNonCanonicalDelta() {
+        return SIGNAL_KV_FILTERED_NON_CANONICAL.getAndSet(0);
+    }
+
     /** Start periodic flush (every 10 s). Call once from {@code SignalJob.run}. */
     public void start() {
         scheduler.scheduleAtFixedRate(this::flush, 10, 10, TimeUnit.SECONDS);
@@ -276,7 +310,8 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public int flushOnce() throws java.io.IOException {
         long delta = drainDelta();
         long sourceIdleAtTail = drainSourceIdleAtTailDelta();
-        String json = buildMetricsJson(delta, sourceIdleAtTail);
+        long signalKvFiltered = drainSignalKvFilteredNonCanonicalDelta();
+        String json = buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -380,11 +415,25 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     }
 
     /**
-     * OTLP/JSON payload: one DELTA non-monotonic sum for the rejection counter
-     * plus (when the startup mode was recorded) a GAUGE for the run's startup
-     * mode.
+     * OTLP/JSON payload: DELTA non-monotonic sums for the rejection counter,
+     * the source idle-at-tail episode counter, and the signal KV
+     * non-canonical filter counter, plus (when the startup mode was recorded)
+     * a GAUGE for the run's startup mode and the dedup-state gauges.
      */
+    /**
+     * 1-arg convenience for payload-test call sites that do not care about
+     * the source-idle or signal-KV deltas: delegates with zero counts (the
+     * metrics still appear in the payload at 0).
+     */
+    String buildMetricsJson(long delta) {
+        return buildMetricsJson(delta, 0L, 0L);
+    }
+
     String buildMetricsJson(long delta, long sourceIdleAtTail) {
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L);
+    }
+
+    String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -408,6 +457,12 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
           .append("\"isMonotonic\":false,")
           .append("\"dataPoints\":[{\"asInt\":").append(sourceIdleAtTail).append(",")
+          .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
+        sb.append(",{\"name\":\"").append(SIGNAL_KV_FILTERED_NON_CANONICAL_METRIC).append("\",")
+          .append("\"unit\":\"signals\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
+          .append("\"isMonotonic\":false,")
+          .append("\"dataPoints\":[{\"asInt\":").append(signalKvFiltered).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
         if (mode != -1L) {
             sb.append(",{\"name\":\"").append(STARTUP_MODE_METRIC).append("\",")

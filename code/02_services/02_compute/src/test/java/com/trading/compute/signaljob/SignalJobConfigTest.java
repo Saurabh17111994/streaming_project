@@ -48,6 +48,7 @@ class SignalJobConfigTest {
         assertEquals("2", cfg.candleSchemaVersion());
         // signal detection tuning defaults (DEC-034)
         assertEquals("Signal_Candidates", cfg.signalCandidatesTable());
+        assertEquals("Signal_Candidates_current", cfg.signalCurrentTable());
         assertEquals("simple-breakout", cfg.signalStrategyId());
         assertEquals("1.0.0", cfg.signalStrategyVersion());
         assertEquals("breakout-20-bullish-trend", cfg.signalRuleId());
@@ -195,6 +196,7 @@ class SignalJobConfigTest {
         env.put("RAW_TABLE", "raw_table_1");
         env.put("CANDLE_TABLE", "feature_candles_15s");
         env.put("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates_dev");
+        env.put("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current_dev");
         env.put("SIGNAL_STRATEGY_ID", "my-strategy");
         env.put("SIGNAL_STRATEGY_VERSION", "2.1.0");
         env.put("SIGNAL_RULE_ID", "my-rule");
@@ -209,6 +211,7 @@ class SignalJobConfigTest {
         assertEquals(45_000L, cfg.restartDelayMs());
         assertEquals("fluss:9123", cfg.bootstrapServers());
         assertEquals("Signal_Candidates_dev", cfg.signalCandidatesTable());
+        assertEquals("Signal_Candidates_current_dev", cfg.signalCurrentTable());
         assertEquals("my-strategy", cfg.signalStrategyId());
         assertEquals("2.1.0", cfg.signalStrategyVersion());
         assertEquals("my-rule", cfg.signalRuleId());

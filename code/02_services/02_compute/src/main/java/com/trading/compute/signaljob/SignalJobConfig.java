@@ -20,6 +20,17 @@ import java.util.Map;
  * <p>Build via {@link #fromEnv()} in production; {@link #from(Map)} is exposed
  * so the rejection rules are unit-testable without touching {@code System.getenv}.
  *
+ * <p><b>Signal dual-sink (DEC-035, tracker 14 re-scoped P2).</b>
+ * {@code SIGNAL_CANDIDATES_TABLE} (default {@code Signal_Candidates}) is the
+ * append-only LOG; {@code SIGNAL_CURRENT_TABLE} (default
+ * {@code Signal_Candidates_current}) is the KV current-state projection. The
+ * canonical identity — {@code SIGNAL_STRATEGY_ID},
+ * {@code SIGNAL_STRATEGY_VERSION}, {@code SIGNAL_RULE_ID} — defaults to the
+ * pinned {@link SignalCandidatesTableColumns} canonical constants, so the
+ * default config emits rows the KV filter accepts; an override changes the
+ * identity and those rows are filtered from the KV sink (LOG keeps them) and
+ * counted via {@code compute.signal.kv.filtered.noncanonical}.
+ *
  * <p><b>Fail-closed startup mode (CANDLE-KV-REPLAY-001 A3.3).</b> A restart
  * must either restore from a checkpoint ({@code STATE_RECOVERY_PATH}, mode
  * {@link StartupMode#RESTORE}) or explicitly accept an offset-0 full replay
@@ -54,6 +65,7 @@ public record SignalJobConfig(
         long restartDelayMs,
         String checkpointDir,
         String signalCandidatesTable,
+        String signalCurrentTable,
         String signalStrategyId,
         String signalStrategyVersion,
         String signalRuleId,
@@ -106,9 +118,13 @@ public record SignalJobConfig(
                 longValue(env, "RESTART_DELAY_MS", 30_000L),
                 checkpointDir(env),
                 env.getOrDefault("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates"),
-                env.getOrDefault("SIGNAL_STRATEGY_ID", "simple-breakout"),
-                env.getOrDefault("SIGNAL_STRATEGY_VERSION", "1.0.0"),
-                env.getOrDefault("SIGNAL_RULE_ID", "breakout-20-bullish-trend"),
+                env.getOrDefault("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current"),
+                env.getOrDefault("SIGNAL_STRATEGY_ID",
+                        SignalCandidatesTableColumns.CANONICAL_STRATEGY_ID),
+                env.getOrDefault("SIGNAL_STRATEGY_VERSION",
+                        SignalCandidatesTableColumns.CANONICAL_STRATEGY_VERSION),
+                env.getOrDefault("SIGNAL_RULE_ID",
+                        SignalCandidatesTableColumns.CANONICAL_RULE_ID),
                 signalLookbackCandles(env),
                 signalQuantity(env),
                 env.getOrDefault("OTEL_COLLECTOR_HOST", "otel-collector:4318"),

@@ -1,5 +1,6 @@
 package com.trading.compute.signaljob;
 
+import com.trading.common.schema.CandleTableSchema;
 import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.time.Duration;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -29,17 +30,22 @@ import org.slf4j.LoggerFactory;
  * <p>Topology: {@code raw_table_1} (Fluss LOG source, full offsets) → raw
  * schema/validity gate → bounded fingerprint dedup → 15-second event-time
  * tumbling window (OHLCV aggregate) → {@code feature_candles_15s} (Fluss LOG
- * sink, the sole candle output — the KV current-state twin retired 2026-08-13)
- * → MVP signal detection (Slice 2.1, DEC-034) → {@code Signal_Candidates} (Fluss
- * KV upsert sink). Business Logic operator internals (candidate lifecycle,
- * max-one-active) and Ranking/decision sinks stay disabled at those boundaries
- * — postponed with the ranking phase.
+ * sink, the sole candle output — the KV current-state twin was retired
+ * 2026-08-13) → MVP signal detection (Slice 2.1, DEC-034) → signal dual-sink
+ * (DEC-035): {@code Signal_Candidates} (Fluss LOG append, every signal) and
+ * {@code Signal_Candidates_current} (Fluss KV upsert behind the
+ * canonical-signal filter). Business Logic operator internals (candidate
+ * lifecycle, max-one-active) and Ranking/decision sinks stay disabled at
+ * those boundaries — postponed with the ranking phase.
  *
  * <p>Checkpointing: EXACTLY_ONCE, pinned interval/timeout/max-concurrent
- * (REQ-FC-006); fixed-delay restart 3 × 30s. The sink is the Fluss
- * append writer ({@code RowDataSerializationSchema(true, true)} = append-only,
- * ignore delete — correct for a LOG table); the source consumes from the
- * earliest available offset on first start.
+ * (REQ-FC-006); fixed-delay restart 3 × 30s. Both signal sinks stay inside
+ * {@code StallGuardedSink} (hang containment, identical on all sinks). The
+ * LOG sinks use {@code RowDataSerializationSchema(true, true)} (append-only,
+ * ignore delete — correct for a LOG table); the KV current-state sink uses
+ * {@code RowDataSerializationSchema(false, false)} (INSERT → UPSERT for the
+ * KV writer). The source consumes from the earliest available offset on
+ * first start.
  */
 public final class SignalJob {
 
@@ -112,9 +118,13 @@ public final class SignalJob {
      * by the same code path the running job uses.
      */
     public static StreamExecutionEnvironment buildTopology(SignalJobConfig config) {
+        // Read-only metadata preflight (tracker 14 P1 / re-scoped P2): prove
+        // the deployed tables (candle LOG, signal LOG, signal current-state KV)
+        // match the contracts the write paths rely on before any graph is
+        // built — fail closed on contract drift, never write degraded.
         try {
             preflightTableContracts(config);
-        } catch (CandleTableContractValidator.ContractViolation e) {
+        } catch (TableContractValidator.ContractViolation e) {
             // Tracker 14 P8.0 box 828: record the fail-closed startup event on
             // the trading_alerts stream before rethrowing — the job exits
             // right after, so this is the only chance to ship it.
@@ -177,18 +187,21 @@ public final class SignalJob {
                 .build();
 
         WatermarkStrategy<RowData> watermarks = CandleWatermarkStrategy.of(config);
-        DataStream<RowData> ticks = env.fromSource(source, watermarks, "raw-table-1");
+        DataStream<RowData> ticks = env.fromSource(source, watermarks, "raw-table-1")
+                .uid("raw-table-1");
 
         DataStream<RowData> valid = ticks
                 .flatMap(new RawValidationFunction(config))
                 .returns(ticks.getType())
-                .name("raw-validation");
+                .name("raw-validation")
+                .uid("raw-validation");
 
         DataStream<RowData> deduped = valid
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
                 .process(new FingerprintDedupFunction(config))
                 .returns(ticks.getType())
-                .name("fingerprint-dedup");
+                .name("fingerprint-dedup")
+                .uid("fingerprint-dedup");
 
         SingleOutputStreamOperator<RowData> candles = deduped
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
@@ -196,7 +209,8 @@ public final class SignalJob {
                 .allowedLateness(Duration.ofMillis(config.allowedLatenessMs()))
                 .aggregate(new CandleAggregateFunction(), new CandleEmitFunction(config))
                 .returns(CandleTableColumns.ROW_TYPE_INFO)
-                .name("candle-15s");
+                .name("candle-15s")
+                .uid("candle-15s");
 
         // Tracker 14 box 682/116 (2026-08-12): the candle LOG sink is
         // wrapped in StallGuardedSink — a Flink-side watchdog
@@ -232,28 +246,66 @@ public final class SignalJob {
                                 .setOption("client.writer.retries", "2")
                                 .build(),
                         config.sinkWriteStallTimeoutMs()))
-                .name("feature-candles-15s-sink");
+                .name("feature-candles-15s-sink")
+                .uid("feature-candles-15s-sink");
 
         // Slice 2.1 (DEC-034): closed candles -> MVP signal detection ->
-        // Signal_Candidates KV upsert. The KV sink uses
-        // RowDataSerializationSchema(false, false): isAppendOnly=false maps
-        // INSERT RowKinds to UPSERT operations for the KV writer; the writer
-        // (Append vs Upsert) is chosen from the live table metadata fetched by
-        // FlussSink.build() — fail-fast startup if the table is missing.
+        // signal dual-sink (DEC-035, tracker 14 re-scoped P2).
+        //
+        // (a) Signal_Candidates LOG: append-only RowDataSerializationSchema
+        // (true, true) — every emitted signal is an immutable audit row.
+        // (b) Signal_Candidates_current KV: the canonical-signal filter keeps
+        // only the pinned canonical identity (schema_version +
+        // strategy_id + strategy_version + rule_id) and the
+        // RowDataSerializationSchema(false, false) maps INSERT RowKinds to
+        // UPSERTs; the writer (Append vs Upsert) is chosen from the live
+        // table metadata fetched by FlussSink.build() — fail-fast startup if
+        // the table is missing or is not a KV table.
+        //
+        // Both sinks stay inside StallGuardedSink (tracker 14 box 682/116,
+        // identical on ALL sinks): the Fluss client has two unbounded hang
+        // points only an interrupt-bounded call guard can see; on timeout the
+        // guard fails the task so the restart policy drives the job to
+        // terminal FAILED instead of cycling FAILING forever.
         DataStream<RowData> signals = candles
                 .keyBy(row -> row.getLong(CandleTableColumns.INSTRUMENT_TOKEN))
                 .process(new SignalDetectionFunction(config))
                 .returns(SignalCandidatesTableColumns.ROW_TYPE_INFO)
-                .name("signal-detection");
+                .name("signal-detection")
+                .uid("signal-detection");
 
         signals
-                .sinkTo(FlussSink.<RowData>builder()
-                        .setBootstrapServers(config.bootstrapServers())
-                        .setDatabase(config.database())
-                        .setTable(config.signalCandidatesTable())
-                        .setSerializationSchema(new RowDataSerializationSchema(false, false))
-                        .build())
-                .name("signal-candidates-sink");
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.signalCandidatesTable())
+                                .setSerializationSchema(new RowDataSerializationSchema(true, true))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
+                .name("signal-candidates-sink")
+                .uid("signal-candidates-sink");
+
+        signals
+                .filter(new CanonicalSignalFilterFunction())
+                .name("canonical-signal-filter")
+                .uid("canonical-signal-filter")
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.signalCurrentTable())
+                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
+                .name("signal-candidates-current-sink")
+                .uid("signal-candidates-current-sink");
 
         return env;
     }
@@ -348,33 +400,58 @@ public final class SignalJob {
     }
 
     /**
-     * Read-only metadata preflight (CANDLE-KV-REPLAY-001 P4): opens a short
-     * Fluss connection, checks the deployed candle table against the
-     * LOG contract (no PK, instrument_token routing), and closes.
-     * Any violation — or an unreachable cluster — fails startup before the
-     * graph is built: the job never writes to a table that contradicts the
-     * contract it was compiled against.
+     * Read-only metadata preflight (tracker 14 P1 — CANDLE-SCHEMA-002;
+     * tracker 14 re-scoped P2 — SIGNAL-SCHEMA-001): opens a short Fluss
+     * connection and checks the three deployed tables the write paths rely
+     * on — the candle LOG (no PK, instrument_token routing, 16 buckets,
+     * exact 15-column v2 schema), the signal LOG (no PK, instrument_token
+     * routing, 16 buckets, exact 22-column v3 schema), and the signal
+     * current-state KV (PK exactly [instrument_token], instrument_token
+     * routing, 16 buckets, the same 22-column schema) — then closes. Any
+     * violation — or an unreachable cluster — fails startup before the graph
+     * is built: the job never writes to a table that contradicts the contract
+     * it was compiled against.
      */
     static void preflightTableContracts(SignalJobConfig config) {
         org.apache.fluss.config.Configuration clientConf = new org.apache.fluss.config.Configuration();
         clientConf.setString("bootstrap.servers", config.bootstrapServers());
         try (org.apache.fluss.client.Connection conn =
                 org.apache.fluss.client.ConnectionFactory.createConnection(clientConf)) {
-            org.apache.fluss.metadata.TableInfo logInfo = conn
+            org.apache.fluss.metadata.TableInfo candleLog = conn
                     .getTable(org.apache.fluss.metadata.TablePath.of(config.database(), config.candleTable()))
                     .getTableInfo();
-            CandleTableContractValidator.validateLogTable(logInfo);
-            // Tracker 14 P1 (CANDLE-SCHEMA-002): log the validated schema report —
-            // exact live columns/types (and the DDL-vs-live nullability
-            // divergence where Fluss does not carry NOT NULL) as startup evidence.
-            LOG.info("signal-job: candle table contract OK ({} LOG)",
-                    config.candleTable());
-            LOG.info("signal-job: {}", CandleTableContractValidator.schemaReport(logInfo));
-        } catch (CandleTableContractValidator.ContractViolation e) {
+            TableContractValidator.validateCandleLogTable(candleLog);
+            org.apache.fluss.metadata.TableInfo signalLog = conn
+                    .getTable(org.apache.fluss.metadata.TablePath.of(
+                            config.database(), config.signalCandidatesTable()))
+                    .getTableInfo();
+            TableContractValidator.validateSignalLogTable(signalLog);
+            org.apache.fluss.metadata.TableInfo signalCurrent = conn
+                    .getTable(org.apache.fluss.metadata.TablePath.of(
+                            config.database(), config.signalCurrentTable()))
+                    .getTableInfo();
+            TableContractValidator.validateSignalCurrentKvTable(signalCurrent);
+            // Log the validated schema reports — exact live columns/types
+            // (and the DDL-vs-live nullability divergence where Fluss does
+            // not carry NOT NULL) as startup evidence.
+            LOG.info("signal-job: candle table contract OK ({} LOG)", config.candleTable());
+            LOG.info("signal-job: {}",
+                    TableContractValidator.schemaReport(
+                            candleLog, CandleTableSchema.COLUMN_NULLABLE_IN_DDL));
+            LOG.info("signal-job: signal LOG contract OK ({})", config.signalCandidatesTable());
+            LOG.info("signal-job: {}",
+                    TableContractValidator.schemaReport(
+                            signalLog, SignalCandidatesTableColumns.COLUMN_NULLABLE_IN_DDL));
+            LOG.info("signal-job: signal current-state KV contract OK ({})",
+                    config.signalCurrentTable());
+            LOG.info("signal-job: {}",
+                    TableContractValidator.schemaReport(
+                            signalCurrent, SignalCandidatesTableColumns.COLUMN_NULLABLE_IN_DDL));
+        } catch (TableContractValidator.ContractViolation e) {
             throw e; // contract drift: fail closed, do not build a degraded graph
         } catch (Exception e) {
             throw new IllegalStateException(
-                    "signal-job: candle-table preflight failed — is the dev Fluss cluster reachable at "
+                    "signal-job: table preflight failed — is the dev Fluss cluster reachable at "
                             + config.bootstrapServers() + "? (" + e.getMessage() + ")", e);
         }
     }

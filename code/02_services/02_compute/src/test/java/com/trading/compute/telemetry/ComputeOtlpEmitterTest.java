@@ -16,7 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** OTLP payload contract for the rejection counter (process rule 2). */
+/** OTLP payload contract for the rejection counter (process rule 2), source-idle episodes, and dedup gauges. */
 @DisplayName("ComputeOtlpEmitter JSON shape")
 class ComputeOtlpEmitterTest {
 
@@ -34,13 +34,14 @@ class ComputeOtlpEmitterTest {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
         emitter.drainDelta();
         emitter.drainSourceIdleAtTailDelta();
+        emitter.drainSignalKvFilteredNonCanonicalDelta();
         ComputeOtlpEmitter.resetStartupModeForTest();
     }
 
     @Test
     @DisplayName("payload is a DELTA non-monotonic sum named compute.invalid.byReason.schema-version")
     void emitsDeltaSumWithExactMetricName() {
-        String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(7, 0);
+        String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(7);
 
         // Exact metric name — the O2 stream (dots -> underscores) must be
         // compute_invalid_byReason_schema-version for the alert to match.
@@ -59,20 +60,58 @@ class ComputeOtlpEmitterTest {
     void sourceIdleAtTailShipsAsDeltaSum() {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
 
-        // 3-arg overload carries the drained episode count; the stream name
+        // 2-arg overload carries the drained episode count; the stream name
         // (dots -> underscores) must be compute_source_idle_at_tail for the O2
         // alert to match.
-        String json = emitter.buildMetricsJson(0, 0, 2);
+        String json = emitter.buildMetricsJson(0, 2);
         assertThat(json).contains("\"name\":\"compute.source.idle.at.tail\"");
         assertThat(json).contains("\"asInt\":2");
         assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
         assertThat(json).contains("\"isMonotonic\":false");
 
-        // The 2-arg convenience keeps ~8 existing call sites green and simply
+        // The 1-arg convenience keeps existing call sites green and simply
         // carries a zero episode count — the metric is always present.
-        String twoArg = emitter.buildMetricsJson(0, 0);
+        String twoArg = emitter.buildMetricsJson(0);
         assertThat(twoArg).contains("\"name\":\"compute.source.idle.at.tail\"");
         assertThat(twoArg).contains("\"asInt\":0");
+    }
+    @Test
+    @DisplayName("signal KV non-canonical filter count ships as its own DELTA sum (DEC-035)")
+    void signalKvFilteredShipsAsDeltaSum() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        // 3-arg overload carries the drained count; the stream name
+        // (dots -> underscores) must be compute_signal_kv_filtered_noncanonical
+        // for the O2 query to match.
+        String json = emitter.buildMetricsJson(0, 0, 3);
+        assertThat(json).contains("\"name\":\"compute.signal.kv.filtered.noncanonical\"");
+        assertThat(json).contains("\"asInt\":3");
+        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
+        assertThat(json).contains("\"isMonotonic\":false");
+
+        // The 1- and 2-arg conveniences keep existing call sites green and
+        // simply carry a zero count — the metric is always present.
+        assertThat(emitter.buildMetricsJson(0))
+                .contains("\"name\":\"compute.signal.kv.filtered.noncanonical\"");
+        assertThat(emitter.buildMetricsJson(0, 0))
+                .contains("\"name\":\"compute.signal.kv.filtered.noncanonical\"");
+    }
+
+    @Test
+    @DisplayName("signal KV filter counter is drained as a delta, independent of the rejection counter")
+    void signalKvFilteredCounterIsDrainedAsDelta() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        assertThat(emitter.drainSignalKvFilteredNonCanonicalDelta()).isZero();
+
+        ComputeOtlpEmitter.recordSignalKvFilteredNonCanonical();
+        ComputeOtlpEmitter.recordSignalKvFilteredNonCanonical();
+        ComputeOtlpEmitter.recordSchemaVersionRejection();
+        // each counter is drained independently
+        assertThat(emitter.drainSignalKvFilteredNonCanonicalDelta()).isEqualTo(2);
+        assertThat(emitter.drainDelta()).isEqualTo(1);
+        // a drained increment never re-fires
+        assertThat(emitter.drainSignalKvFilteredNonCanonicalDelta()).isZero();
     }
 
     @Test
@@ -101,16 +140,16 @@ class ComputeOtlpEmitterTest {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
 
         // before the run records a mode, the gauge is absent
-        assertThat(emitter.buildMetricsJson(0, 0)).doesNotContain("compute.startup.mode");
+        assertThat(emitter.buildMetricsJson(0)).doesNotContain("compute.startup.mode");
 
         ComputeOtlpEmitter.recordStartupMode(0); // RESTORE
-        String restoreJson = emitter.buildMetricsJson(0, 0);
+        String restoreJson = emitter.buildMetricsJson(0);
         assertThat(restoreJson).contains("\"name\":\"compute.startup.mode\"");
         assertThat(restoreJson).contains("\"gauge\":{\"dataPoints\":[{\"asInt\":0");
         assertThat(emitter.startupModeValue()).isZero();
 
         ComputeOtlpEmitter.recordStartupMode(1); // FULL_REPLAY
-        assertThat(emitter.buildMetricsJson(0, 0))
+        assertThat(emitter.buildMetricsJson(0))
                 .contains("\"gauge\":{\"dataPoints\":[{\"asInt\":1");
         assertThat(emitter.startupModeValue()).isEqualTo(1L);
     }
@@ -132,6 +171,7 @@ class ComputeOtlpEmitterTest {
         String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(7, 2);
 
         assertThat(json).contains("\"unit\":\"rejections\"");
+        assertThat(json).contains("\"unit\":\"episodes\"");
         assertThat(json).contains("\"unit\":\"entries\"");
         assertThat(json).contains("\"unit\":\"buckets\"");
         assertThat(json).contains("\"unit\":\"bytes\"");
@@ -215,7 +255,7 @@ class ComputeOtlpEmitterTest {
                     "deployment.version", "1.0.0",
                     "job.name", "signal-job",
                     "flink.execution.mode", "embedded");
-            String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0, 0);
+            String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0);
             assertThat(json).contains("\"key\":\"deployment.environment\","
                     + "\"value\":{\"stringValue\":\"dev\"}");
             assertThat(json).contains("\"key\":\"host.name\","
@@ -245,7 +285,7 @@ class ComputeOtlpEmitterTest {
         try {
             ComputeOtlpEmitter.configureResourceAttributes(
                     "host.name", "node\"quote\\path\nnewline");
-            String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0, 0);
+            String json = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0);
             assertThat(json).contains("node\\\"quote\\\\path\\nnewline");
             parseJson(json); // must still be valid JSON
         } finally {
@@ -315,6 +355,7 @@ class ComputeOtlpEmitterTest {
             // Exactly the NEW delta — the failed pre-outage increment is not retried
             // (drained-once semantics: no duplicate/unbounded telemetry buffering).
             assertThat(lastBody.get()).contains("\"asInt\":1")
+                    .contains("compute.invalid.byReason.schema-version")
                     .doesNotContain("\"asInt\":2");
         } finally {
             server.stop(0);
