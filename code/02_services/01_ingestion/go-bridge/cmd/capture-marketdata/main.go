@@ -19,6 +19,7 @@
 //	ARROW_TOKEN (optional, overrides)     → use an existing token verbatim
 //	CAPTURE_STANDARD=1 (default)          → capture ds.arrow.trade
 //	CAPTURE_HFT=1 (default)               → capture socket.arrow.trade
+//	CAPTURE_MODES=ltp,ltpc,quote,full     → subset of standard modes (default: all four)
 //	CAPTURE_TOKENS=2885,1333,3045         → instrument ids (NSE tokens)
 //	CAPTURE_DURATION=20                   → seconds per feed
 //	CAPTURE_OUT=marketdata-capture.jsonl  → output path
@@ -218,7 +219,23 @@ func captureStandard(rec *recorder, client *arrow.Client, tokens []int32, dur ti
 	defer ds.Close()
 	_ = rec.emit(map[string]any{"kind": "connect", "feed": "standard", "ok": true})
 
-	for _, mode := range []arrow.StreamMode{arrow.StreamModeLTP, arrow.StreamModeLTPC, arrow.StreamModeQuote, arrow.StreamModeFull} {
+	modes := []arrow.StreamMode{arrow.StreamModeLTP, arrow.StreamModeLTPC, arrow.StreamModeQuote, arrow.StreamModeFull}
+	if v := os.Getenv("CAPTURE_MODES"); v != "" {
+		modes = nil
+		for _, m := range strings.Split(v, ",") {
+			switch strings.TrimSpace(m) {
+			case "ltp":
+				modes = append(modes, arrow.StreamModeLTP)
+			case "ltpc":
+				modes = append(modes, arrow.StreamModeLTPC)
+			case "quote":
+				modes = append(modes, arrow.StreamModeQuote)
+			case "full":
+				modes = append(modes, arrow.StreamModeFull)
+			}
+		}
+	}
+	for _, mode := range modes {
 		err := ds.Subscribe(mode, tokens)
 		_ = rec.emit(map[string]any{"kind": "subscribe", "feed": "standard", "mode": string(mode), "ok": err == nil, "err": errStr(err)})
 		fmt.Fprintf(os.Stderr, "standard subscribe mode=%s ok=%v err=%v\n", mode, err == nil, err)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -110,7 +111,18 @@ func (s *DataStream) sendSubMessage(code string, mode StreamMode, tokens []int32
 	return s.conn.WriteJSON(msg)
 }
 
-func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick), onError func(error)) {
+func payloadPrefix(p []byte, n int) []byte {
+	if len(p) <= n {
+		return p
+	}
+	return p[:n]
+}
+
+// ReadTicks reads and parses market-tick payloads until ctx is done or the
+// socket errors. onTick receives the parsed tick AND the exact raw frame
+// bytes (the payload_hash/raw_payload contract: the bridge re-emits those
+// bytes verbatim so Java can verify the SHA-256 digest).
+func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick, []byte), onError func(error)) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,6 +143,10 @@ func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick), onE
 			}
 			return
 		}
+		if os.Getenv("ARROW_DEBUG_WS") != "" {
+			fmt.Fprintf(os.Stderr, "arrow-debug-ws: read mt=%d len=%d first=%x\n",
+				-1, len(payload), payloadPrefix(payload, 8))
+		}
 		if len(payload) < 13 {
 			// Heartbeats / control payloads (e.g. 1 byte) — ignore.
 			continue
@@ -142,7 +158,7 @@ func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick), onE
 			}
 			continue
 		}
-		onTick(tick)
+		onTick(tick, append([]byte(nil), payload...))
 	}
 }
 

@@ -581,15 +581,32 @@ func runStandard(ctx context.Context, cancel context.CancelFunc, client *arrow.C
 		os.Exit(1)
 	}
 	defer ds.Close()
-
+	logf("standard connected (tokens=%d)", len(tokens))
 	if err := ds.Subscribe(arrow.StreamModeFull, tokens); err != nil {
 		fmt.Fprintf(os.Stderr, "arrow-bridge: standard subscribe failed: %v\n", err)
 		os.Exit(1)
 	}
 	logf("standard subscribed %d tokens (mode=full)", len(tokens))
 
-	go ds.ReadTicks(ctx, func(t arrow.MarketTick) {
-		emit(fromStandardTick(t))
+	// Standard-mode identity. The standard stream is a single
+	// process-lifetime connection (no in-process reconnect loop): the
+	// supervisor restarts the process on disconnect, so a new process
+	// begins a new connection epoch. R-185: restart the per-slot tick
+	// sequence at the start of the epoch.
+	const (
+		slotID       = "standard-0"
+		connectionID = "ingestion-local/standard-0"
+	)
+	epoch := uint64(1)
+	bridgeEmitter.resetSeq(slotID)
+
+	go ds.ReadTicks(ctx, func(t arrow.MarketTick, payload []byte) {
+		// EmitTick (not a bare write) so standard ticks carry the full v2
+		// contract: record_type, connection/slot/epoch identity,
+		// feed_sequence_local, received_ts_ms, and raw_payload + payload_hash
+		// (SHA-256 of the exact frame bytes). Without payload_hash the Java
+		// PayloadHashValidator quarantines every standard tick HASH_MISMATCH.
+		_ = bridgeEmitter.EmitTick(fromStandardTick(t), connectionID, slotID, epoch, time.Now(), payload)
 	}, func(err error) {
 		logf("standard stream ended: %v", err)
 		cancel()
@@ -638,16 +655,6 @@ func fromStandardTick(t arrow.MarketTick) Tick {
 		BidSize: bidQty, AskSize: askQty,
 		BidOrd: bidOrd, AskOrd: askOrd,
 		TS: tsMs,
-	}
-}
-
-func emit(t Tick) {
-	// R-058: standard-mode ticks and lifecycle events MUST share one stdout
-	// writer. The global encoder and bridgeEmitter were two independent
-	// writers — interleaved NDJSON lines corrupted ordering for Java.
-	if err := bridgeEmitter.write(t); err != nil {
-		fmt.Fprintf(os.Stderr, "arrow-bridge: stdout write error: %v\n", err)
-		os.Exit(1)
 	}
 }
 

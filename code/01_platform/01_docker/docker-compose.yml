@@ -19,9 +19,7 @@
 # Operational live manifest (1,024 instruments, Jul 31) — the Go bridge caps
 # 1024 tokens/connection and Java pins ARROW_HFT_CONNECTIONS=1, so the 2433-row
 # NSE_CM_EQUITY.csv cannot be serviced; this file is the live + bench manifest.
-x-manifest: &manifest >-
-  /home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/
-  instruments/cash_stocks/NSE_CM_EQUITY (1024).csv
+x-manifest: &manifest /home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv
 
 x-fluss-common: &fluss-common
   restart: unless-stopped
@@ -302,6 +300,8 @@ services:
       ARROW_PASSWORD: ${ARROW_PASSWORD}
       ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
       ARROW_USE_STANDARD: ${ARROW_USE_STANDARD:-false}
+      ARROW_INSTRUMENT_TOKENS: ${ARROW_INSTRUMENT_TOKENS:-}
+      ARROW_DEBUG_WS: ${ARROW_DEBUG_WS:-}
       ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
