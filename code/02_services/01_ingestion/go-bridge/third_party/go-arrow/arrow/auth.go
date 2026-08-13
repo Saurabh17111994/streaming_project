@@ -64,7 +64,7 @@ func (c *Client) Authenticate(requestToken string) (string, error) {
 		CheckSum string `json:"checkSum"`
 		Checksum string `json:"checksum"`
 		Token    string `json:"token"`
-		AppID    string `json:"appId"`
+		AppID    string `json:"appID"`
 	}{
 		CheckSum: checksum, Checksum: checksum, Token: requestToken, AppID: c.Config.AppID,
 	}
@@ -206,7 +206,7 @@ func (c *Client) AutoLogin(username, password, totpSecret string) error {
 	if err != nil {
 		return fmt.Errorf("marshal 2fa payload: %w", err)
 	}
-	resp, err = c.rawRequest("https://edge.arrow.trade/auth/validate-2fa", "POST", totpPayload)
+	resp, err = c.rawRequest("https://api.arrow.trade/auth/validate-2fa", "POST", totpPayload)
 	if err != nil {
 		log.Error().Err(err).Msg("2FA validation failed")
 		return err

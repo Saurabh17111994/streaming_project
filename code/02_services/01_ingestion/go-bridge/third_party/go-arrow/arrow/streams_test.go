@@ -7,15 +7,20 @@ package arrow
 //	17  → LTPC   (token + ltp + changeFlag + close)
 //	93  → QUOTE  (LTPC prefix + LTQ, avg price, aggregates, OHLC, volume,
 //	             timestamps, open interest)
-//	241 → FULL   (QUOTE prefix + limits + 5-level bid/ask depth)
+//	249 → FULL   (QUOTE prefix + limits + 8 reserved bytes + 5-level depth)
+//	241 → FULL   (legacy layout: depth immediately after limits)
+//	29/33/109/265 → base + 16-byte Closing Auction Session trailer
 //
 // All integers are big-endian; prices are in paise. LTPC and QUOTE were the
 // only modes with zero test coverage (golden corpus + HFT tests cover LTP and
 // FULL only) — these tests pin the byte layout and the R-203 NetChange rule
-// (bytes 13:17 are LTQ in a quote frame, never the close price).
+// (bytes 13:17 are LTQ in a quote frame, never the close price). The 249 and
+// 93 live-frame tests use raw broker bytes captured 2026-08-13 (BROKER-MD-001),
+// not bytes produced by this package's own builders — non-circular fixtures.
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"math"
 	"testing"
 )
@@ -236,5 +241,114 @@ func TestParseMarketTickUnsupportedSize(t *testing.T) {
 	}
 	if _, err := ParseMarketTick(nil); err == nil {
 		t.Fatal("ParseMarketTick(0B) = nil error, want unsupported-size error")
+	}
+}
+
+// Live QUOTE frame, RELIANCE token 2885, captured 2026-08-13 from
+// wss://ds.arrow.trade (BROKER-MD-001). Values cross-validated against the HFT
+// feed (socket.arrow.trade) — identical ltp/vwap/volume/ltt on the same token.
+const liveQuote2885Hex = "00000b45000202742000000000000000c8000201380000000000015bf90000000000000000000206ac000206ac000207240001fea000000000008f64356a7d9ca16a7d9ca2000000000000000000000000000000000000000000000000"
+
+// Live FULL frame, RELIANCE token 2885, captured 2026-08-13 from
+// wss://ds.arrow.trade (BROKER-MD-001). 249 bytes = current wire layout: the
+// 93-byte quote prefix, lower/upper limits at 93:101, 8 reserved bytes at
+// 101:109, then 10 depth levels of 14 bytes at 109+i*14.
+const liveFull2492885Hex = "00000b45000202742000000000000000c8000201380000000000015bf90000000000000000000206ac000206ac000207240001fea000000000008f64356a7d9ca16a7d9ca20000000000000000000000000000000000000000000000000001cf02000235e600000000000000000000000000015bf9000202740015000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+func TestParseMarketTickQuoteLive(t *testing.T) {
+	p, err := hex.DecodeString(liveQuote2885Hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick, err := ParseMarketTick(p)
+	if err != nil {
+		t.Fatalf("ParseMarketTick(93B live) error: %v", err)
+	}
+	if tick.Mode != StreamModeQuote || tick.Token != 2885 || tick.LTP != 131700 {
+		t.Fatalf("mode/token/ltp = %q/%d/%d, want quote/2885/131700", tick.Mode, tick.Token, tick.LTP)
+	}
+	if tick.LTQ != 200 || tick.AvgPrice != 131384 {
+		t.Fatalf("ltq/avg = %d/%d, want 200/131384", tick.LTQ, tick.AvgPrice)
+	}
+	if tick.TotalBuyQuantity != 89081 || tick.TotalSellQuantity != 0 {
+		t.Fatalf("tbq/tsq = %d/%d, want 89081/0", tick.TotalBuyQuantity, tick.TotalSellQuantity)
+	}
+	if tick.Open != 132780 || tick.High != 132780 || tick.Close != 132900 || tick.Low != 130720 {
+		t.Fatalf("ohlc = %d/%d/%d/%d, want 132780/132780/132900/130720", tick.Open, tick.High, tick.Close, tick.Low)
+	}
+	if tick.Volume != 9397301 || tick.LTT != 1786616993 || tick.Time != 1786616994 {
+		t.Fatalf("volume/ltt/time = %d/%d/%d", tick.Volume, tick.LTT, tick.Time)
+	}
+}
+
+func TestParseMarketTickFull249Live(t *testing.T) {
+	p, err := hex.DecodeString(liveFull2492885Hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 249 {
+		t.Fatalf("live full frame len = %d, want 249", len(p))
+	}
+	tick, err := ParseMarketTick(p)
+	if err != nil {
+		t.Fatalf("ParseMarketTick(249B live) error: %v", err)
+	}
+	if tick.Mode != StreamModeFull || tick.Token != 2885 || tick.LTP != 131700 {
+		t.Fatalf("mode/token/ltp = %q/%d/%d, want full/2885/131700", tick.Mode, tick.Token, tick.LTP)
+	}
+	if tick.Close != 132900 {
+		t.Fatalf("close = %d, want 132900", tick.Close)
+	}
+	if tick.LowerLimit != 118530 || tick.UpperLimit != 144870 {
+		t.Fatalf("limits = %d/%d, want 118530/144870", tick.LowerLimit, tick.UpperLimit)
+	}
+	if len(tick.Bids) != 5 || len(tick.Asks) != 5 {
+		t.Fatalf("depth = %d bids / %d asks, want 5/5", len(tick.Bids), len(tick.Asks))
+	}
+	b0 := tick.Bids[0]
+	if b0.Quantity != 89081 || b0.Price != 131700 || b0.Orders != 21 {
+		t.Fatalf("bid[0] = qty %d price %d orders %d, want 89081/131700/21", b0.Quantity, b0.Price, b0.Orders)
+	}
+	for i := 1; i < 5; i++ {
+		if l := tick.Bids[i]; l.Quantity != 0 || l.Price != 0 || l.Orders != 0 {
+			t.Fatalf("bid[%d] = %+v, want zero", i, l)
+		}
+	}
+	for i := range 5 {
+		if l := tick.Asks[i]; l.Quantity != 0 || l.Price != 0 || l.Orders != 0 {
+			t.Fatalf("ask[%d] = %+v, want zero", i, l)
+		}
+	}
+}
+
+func TestParseMarketTickFull249CasTrailer(t *testing.T) {
+	// Closing Auction Session: 249-byte full frame + 16-byte trailer
+	// (imbalance_qty i64 signed, indicative_close i32, ref_price i32) —
+	// appended to every mode after ~15:15 IST (pyarrow_client sockets.py).
+	raw := liveFull2492885Hex +
+		"fffffffffffffb2e" + // imbalance_qty = -1234 (two's complement i64 BE)
+		"00020724" + // indicative_close = 132900
+		"00020274" // ref_price = 131700
+	p, err := hex.DecodeString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 265 {
+		t.Fatalf("CAS full frame len = %d, want 265", len(p))
+	}
+	tick, err := ParseMarketTick(p)
+	if err != nil {
+		t.Fatalf("ParseMarketTick(265B CAS) error: %v", err)
+	}
+	if tick.Mode != StreamModeFull || tick.Token != 2885 {
+		t.Fatalf("mode/token = %q/%d, want full/2885", tick.Mode, tick.Token)
+	}
+	if tick.ImbalanceQty != -1234 || tick.IndicativeClose != 132900 || tick.RefPrice != 131700 {
+		t.Fatalf("cas = imb %d / iclose %d / ref %d, want -1234/132900/131700",
+			tick.ImbalanceQty, tick.IndicativeClose, tick.RefPrice)
+	}
+	// Base fields must still parse through the trailer.
+	if tick.LowerLimit != 118530 || tick.UpperLimit != 144870 {
+		t.Fatalf("limits = %d/%d, want 118530/144870", tick.LowerLimit, tick.UpperLimit)
 	}
 }

@@ -19,7 +19,9 @@ const (
 )
 
 // StreamMode is the subscription mode for the token-based market WebSocket (wss://ds.arrow.trade).
-// Inbound ticks are binary, big-endian int fields, with lengths 13 / 17 / 93 / 241 by mode (aligned with Arrow’s JS/Python clients).
+// Inbound ticks are binary, big-endian int fields, with lengths 13 / 17 / 93 / 249 by mode
+// (241 is the legacy full layout; see parseFull). After ~15:15 IST every mode appends a
+// 16-byte Closing Auction Session trailer → 29 / 33 / 109 / 265 (pyarrow_client sockets.py).
 // REST /info/quote uses a smaller set; see InfoQuoteMode in quote.go.
 type StreamMode string
 
@@ -60,6 +62,12 @@ type MarketTick struct {
 	UpperLimit        int32        `json:"upperLimit"`
 	Bids              []DepthLevel `json:"bids"`
 	Asks              []DepthLevel `json:"asks"`
+	// Closing Auction Session (CAS) trailer fields — appended (+16 bytes) to
+	// every mode after ~15:15 IST (imbalance_qty i64 + indicative_close i32 +
+	// ref_price i32). Zero unless a CAS frame was parsed.
+	ImbalanceQty      int64        `json:"imbalanceQty,omitempty"`
+	IndicativeClose   int32        `json:"indicativeClose,omitempty"`
+	RefPrice          int32        `json:"refPrice,omitempty"`
 }
 
 type DataStream struct {
@@ -138,19 +146,68 @@ func (s *DataStream) ReadTicks(ctx context.Context, onTick func(MarketTick), onE
 	}
 }
 
+// ReadRawTicks reads raw binary market-tick payloads verbatim (no parsing)
+// until ctx is done or the socket errors. Capture-only hook for protocol
+// evidence (BROKER-MD-001): payload sizes and byte layouts are recorded
+// exactly as received, so the parse layouts can be validated against real
+// broker frames. Non-binary frames (e.g. text keepalives) are ignored.
+func (s *DataStream) ReadRawTicks(ctx context.Context, onRaw func([]byte), onError func(error)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		_ = s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		mt, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if onError != nil && !errors.Is(err, websocket.ErrCloseSent) {
+				onError(err)
+			}
+			return
+		}
+		if mt != websocket.BinaryMessage {
+			continue
+		}
+		onRaw(append([]byte(nil), payload...))
+	}
+}
+
 func ParseMarketTick(data []byte) (MarketTick, error) {
+	base, cas := data, []byte(nil)
 	switch len(data) {
-	case 13:
-		return parseLTP(data), nil
-	case 17:
-		return parseLTPC(data), nil
-	case 93:
-		return parseQuote(data), nil
-	case 241:
-		return parseFull(data), nil
+	case 13, 17, 93, 241, 249:
+		// Base payloads: LTP / LTPC / QUOTE / FULL (legacy 241 / current 249).
+	case 29, 33, 109, 265:
+		// Closing Auction Session: base payload + 16-byte trailer
+		// (imbalance_qty i64, indicative_close i32, ref_price i32) appended
+		// after ~15:15 IST (pyarrow_client sockets.py).
+		base, cas = data[:len(data)-16], data[len(data)-16:]
 	default:
 		return MarketTick{}, fmt.Errorf("unsupported market tick payload size: %d", len(data))
 	}
+	var tick MarketTick
+	switch len(base) {
+	case 13:
+		tick = parseLTP(base)
+	case 17:
+		tick = parseLTPC(base)
+	case 93:
+		tick = parseQuote(base)
+	case 241:
+		tick = parseFull(base, 101) // legacy layout: depth immediately after limits
+	case 249:
+		tick = parseFull(base, 109) // current wire: 8 reserved bytes after limits
+	}
+	if len(cas) == 16 {
+		tick.ImbalanceQty = beI64(cas[0:8])
+		tick.IndicativeClose = beI32(cas[8:12])
+		tick.RefPrice = beI32(cas[12:16])
+	}
+	return tick, nil
 }
 
 func parseLTP(data []byte) MarketTick {
@@ -206,7 +263,7 @@ func parseQuote(data []byte) MarketTick {
 	return tick
 }
 
-func parseFull(data []byte) MarketTick {
+func parseFull(data []byte, depthOffset int) MarketTick {
 	tick := parseQuote(data)
 	tick.Mode = StreamModeFull
 	tick.LowerLimit = beI32(data[93:97])
@@ -214,7 +271,7 @@ func parseFull(data []byte) MarketTick {
 	tick.Bids = make([]DepthLevel, 0, 5)
 	tick.Asks = make([]DepthLevel, 0, 5)
 	for i := 0; i < 10; i++ {
-		offset := 101 + i*14
+		offset := depthOffset + i*14
 		level := DepthLevel{
 			Quantity: beI64(data[offset : offset+8]),
 			Price:    beI32(data[offset+8 : offset+12]),
