@@ -28,7 +28,7 @@ tables.
    pinned images).
 2. A runnable local stack (Docker + Compose) per `08-local-compose.md` using the
    pinned images.
-3. `make ddl` already emits `schema_manifest.json` (20 tables) — confirmed; it
+3. `make ddl` already emits `schema_manifest.json` (21 tables) — confirmed; it
    still refuses application by design.
 4. For external rows, a sandbox broker and Arrow REST stub (no real credentials).
 

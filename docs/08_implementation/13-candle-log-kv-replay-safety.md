@@ -1,11 +1,31 @@
 # Candle LOG + Canonical KV + Replay Safety
 
 **Tracker ID:** `CANDLE-KV-REPLAY-001`  
-**Status:** `COMPLETE — P0–P9 done; Phase 8 executed and verified on the dev cluster 2026-08-10 (historical load 1,351,301 rows, dual-sink cutover, B8.7 rollback rehearsal). Production data-plane execution remains the operator's blue-green step.`  
+**Status:** `COMPLETE — P0–P9 done; Phase 8 executed and verified on the dev cluster 2026-08-10 (historical load 1,351,301 rows, dual-sink cutover, B8.7 rollback rehearsal). Production data-plane execution remains the operator's blue-green step.` — **SCOPE SUPERSEDED 2026-08-13, see banner below; this document remains the accurate historical record of the implemented candle dual-sink.**
 **Owner:** Compute / Storage / Operations  
 **Repository:** `streaming_project`  
 **Running compatibility target:** Flink `2.2.1` + Fluss connector `org.apache.fluss:fluss-flink-2.2:0.9.1-incubating`  
 **Evidence IDs:** `CANDLE-KV-001`, `STARTUP-GATE-001`, `CHECKPOINT-RESTORE-001`, `CANDLE-MIGRATION-001`, `CANDLE-CUTOVER-001`
+
+> **REQUIREMENT CHANGE (user decision, 2026-08-13) — CANDLE [LOG + KV] RETIRED; the facility moves to the SIGNAL tables.**
+>
+> The candle [LOG + KV] dual-sink this tracker implemented (`feature_candles_15s` LOG +
+> `feature_candles_15s_current` KV) is **RETIRED**: the user does not do per-stock
+> candle auditing. `feature_candles_15s` remains the **sole candle output** — an
+> immutable append-only LOG; the candle KV projection, the `CandleMigrationTool`
+> load/audit machinery, and the candle rehearsal are no longer the target design.
+>
+> The [LOG + KV] facility now applies to the **trade-signal table on Fluss** (user
+> confirmed): `Signal_Candidates` becomes the **LOG** — Flink appends a new row per
+> found signal, never updated; a new `Signal_Candidates_current` **KV** holds the
+> latest/active candidate per instrument, updated on supersession. This resolves the
+> R-084 dead-supersede-chain problem by moving supersession writes to the KV
+> current-state while the LOG preserves immutable history.
+>
+> This document and the rest of tracker `14-candle-log-kv-replay-safety_2.md` (which
+> carries the re-scope) remain the authoritative historical record of the candle
+> dual-sink implementation, tests, and B8.7 rehearsal. Do not read this tracker as the
+> current target design.
 
 > **How to use this document:** tick an atomic checkbox only after its stated evidence exists. Tick a compound phase checkbox only after all atomic tasks in that phase are complete. Do not tick a task because code compiles if the task requires a live-cluster, checkpoint, or migration result. Record command output, artifact paths, table IDs, checkpoint IDs, and dates in the evidence tables. Add newly discovered required work under the owning phase and prefix it with `ADDED:`; record blocked work as `BLOCKED:` with evidence.
 

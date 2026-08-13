@@ -235,13 +235,14 @@ Trigger: DDL/version preflight blocks startup (validation/contract gate).
 
 1. Capture the failing table, expected vs actual schema, and version matrix
    state.
-2. Check the candle contract (`CandleTableContractValidator`) fields: PK,
-   routing, bucket count, and the full 15-column/type/nullability set.
+2. Check the table contract fields: PK, routing, bucket count, and the full column/type/nullability set (`CandleTableContractValidator` today; re-targeted by the 2026-08-13 re-scope to `feature_candles_15s` LOG + `Signal_Candidates` LOG + `Signal_Candidates_current` KV — SIGNAL-SCHEMA-001, pending implementation).
 3. Do NOT bypass the gate; reconcile the DDL/schema with the manifest
    (`ddl_apply.py --force` regeneration must be byte-identical) and re-run.
 4. Closure: preflight passes, job starts in the intended mode.
 
-## Migration conflict (CandleMigrationTool)
+## Migration conflict (CandleMigrationTool) — RETIRED
+
+> **RETIRED (2026-08-13):** `CandleMigrationTool` is decommissioned with the candle KV projection (requirement change — candle output is LOG-only). The procedure below is retained as the historical record of the implemented candle-KV migration conflict handling.
 
 Trigger: `CandleMigrationTool` audit/load exits 2 (unaccepted conflicts) or 1
 (accept-list entries match no canonical key).
@@ -273,7 +274,9 @@ Trigger: `SIGNAL-error-flink-jm-scrape-down` / `SIGNAL-error-flink-tm-scrape-dow
    approved replay path.
 5. Closure: scrapes return to 1, checkpoints advance, alerts recover.
 
-## Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001)
+## Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001) — RETIRED
+
+> **RETIRED (2026-08-13):** the candle dual-sink this runbook rolls back is retired (candle output is LOG-only). The registry and chk-1539 cutoff below are historical dev-rehearsal evidence. The re-scope target is the SIGNAL dual-sink rollback runbook (`Signal_Candidates` LOG + `Signal_Candidates_current` KV), delivered by tracker 14 P10 (`docs/08_implementation/09-production-swarm.md`).
 
 Exact dev-rehearsed registry (2026-08-10, tracker
 `docs/08_implementation/13-candle-log-kv-replay-safety.md`):

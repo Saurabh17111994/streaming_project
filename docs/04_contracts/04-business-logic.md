@@ -5,6 +5,8 @@
 A stateful operator inside the Signal Flink job consumes closed-candle and forming-bar events. Candidate detection is keyed by `instrument_token`. Eligible candidates are then repartitioned by `portfolio_id` to a serialized ranking/reservation scope inside the same job. The operator never calls Arrow REST or mutates broker/position lifecycle.
 
 > **MVP scope (Slice 2.1, DEC-034):** the implemented subset is closed-candle signal detection → `Signal_Candidates` KV records (side BUY / action ENTRY / order MARKET, execution-engine-ready; ranking fields NULL by design). Forming-bar events, candidate lifecycle (bounds, supersession, expiry), ranking/reservation repartitioning, and `Trade_Decisions` are postponed — the sections below define the full-phase contract.
+>
+> **REQUIREMENT CHANGE (user decision, 2026-08-13):** the candidate output splits into a **LOG audit** (`Signal_Candidates`, append-only — one new row per fired signal, never updated; matches "immutable candidate audit") and a **KV current-state** (`Signal_Candidates_current`, PK `(instrument_token)` — latest/active candidate per instrument, supersession overwrites in place). This reverses the R-084 KV conversion for the audit table and resolves the R-084 dead-supersede-chain problem. Pending implementation; the built code still writes the KV-only candidate row (see `04-signal-job.md` banner).
 
 ## Identities and state
 
@@ -24,7 +26,8 @@ Unknown/stale external state suppresses publication. Unknown attempts keep capac
 
 ## Outputs
 
-- `Signal_Candidates`: immutable candidate audit
+- `Signal_Candidates`: immutable candidate audit LOG (append-only, one row per fired signal — RE-SCOPED 2026-08-13, pending implementation; current code writes KV)
+- `Signal_Candidates_current`: candidate current-state KV, PK `(instrument_token)`, latest/active per instrument, supersession overwrites (NEW — RE-SCOPED 2026-08-13, pending implementation)
 - In-process candidate input to Ranking
 - Immutable `Trade_Decisions` instruction after ranking/reservation
 

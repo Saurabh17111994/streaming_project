@@ -33,6 +33,15 @@ Read this file before starting any build phase. It contains the shared plan, rul
 
 This document defines the fixed implementation sequence, per-component work cards, mandatory acceptance checks, and completion gate for the per-instrument tick pipeline. It is the master implementation checklist for the coding agent.
 
+### Requirement change record (2026-08-13)
+
+Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.md` §Authority and conflict rule), the user requirement change of 2026-08-13 is recorded here:
+
+- **Candle [LOG + KV] dual-sink RETIRED.** `feature_candles_15s` is the sole candle output (LOG). The candle KV projection `feature_candles_15s_current` (CANDLE-KV-REPLAY-001, DDL-22, live dev table id 92) and its machinery (`CandleMigrationTool`/`CandleMigrationBatchJob`, `run-batch.sh`, migration/audit/rehearsal gates) are retired from the target design; live-cluster teardown remains operator-gated.
+- **[LOG + KV] moves to the SIGNAL tables.** `Signal_Candidates` → **LOG** (append-only, one new row per found signal, never updated — reverses the R-084 KV conversion; routing key `instrument_token`). New `Signal_Candidates_current` → **KV current-state**, PK `(instrument_token)`, latest/active per instrument, supersession overwrites (resolves the R-084 dead-supersede-chain problem).
+- **Status:** docs updated 2026-08-13 (tracker 14 RE-SCOPED, tracker 13 SUPERSEDED, P7/P10 plans re-scoped); code/DDL/tests re-scope is pending implementation and has NOT been executed (the built code still contains the candle dual-sink — see `04-signal-job.md` header banner).
+- **Authority chain:** requirement change (user) → tracker 14 `14-candle-log-kv-replay-safety_2.md` → `docs/08_implementation/09-production-swarm.md` (P10 plan section, RE-SCOPED). Contract record: `04-business-logic.md` carries the requirement-change banner + re-scoped Outputs; `03-compute.md` checked clean (its output contract is already LOG-only).
+
 ### Fixed scope
 
 #### Implementation checklist
@@ -678,7 +687,7 @@ Proposed routing review:
 | --- | --- | --- |
 | `raw_table_1` | `instrument_token` after validation | Per-instrument processing order |
 | `feature_candles_15s` | `instrument_token` | Per-instrument window history |
-| `Signal_Candidates` | `candidate_id` (KV primary key, R-084 — was LOG) | Strategy locality |
+| `Signal_Candidates` | `candidate_id` (KV primary key, R-084 — was LOG) → **RE-SCOPED 2026-08-13: back to LOG, routing key `instrument_token`** (immutable candidate audit; new `Signal_Candidates_current` KV takes PK `(instrument_token)` for latest/active per instrument) | Strategy locality |
 | `Ranking_Results` | `evaluation_id` (R-136 — was `candidate_id`) | Avoid cross-instrument/null ambiguity |
 | `Fills` | `postback_event_id` when broker ID may be absent | Every delivery is routable |
 | `Execution_Audit` | `audit_event_id` | Gate-only events may lack instruction ID |

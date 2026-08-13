@@ -169,3 +169,130 @@ For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 
 ## Verification mapping
 
 The required behavior above is verified by the canonical [Production Swarm test design](./11-testing-and-release.md#production-swarm): `SWARM-INT-001`, `SWARM-INT-002`, `SWARM-FAIL-001`, `SWARM-FAIL-002`, `SWARM-REC-001`, `PERF-NODELOSS-001`, and `SEC-NET-001` to `SEC-AUDIT-001`.
+
+---
+
+## P10 rehearsal and cutover plan (RE-SCOPED 2026-08-13)
+
+### P10 — Signal LOG/KV Dual-Sink Rehearsal & Cutover Runbook (tracker 14)
+
+**Status:** `RE-SCOPED 2026-08-13 — previously PLANNED (not yet executed) as a candle KV migration rehearsal; target changed to the SIGNAL dual-sink per requirement change. Phase 0 isolation groundwork (overlay compose, empty rehearsal trio) remains valid; no data copy was ever performed.`
+\*\*Location:\*\* `docs/08_implementation/09-production-swarm.md`
+**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P10 — Operator-only migration and cutover` (RE-SCOPED), `## P10.1 Isolated rehearsal`, `## P10.2 Production blue-green cutover`, `## P10.3 Rollback`.
+**Sequencing gate:** the tracker says "Do not execute until P1–P9 code/evidence gates are complete" — this plan starts strictly AFTER (a) the signal dual-sink implementation (candle LOG-only + `Signal_Candidates` LOG + `Signal_Candidates_current` KV) and (b) the P7.2/P7.3 battery re-run on the new topology (`docs/08_implementation/11-testing-and-release.md`).
+**Recipe source:** `skill://candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover procedure pattern) + `candle-failure-injection-tests` (state-restore verification patterns) + `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)` (R2 containment).
+
+> **REQUIREMENT CHANGE (user decision, 2026-08-13):** the candle [LOG + KV] facility is
+> RETIRED (no per-stock candle audit). The [LOG + KV] facility moves to the trade-signal
+> tables: `Signal_Candidates` → LOG (append one row per found signal, never updated) and
+> `Signal_Candidates_current` → KV current-state (PK `instrument_token`, latest/active
+> candidate per instrument, supersession overwrites). This rehearsal rehearses **that**
+> dual-sink: cutover, bounded-replay idempotency (LOG grows / KV keys frozen), rollback,
+> and re-cutover. There is **no candle history audit, no conflict reconciliation, no
+> migration load**. The earlier Phase 0 record (`logs/tracker-14/p10-rehearsal-20260813.md`,
+> divergences D1–D6) stays valid for the isolation mechanics (byte-copy, warehouse
+> prefix, remapped ports); the candle-specific rehearsal steps below were removed.
+
+## 1. Objective
+
+Execute the full P10.1 isolated rehearsal on the dev host (all 10 re-scoped boxes), deliver P10.2/P10.3 as a ready-to-run production runbook (execution deferred — no production exists), and leave the register/evidence trail so production cutover is a command sequence, not a discovery exercise. Dev cluster is the qualification target (user decision); "production objects" in P10.1 wording = the live dev stack's objects.
+
+## 2. Locked spec (user decisions, 2026-08-12 + 2026-08-13)
+
+### 2.1 Scope decisions
+
+| Dimension | Decision |
+| --- | --- |
+| Production definition | Dev cluster = qualification target; P10.2/10.3 delivered as a READY runbook, executed only when a real production deployment exists |
+| Isolated env | Second compose project on this host (the `p10` overlay built 2026-08-13): separate project name → separate network, container names, remapped ports (12181/19123/19124/18081/19249/19250); live stack untouched |
+| Rehearsal data | Full dev data + checkpoints (Fluss tablet segments + ZK metadata + archived known-good checkpoint); R2 lake objects shared read-only where the source reads the lake tier (§2.2) |
+| Table provisioning | `feature_candles_15s` (LOG, sole candle output), `Signal_Candidates` (LOG), `Signal_Candidates_current` (KV, PK `instrument_token`) via the identical gated DDL path; preflight validator re-targeted (SIGNAL-SCHEMA-001) |
+| Signal LOG contract | Append one row per fired signal; never updated; replay appends are retained as evidence (never silently deleted) |
+| Signal KV contract | Exactly one latest/active candidate per instrument; supersession replaces the row; KV key count == active instruments after replay |
+| Bounded replay | Bounded replay run TWICE from the same source offsets — idempotency proof: signal LOG may grow, `Signal_Candidates_current` key count frozen |
+| Checkpoint source | Archived known-good checkpoint (archived before live dev runs rotate it); restore reads the archive copy, never the live checkpoint dir |
+| Rollback rehearsal | B8.7-style FULL: rollback (dual-sink → single-LOG artifact, pre-cutover checkpoint, signal KV frozen / LOG grows) AND re-cutover (dual-sink from its own checkpoint) |
+| Operator | Autonomous execution by the agent; user reviews evidence + approves register rows |
+| Sequencing | Strictly after signal dual-sink implementation + P7 re-run (no parallel override) |
+| Consumers | P10.2 "point current-state consumers to `Signal_Candidates_current`" marked VACUOUS today (no consumers exist) — delivered as a runbook step for when the downstream pipeline lands |
+| DDL path | Identical gated path: `ddl_apply.py` + version-matrix gate, against the isolated env's coordinator |
+| Exposure record | Signal LOG + KV envelope: timestamp range + row counts + sampled keys written during the dual-sink window |
+
+### 2.2 Isolation mechanism (design, verified against Fluss lake layout at execution)
+
+- Fluss lake objects live at `s3://<bucket>/lake/<database>/<table>/...` (verified path layout: `lake/default/candle_scale_log/metadata/`). The isolated env creates its tables in a dedicated database (e.g. `rehearsal`) → its lake writes land at `lake/rehearsal/<table>/` — no R2 object collision with live `lake/default/...`.
+- The rehearsal SignalJob reads the copied `raw_table_1` history (log segments + attached lake tier, read-only) and writes new candles/signals to the rehearsal env's own tables (db `rehearsal`, distinct lake path + separate tablet data dirs).
+- Checkpoint restore reads the ARCHIVED COPY (`s3a://.../p10-rehearsal/<run>/chk-N` + `shared/`), never the live checkpoint dir.
+
+## 3. Prerequisites (checked at Phase 0 entry)
+
+- [ ] Signal dual-sink implemented: candle LOG-only sink, `Signal_Candidates` LOG append sink, `Signal_Candidates_current` KV sink; `CandleGraphReplayIntegrationTest` re-scoped and green.
+- [ ] P7 battery re-run on the new topology with evidence registered (`PERF-*` + `DEDUP-MEMORY-001` rows annotated).
+- [ ] Archived known-good checkpoint copied to a stable archive prefix (`s3a://…/p10-rehearsal/archive/`) BEFORE further live runs rotate it.
+- [ ] Live stack healthy; no other rehearsal/bench in flight.
+- [ ] R2 endpoint reachable; S3A timeout pins + outer-deadline containment available for every checkpoint step.
+- [ ] Fast smoke gate probes available on the rehearsal network (§4.1): `probe-r2.sh` + bounded-read probe + KV-count probe.
+
+## 4. Phase 0 — prepare isolated environment
+
+1. **Archive the checkpoint:** copy the known-good R2 checkpoint tree (chk-N + `shared/` incremental SSTs) to the archive prefix; verify with `_metadata` read + a restore probe on a throwaway MiniCluster (CHECKPOINT-DURABILITY-001 recipe).
+2. **Confirm the second compose project:** `docker compose -p p10 -f docker-compose.p10.yml` (overlay built 2026-08-13, remapped ports 12181/19123/19124/18081/19249/19250); same image digests; dev secrets. Trio health: `p10-zookeeper-1`, `p10-fluss-coordinator-1`, `p10-fluss-tablet-1` Up.
+3. **Copy Fluss data:** copy the live tablet data dirs + ZK metadata into the rehearsal volumes while the live writer is stopped (brief ingestion stop; restart after copy — record start/stop timestamps). Verify segment integrity (torn-tail truncation procedure if needed — `fluss-tablet-crash-loop-repair` skill pattern).
+4. **Database/table setup in the rehearsal env:** create database `rehearsal`; provision `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Signal_Candidates_current` via the gated DDL path (identical to production: `ddl_apply.py` + version-matrix gate — no bootstrap at service startup; DdlBootstrap owns only registry tables).
+5. **Load the copied history:** copy log segments into the rehearsal `raw_table_1`; lake tier attaches to the existing R2 objects (shared read-only, §2.2).
+6. **Environment health gate:** coordinator/tablet healthy in the rehearsal network; O2/collector reachable (or a rehearsal-scoped metric sink); rehearsal `raw_table_1` visible with the full copied history; `Signal_Candidates` empty LOG + `Signal_Candidates_current` empty KV visible.
+7. **Fast smoke gate (≤ 2 min, §4.1):** `probe-r2.sh` against the rehearsal R2 path (`lake/rehearsal/...`) PASS + 30 s bounded log read on rehearsal `raw_table_1` returning the copied count + preflight validator smoke (expected PASS on the rehearsal tables). Smoke fails → fix + re-smoke before Phase 1.
+
+### 4.1 Long-run gate rule (user directive, 2026-08-12)
+
+Any phase estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of the SAME machinery that phase depends on: R2 lake read (`probe-r2.sh`) for checkpoint steps, bounded log/batch reads for scan steps, checkpoint-restore probe for state steps. Smoke passes → run the long phase; smoke fails → fix + re-smoke. No blind long waits: the P3.5 R2 saga proved a 55-90 min audit can wedge with NO error while a 1-min probe catches the same failure in seconds. The smoke result (probe log path + exit code) is recorded in the evidence file as part of the run's proof.
+
+## 5. Phase 1 — table preflight + dual-sink from copied checkpoint (P10.1 boxes 1-4, 6-7)
+
+0. **Smoke (§4.1):** `probe-r2.sh` PASS + the archived-checkpoint restore probe (Phase 0 step 1) re-run immediately before this phase — the checkpoint-restore machinery is what this phase exercises.
+1. Run the re-targeted preflight validator against the rehearsal tables: `feature_candles_15s` LOG (no PK), `Signal_Candidates` LOG (no PK), `Signal_Candidates_current` KV PK exactly `[instrument_token]`, 22 columns/type/nullability, bucket.key `instrument_token` + 16 buckets. Negative legs: wrong-kind and wrong-schema tables fail before environment creation (SIGNAL-SCHEMA-001).
+2. Submit the SignalJob (application mode, rehearsal env, PARALLELISM from P7) in RESTORE mode from the ARCHIVED checkpoint copy; `allowNonRestoredState=false` (never set — STARTUP-GATE-001 contract).
+3. Verify: table preflight passes; startup mode = RESTORE (no FULL_REPLAY); source/dedup/window/detection state restored (CHECKPOINT-RESTORE-002 recipe: offsets, dedup map, window state); signal LOG sink appends and `Signal_Candidates_current` sink starts cleanly (first upserts from the restored detection state).
+4. Verify first checkpoint meets target (30 s interval; duration recorded; R2 pins active).
+
+## 6. Phase 2 — bounded replay twice (P10.1 boxes 8-9)
+
+0. **Smoke (§4.1):** `probe-r2.sh` PASS + rehearsal env health before the replay runs.
+1. Run a bounded source replay twice (same offsets): 2nd run must leave `Signal_Candidates_current` **byte-identical in key count** (== active instrument count) while the `Signal_Candidates` LOG gains the replayed append rows (retained as evidence — duplicates after deliberate replay are never silently deleted).
+2. Verify LOG may grow and KV keys do not: run the dual-sink job forward; confirm signal LOG row count grows while `Signal_Candidates_current` key count stays frozen.
+
+## 7. Phase 3 — rollback + re-cutover rehearsal (P10.1 box 10, B8.7-style full)
+
+0. **Smoke (§4.1):** `probe-r2.sh` PASS + restore probe against BOTH checkpoints (pre-cutover single-LOG and dual-sink era) before the rollback direction starts.
+1. **Rollback direction:** stop the dual-sink job (approved operator procedure); preserve the `Signal_Candidates` LOG and `Signal_Candidates_current` KV tables; reconstruct the single-LOG artifact (signal KV sink stripped, restore wiring kept); restore from the pre-cutover checkpoint; verify signal KV key count frozen and LOG grows; checkpoints complete <= 30 s.
+2. **Re-cutover direction:** stop the single-LOG job; restore the dual-sink job from the dual-sink era's own checkpoint; verify full graph restore + `Signal_Candidates_current` sink resumes.
+3. **Exposure record (P10.3 box):** capture the signal LOG + KV envelope of the dual-sink window — timestamp range, LOG rows appended, KV upserts, sampled keys (the data that a production rollback would expose as duplicates).
+4. No `allowNonRestoredState=true` shortcut; no automatic full replay at any point (STARTUP-GATE-001 / P10.3 contract).
+
+## 8. Phase 4 — evidence + runbook delivery
+
+1. Check all re-scoped P10.1 boxes in the tracker with evidence annotations (date + artifact path, register-format fields: commit, commands, topology, volume, output, pass/fail, operator/approver line).
+2. Deliver `docs/08_implementation/15-signal-log-kv-production-cutover.md` (or appendix in the tracker): the P10.2 (10 boxes) + P10.3 (8 boxes) ready-runbook — exact commands, stop/RESTORE sequence, consumer-repoint step (marked for when the downstream pipeline exists), rollback triggers, exposure-record format. Execution deferred until a real production deployment exists.
+3. Register rows updated where rehearsal evidence contributes (`CHECKPOINT-RESTORE-002` gains a signal dual-sink rehearsal-env variant annotation; `SIGNAL-DUAL-SINK-001`, `SIGNAL-SCHEMA-001` where exercised).
+
+## 9. Evidence template
+
+Per tracker §4 fields: date; commit/image IDs; exact command or test; environment topology (isolated project, ports, db name); input volume/rate (copied row counts, offsets); output location (archive checkpoint path, rehearsal O2 queries, evidence file `logs/tracker-14/p10-rehearsal-<date>.md`); pass/fail per box; operator/approver line (user review).
+
+## 10. Pass/fail handling
+
+Any box failing mid-rehearsal: record the failure + root cause in the evidence file, fix (env/config/artifact), re-run the affected phase. The rehearsal env is throwaway — a failed phase never touches live data (isolation is the safety net). Production stays `BLOCKED` (tracker §6).
+
+## 11. Cross-references
+
+- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P10 (RE-SCOPED), §4 register (`SIGNAL-DUAL-SINK-001`, `SIGNAL-SCHEMA-001`), §6 acceptance.
+- Requirement change + retired candle machinery: tracker 14 header banner; `13-candle-log-kv-replay-safety.md` banner (SUPERSEDED scope); tracker 14 §4 register HISTORICAL rows.
+- Recipe skills: `candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover pattern), `candle-failure-injection-tests` (state-restore verification patterns), `fluss-tablet-crash-loop-repair` (segment integrity).
+- P7 bench: `docs/08_implementation/11-testing-and-release.md` (topology re-scope banner; sequencing gate).
+- R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
+- Prior Phase 0 evidence: `logs/tracker-14/p10-rehearsal-20260813.md` (divergences D1–D6; overlay compose + empty rehearsal trio; data copy never performed).
+- Production target (future): `docs/08_implementation/09-production-swarm.md`, `docs/05_deployment/06-swarm-secrets.md` (P9 open review).
+
+## 12. Execution results
+
+*(to be appended after each phase run — date, commands, raw numbers, pass/fail, bottleneck notes. The 2026-08-13 Phase 0 record is `logs/tracker-14/p10-rehearsal-20260813.md`.)*

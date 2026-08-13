@@ -55,6 +55,7 @@ Documentation-complete is not code-complete. A checklist item may be marked docu
 | [`09-production-swarm.md`](./09-production-swarm.md) | Production runtime instructions and test design | 9 |
 | [`10-observability.md`](./10-observability.md) | Monitoring/operations instructions and test design | 10 |
 | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, and final release evidence | 11–12 |
+| **Roadmap** | Step-by-step plans live INSIDE their dossiers (2026-08-13 merge): current build plan → `04-signal-job.md` (appended section); P7 bench + completed gaps → `11-testing-and-release.md`; P10 rehearsal → `09-production-swarm.md`; agent-2 executor plan → `07-executor.md` | — |
 
 ## Document status vocabulary
 
@@ -79,7 +80,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | Broker protocols | Evidence-blocked | Implementing | Untested | Blocked |
 | DDL/schema | Design-ready | Implementing | Untested | Blocked |
 | Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
-| Signal job | Design-ready | Implementing (Slice 1 compute path done, 25 tests green, live smoke verified; Slices 2/3 pending) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001) | Blocked |
+| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified 2026-08-10, 34 tests green; candle dual-sink RETIRED / signal LOG+KV dual-sink re-scope pending — see `04-signal-job.md` banner, 2026-08-13) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live) | Blocked |
 | Action Capture | Design-ready | Not-implemented | Untested | Blocked |
 | Babysitter | Design-ready | Not-implemented | Untested | Blocked |
 | Executor | Design-ready | Not-implemented | Untested | Blocked |

@@ -1,9 +1,36 @@
 # Candle LOG/KV Replay Safety — Production Resolution Tracker
 
 **File:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md`  
-**Status:** `IN_PROGRESS — production blocked`  
+**Status:** `IN_PROGRESS — production blocked` (RE-SCOPED 2026-08-13, see banner below)  
 **Purpose:** corrective implementation and evidence tracker after `13-candle-log-kv-replay-safety.md`.  
-**Scope:** make the implemented candle projection safe for real-time production throughput, bounded memory, low latency, durable recovery, and controlled migration.
+**Scope:** signal LOG + KV replay safety — `Signal_Candidates` LOG (append per signal) + `Signal_Candidates_current` KV current-state; candle table is LOG-only.
+
+> **REQUIREMENT CHANGE (user decision, 2026-08-13) — candle [LOG + KV] RETIRED, facility moves to SIGNAL tables.**
+>
+> The candle [LOG + KV] facility is **absolutely not needed**: the user does not do
+> per-stock candle auditing. Therefore:
+>
+> - `feature_candles_15s` remains the **sole candle output** — an immutable append-only
+>   LOG. The `feature_candles_15s_current` KV projection, the candle history
+>   audit/migration machinery (`CandleMigrationTool` load, `CandleMigrationBatchJob`
+>   union audit, conflict reconciliation, `run-batch.sh` candle tables), and the
+>   candle-KV rehearsal are **RETIRED**.
+> - The [LOG + KV] facility **is needed for the trade-signal table on Fluss** (user
+>   confirmed): Flink appends a **new row per found signal**, and a KV current-state
+>   holds the latest/active candidate per instrument.
+> - Target design (locked 2026-08-13): `Signal_Candidates` → **LOG** (append-only,
+>   every signal ever fired, never updated — matches the business-logic contract's
+>   "`Signal_Candidates`: immutable candidate audit"); new `Signal_Candidates_current`
+>   → **KV**, PK `(instrument_token)`, latest/active candidate per instrument, updated
+>   on supersession.
+>
+> Tracker sections below are re-scoped accordingly. Candle-KV-specific evidence
+> (CANDLE-SCHEMA-002, CANDLE-CANONICAL-001, CANDLE-MIGRATION-002,
+> MIGRATION-CONFLICT-002, candle `CHECKPOINT-RESTORE-002`) is retained as the
+> **historical record of what was built**; the load-bearing machinery that remains
+> (P4 state backend + durable checkpoints, STARTUP-GATE, P5 dedup memory, P6 failure
+> injection, P8 observability) re-targets the signal dual-sink. File name retained
+> for cross-reference stability.
 
 > This document is the authoritative tracker for this corrective phase. Do not mark a checkbox complete from prose alone. Each completed item needs the stated code, test, command output, or operational evidence. Do not modify production code, apply DDL, start SignalJob, or touch the live cluster unless the task explicitly belongs to the later operator-only phase.
 
@@ -27,12 +54,12 @@ with that contract and this tracker. Do not create a second observability plan.
 
 Deliver a production-ready SignalJob that:
 
-1. preserves `feature_candles_15s` as the immutable append-only LOG;
-2. writes the same completed candle stream to `feature_candles_15s_current`, a KV table with primary key `(instrument_token, window_start)`;
-3. blocks accidental no-restore/full-history starts;
-4. rejects incompatible Fluss table metadata before job execution;
-5. prevents non-canonical algorithm/configuration rows from entering the canonical KV projection;
-6. migrates only complete, conflict-reconciled history;
+1. preserves `feature_candles_15s` as the **sole candle output** — an immutable append-only LOG (candle [LOG + KV] facility RETIRED by user decision 2026-08-13);
+2. appends every fired trade signal to `Signal_Candidates`, an immutable LOG — one new row per signal found, never updated;
+3. maintains `Signal_Candidates_current`, a KV current-state projection — latest/active candidate per instrument, updated on supersession;
+4. blocks accidental no-restore/full-history starts;
+5. rejects incompatible Fluss table metadata before job execution;
+6. prevents non-canonical strategy/rule/configuration rows from entering the signal KV current-state;
 7. uses explicitly configured managed state and durable checkpoints;
 8. proves throughput, latency, memory, checkpoint, and failover targets with reproducible evidence.
 
@@ -41,24 +68,25 @@ Deliver a production-ready SignalJob that:
 ```text
 Arrow/Go ingestion -> raw_table_1 LOG -> SignalJob
                                       |
-                                      +-> feature_candles_15s LOG
-                                      +-> feature_candles_15s_current KV
+                                      +-> feature_candles_15s LOG            (sole candle output; no KV twin)
                                       +-> in-memory SignalDetectionFunction
-                                             -> Signal_Candidates KV
+                                             +-> Signal_Candidates LOG       (append one row per fired signal)
+                                             +-> Signal_Candidates_current KV (latest/active candidate per instrument)
 ```
 
 ### 1.3 Non-negotiable contracts
 
-- Existing `feature_candles_15s` remains LOG. Never convert it in this phase.
-- New `feature_candles_15s_current` remains KV with PK exactly `(instrument_token, window_start)`.
-- Both candle tables retain the same 15-column order and row `schema_version="2"`.
+- `feature_candles_15s` remains LOG (append-only). It is the **only** candle table; `feature_candles_15s_current` (KV) is RETIRED.
+- `Signal_Candidates` is LOG (no primary key, append-only): every signal ever fired is a row; rows are **never updated**.
+- `Signal_Candidates_current` is KV with PK exactly `(instrument_token)`: one row = the latest/active candidate per instrument; supersession replaces the row. (PK extension to `(strategy_id, instrument_token)` is recorded for a future multi-strategy phase.)
+- Signal LOG and KV rows share the same 22-column layout as the pre-change `Signal_Candidates` v2, row `schema_version="2"`.
 - LOG duplicates after deliberate replay are retained as evidence; they are not silently deleted.
-- KV deduplicates only by its primary key; Fluss does not enforce algorithm/configuration policy.
-- Only the approved canonical algorithm/configuration writes to the current KV table.
+- KV deduplicates only by its primary key; Fluss does not enforce strategy/rule policy.
+- Only the approved canonical strategy/rule/configuration writes to the signal KV current-state.
 - Normal startup restores from a nonblank `STATE_RECOVERY_PATH`.
 - Full replay requires explicit `ALLOW_FULL_REPLAY=true` and capacity approval.
 - Restore failure never falls back automatically to full replay.
-- LOG and KV sinks have shared job fate; LOG-only degraded mode is out of scope.
+- Signal LOG and KV sinks have shared job fate; LOG-only degraded mode is out of scope.
 - No DDL is applied at runtime.
 - Kubernetes remains out of scope; deployment targets are Docker Compose dev and Docker Swarm production.
 
@@ -84,35 +112,37 @@ If the source document uses a different exact unit or measurement boundary, pres
 
 ## 2. Current baseline and known blockers
 
+> Baseline below is the **pre-requirement-change code state** (2026-08-13): the candle
+> KV machinery it describes is being retired per the header banner. Re-scope deltas
+> are recorded in the phase sections.
+
 These are verified baseline facts, not tasks to rediscover:
 
-- `CandleTableSchema` defines the 15-column shared row contract.
-- `SignalJobConfig` has `CANDLE_CURRENT_TABLE` and the fail-closed startup mode.
-- SignalJob has LOG + KV candle sinks.
-- `CandleMigrationTool` loaded dev history using a low-level `BatchScanner` and a 25-key accept list.
-- The accept list permits `MAX(output_ts)` even when business fields conflict.
-- `CandleTableContractValidator` does not fully validate all 15 columns/types despite its contract name.
-- The dev restore rehearsal used heap/HashMap state and local file checkpoints.
-- The repository Docker Compose file does not pin production state backend or durable S3 checkpoint configuration for compute.
-- The low-level batch scanner is not accepted as proof of complete Iceberg-tiered LOG history.
-- The previous dev migration observed 25 conflicting canonical keys.
+- `CandleTableSchema` defines the 15-column shared row contract (candle LOG only; the KV twin retires).
+- `SignalJobConfig` has `CANDLE_CURRENT_TABLE` and the fail-closed startup mode (`CANDLE_CURRENT_TABLE` retires with the candle KV projection; signal table config keys follow).
+- SignalJob has LOG + KV candle sinks (to become candle LOG + signal LOG/KV dual-sink).
+- `CandleMigrationTool` loaded dev history using a low-level `BatchScanner` and a 25-key accept list. (RETIRED with the candle KV projection.)
+- The accept list permits `MAX(output_ts)` even when business fields conflict. (RETIRED — no candle conflict reconciliation.)
+- `CandleTableContractValidator` does not fully validate all 15 columns/types despite its contract name. (Re-scope target: candle LOG + signal LOG/KV preflight.)
+- The dev restore rehearsal used heap/HashMap state and local file checkpoints. (Dev-only; production gate P4 unchanged.)
+- The repository Docker Compose file does not pin production state backend or durable S3 checkpoint configuration for compute. (P4 unchanged.)
+- The low-level batch scanner is not accepted as proof of complete Iceberg-tiered LOG history. (Moot for candles — no candle audit; applies to any future signal-history audit only if added.)
+- The previous dev migration observed 25 conflicting canonical keys. (Historical; retired with candle migration.)
 
 ### Production release gates
 
-Do not mark production-ready until every item below is complete:
+Do not mark production-ready until every item below is complete. (2026-08-13: candle-KV-specific gates annotated RETIRED; signal gates added.)
 
-- [x] Exact live schema/type preflight is complete.
-  (Verified 2026-08-11 audit: `CandleTableContractValidator` — LOG must have no PK; KV PK exactly (instrument_token, window_start); all 15 columns name/type-root/DDL-order checked, KV PK columns non-nullable; bucket.key instrument_token + 16 buckets; wired as `SignalJob.preflightTableContracts` before the environment is created; `CandleTableContractValidatorTest` 19/19; live preflight failures proven by P6.2. Register `CANDLE-SCHEMA-002` [x].)
-- [ ] Zero unresolved candle business conflicts remain in the production interval.
-- [x] Complete lake+log union-read evidence exists for migration history.
-  (DEV migration history 2026-08-11: union-read proof on the lake-enabled cluster — 1,638,400 rows, snapshot 3346481978558104585, 16/16 buckets, `RESULT=OK` (`logs/tracker-14/p3-2-lake-tiering-union-read-2026-08-11.md`). Production-interval union read remains the operator B8.1 step — see register row `CANDLE-MIGRATION-002`.)
+- [x] Exact live schema/type preflight is complete (candle LOG + signal LOG/KV).
+  (Candle-KV version, HISTORICAL 2026-08-11: `CandleTableContractValidator` — LOG must have no PK; KV PK exactly (instrument_token, window_start); all 15 columns name/type-root/DDL-order checked, KV PK columns non-nullable; bucket.key instrument_token + 16 buckets; wired as `SignalJob.preflightTableContracts` before the environment is created; `CandleTableContractValidatorTest` 19/19; live preflight failures proven by P6.2. Register `CANDLE-SCHEMA-002` [x]. RE-SCOPED target: same machinery re-targeted to `feature_candles_15s` (LOG), `Signal_Candidates` (LOG), `Signal_Candidates_current` (KV PK instrument_token) — pending, register `SIGNAL-SCHEMA-001` [ ].)
+- [ ] ~~Zero unresolved candle business conflicts remain in the production interval.~~ RETIRED — no candle migration/conflict reconciliation (user decision 2026-08-13).
+- [x] Complete lake+log union-read evidence exists for migration history. (HISTORICAL, RETIRED for candles: the candle union audit exists only to prove candle-KV migration completeness — no candle audit is needed per user decision 2026-08-13. DEV evidence 2026-08-11 retained: union-read proof on the lake-enabled cluster — 1,638,400 rows, snapshot 3346481978558104585, 16/16 buckets, `RESULT=OK` (`logs/tracker-14/p3-2-lake-tiering-union-read-2026-08-11.md`). Register `CANDLE-MIGRATION-002` [x] — historical.)
 - [x] Production uses the approved managed state backend, not heap/HashMap state.
   (Verified 2026-08-11 audit: `SignalJobConfig.stateBackend` — production defaults to rocksdb and explicit `hashmap` is rejected; `submit-jobs.sh` FATAL rejects hashmap in production; `SignalJob.applyRuntimeOptions` sets rocksdb + incremental checkpoints + localdir + managed memory; runtime RocksDB restore proof `CandleRocksDbRestoreIntegrationTest` (P4.3). Actual production deployment remains the P10 operator step. Register `STATE-BACKEND-001` [x].)
 - [x] Production checkpoints use durable remote storage, not local-only paths.
   (Verified 2026-08-11 audit: `SignalJobConfig` rejects non-S3 checkpoint/savepoint URIs in production (fail-closed, no silent `/tmp` fallback); `submit-jobs.sh` FATAL requires `s3://`/`s3a://` + endpoint + env-only credentials; live R2 write/read/cross-worker restore proof (P4.2 `SignalJobObjectStoreCheckpointIntegrationTest`). Actual production deployment remains the P10 operator step. Register `CHECKPOINT-DURABILITY-001` [x].)
-- [x] Canonical version policy is enforced at the live KV boundary.
-  (Verified 2026-08-11 audit: `CanonicalCandleFilterFunction` is wired in `SignalJob.buildTopology` directly before the KV sink (`canonical-candle-filter`) — non-canonical rows dropped + counted on `compute.kv.filtered.noncanonical` + WARN-logged; canonical pair `candle-15s-v1`/`1.0.0` pinned in `CandleTableSchema`; `SignalJobConfig.requireCanonicalVersion` startup gate; `CanonicalCandlePolicyTest` 7/7 + filter tests 4/4 + config-gate tests 38/38. Register `CANDLE-CANONICAL-001` [x].)
-- [ ] 60k sustained / 90k peak throughput evidence passes.
+- [x] Canonical version policy is enforced at the live KV boundary. (Candle-KV version, HISTORICAL 2026-08-11, RETIRED with the candle KV projection: `CanonicalCandleFilterFunction` was wired in `SignalJob.buildTopology` directly before the KV sink (`canonical-candle-filter`) — non-canonical rows dropped + counted on `compute.kv.filtered.noncanonical` + WARN-logged; canonical pair `candle-15s-v1`/`1.0.0` pinned in `CandleTableSchema`; `SignalJobConfig.requireCanonicalVersion` startup gate; `CanonicalCandlePolicyTest` 7/7 + filter tests 4/4 + config-gate tests 38/38. Register `CANDLE-CANONICAL-001` [x]. RE-SCOPED target: canonical strategy/rule/configuration policy enforced at the `Signal_Candidates_current` KV boundary — pending.)
+- [ ] 60k sustained / 90k peak throughput evidence passes (re-scope: measured on the NEW signal dual-sink topology after implementation; the feed/tablet ceiling finding from P7 is topology-independent and already recorded).
 - [ ] p99 latency evidence passes.
 - [ ] checkpoint, memory, and recovery evidence passes.
 - [x] Fluss/sink failure-injection evidence passes.
@@ -211,32 +241,26 @@ Implement pure validation of a supplied `TableInfo`/`Schema` object. Do not conn
 - [x] bucket key exactly `instrument_token`.
   (`validateRouting`; tests `kvWrongBucketKeyIsRejected`, `kvDefaultBucketKeyIsRejected`.)
 
-### KV contract
+### KV contract (RE-SCOPED 2026-08-13 — candle KV checks below RETIRED; new target `Signal_Candidates_current`)
 
-`feature_candles_15s_current` must satisfy:
+The `feature_candles_15s_current` candle KV checks below are **historical evidence of the
+retired candle KV projection** (R-012 / CANDLE-KV-REPLAY-001). The metadata-preflight
+machinery is re-targeted to the signal current-state table:
 
-- [x] `hasPrimaryKey() == true`.
-  (`validateCanonicalKvTable`; test `kvWithoutPkIsRejected`.)
-- [x] primary-key list exactly `[instrument_token, window_start]` in that order.
-  (Exact `List.equals` against `CandleTableSchema.KEY_COLUMNS`; tests `kvWrongPkOrderIsRejected`, `kvWrongPkColumnsAreRejected`.)
-- [x] exactly 15 columns.
-  (Same `validateSchema` path as the LOG twin.)
-- [x] exact names and exact order from `CandleTableSchema.COLUMNS`.
-  (Same per-index name comparison.)
-- [x] exact compatible Fluss logical types for every column.
-  (Same per-index type-root comparison.)
-- [x] expected nullability.
-  (KV PK columns enforced NOT NULL — matches what Fluss live metadata reports.)
-- [x] bucket count 16.
-- [x] bucket key exactly `instrument_token`.
-  (And `pk ⊇ bucketKey` holds by construction — `KEY_COLUMNS` is a superset of `[instrument_token]`, the Fluss requirement.)
+`Signal_Candidates_current` must satisfy:
 
-- [x] Compare metadata by semantic type, not Java implementation class identity.
-  (Comparison is by `DataTypeRoot.name()` against the shared contract, not class identity; verified live against dev-cluster metadata 2026-08-10.)
-- [x] Produce an error containing table name, expected contract, and actual mismatch.
-  (Every `ContractViolation` names the table path, the expected value, and the actual value.)
-- [x] Do not allow the connector’s append/upsert writer selection to substitute for this check.
-  (`SignalJob.preflightTableContracts` runs the validator before the environment is created; P6.2 proves missing/wrong-kind/wrong-schema tables fail before any graph build.)
+- [ ] `hasPrimaryKey() == true`; primary-key list exactly `[instrument_token]`.
+- [ ] exactly 22 columns; exact names and order from the signal row contract (`SignalCandidatesTableColumns`).
+- [ ] exact compatible Fluss logical types for every column; PK column NOT NULL.
+- [ ] bucket count 16; bucket key exactly `instrument_token` (`pk ⊇ bucketKey` holds by construction).
+- [ ] Compare metadata by semantic type (`DataTypeRoot.name()`), not Java implementation class identity.
+- [ ] Produce an error containing table name, expected contract, and actual mismatch.
+- [ ] Do not allow the connector's append/upsert writer selection to substitute for this check — `SignalJob.preflightTableContracts` runs before the environment is created.
+
+Historical candle-KV checks (retired, kept for the record — all verified [x] 2026-08-11):
+`feature_candles_15s_current` PK exactly `[instrument_token, window_start]`; 15 columns
+matching `CandleTableSchema.COLUMNS`; bucket.key `instrument_token`; `CandleTableContractValidatorTest` 19/19;
+live preflight failures proven by P6.2 (missing/wrong-kind/wrong-schema tables, unreachable coordinator).
 
 Evidence: `CandleTableContractValidatorTest` 19/19, `preflightTableContracts` live-cluster path exercised by P6.2 (2026-08-11).
 
@@ -370,6 +394,13 @@ Implement this fixed policy:
 ---
 
 ## P3 — Repair and harden historical migration
+
+> **RETIRED (requirement change 2026-08-13):** the candle history audit/migration this
+> phase hardens is no longer performed — the candle KV projection is gone and no
+> candle history is migrated. The subsections below remain the accurate historical
+> record of the hardened migration machinery and its evidence (R2 lake-read stall
+> investigation P3.5, parallelism fix P3.6). The `CandleMigrationTool`/`CandleMigrationBatchJob`
+> tooling is decommissioned with the candle KV projection in the re-scope.
 
 ## P3.1 Remove unsafe conflict resolution from canonical migration
 
@@ -712,9 +743,15 @@ Do not redesign dedup speculatively. If baseline exceeds memory or latency targe
 
 ## P6 — End-to-end correctness and failure tests
 
+> RE-SCOPED 2026-08-13: the P6 harness evidence below was produced against the candle
+> LOG+KV dual-sink (HISTORICAL, retained). The same harness re-runs against the signal
+> dual-sink (`Signal_Candidates` LOG + `Signal_Candidates_current` KV) after
+> implementation: graph replay, replay idempotency (LOG may grow, KV key count frozen),
+> strict-restore, and shared-fate failure injection.
+
 ## P6.1 Full graph replay test
 
-- [x] Feed a fixed bounded raw tick set through source/validation/dedup/window/detection and both candle sinks.
+- [x] Feed a fixed bounded raw tick set through source/validation/dedup/window/detection and both candle sinks (HISTORICAL — candle dual-sink; re-run targets the signal dual-sink).
   (`CandleGraphReplayIntegrationTest.dualSinkReplayAndRestoreIdempotency` phase 1 — the actual
   `SignalJob.buildTopology` graph, MiniCluster + scratch Fluss tables; LOG=46 / KV=46 / candidates=2.)
 - [x] Replay exactly the same source set.
@@ -855,9 +892,9 @@ Record raw time series and p50/p95/p99/max for every metric listed below; missin
 - [ ] accepted records/s.
 - [ ] duplicate records/s.
 - [ ] invalid records by reason.
-- [ ] candle LOG writes/s.
-- [ ] candle KV upserts/s.
-- [ ] candidate writes/s.
+- [ ] candle LOG writes/s (sole candle sink).
+- [ ] signal LOG appends/s (`Signal_Candidates`).
+- [ ] signal KV upserts/s (`Signal_Candidates_current`).
 - [ ] end-to-end decision latency.
 - [ ] source lag.
 - [ ] watermark lag.
@@ -1071,12 +1108,10 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 
 ## P8.4 Dashboards and runbooks
 
-- [x] production dashboard distinguishes LOG physical rows from KV unique keys.
-  (COMPUTE - Candle Health: LOG sink `numRecordsIn` vs KV sink `numRecordsIn` panels + LOG:KV ratio panel. LOG rows = candle LOG sink physical rows; KV upserts = KV sink writes (per-key, the live convergence); unique-key counts come from Fluss KV scans / CandleMigrationTool audits — no live unique-key counter in this build, documented in the dashboard description.)
+- [x] production dashboard distinguishes LOG physical rows from KV unique keys. (Candle-KV version HISTORICAL, RETIRED with the candle KV projection: COMPUTE - Candle Health panels compared candle LOG sink `numRecordsIn` vs candle KV sink writes. RE-SCOPED target: the LOG:KV distinction moves to a **Signal Health** surface — `Signal_Candidates` LOG appends vs `Signal_Candidates_current` KV upserts (per-key current-state convergence), `numRecordsIn` of both signal sinks + LOG:KV ratio. Pending dashboard update.)
 - [x] SignalJob overview dashboard shows startup mode, throughput, lag, validation, dedup, candles, candidates, sink health, watermark, checkpoints, memory, and backpressure.
   (COMPUTE - SignalJob Overview, 14 panels, all stored in the v8 dashboard (healed from empty shells 2026-08-11 — the old v3 POST bodies were silently dropped by O2 v0.91.5): startup mode (`max(flink_taskmanager_job_task_operator_compute_startup_mode)`, promql — live series, value 0 RESTORE), ingest/source throughput, event-time lag (currentfetcheventtimelag/watermarklag), validation, dedup (state count + expiry index), candles emitted, candidates, LOG+KV sink health, watermark, checkpoint duration, JVM heap, backpressure. All query names verified live 2026-08-11; 81/81 spec panels across all 9 dashboards now stored (idempotent heal). Evidence: `logs/tracker-14/p8-5-observability-live-2026-08-11.md` §4.)
-- [x] Candle dashboard shows LOG emissions, KV unique keys, KV upserts, replay ratio, and unexplained LOG/KV divergence.
-  (COMPUTE - Candle Health: LOG emissions (candle LOG sink), KV upserts (KV sink), LOG:KV ratio (replay-divergence proxy), LOG/KV rate split panels. Unique-key counts and replay ratio are cross-checked against CandleMigrationTool audits (DEST_ROWS_AFTER vs DISTINCT_KEYS); live unique-key counters are a documented build gap, not a dashboard gap.)
+- [x] Candle dashboard shows LOG emissions, KV unique keys, KV upserts, replay ratio, and unexplained LOG/KV divergence. (HISTORICAL, RETIRED with the candle KV projection — the LOG:KV divergence surface moves to the signal tables: `Signal_Candidates` LOG appends vs `Signal_Candidates_current` unique keys; replay-ratio proxy = LOG:KV sink ratio. Dashboard update pending.)
 - [x] Checkpoint/state dashboard shows duration, size, failures, restarts, state backend, dedup state, and memory.
   (COMPUTE - Checkpoints & State: checkpoint duration/size/failures/restarts (checkpoint_size_*, duration_*, failed/restored counts), dedup state count, JVM heap. State backend + checkpoint URI are logged per run (`signal-job: effective state backend = …`); dev = heap/HashMap + /tmp, production = RocksDB + S3 (P4 gate) — documented in the dashboard description.)
 - [x] Flink/Fluss dashboard shows operator throughput, watermark, backpressure, request latency, tablet/coordinator health, and telemetry delivery.
@@ -1098,9 +1133,9 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] schema-preflight failure runbook exists.
   (docs/06_operations/01-runbooks.md "Schema-preflight failure": full 15-column validator scope, no gate bypass, manifest regen byte-identical check.)
 - [x] migration conflict runbook exists.
-  (docs/06_operations/01-runbooks.md "Migration conflict (CandleMigrationTool)": exit 2/1 semantics, accept-list file format, MAX(output_ts) merge legality, closure counts.)
+  (docs/06_operations/01-runbooks.md "Migration conflict (CandleMigrationTool)": exit 2/1 semantics, accept-list file format, MAX(output_ts) merge legality, closure counts. HISTORICAL, RETIRED with the candle migration — no candle conflict reconciliation per requirement change 2026-08-13; runbook entry to be removed with the candle migration tooling.)
 - [x] rollback procedure identifies exact artifact, checkpoint, table names, and cutoff.
-  (docs/06_operations/01-runbooks.md "Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001)": full dev-rehearsed registry 0417068d/87c48642/4527918b/92104dac, restore targets chk-1538/chk-1732, table names feature_candles_15s + feature_candles_15s_current, rollback cutoff chk-1539 = first dual-sink checkpoint, javap 0-kv-sink-ref artifact check, re-cutover restore rule.)
+  (HISTORICAL — candle dual-sink rollback (docs/06_operations/01-runbooks.md "Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001)": full dev-rehearsed registry 0417068d/87c48642/4527918b/92104dac, restore targets chk-1538/chk-1732, table names feature_candles_15s + feature_candles_15s_current, rollback cutoff chk-1539 = first dual-sink checkpoint, javap 0-kv-sink-ref artifact check, re-cutover restore rule). RETIRED with the candle KV projection. RE-SCOPED target: signal dual-sink rollback runbook (same structure — artifact/checkpoint/table names/cutoff — for `Signal_Candidates` + `Signal_Candidates_current`); carried by P10.3 rehearsal.)
 - [x] no sensitive credentials appear in logs or dashboards.
   (Dashboards/alerts query metric streams by name only; evidence and runbooks reference env names, never values; webhook evidence bodies carry rule names only. Provisioner reads O2 creds from env, never writes them. Evidence files redact accept-keys/credential values.)
 - [x] Every dashboard and alert has an owner, severity, threshold, query/test, and recovery condition.
@@ -1157,39 +1192,38 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 
 Do not execute until P1–P9 code/evidence gates are complete.
 
-**P10 plan (2026-08-12):** `docs/plans/20260812-p10-rehearsal-cutover.md` — locked spec (13 user decisions: dev = qualification target with P10.2/3 delivered as a ready-runbook, second compose project on the same host, full dev data + archived known-good checkpoint, full union audit, audit-derived distinct count, migration-load-twice idempotency proof, B8.7 rollback + re-cutover, autonomous execution with user evidence review, strictly after P7, 'point consumers to KV' vacuous today, identical gated DDL path, KV+LOG exposure envelope). **Nothing executed yet — sequencing gate: P7 bench complete.** Long-run gate rule per plan §4.1: every >10-min phase (90-min audit, load, replay, rollback) is preceded by the ≤2-min smoke (probe-r2.sh + bounded reads).
+> **RE-SCOPED (requirement change 2026-08-13):** the rehearsal/cutover target is the
+> SIGNAL dual-sink (`Signal_Candidates` LOG + `Signal_Candidates_current` KV), not the
+> retired candle KV projection. There is **no candle history audit, no conflict
+> reconciliation, no migration load**. The candle rehearsal divergences D1–D6 recorded in
+> `logs/tracker-14/p10-rehearsal-20260813.md` stay valid for the isolation mechanics
+> (byte-copy, warehouse prefix, remapped ports) and are carried into the re-scoped plan
+> `docs/08_implementation/09-production-swarm.md` (P10 rehearsal plan section, status RE-SCOPED). Sequencing gate: signal
+> dual-sink implementation + P7 re-run complete. Long-run gate rule per plan §4.1: every
+> >10-min phase is preceded by the ≤2-min smoke (probe-r2.sh + bounded reads).
 
 ## P10.1 Isolated rehearsal
 
 - [ ] Create isolated Fluss/Flink environment.
 - [ ] Use copied data/checkpoint, never production objects directly.
-- [ ] Create new KV table through offline/evidence-gated DDL.
-- [ ] Run complete lake+log history audit.
-- [ ] Resolve or exclude all conflicts.
-- [ ] Run migration load.
-- [ ] Verify destination row count equals approved distinct key count.
-- [ ] Run dual-sink job from copied checkpoint with `allowNonRestoredState=false`.
-- [ ] Verify source/dedup/window/detection/LOG state restore.
-- [ ] Verify KV sink starts cleanly.
+- [ ] Create `Signal_Candidates` (LOG) + `Signal_Candidates_current` (KV, PK `instrument_token`) through offline/evidence-gated DDL.
+- [ ] Run the dual-sink SignalJob from a copied checkpoint with `allowNonRestoredState=false`.
+- [ ] Verify source/dedup/window/detection state restore.
+- [ ] Verify signal LOG sink appends and KV current-state sink starts cleanly.
 - [ ] Verify first checkpoint meets target.
 - [ ] Run bounded replay twice.
-- [ ] Verify LOG may grow and KV keys do not.
+- [ ] Verify signal LOG may grow (replay appends retained as evidence) and KV key count stays == active-instrument count (idempotent).
 - [ ] Rehearse rollback and re-cutover.
 
-## P10.2 Production blue-green migration
+## P10.2 Production blue-green cutover
 
 - [ ] Stop SignalJob using approved operator procedure.
 - [ ] Record last successful durable checkpoint.
-- [ ] Freeze or bound source history for migration snapshot.
-- [ ] Create/verify `feature_candles_15s_current`.
-- [ ] Run complete-history dry audit.
-- [ ] Abort on unresolved conflict.
-- [ ] Load only approved canonical rows.
-- [ ] Verify destination count and sampled values.
+- [ ] Create/verify `Signal_Candidates` + `Signal_Candidates_current`.
 - [ ] Start dual-sink SignalJob in RESTORE mode.
 - [ ] Verify table preflight and startup mode.
 - [ ] Verify checkpoints.
-- [ ] Point current-state consumers to KV.
+- [ ] Point current-state consumers to `Signal_Candidates_current`.
 - [ ] Keep LOG consumers only where append/history semantics are intended.
 - [ ] Run bounded replay acceptance test.
 - [ ] Record final evidence.
@@ -1264,17 +1298,19 @@ Every evidence row must include:
 
 | Requirement | Implementation | Test/evidence | Gate |
 | --- | --- | --- | --- |
-| KV has one canonical row/key | P1 | P1 negative metadata + P6 replay | CANDLE-SCHEMA-002 `[x]` |
-| Only canonical versions write KV | P2 | P2 policy and sink-boundary tests | CANDLE-CANONICAL-001 `[x]` |
-| Complete history migration | P3 | union-read count and bucket coverage | CANDLE-MIGRATION-002 `[x]` |
-| No unresolved conflicts | P3 | field hashes and approval report | MIGRATION-CONFLICT-002 `[x]` |
+| Candle LOG-only output | P1/P2 | candle LOG sink only; candle KV projection RETIRED (2026-08-13) | CANDLE-SCHEMA-002 `[x]` (historical) |
+| Signal LOG append per signal | P1/P2 | `Signal_Candidates` LOG sink — one row per fired signal, never updated | SIGNAL-DUAL-SINK-001 |
+| Signal KV current-state | P1/P2 | `Signal_Candidates_current` KV upsert — latest/active per instrument | SIGNAL-DUAL-SINK-001 |
+| Only canonical versions write signal KV | P2 | policy re-targeted to signal current-state boundary | CANDLE-CANONICAL-001 `[x]` (historical) → re-scope pending |
+| Complete history migration | P3 | RETIRED — no candle migration/audit per requirement change | CANDLE-MIGRATION-002 `[x]` (historical) |
+| No unresolved conflicts | P3 | RETIRED — no conflict reconciliation | MIGRATION-CONFLICT-002 `[x]` (historical) |
 | No accidental full replay | existing startup gate | config tests + launcher audit | STARTUP-GATE-001 |
 | Durable state | P4 | runtime backend and cross-worker restore | STATE-BACKEND-001 |
 | Durable checkpoints | P4 | S3 write/read/restore | CHECKPOINT-DURABILITY-001 |
-| Graph restore | P6/P10 | copied checkpoint strict restore | CHECKPOINT-RESTORE-002 |
+| Graph restore | P6/P10 | copied checkpoint strict restore (re-run on signal dual-sink) | CHECKPOINT-RESTORE-002 |
 | Bounded memory | P5/P7 | target-load time series | DEDUP-MEMORY-001 |
-| Throughput/latency | P7 | benchmark report | PERF-* |
-| Failure safety | P6/P10 | injection and recovery report | FAILOVER-FLUSS-001 |
+| Throughput/latency | P7 | benchmark report (re-run on signal dual-sink topology) | PERF-* |
+| Failure safety | P6/P10 | injection and recovery report (re-run on signal sinks) | FAILOVER-FLUSS-001 |
 | OpenObserve observability | P8/P9 | collector delivery queries, payload tests, dashboards, alerts, retention, outage/recovery evidence | OBSERVABILITY-002 |
 
 ---

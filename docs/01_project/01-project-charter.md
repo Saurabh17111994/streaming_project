@@ -36,7 +36,7 @@ The platform separates the **data path** from the **order path**:
 - Fluss raw and feature LOG tables
 - Flink 2.2.0 deduplication, event-time windows, candle computation
 - Stateful signal detection and in-operator ranking
-- `Signal_Candidates`, `Ranking_Results`, and `Trade_Decisions` outputs
+- `Signal_Candidates` (+ `Signal_Candidates_current` current-state KV), `Ranking_Results`, and `Trade_Decisions` outputs
 - Independent postback capture into `Fills` via `wss://order-updates.arrow.trade`
 - Executor-to-Arrow order handoff (`POST /order/regular`); no OpenAlgo layer
 - Babysitter wiring with no emitted actions
