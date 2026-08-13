@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation active; Phases 2a-2g complete; 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: ING-PERF-001 50k gate not yet certified at the 3,000-instrument production envelope (1,024-envelope mock-feed probe 58,951 ticks/s; feed ceiling ≈58.9k rows/s exceeds the gate, but the 30-min production-manifest acceptance run is deferred — multi-connection approval + 3,000-token manifest required); ING-RES-001 100-cycle real-backoff soak running (~48 min, launched 2026-08-13, 3-cycle smoke PASS); BROKER-MD-001 pending live Arrow sandbox evidence (blocked on external access); real-broker market-hours capture never run (faketool feeds only — broker TCP losslessness and the AutoLogin/TOTP path unproven); LTPC/QUOTE wire fixtures absent from the golden corpus; 90k peak campaign retired (DEC-036) |
+| Status | Implementation active; Phases 2a-2g complete; 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: ING-PERF-001 50k gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append hot path 49,578 tps / 0 failures / p99 &lt; 5 ms — floors 47.5k/48k PASS); the 30-min 3,000-instrument production-envelope run remains deferred (multi-connection approval + 3,000-token manifest required); ING-RES-001 100-cycle real-backoff soak running (~48 min, launched 2026-08-13, 3-cycle smoke PASS); BROKER-MD-001 pending live Arrow sandbox evidence (blocked on external access); real-broker market-hours capture never run (faketool feeds only — broker TCP losslessness and the AutoLogin/TOTP path unproven); LTPC/QUOTE wire fixtures absent from the golden corpus; 90k peak campaign retired (DEC-036) |
 | Owner | Ingestion Team |
 | Requirements | `REQ-ING-001`–`REQ-ING-016` |
 | Build contract | `docs/04_contracts/01-ingestion.md` |
@@ -235,6 +235,7 @@ Before code is accepted, verify each item:
 #### Acceptance checks
 
 - At the variable 50,000 ticks/s average baseline (3,000 instruments; every instrument ≤30 ticks/s; the 90,000 ticks/s peak is retired, DEC-036), one append submission per accepted input tick; no application batch contains more than one record. The current testing phase uses the 1,024-instrument manifest on one connection; the 3,000-instrument / 3-connection envelope is the deferred target.
+- 2026-08-13 certification under the DEC-036 50k gate (`PerfBaselineTest`, `INGESTION_INT_TEST_PERF=true`, in-process — no live Fluss): mock-socket wire run 492,419 emitted = 492,419 received (49,242 tps, 0 wire loss; socket floor 47.5k PASS); append hot path 148,733 writes (49,578 tps, 0 failures, p99 accept→ack 0.000 ms; floor 48k, budget &lt; 5 ms PASS). 2/2 green. The 30-minute 3,000-instrument production-manifest run (p99 &lt; 50 ms against live Fluss) remains the deferred production envelope.
 - `broker_receive_to_fluss_ack_p99_ms < 50` over a 30-minute 3,000-instrument production-manifest test.
 - Simulated slow Fluss writer reaches 80% warning condition before exceeding a pending limit.
 - Simulated unavailable Fluss writer reaches 100% condition without exceeding either limit and without an unrecorded drop.
