@@ -3,18 +3,20 @@
 **File:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md`  
 **Status:** `IN_PROGRESS — production blocked` (RE-SCOPED 2026-08-13, see banner below)  
 **Purpose:** corrective implementation and evidence tracker after `13-candle-log-kv-replay-safety.md`.  
-**Scope:** signal LOG + KV replay safety — `Signal_Candidates` LOG (append per signal) + `Signal_Candidates_current` KV current-state; candle table is LOG-only.
+**Scope:** signal LOG + KV replay safety — `Signal_Candidates` LOG (append per signal) + `Signal_Candidates_current` KV current-state; candle table is KV-only (converted 2026-08-13).
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13) — candle [LOG + KV] RETIRED, facility moves to SIGNAL tables.**
 >
 > The candle [LOG + KV] facility is **absolutely not needed**: the user does not do
 > per-stock candle auditing. Therefore:
 >
-> - `feature_candles_15s` remains the **sole candle output** — an immutable append-only
->   LOG. The `feature_candles_15s_current` KV projection, the candle history
->   audit/migration machinery (`CandleMigrationTool` load, `CandleMigrationBatchJob`
->   union audit, conflict reconciliation, `run-batch.sh` candle tables), and the
->   candle-KV rehearsal are **RETIRED**.
+> - `feature_candles_15s` is the **sole candle output — as a KV upsert table**
+>   (2026-08-13, later same day: converted to KV, PK `(instrument_token, window_start)`,
+>   last-write-wins — replay re-upserts the same key and converges, no row growth).
+>   The candle LOG-era machinery (`feature_candles_15s_current` KV projection, the
+>   candle history audit/migration machinery (`CandleMigrationTool` load,
+>   `CandleMigrationBatchJob` union audit, conflict reconciliation, `run-batch.sh`
+>   candle tables), and the candle-KV rehearsal are **RETIRED**.
 > - The [LOG + KV] facility **is needed for the trade-signal table on Fluss** (user
 >   confirmed): Flink appends a **new row per found signal**, and a KV current-state
 >   holds the latest/active candidate per instrument.
@@ -68,7 +70,7 @@ Deliver a production-ready SignalJob that:
 ```text
 Arrow/Go ingestion -> raw_table_1 LOG -> SignalJob
                                       |
-                                      +-> feature_candles_15s LOG            (sole candle output; no KV twin)
+                                      +-> feature_candles_15s KV            (sole candle output; PK (instrument_token, window_start), upsert)
                                       +-> in-memory SignalDetectionFunction
                                              +-> Signal_Candidates LOG       (append one row per fired signal)
                                              +-> Signal_Candidates_current KV (latest/active candidate per instrument)
@@ -76,7 +78,7 @@ Arrow/Go ingestion -> raw_table_1 LOG -> SignalJob
 
 ### 1.3 Non-negotiable contracts
 
-- `feature_candles_15s` remains LOG (append-only). It is the **only** candle table; `feature_candles_15s_current` (KV) is RETIRED.
+- `feature_candles_15s` is KV (upsert, PK exactly `(instrument_token, window_start)`): one row per closed 15 s window per instrument; last-write-wins — replay re-upserts the same key and converges (no row growth). It is the **only** candle table; `feature_candles_15s_current` (KV) is RETIRED.
 - `Signal_Candidates` is LOG (no primary key, append-only): every signal ever fired is a row; rows are **never updated**.
 - `Signal_Candidates_current` is KV with PK exactly `(instrument_token)`: one row = the latest/active candidate per instrument; supersession replaces the row. (PK extension to `(strategy_id, instrument_token)` is recorded for a future multi-strategy phase.)
 - Signal LOG and KV rows share the same 22-column layout as the pre-change `Signal_Candidates` v2, row `schema_version="2"`.
@@ -113,17 +115,18 @@ If the source document uses a different exact unit or measurement boundary, pres
 ## 2. Current baseline and known blockers
 
 > Baseline below is the **pre-requirement-change code state** (2026-08-13): the candle
-> KV machinery it describes is being retired per the header banner. Re-scope deltas
-> are recorded in the phase sections.
+> LOG-era machinery it describes is retired per the header banner (first the signal
+> re-scope, then the candle KV-only conversion). Re-scope deltas are recorded in the
+> phase sections.
 
 These are verified baseline facts, not tasks to rediscover:
 
-- `CandleTableSchema` defines the 15-column shared row contract (candle LOG only; the KV twin retires).
-- `SignalJobConfig` has `CANDLE_CURRENT_TABLE` and the fail-closed startup mode (`CANDLE_CURRENT_TABLE` retires with the candle KV projection; signal table config keys follow).
-- SignalJob has LOG + KV candle sinks (to become candle LOG + signal LOG/KV dual-sink).
+- `CandleTableSchema` defines the 15-column candle row contract (now the **KV** contract — PK `(instrument_token, window_start)` NOT ENFORCED; `LOG_TABLE` renamed `TABLE` 2026-08-13; the LOG-era KV twin is gone).
+- `SignalJobConfig` has the fail-closed startup mode (`CANDLE_CURRENT_TABLE` key deleted 2026-08-13; `ALLOW_FULL_REPLAY`/`STATE_RECOVERY_PATH` retained).
+- SignalJob has the candle **KV upsert** sink + signal LOG/KV dual-sink (converted 2026-08-13).
 - `CandleMigrationTool` loaded dev history using a low-level `BatchScanner` and a 25-key accept list. (RETIRED with the candle KV projection.)
 - The accept list permits `MAX(output_ts)` even when business fields conflict. (RETIRED — no candle conflict reconciliation.)
-- `CandleTableContractValidator` does not fully validate all 15 columns/types despite its contract name. (Re-scope target: candle LOG + signal LOG/KV preflight.)
+- `CandleTableContractValidator` became `TableContractValidator` (2026-08-13): candle KV exact-PK `(instrument_token, window_start)` + signal LOG no-PK (SIGNAL-SCHEMA-001) + signal KV PK `(instrument_token)` preflight; all 15 column names/type-roots/DDL-order checked.
 - The dev restore rehearsal used heap/HashMap state and local file checkpoints. (Dev-only; production gate P4 unchanged.)
 - The repository Docker Compose file does not pin production state backend or durable S3 checkpoint configuration for compute. (P4 unchanged.)
 - The low-level batch scanner is not accepted as proof of complete Iceberg-tiered LOG history. (Moot for candles — no candle audit; applies to any future signal-history audit only if added.)
@@ -133,8 +136,8 @@ These are verified baseline facts, not tasks to rediscover:
 
 Do not mark production-ready until every item below is complete. (2026-08-13: candle-KV-specific gates annotated RETIRED; signal gates added.)
 
-- [x] Exact live schema/type preflight is complete (candle LOG + signal LOG/KV).
-  (Candle-KV version, HISTORICAL 2026-08-11: `CandleTableContractValidator` — LOG must have no PK; KV PK exactly (instrument_token, window_start); all 15 columns name/type-root/DDL-order checked, KV PK columns non-nullable; bucket.key instrument_token + 16 buckets; wired as `SignalJob.preflightTableContracts` before the environment is created; `CandleTableContractValidatorTest` 19/19; live preflight failures proven by P6.2. Register `CANDLE-SCHEMA-002` [x]. RE-SCOPED target: same machinery re-targeted to `feature_candles_15s` (LOG), `Signal_Candidates` (LOG), `Signal_Candidates_current` (KV PK instrument_token) — pending, register `SIGNAL-SCHEMA-001` [ ].)
+- [x] Exact live schema/type preflight is complete (candle KV + signal LOG/KV).
+  (Candle-KV version, HISTORICAL 2026-08-11: `CandleTableContractValidator` — LOG must have no PK; KV PK exactly (instrument_token, window_start); all 15 columns name/type-root/DDL-order checked, KV PK columns non-nullable; bucket.key instrument_token + 16 buckets; wired as `SignalJob.preflightTableContracts` before the environment is created; `CandleTableContractValidatorTest` 19/19; live preflight failures proven by P6.2. Register `CANDLE-SCHEMA-002` [x]. RE-SCOPED + CONVERTED 2026-08-13: `TableContractValidator.validateCandleKvTable` — candle table PK exactly (instrument_token, window_start) — + signal LOG no-PK + signal KV PK instrument_token; `TableContractValidatorTest` 23/23; register `SIGNAL-SCHEMA-001` [x].)
 - [ ] ~~Zero unresolved candle business conflicts remain in the production interval.~~ RETIRED — no candle migration/conflict reconciliation (user decision 2026-08-13).
 - [x] Complete lake+log union-read evidence exists for migration history. (HISTORICAL, RETIRED for candles: the candle union audit exists only to prove candle-KV migration completeness — no candle audit is needed per user decision 2026-08-13. DEV evidence 2026-08-11 retained: union-read proof on the lake-enabled cluster — 1,638,400 rows, snapshot 3346481978558104585, 16/16 buckets, `RESULT=OK` (`logs/tracker-14/p3-2-lake-tiering-union-read-2026-08-11.md`). Register `CANDLE-MIGRATION-002` [x] — historical.)
 - [x] Production uses the approved managed state backend, not heap/HashMap state.
@@ -217,7 +220,7 @@ The coding agent must implement P0–P9 and prepare P10 commands/runbooks. It mu
 
 Modify or extend:
 
-- `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/CandleTableContractValidator.java`
+- `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/TableContractValidator.java` (renamed 2026-08-13 from `CandleTableContractValidator`)
 - `code/common/src/main/java/com/trading/common/schema/CandleTableSchema.java`
 
 Implement pure validation of a supplied `TableInfo`/`Schema` object. Do not connect to Fluss in the pure helper.
@@ -481,7 +484,7 @@ The source LOG is lake-enabled. A plain limited `BatchScanner` is not accepted a
   - `connection.establish.timeout` = 30000 (`socket.timeout` proven dead in hadoop-aws 3.3.x —
   deliberate deviation, plan-sanctioned); `run-batch.sh` outer deadline (default 90m,
   `CANDLE_MIGRATION_OUTER_TIMEOUT` on exit 124/137) — plan
-  `docs/plans/20260812-fix-r2-iceberg-lake-read-stall.md`. Probe PASS 22.35 s (effective-conf
+  `§P3.5 of this tracker (plan file never persisted)`. Probe PASS 22.35 s (effective-conf
   30000/30000 reaches Hadoop conf, HEAD+GET, no credentials — Phase 5). Canary 155017 still wedged
   3/3 on the R2 edge blackhole → contained by the 10m deadline (exit 124, trap-removed); full-run
   native peaks still pending a stall-free audit (plan Phase 6).)
@@ -550,7 +553,7 @@ The production-path migration audit reads history through the Fluss Flink source
 - S3A timeout pins: docker-compose (coordinator + tablet blocks) + `CandleMigrationBatchJob` supplier keys `iceberg.iceberg.hadoop.fs.s3a.connection.timeout` and `iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout` = 30000 (env pins `CANDLE_MIGRATION_S3_CONNECTION_TIMEOUT_MS`/`_SOCKET_TIMEOUT_MS`; default 30000, range [1000,300000], non-numeric/zero/negative fail startup). DELIBERATE DEVIATION: NOT `fs.s3a.socket.timeout` — bytecode-proven dead in hadoop-aws 3.3.x (S3AUtils.initConnectionSettings maps `connection.timeout` → SDK socket READ timeout and `connection.establish.timeout` → TCP connect timeout; `socket.timeout` is never read, silent no-op); the same reasoning is encoded in docker-compose comments.
 - Operational containment: `run-batch.sh` outer deadline `timeout --foreground -k 10s ${CANDLE_MIGRATION_MAX_RUNTIME:-90m}` + `set -o pipefail` + `CANDLE_MIGRATION_OUTER_TIMEOUT=1` on exit 124/137 + named-container cleanup trap. Every run is now guaranteed to terminate.
 - Proof: bounded probe PASS 22.35 s (plan Phase 5) — effective values reach Hadoop conf (`CANDLE_MIGRATION_EFFECTIVE_CONNECTION_TIMEOUT_MS=30000`, `EFFECTIVE_ESTABLISH_TIMEOUT_MS=30000`), HEAD+GET ok, no credentials. Supplier tests in `CandleMigrationBatchJobTest` (missing → 30000, custom, zero/negative/below-1000/above-300000/non-numeric rejection, exact map keys, no-credentials, prefix transformation).
-- Plan: `docs/plans/20260812-fix-r2-iceberg-lake-read-stall.md` (Phases 0-5 done; Phase 6 open).
+- Plan: `§P3.5 of this tracker (plan file never persisted)` (Phases 0-5 done; Phase 6 open).
 
 ### Residual risk (still open 2026-08-12)
 
@@ -565,7 +568,7 @@ Root cause: the ENTIRE batch pipeline ran at parallelism 1 (thread dump: `migrat
 2. [ ] **Metadata-only count reconciliation**: Iceberg manifests carry per-file row counts; the union-total check (`UNION_TOTAL==FULL_TOTAL`, 16/16 buckets) is answerable from manifests + log offsets without fetching data files — minutes. Only the 25 conflict keys need real rows. This is the engine production P10.2's dry audit should use (production data >> dev).
 3. [ ] **Incremental audits**: track the last audited snapshot; read only new snapshots on re-runs.
 
-Full-run timing comparison (parallelism 16 vs 1) pending the next audit run — Block 0's in-flight run still used the old jar (launched 17:26). Owner: coding agent; fold option 2 into the P10 plan's dry-audit step when built.
+Option 1 verified end-to-end 2026-08-12: full-run audit of the grown lake (2,529,054 rows / 16 buckets) at parallelism 16 finished in 13 m 01 s (STATUS=OK, union==full, 0 conflicts) vs the serial engine's measured 2.85 MB/min crawl (~2.5 h projected for the same data). Thread dump preserved in `logs/tracker-14/batch-audit-20260812-172651.log`. R2 Phase 6 + box 428 NMT peaks + B8.1 reconciliation evidence: `logs/tracker-14/batch-audit-20260812-183311.log`.
 
 ---
 
@@ -865,7 +868,16 @@ rejected end-to-end (no TOKEN_BAD candle) while its watermark legitimately close
 
 ## P7 — Performance and capacity evidence
 
-**P7 bench plan (2026-08-12):** `docs/plans/20260812-p7-bench.md` — locked bench spec (24 user decisions: 12 scope — dev compose cluster, 3+ faketool connections, live raw_table_1, writer stopped for the window, 1024 tokens, as-produced realism, 30 min @ 60k, source-consumed gate with p50/p95/p99/max, tick→emit p99 < 100 ms, R2 checkpoints for gate + file:// for debug, docker-level disturbance matrix, application mode + PARALLELISM=8; 12 measurement/operation — clock from RUNNING, feed-emit latency origin incl. Fluss round-trip, latency tracking ON for gate run, two 5-min 90k bursts, accepted = emitted+deduped+quarantined, checkpoint tolerance <= 2 restart-recovered, memory vs TM 2g container limit, dedup expiry sweep, dev baseline first, 5 s raw capture) + phases 0-3 + gate definitions + evidence template; long-run gate rule §4.1 (every >10-min phase preceded by the ≤2-min smoke: probe-r2.sh + feed smoke). **Nothing executed yet.**
+**Status (2026-08-13):** Phase 0 baseline DONE; Phases 1–3 + dedup sweep recorded BLOCKED with evidence (plan §14). Throughput gates feed-limited (measured ceiling 58.9–59.7k rows/s vs 60k/90k targets); latency p99 not measurable via exporter; memory + checkpoint gates PASS. Bench surfaced two real findings: (1) Fluss 0.9.1 Flink log-source checkpoint fetch-ahead offsets → restore stall/data-loss risk (`RestoreStallProbe` evidence), (2) safety-write churn → fixed by R-298 write-side dedup (commit `a4c69692`).
+>
+> **RE-SCOPED (requirement change 2026-08-13):** the bench measured the PRE-change candle
+> LOG+KV dual-sink topology. The measured bottleneck facts (feed/tablet ceiling,
+> exporter latency limitation, R-298) are topology-independent and stand. The
+> P7.2/P7.3 battery re-runs against the new signal dual-sink topology after
+> implementation — "candle KV upserts/s" is replaced by "signal LOG appends/s" and
+> "signal KV upserts/s".
+
+**P7 bench plan (2026-08-12):** `docs/08_implementation/11-testing-and-release.md` (P7 bench plan section) — locked bench spec (24 user decisions: 12 scope — dev compose cluster, 3+ faketool connections, live raw_table_1, writer stopped for the window, 1024 tokens, as-produced realism, 30 min @ 60k, source-consumed gate with p50/p95/p99/max, tick→emit p99 < 100 ms, R2 checkpoints for gate + file:// for debug, docker-level disturbance matrix, application mode + PARALLELISM=8; 12 measurement/operation — clock from RUNNING, feed-emit latency origin incl. Fluss round-trip, latency tracking ON for gate run, two 5-min 90k bursts, accepted = emitted+deduped+quarantined, checkpoint tolerance <= 2 restart-recovered, memory vs TM 2g container limit, dedup expiry sweep, dev baseline first, 5 s raw capture) + phases 0-3 + gate definitions + evidence template; long-run gate rule §4.1 (every >10-min phase preceded by the ≤2-min smoke: probe-r2.sh + feed smoke). **Executed 2026-08-12/13 — results in the plan's §14.**
 
 ## P7.1 Test matrix
 
@@ -910,6 +922,12 @@ Record raw time series and p50/p95/p99/max for every metric listed below; missin
 - [ ] restart recovery duration.
 
 ## P7.3 Pass/fail gates
+
+> **Measured status (2026-08-13, plan §14):** throughput gates feed-limited — measured
+> ceiling 58.9–59.7k rows/s (CountRows + Phase 0); 60k/90k NOT ACHIEVED; decision
+> p99 NOT MEASURABLE (exporter drops histogram buckets); memory 24% PASS; checkpoint
+> p99 3.1 s PASS. Production status stays BLOCKED per §6; bottlenecks recorded, no
+> config inflation.
 
 - [ ] sustained throughput >= 60,000 ticks/s.
 - [ ] peak throughput reaches 90,000 ticks/s without data loss.
@@ -1380,4 +1398,4 @@ A successful compilation or dev migration is not sufficient for `READY`.
 
 > Report: `logs/tracker-14/final-report-2026-08-12.md` — verdict
 > `PENDING_OPERATOR_EVIDENCE` (14 sections; closes the 2026-08-12 easy-gaps block,
-> plan `docs/plans/20260812-easy-implementable-gaps.md`).
+> plan `docs/08_implementation/11-testing-and-release.md` (completed easy-gaps section)).

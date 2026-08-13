@@ -1,7 +1,7 @@
 # Candle LOG + Canonical KV + Replay Safety
 
 **Tracker ID:** `CANDLE-KV-REPLAY-001`  
-**Status:** `COMPLETE — P0–P9 done; Phase 8 executed and verified on the dev cluster 2026-08-10 (historical load 1,351,301 rows, dual-sink cutover, B8.7 rollback rehearsal). Production data-plane execution remains the operator's blue-green step.` — **SCOPE SUPERSEDED 2026-08-13, see banner below; this document remains the accurate historical record of the implemented candle dual-sink.**
+**Status:** `COMPLETE — P0–P9 done; Phase 8 executed and verified on the dev cluster 2026-08-10 (historical load 1,351,301 rows, dual-sink cutover, B8.7 rollback rehearsal). Production data-plane execution remains the operator's blue-green step.` — **SCOPE SUPERSEDED 2026-08-13, see banner below; this document remains the accurate historical record of the implemented candle dual-sink. FURTHER SUPERSEDED (2026-08-13, later same day): the candle tables were converted to KV-only — `feature_candles_15s` is now the KV upsert table (PK `(instrument_token, window_start)`), the LOG-era dual-sink below is doubly superseded (see `04-signal-job.md` banner).**
 **Owner:** Compute / Storage / Operations  
 **Repository:** `streaming_project`  
 **Running compatibility target:** Flink `2.2.1` + Fluss connector `org.apache.fluss:fluss-flink-2.2:0.9.1-incubating`  
@@ -11,9 +11,14 @@
 >
 > The candle [LOG + KV] dual-sink this tracker implemented (`feature_candles_15s` LOG +
 > `feature_candles_15s_current` KV) is **RETIRED**: the user does not do per-stock
-> candle auditing. `feature_candles_15s` remains the **sole candle output** — an
-> immutable append-only LOG; the candle KV projection, the `CandleMigrationTool`
-> load/audit machinery, and the candle rehearsal are no longer the target design.
+> candle auditing, and per the user's requirement (2026-08-13, later same day)
+> `feature_candles_15s` is now the **sole candle output as a KV upsert table** —
+> PK exactly `(instrument_token, window_start)`, one row per closed 15 s window,
+> last-write-wins (replay converges, no row growth). The candle KV projection
+> `feature_candles_15s_current`, the `CandleMigrationTool` load/audit machinery, and
+> the candle rehearsal are deleted; the LOG-era dual-sink described in this tracker
+> is doubly superseded (first by the signal re-scope, then by the candle KV-only
+> conversion — see `04-signal-job.md` banner for the executed 2026-08-13 state).
 >
 > The [LOG + KV] facility now applies to the **trade-signal table on Fluss** (user
 > confirmed): `Signal_Candidates` becomes the **LOG** — Flink appends a new row per

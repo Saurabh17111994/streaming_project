@@ -179,7 +179,7 @@ The required behavior above is verified by the canonical [Production Swarm test 
 **Status:** `RE-SCOPED 2026-08-13 — previously PLANNED (not yet executed) as a candle KV migration rehearsal; target changed to the SIGNAL dual-sink per requirement change. Phase 0 isolation groundwork (overlay compose, empty rehearsal trio) remains valid; no data copy was ever performed.`
 \*\*Location:\*\* `docs/08_implementation/09-production-swarm.md`
 **Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P10 — Operator-only migration and cutover` (RE-SCOPED), `## P10.1 Isolated rehearsal`, `## P10.2 Production blue-green cutover`, `## P10.3 Rollback`.
-**Sequencing gate:** the tracker says "Do not execute until P1–P9 code/evidence gates are complete" — this plan starts strictly AFTER (a) the signal dual-sink implementation (candle LOG-only + `Signal_Candidates` LOG + `Signal_Candidates_current` KV) and (b) the P7.2/P7.3 battery re-run on the new topology (`docs/08_implementation/11-testing-and-release.md`).
+**Sequencing gate:** the tracker says "Do not execute until P1–P9 code/evidence gates are complete" — this plan starts strictly AFTER (a) the signal dual-sink implementation (candle **KV-only** sink + `Signal_Candidates` LOG + `Signal_Candidates_current` KV) and (b) the P7.2/P7.3 battery re-run on the new topology (`docs/08_implementation/11-testing-and-release.md`).
 **Recipe source:** `skill://candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover procedure pattern) + `candle-failure-injection-tests` (state-restore verification patterns) + `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)` (R2 containment).
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13):** the candle [LOG + KV] facility is
@@ -206,7 +206,7 @@ Execute the full P10.1 isolated rehearsal on the dev host (all 10 re-scoped boxe
 | Production definition | Dev cluster = qualification target; P10.2/10.3 delivered as a READY runbook, executed only when a real production deployment exists |
 | Isolated env | Second compose project on this host (the `p10` overlay built 2026-08-13): separate project name → separate network, container names, remapped ports (12181/19123/19124/18081/19249/19250); live stack untouched |
 | Rehearsal data | Full dev data + checkpoints (Fluss tablet segments + ZK metadata + archived known-good checkpoint); R2 lake objects shared read-only where the source reads the lake tier (§2.2) |
-| Table provisioning | `feature_candles_15s` (LOG, sole candle output), `Signal_Candidates` (LOG), `Signal_Candidates_current` (KV, PK `instrument_token`) via the identical gated DDL path; preflight validator re-targeted (SIGNAL-SCHEMA-001) |
+| Table provisioning | `feature_candles_15s` (KV, PK `(instrument_token, window_start)` — sole candle output, converted 2026-08-13), `Signal_Candidates` (LOG), `Signal_Candidates_current` (KV, PK `instrument_token`) via the identical gated DDL path; preflight validator re-targeted (SIGNAL-SCHEMA-001) |
 | Signal LOG contract | Append one row per fired signal; never updated; replay appends are retained as evidence (never silently deleted) |
 | Signal KV contract | Exactly one latest/active candidate per instrument; supersession replaces the row; KV key count == active instruments after replay |
 | Bounded replay | Bounded replay run TWICE from the same source offsets — idempotency proof: signal LOG may grow, `Signal_Candidates_current` key count frozen |
@@ -226,7 +226,7 @@ Execute the full P10.1 isolated rehearsal on the dev host (all 10 re-scoped boxe
 
 ## 3. Prerequisites (checked at Phase 0 entry)
 
-- [ ] Signal dual-sink implemented: candle LOG-only sink, `Signal_Candidates` LOG append sink, `Signal_Candidates_current` KV sink; `CandleGraphReplayIntegrationTest` re-scoped and green.
+- [ ] Signal dual-sink implemented: candle **KV upsert** sink (PK `(instrument_token, window_start)`), `Signal_Candidates` LOG append sink, `Signal_Candidates_current` KV sink; `CandleGraphReplayIntegrationTest` re-scoped and green.
 - [ ] P7 battery re-run on the new topology with evidence registered (`PERF-*` + `DEDUP-MEMORY-001` rows annotated).
 - [ ] Archived known-good checkpoint copied to a stable archive prefix (`s3a://…/p10-rehearsal/archive/`) BEFORE further live runs rotate it.
 - [ ] Live stack healthy; no other rehearsal/bench in flight.
