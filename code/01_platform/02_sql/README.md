@@ -12,7 +12,7 @@
 | `02_raw_table_1.sql` | `raw_table_1` — immutable raw packet/tick LOG |
 | `03_feature_candles_15s.sql` | `feature_candles_15s` — final 15-second candle LOG (immutable evidence trail) |
 | `04_forming_bar.sql` | `forming_bar` — per-ticker forming-bar KV |
-| `05_signal_candidates.sql` | `Signal_Candidates` — candidate audit (KV since DDL v2, R-084) |
+| `05_signal_candidates.sql` | `Signal_Candidates` — candidate audit LOG v3 (2026-08-13, DEC-035): append-only, one row per fired signal, never updated, `bucket.key=instrument_token`; supersede columns retained for audit linkage |
 | `06_ranking_results.sql` | `Ranking_Results` — immutable ranking audit LOG |
 | `07_trade_decisions.sql` | `Trade_Decisions` — immutable instruction feed LOG |
 | `08_fills.sql` | `Fills` — immutable broker postback/fill LOG |
@@ -29,7 +29,7 @@
 | `19_suspected_discontinuities.sql` | `suspected_discontinuities` — feed discontinuity evidence LOG |
 | `20_instruments.sql` | `instruments` — versioned instrument manifest KV |
 | `21_ingestion_quarantine.sql` | `ingestion_quarantine` — immutable ingestion quarantine LOG |
-| `22_feature_candles_15s_current.sql` | `feature_candles_15s_current` — canonical candle KV projection, PK `(instrument_token, window_start)`, same 15-column v2 schema and bucket layout as `feature_candles_15s` (CANDLE-KV-REPLAY-001) |
+| `23_signal_candidates_current.sql` | `Signal_Candidates_current` — signal KV current-state, PK `(instrument_token)`, latest/active per instrument, supersession overwrites; 22-column twin of `Signal_Candidates` (DEC-035) |
 
 ## Validation required before application
 

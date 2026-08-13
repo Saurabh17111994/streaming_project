@@ -9,10 +9,17 @@
 > clean (SCH-01..04, `schema_manifest.json` + `ddl_apply.py`). Since 2026-08-10 the gate also
 > field-validates `primary_key`/`bucket_key` against the DDLs (not only checksum + `table_kind`),
 > so a manifest whose routing fields silently diverge from a DDL now fails `make ddl` instead of
-> passing. `Safety_Halt_Requests` is now a KV table (v3, R-089) and `Signal_Candidates` is now a KV
+> `Safety_Halt_Requests` is now a KV table (v3, R-089) and `Signal_Candidates` is now a KV
 > table (v2, R-084) — see the DDL headers.
 > Keep this file as the historical record of the requirements→DDL reconciliation; it no longer
 > describes the live DDL surface.
+> **Further superseded (2026-08-13):** per the requirement change (tracker 14 RE-SCOPED),
+> `Signal_Candidates` reverts to LOG v3 (append-only audit) + a new `Signal_Candidates_current`
+> KV current-state table (PK `instrument_token`), and the candle KV projection
+> `22_feature_candles_15s_current.sql` is retired. DDL changes pending implementation.
+> **Implemented 2026-08-13 (Stage 2):** repo DDL/manifest/bootstrap now carry
+> `Signal_Candidates` LOG v3 + the `Signal_Candidates_current` KV table; live
+> dev-cluster apply and candle-KV drop remain Stage 6 (operator-gated).
 
 ## Status: REQUIREMENTS RECONCILED — SQL GENERATED — VERSION PINNING PENDING
 

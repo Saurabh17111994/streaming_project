@@ -123,7 +123,8 @@ public final class DdlBootstrap {
      * their creation is the offline DDL gate's job (schema reconciliation is
      * owned by {@code ddl_apply.py} / {@code schema_manifest.json}). The
      * compute tables ({@code feature_candles_15s}, {@code
-     * feature_candles_15s_current}, {@code Signal_Candidates}, …) are
+     * feature_candles_15s_current}, {@code Signal_Candidates}, {@code
+     * Signal_Candidates_current}, …) are
      * provisioned out-of-band; this method only ever creates
      * {@link #OWNED_TABLES}.
      *
@@ -295,10 +296,11 @@ public final class DdlBootstrap {
             .build();
 
     /**
-     * Full 22-column KV schema for Signal_Candidates matching the v2 DDL
-     * (05_signal_candidates.sql, R-084). Written by the compute job's
-     * signal-detection slice (DEC-034); KV so the supersede chain
-     * (superseded_by_candidate_id) can be populated by the ranking phase later.
+     * Full 22-column LOG schema for Signal_Candidates matching the v3 DDL
+     * (05_signal_candidates.sql, DEC-035). Written by the compute job's
+     * signal-detection slice (DEC-034) as append-only audit — one row per
+     * fired signal, never updated. Current-state consumers read the KV
+     * projection {@link #SIGNAL_CANDIDATES_CURRENT_SCHEMA}.
      */
     private static final Schema SIGNAL_CANDIDATES_SCHEMA = Schema.newBuilder()
             .column("candidate_id", org.apache.fluss.types.DataTypes.STRING())
@@ -323,7 +325,40 @@ public final class DdlBootstrap {
             .column("supersedes_candidate_id", org.apache.fluss.types.DataTypes.STRING())
             .column("superseded_by_candidate_id", org.apache.fluss.types.DataTypes.STRING())
             .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
-            .primaryKey("candidate_id") // DDL v2 (R-084): KV, 16 buckets
+            .build();
+
+    /**
+     * Full 22-column KV schema for Signal_Candidates_current matching DDL 23
+     * (DEC-035): same columns as the LOG twin plus
+     * PRIMARY KEY (instrument_token) — the idempotent current-state
+     * projection consumers read instead of scanning the append-only LOG.
+     * Bucket key instrument_token equals the PK, keeping per-ticker
+     * colocation with the LOG twin.
+     */
+    private static final Schema SIGNAL_CANDIDATES_CURRENT_SCHEMA = Schema.newBuilder()
+            .column("candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("instruction_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("trade_context_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
+            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
+            .column("strategy_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("strategy_version", org.apache.fluss.types.DataTypes.STRING())
+            .column("rule_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("detection_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("evaluation_ts", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("action", org.apache.fluss.types.DataTypes.STRING())
+            .column("side", org.apache.fluss.types.DataTypes.STRING())
+            .column("quantity", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("order_type", org.apache.fluss.types.DataTypes.STRING())
+            .column("limit_price_paise", org.apache.fluss.types.DataTypes.BIGINT())
+            .column("score_inputs", org.apache.fluss.types.DataTypes.STRING())
+            .column("formation_snapshot_ref", org.apache.fluss.types.DataTypes.STRING())
+            .column("validity_reason", org.apache.fluss.types.DataTypes.STRING())
+            .column("supersedes_candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("superseded_by_candidate_id", org.apache.fluss.types.DataTypes.STRING())
+            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
+            .primaryKey("instrument_token")
             .build();
 
     /**
@@ -436,7 +471,9 @@ public final class DdlBootstrap {
                                     .distributedBy(16, "instrument_token")
                                     .build()),
                     Map.entry("Signal_Candidates",
-                            TableDescriptor.builder().schema(SIGNAL_CANDIDATES_SCHEMA).distributedBy(16, "candidate_id").build()),
+                            TableDescriptor.builder().schema(SIGNAL_CANDIDATES_SCHEMA).distributedBy(16, "instrument_token").build()),
+                    Map.entry("Signal_Candidates_current",
+                            TableDescriptor.builder().schema(SIGNAL_CANDIDATES_CURRENT_SCHEMA).distributedBy(16, "instrument_token").build()),
                     Map.entry("Ranking_Results",
                             logTable("execution_partition_id")),
                     Map.entry("Trade_Decisions",

@@ -132,7 +132,8 @@ class DdlBootstrapSchemaAgreementTest {
     void computeTablesAreNotOwned() {
         for (String computeTable : List.of(
                 "feature_candles_15s", "feature_candles_15s_current",
-                "Signal_Candidates", "Ranking_Results", "Trade_Decisions",
+                "Signal_Candidates", "Signal_Candidates_current",
+                "Ranking_Results", "Trade_Decisions",
                 "Portfolio_Reservations")) {
             assertFalse(DdlBootstrap.ownedTables().contains(computeTable),
                     computeTable + " is a compute-owned table — DdlBootstrap must not own it "

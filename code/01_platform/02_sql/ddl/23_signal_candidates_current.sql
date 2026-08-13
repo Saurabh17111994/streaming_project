@@ -1,21 +1,23 @@
--- Signal_Candidates: immutable LOG — one row per fired signal, never updated
+-- Signal_Candidates_current: KV current-state companion to the immutable LOG
 -- Owner: Signal job
--- Type: LOG (no primary key)
--- Bucket key: instrument_token
+-- Type: KV (primary key on instrument_token)
+-- Bucket key: instrument_token (colocates with Signal_Candidates; the Fluss
+--   connector requires bucket.key to be a SUBSET of the primary key, and this
+--   single-column PK keeps every signal of a ticker in the same bucket as its
+--   LOG twin — DEC-035)
 -- Retention: ≤7 calendar days via table.log.ttl
 -- Lake: EOD Iceberg offload
 -- Scope: portfolio_id
--- Schema version: 3
+-- Schema version: 1
 --
--- v2 (2026-08-03, review R-084): was LOG; converted to KV keyed on
--- candidate_id so the supersede chain could update appended rows.
--- v3 (2026-08-13, DEC-035 requirement change): reverts to LOG. The supersede
--- chain never materialized in this phase, and current-state consumers read
--- the KV projection Signal_Candidates_current (23_signal_candidates_current.sql)
--- keyed by instrument_token — so this table can stay append-only audit.
--- Supersede columns are retained for audit linkage (22-column layout frozen).
+-- Why KV (2026-08-13, DEC-035): Signal_Candidates is an immutable LOG (v3) —
+-- one row per fired signal, never updated — so consumers of "the current
+-- signal per instrument" cannot tell which row is current. As a KV table the
+-- storage layer enforces one row per instrument_token and a supersession
+-- upserts the same key — the LOG stays as immutable audit, this table is the
+-- idempotent current-state projection.
 
-CREATE TABLE Signal_Candidates (
+CREATE TABLE Signal_Candidates_current (
     candidate_id            STRING      NOT NULL,
     instruction_id          STRING,
     trade_context_id        STRING,
@@ -37,7 +39,8 @@ CREATE TABLE Signal_Candidates (
     validity_reason         STRING,
     supersedes_candidate_id STRING,
     superseded_by_candidate_id STRING,
-    schema_version          STRING      NOT NULL
+    schema_version          STRING      NOT NULL,
+    PRIMARY KEY (instrument_token) NOT ENFORCED
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',

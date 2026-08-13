@@ -28,10 +28,10 @@
     {
       "table_name": "Signal_Candidates",
       "ddl_path": "05_signal_candidates.sql",
-      "ddl_sha256": "175c44f83a49cc1c8187fcf4835447768a6a94a32872075cb5905d42a5fbf822",
-      "table_kind": "KV",
-      "primary_key": "candidate_id",
-      "bucket_key": null
+      "ddl_sha256": "be17c643173f496a508799d872382a4eabe702d35f88c9c000f9e2d71f100435",
+      "table_kind": "LOG",
+      "bucket_key": "instrument_token",
+      "primary_key": null
     },
     {
       "table_name": "Ranking_Results",
@@ -162,11 +162,11 @@
       "primary_key": null
     },
     {
-      "table_name": "feature_candles_15s_current",
-      "ddl_path": "22_feature_candles_15s_current.sql",
-      "ddl_sha256": "8e7ccd03761284c29ccb7b0a13dc5e76385a0399387e9b4f9b686754f8341257",
+      "table_name": "Signal_Candidates_current",
+      "ddl_path": "23_signal_candidates_current.sql",
+      "ddl_sha256": "0672d0f9bc4c1f6d5f88ae746b7a1fb8df5b6d7db915d703cf88998c8ea81573",
       "table_kind": "KV",
-      "primary_key": "instrument_token, window_start",
+      "primary_key": "instrument_token",
       "bucket_key": null
     }
   ]

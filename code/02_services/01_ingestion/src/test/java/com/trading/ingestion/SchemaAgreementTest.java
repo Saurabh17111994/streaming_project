@@ -172,11 +172,16 @@ class SchemaAgreementTest {
     }
 
     @Test
-    @DisplayName("KV tables that need storage-level dedup declare a PK (R-084/R-089)")
-    void kvDedupTablesHavePrimaryKeys() throws IOException {
+    @DisplayName("Signal_Candidates LOG v3 has no PK; Signal_Candidates_current KV keys on instrument_token (DEC-035)")
+    void signalTablesFollowReScope() throws IOException {
         String candidates = readDdl("05_signal_candidates.sql");
-        assertTrue(candidates.contains("PRIMARY KEY (candidate_id)"),
-                "Signal_Candidates must be KV keyed on candidate_id so supersede updates land (R-084)");
+        assertTrue(!candidates.contains("PRIMARY KEY"),
+                "Signal_Candidates is append-only LOG v3 (DEC-035) — it must not declare a primary key");
+        assertTrue(candidates.contains("'bucket.key' = 'instrument_token'"),
+                "Signal_Candidates LOG must route by instrument_token (colocates with the KV current-state twin)");
+        String current = readDdl("23_signal_candidates_current.sql");
+        assertTrue(current.contains("PRIMARY KEY (instrument_token)"),
+                "Signal_Candidates_current must be KV keyed on instrument_token so supersessions upsert the same key (DEC-035)");
         String halts = readDdl("18_safety_halt_requests.sql");
         assertTrue(halts.contains("PRIMARY KEY (halt_request_id)"),
                 "Safety_Halt_Requests must be KV keyed on halt_request_id so duplicate deliveries are no-ops (R-089)");
