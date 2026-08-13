@@ -26,10 +26,10 @@ Final machine sizing (CPU, RAM, disk I/O, network bandwidth) is evidence-gated b
 
 | Scenario | Tick rate | Duration | Purpose |
 | --- | ---: | --- | --- |
-| Variable baseline | 50,000 ticks/s average (3,000 instruments; ≈16.7 ticks/s/instrument average) | 30-minute production-manifest test | Required latency release gate |
+| Variable baseline | 50,000 ticks/s average (3,000 instruments; ≈16.7 ticks/s/instrument average) | ~~30-minute production-manifest test~~ REMOVED (DEC-037, 2026-08-13); certified at the synthetic hot-path envelope | Required latency release gate |
 | Capacity peak | ~~90,000 ticks/s~~ RETIRED (DEC-036); theoretical cap ceiling (3,000 × 30) for generator stress only | — | No peak-capacity acceptance evidence required |
 
-Tests must use the full 3,000-instrument production manifest. Synthetic workloads must preserve variable per-instrument arrivals, maintain the declared average/cap, and record the generator seed/profile. The p99 <100 ms release target applies at the baseline; the gate proves safety and boundedness rather than inventing a second latency threshold (the peak campaign is retired, DEC-036).
+Synthetic workloads must preserve variable per-instrument arrivals, maintain the declared average/cap, and record the generator seed/profile. The p99 <100 ms release target applies at the baseline; the gate proves safety and boundedness rather than inventing a second latency threshold (the peak campaign is retired, DEC-036). The 30-minute 3,000-instrument production-manifest run is REMOVED from acceptance (DEC-037, 2026-08-13 — user decision: not to be tested); the 50k gate is certified at the synthetic hot-path envelope.
 
 The platform must meet the production latency SLO at the 50,000 ticks/s baseline and must verify bounded backlog, backpressure, checkpoint stability, recovery, and absence of acknowledged data loss at that gate (the 90,000 ticks/s peak is retired, DEC-036).
 

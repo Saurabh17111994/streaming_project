@@ -260,8 +260,9 @@ boundaries:
     evidence_owner: Ingestion
     evidence_method: >-
       Build versioned broker packet corpus (both feeds); assert decoder
-      handles identity (Token), timestamps, status, limits, reconnect,
-      replay, echo. Verify full-mode byte size (249 docs vs 241 SDK).
+      handles identity (Token), timestamps, status, limits. Reconnect/
+      replay/echo acceptance is the bridge-level ING-RES-001 soak
+      (DEC-037, 2026-08-13). Verify full-mode byte size (249 vs 241).
     source_artifact: logs/broker-md-001/marketdata-capture-20260813.jsonl
     fixture: >-
       logs/broker-md-001/marketdata-capture-20260813.jsonl (52 records, both
@@ -281,9 +282,9 @@ boundaries:
       +16 B trailer after ~15:15 IST (29/33/109/265, source-derived);
       heartbeat 1 B ignored; HFT ts_ns = ~5.4-day counter, not epoch-ns
     limitations: >-
-      Live reconnect/replay/echo not re-exercised (30 s capture, no forced
-      disconnect) — covered at bridge level by ING-RES-001 in-process soak
-      (PASS 2026-08-13); CAS trailer not yet observed live (unit-tested)
+      CAS trailer not yet observed live (unit-tested only). Live reconnect/
+      replay/echo removed from acceptance (DEC-037, 2026-08-13); bridge-level
+      ING-RES-001 soak PASS (2026-08-13) is the reconnect evidence
     date: 2026-08-13
     status: EVIDENCE_RECORDED_LIVE
 

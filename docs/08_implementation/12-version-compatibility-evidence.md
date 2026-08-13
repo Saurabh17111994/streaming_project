@@ -63,10 +63,10 @@ resolved — 249 B (docs) is the live wire, 241 B is the legacy layout (8 reserv
 bytes at 101:109, depth at 109); paise scaling cross-validated across feeds;
 AutoLogin (non-interactive, no device token) verified after the vendored-SDK fix
 (validate-2fa host api.arrow.trade + `appID` body field). VM-BROKER-MKT-008 flipped
-`COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`). Limitations: live reconnect/replay/echo not
-re-exercised in the 30 s capture (covered at bridge level by ING-RES-001 in-process
-100-cycle soak, PASS 2026-08-13); CAS +16 B trailer source-derived, not yet observed
-live. Evidence: `logs/broker-md-001/`.
+`COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`). Limitations: CAS +16 B trailer source-derived,
+not yet observed live. Live reconnect/replay/echo is not an acceptance item (DEC-037,
+2026-08-13); bridge-level ING-RES-001 soak PASS (2026-08-13) is the reconnect evidence.
+Evidence: `logs/broker-md-001/`.
 
 ## Environment tiers
 
