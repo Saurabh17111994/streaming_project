@@ -47,6 +47,7 @@ public record SignalJobConfig(
         long outOfOrderMs,
         long allowedLatenessMs,
         long sourceIdleMs,
+        long sourceIdleAlertMs,
         long checkpointIntervalMs,
         long checkpointTimeoutMs,
         int maxConcurrentCheckpoints,
@@ -99,6 +100,7 @@ public record SignalJobConfig(
                 longValue(env, "WATERMARK_OUT_OF_ORDER_MS", 5_000L),
                 longValue(env, "ALLOWED_LATENESS_MS", 5_000L),
                 longValue(env, "SOURCE_IDLE_MS", 15_000L),
+                sourceIdleAlertMs(env),
                 requirePinnedLong(env, "CHECKPOINT_INTERVAL_MS", PlatformConfig.CHECKPOINT_INTERVAL_MS),
                 requirePinnedLong(env, "CHECKPOINT_TIMEOUT_MS", PlatformConfig.CHECKPOINT_TIMEOUT_MS),
                 requirePinnedInt(env, "MAX_CONCURRENT_CHECKPOINTS", PlatformConfig.MAX_CONCURRENT_CHECKPOINTS),
@@ -503,6 +505,24 @@ public record SignalJobConfig(
         if (value <= 0) {
             throw new IllegalStateException("Config SINK_WRITE_STALL_TIMEOUT_MS must be > 0 "
                     + "(pinned default " + PlatformConfig.SINK_WRITE_STALL_TIMEOUT_MS
+                    + "), got " + value);
+        }
+        return value;
+    }
+
+    /**
+     * Source idle-at-tail alert threshold (tracker 14 P7/P10, 2026-08-13).
+     * Defaults to the governed default in {@link PlatformConfig#SOURCE_IDLE_ALERT_MS}
+     * (60000 ms); a present value must parse and be strictly positive — a
+     * non-positive threshold would alert on every scheduler pause, and a
+     * threshold below SOURCE_IDLE_MS would alert during normal quiet-split
+     * watermark idleness.
+     */
+    private static long sourceIdleAlertMs(Map<String, String> env) {
+        long value = longValue(env, "SOURCE_IDLE_ALERT_MS", PlatformConfig.SOURCE_IDLE_ALERT_MS);
+        if (value <= 0) {
+            throw new IllegalStateException("Config SOURCE_IDLE_ALERT_MS must be > 0 "
+                    + "(pinned default " + PlatformConfig.SOURCE_IDLE_ALERT_MS
                     + "), got " + value);
         }
         return value;

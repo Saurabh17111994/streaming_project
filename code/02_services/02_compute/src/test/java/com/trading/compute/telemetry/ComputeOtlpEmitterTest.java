@@ -34,6 +34,7 @@ class ComputeOtlpEmitterTest {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
         emitter.drainDelta();
         emitter.drainKvFilteredDelta();
+        emitter.drainSourceIdleAtTailDelta();
         ComputeOtlpEmitter.resetStartupModeForTest();
     }
 
@@ -65,6 +66,27 @@ class ComputeOtlpEmitterTest {
     }
 
     @Test
+    @DisplayName("source idle-at-tail episodes ship as their own DELTA sum (tracker 14 P7/P10)")
+    void sourceIdleAtTailShipsAsDeltaSum() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        // 3-arg overload carries the drained episode count; the stream name
+        // (dots -> underscores) must be compute_source_idle_at_tail for the O2
+        // alert to match.
+        String json = emitter.buildMetricsJson(0, 0, 2);
+        assertThat(json).contains("\"name\":\"compute.source.idle.at.tail\"");
+        assertThat(json).contains("\"asInt\":2");
+        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
+        assertThat(json).contains("\"isMonotonic\":false");
+
+        // The 2-arg convenience keeps ~8 existing call sites green and simply
+        // carries a zero episode count — the metric is always present.
+        String twoArg = emitter.buildMetricsJson(0, 0);
+        assertThat(twoArg).contains("\"name\":\"compute.source.idle.at.tail\"");
+        assertThat(twoArg).contains("\"asInt\":0");
+    }
+
+    @Test
     @DisplayName("counters are drained as deltas: each flush sees only increments since the previous")
     void staticCountersAreDrainedAsDelta() {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
@@ -72,16 +94,20 @@ class ComputeOtlpEmitterTest {
         // no increments yet -> empty window emits 0 (alert stays quiet)
         assertThat(emitter.drainDelta()).isZero();
         assertThat(emitter.drainKvFilteredDelta()).isZero();
+        assertThat(emitter.drainSourceIdleAtTailDelta()).isZero();
 
         ComputeOtlpEmitter.recordSchemaVersionRejection();
         ComputeOtlpEmitter.recordSchemaVersionRejection();
         ComputeOtlpEmitter.recordKvFilteredNonCanonical();
+        ComputeOtlpEmitter.recordSourceIdleAtTail();
         // each counter is drained independently
         assertThat(emitter.drainDelta()).isEqualTo(2);
         assertThat(emitter.drainKvFilteredDelta()).isEqualTo(1);
+        assertThat(emitter.drainSourceIdleAtTailDelta()).isEqualTo(1);
         // flush 2 sees nothing new — a historical increment never re-fires
         assertThat(emitter.drainDelta()).isZero();
         assertThat(emitter.drainKvFilteredDelta()).isZero();
+        assertThat(emitter.drainSourceIdleAtTailDelta()).isZero();
     }
 
     @Test

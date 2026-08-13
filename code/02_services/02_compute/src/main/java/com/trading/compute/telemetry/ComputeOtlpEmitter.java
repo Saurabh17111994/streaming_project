@@ -68,6 +68,20 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
             "compute.kv.filtered.noncanonical";
 
     /**
+     * Source idle-at-tail episode counter (tracker 14 P7/P10 — 2026-08-13
+     * misdiagnosis lesson): incremented once per idle EPISODE by the
+     * {@code SourceIdleWatchdogGenerator} watermark-level watchdog inside the
+     * source operator when no raw record has been consumed for
+     * {@code SOURCE_IDLE_ALERT_MS}. DELTA non-monotonic, like the rejection
+     * counter — fires on NEW idle episodes, never on replay. OpenObserve
+     * renames '.' to '_', so the stream is {@code compute_source_idle_at_tail};
+     * alert {@code value > 0} means "a restored/stopped source sat idle at a
+     * frozen feed tail" (correct idle-tail behavior — NOT a stall — so the
+     * alert is an observability signal, not a failure).
+     */
+    public static final String SOURCE_IDLE_AT_TAIL_METRIC = "compute.source.idle.at.tail";
+
+    /**
      * Dedup-state gauges (tracker 14 P5.1). Mirrors of the
      * {@code FingerprintDedupFunction} state sizes, resynced to the actual
      * {@code MapState} contents at operator {@code open()} (which runs AFTER
@@ -87,6 +101,12 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
 
     /** Incremented by CanonicalCandleFilterFunction; drained (delta) by the flush thread. */
     private static final AtomicLong KV_FILTERED_NON_CANONICAL = new AtomicLong();
+
+    /**
+     * Incremented by SourceIdleWatchdogGenerator (once per idle episode);
+     * drained (delta) by the flush thread.
+     */
+    private static final AtomicLong SOURCE_IDLE_AT_TAIL = new AtomicLong();
 
     /** Startup mode; -1 = never recorded (not yet started). */
     private static final AtomicLong STARTUP_MODE = new AtomicLong(-1L);
@@ -228,6 +248,23 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         return KV_FILTERED_NON_CANONICAL.getAndSet(0);
     }
 
+    /**
+     * Called by {@code SourceIdleWatchdogGenerator} once per source idle-at-tail
+     * episode. NEVER called from the source task's processing-time thread in a
+     * blocking way — this is a nanosecond static increment, safe on
+     * {@code onPeriodicEmit} (the 200 ms FLIP-27 watermark timer). The WARN log
+     * is emitted in the watchdog; only the delta lands here, drained by the
+     * 10 s flush thread.
+     */
+    public static void recordSourceIdleAtTail() {
+        SOURCE_IDLE_AT_TAIL.incrementAndGet();
+    }
+
+    /** Deltas the source idle-at-tail counter (public: cross-package watchdog tests read it). */
+    public long drainSourceIdleAtTailDelta() {
+        return SOURCE_IDLE_AT_TAIL.getAndSet(0);
+    }
+
     /** Start periodic flush (every 10 s). Call once from {@code SignalJob.run}. */
     public void start() {
         scheduler.scheduleAtFixedRate(this::flush, 10, 10, TimeUnit.SECONDS);
@@ -262,7 +299,8 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public int flushOnce() throws java.io.IOException {
         long delta = drainDelta();
         long kvFiltered = drainKvFilteredDelta();
-        String json = buildMetricsJson(delta, kvFiltered);
+        long sourceIdleAtTail = drainSourceIdleAtTailDelta();
+        String json = buildMetricsJson(delta, kvFiltered, sourceIdleAtTail);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -370,7 +408,16 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      * plus (when the startup mode was recorded) a GAUGE for the run's startup
      * mode.
      */
+    /**
+     * 2-arg convenience kept for the ~8 existing payload-test call sites:
+     * delegates with a zero source-idle delta (the metric still appears in
+     * the payload at 0).
+     */
     String buildMetricsJson(long delta, long kvFiltered) {
+        return buildMetricsJson(delta, kvFiltered, 0L);
+    }
+
+    String buildMetricsJson(long delta, long kvFiltered, long sourceIdleAtTail) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -394,6 +441,12 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
           .append("\"isMonotonic\":false,")
           .append("\"dataPoints\":[{\"asInt\":").append(kvFiltered).append(",")
+          .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
+        sb.append(",{\"name\":\"").append(SOURCE_IDLE_AT_TAIL_METRIC).append("\",")
+          .append("\"unit\":\"episodes\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
+          .append("\"isMonotonic\":false,")
+          .append("\"dataPoints\":[{\"asInt\":").append(sourceIdleAtTail).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
         if (mode != -1L) {
             sb.append(",{\"name\":\"").append(STARTUP_MODE_METRIC).append("\",")

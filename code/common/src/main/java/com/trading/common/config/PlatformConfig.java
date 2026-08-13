@@ -62,6 +62,19 @@ public final class PlatformConfig {
      */
     public static final long SINK_WRITE_STALL_TIMEOUT_MS = 15_000L;
 
+    /**
+     * Source idle-at-tail alert threshold (tracker 14 P7/P10, 2026-08-13):
+     * a restored source that sits at a frozen feed tail consumes ZERO records
+     * for as long as the feed is stopped — correct idle-tail behavior, not a
+     * stall (probe-verified 2026-08-13). This tuning default bounds how long
+     * that silence must last before the Signal job's watermark-level watchdog
+     * logs a WARN and ships a {@code compute.source.idle.at.tail} delta so the
+     * idle tail is observable instead of being misread as a hang. Deliberately
+     * larger than SOURCE_IDLE_MS (15000, watermark idleness) so normal quiet-
+     * split behavior never alerts.
+     */
+    public static final long SOURCE_IDLE_ALERT_MS = 60_000L;
+
     // ---- JVM / container memory ----
     public static final int JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT = 65;
     public static final int NON_HEAP_MEMORY_RESERVE_PERCENT = 35;

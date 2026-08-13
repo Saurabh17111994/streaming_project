@@ -37,6 +37,7 @@ class SignalJobConfigTest {
         assertEquals(5_000L, cfg.outOfOrderMs());
         assertEquals(5_000L, cfg.allowedLatenessMs());
         assertEquals(15_000L, cfg.sourceIdleMs());
+        assertEquals(60_000L, cfg.sourceIdleAlertMs());
         assertEquals(3, cfg.restartMaxAttempts());
         assertEquals(30_000L, cfg.restartDelayMs());
         assertEquals("localhost:9123", cfg.bootstrapServers());
@@ -176,11 +177,26 @@ class SignalJobConfigTest {
     }
 
     @Test
+    void rejectsNonPositiveSourceIdleAlertMs() {
+        // A zero/negative alert threshold would fire on every scheduler
+        // pause — observability knob must stay strictly positive.
+        Map<String, String> env = env();
+        env.put("SOURCE_IDLE_ALERT_MS", "0");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("SOURCE_IDLE_ALERT_MS"),
+                "error must name the key, got: " + e.getMessage());
+        env.put("SOURCE_IDLE_ALERT_MS", "-1");
+        assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
+    }
+
+    @Test
     void honorsTuningOverrides() {
         Map<String, String> env = env();
         env.put("WATERMARK_OUT_OF_ORDER_MS", "2500");
         env.put("ALLOWED_LATENESS_MS", "1000");
         env.put("SOURCE_IDLE_MS", "20000");
+        env.put("SOURCE_IDLE_ALERT_MS", "90000");
         env.put("RESTART_MAX_ATTEMPTS", "5");
         env.put("RESTART_DELAY_MS", "45000");
         env.put("FLUSS_BOOTSTRAP_SERVERS", "fluss:9123");
@@ -196,6 +212,7 @@ class SignalJobConfigTest {
         assertEquals(2_500L, cfg.outOfOrderMs());
         assertEquals(1_000L, cfg.allowedLatenessMs());
         assertEquals(20_000L, cfg.sourceIdleMs());
+        assertEquals(90_000L, cfg.sourceIdleAlertMs());
         assertEquals(5, cfg.restartMaxAttempts());
         assertEquals(45_000L, cfg.restartDelayMs());
         assertEquals("fluss:9123", cfg.bootstrapServers());

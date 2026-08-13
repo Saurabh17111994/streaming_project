@@ -22,8 +22,16 @@ public final class CandleWatermarkStrategy {
     private CandleWatermarkStrategy() {}
 
     public static WatermarkStrategy<RowData> of(SignalJobConfig config) {
+        // SourceIdleWatchdogGenerator wraps the bounded generator INSIDE the
+        // source operator (FLIP-27 per-split generator): zero graph nodes
+        // added, so StreamGraphHasherV2 operator IDs are bit-identical and
+        // P10 archived-checkpoint restore (allowNonRestoredState=false)
+        // remains safe.
         return WatermarkStrategy.<RowData>forGenerator(
-                        context -> boundedOutOfOrderGenerator(config.outOfOrderMs()))
+                        context ->
+                                new SourceIdleWatchdogGenerator(
+                                        boundedOutOfOrderGenerator(config.outOfOrderMs()),
+                                        config.sourceIdleAlertMs()))
                 .withIdleness(Duration.ofMillis(config.sourceIdleMs()))
                 .withTimestampAssigner(
                         (row, timestamp) -> row.getLong(RawTableColumns.EVENT_TIME));
