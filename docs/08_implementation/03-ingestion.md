@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation active; Phases 2a-2g complete (149/155 tasks ✅, 96%); 78 tests (43 ingestion + 35 common), 0 failures, 4 env-gated skips; 3 ⚠️ evidence-gated; 3 ❌ blocked on Fluss multi-node cluster |
+| Status | Implementation active; Phases 2a-2g complete; 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: 60k/90k perf gates not achieved (measured feed ceiling ≈58.9k rows/s); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred |
 | Owner | Ingestion Team |
 | Requirements | `REQ-ING-001`–`REQ-ING-016` |
 | Build contract | `docs/04_contracts/01-ingestion.md` |
@@ -32,20 +32,23 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | Module | Responsibility |
 | --- | --- |
 | `bridge` | Go arrow-bridge process lifecycle, stdin/stdout contract, NDJSON schema, reconnect backoff |
-| `normalization` | Verified units, timestamps, instrument mapping, validity classification |
+| `model` + `bridge` | Verified units, timestamps, instrument mapping, validity classification (lives in the `model`/`bridge` packages) |
 | `fingerprint` | Canonical versioned best-effort event fingerprint |
 | `writer` | Bounded Fluss append, acknowledgements, retry classification |
 | `discontinuity` | Connection/subscription/heartbeat/time-jump evidence |
 | `quarantine` | Preserve unsupported/malformed packet evidence |
 | `health` | Liveness, readiness, subscription completeness, clock and append health |
 | `telemetry` | Structured logs and bounded-cardinality metrics |
+| `config` | Startup validation of every configuration key |
+| `safety` | Safety-halt evidence — records when/why safety gates halted trading |
+| `shutdown` | Uncertainty-journal persistence on shutdown |
 
 ### Configuration contract
 
 | Key | Required | Semantics |
 | --- | ---: | --- |
-| `BROKER_BASELINE_TICKS_PER_INSTRUMENT_PER_SEC` | Yes | `20` average for the synthetic baseline profile; not a live-feed interval or per-instrument requirement |
-| `BROKER_MAX_TICKS_PER_INSTRUMENT_PER_SEC` | Yes | `30` hard maximum enforced by the synthetic workload profile |
+| Broker synthetic profile — fixed inside code (`PlatformConfig`), not an env key | — | `20` average ticks/instrument/s for the synthetic baseline profile; not a live-feed interval or per-instrument requirement |
+| Broker hard maximum — fixed inside code (`PlatformConfig` → `FixedScope`), not an env key | — | `30` ticks/instrument/s hard maximum enforced by the synthetic workload profile |
 | `ARROW_APP_ID` | Yes | Arrow application ID for the Go bridge |
 | `ARROW_APP_SECRET` | Yes | Arrow application secret for AutoLogin |
 | `ARROW_TOKEN` | No | Pre-authenticated access token (24h TTL); if absent, AutoLogin creds are required |
@@ -55,18 +58,41 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `ARROW_USE_STANDARD` | No | Set `true` for standard ds.arrow.trade; default `false` (HFT socket.arrow.trade) |
 | `ARROW_HFT_LATENCY_MS` | No | HFT tick interval ms (default 50, range 50-60000) |
 | `ARROW_INSTRUMENT_TOKENS` | No | Comma-separated instrument tokens; empty = synthetic 50-instrument dev set |
-| `GO_ARROW_SDK_VERSION` | Yes | Pinned go-arrow SDK version tag `v0.0.0-20260622-7cce1630` (replaces DECODER_VERSION) |
-| `FLUSS_BOOTSTRAP_SERVERS` | Yes | Pinned environment endpoint |
+| `ARROW_MAX_EVENT_AGE_MS` | Yes | Max age of a broker tick relative to receive time before it is quarantined as STALE (ms); positive long, no default — must be set |
+| `ARROW_MAX_FUTURE_EVENT_SKEW_MS` | Yes | Max future skew of a broker tick relative to receive time before it is quarantined as FUTURE (ms); positive long, no default — must be set |
+| `ARROW_HFT_CONNECTIONS` | No | HFT socket count — if set, must equal `1` (pinned) |
+| `ARROW_HFT_MAX_TOKENS_PER_CONNECTION` | No | Max instruments per connection — if set, must equal `1024` (pinned) |
+| `ARROW_HFT_MAX_TOKENS_PER_REQUEST` | No | Max instruments per subscription request — if set, must equal `512` (pinned) |
+| `ARROW_HFT_HEARTBEAT_SECONDS` | No | Heartbeat interval — if set, must equal `3` (pinned) |
+| `ARROW_HFT_STALL_TIMEOUT_SECONDS` | No | Broker stall timeout (default 15, range 5-60) |
+| `ARROW_HFT_SUBSCRIPTION_RESPONSE_TIMEOUT_SECONDS` | No | Subscription response timeout (default 10, range 1-60) |
+| `ARROW_HFT_RECONNECT_BASE_SECONDS` | No | Reconnect base backoff — if set, must equal `1` (pinned) |
+| `ARROW_HFT_RECONNECT_MAX_SECONDS` | No | Reconnect max backoff — if set, must equal `30` (pinned) |
+| `ARROW_HFT_AUTH_REFRESH_ATTEMPTS` | No | Auth refresh retries — if set, must equal `3` (pinned) |
+| `ARROW_HFT_MIN_ACTIVE_SLOTS` | No | Minimum active slots before not-ready — if set, must equal `1` (pinned) |
+| `ARROW_HFT_MULTI_CONNECTION_APPROVED` | No | Multi-socket approval flag (default false); rejected in `prod` |
+| `INGESTION_ALLOW_DEGRADED` | No | Degraded-mode approval flag (default false); rejected in `prod` |
+| `GO_ARROW_SDK_VERSION` | No | Pinned go-arrow SDK version tag `v0.0.0-20260622-7cce1630`; if unset the pinned version is used (warning logged) |
+| `FLUSS_BOOTSTRAP` | Yes | Pinned environment endpoint (e.g. fluss-coordinator:9123) |
 | `RAW_TABLE_NAME` | Yes | Must equal reconciled schema manifest |
-| `INSTRUMENT_MANIFEST_VERSION` | Yes | Approved subscription snapshot |
+| `INSTRUMENT_MANIFEST_PATH` | Yes | Path to the approved instrument-manifest CSV; the manifest version is a loader parameter (default 1) |
 | `INGESTION_MAX_BATCH_RECORDS` | Yes | Validated `1..1000` (default `1`); append each accepted tick immediately; startup fails outside range |
 | `INGESTION_MAX_BATCH_WAIT_MS` | Yes | Validated `0..100` (default `0`); do not wait for a batch; startup fails outside range |
 | `MAX_PENDING_APPEND_RECORDS` | Yes | Validated `100..1000000` (default `50000`); stop accepting new broker data and set readiness false at the limit |
-| `MAX_PENDING_APPEND_BYTES` | Yes | `min(67108864, floor(container_memory_limit_bytes × 0.10))`; stop accepting new broker data and set readiness false at the limit |
-| `PENDING_APPEND_WARNING_PERCENT` | Yes | Fixed at `80`; emit warning alert and set readiness false at 80% of either pending limit |
-| `APPEND_TIMEOUT` | Yes | Pinned client classification |
-| `FINGERPRINT_VERSION` | Yes | Canonical algorithm version |
+| `MAX_PENDING_APPEND_BYTES` | Yes | Default 67108864 (64 MiB; minimum 1 MiB); stop accepting new broker data and set readiness false at the limit |
+| `PENDING_APPEND_WARNING_PERCENT` | Yes | Default 0.80 (range 0.10-0.99); emit warning alert and set readiness false at that fraction of either pending limit |
+| `APPEND_TIMEOUT_SECONDS` | Yes | Pinned client classification (default 5 s, range 1-30) |
+| Fingerprint version — fixed inside code (`FingerprintBuilder.FINGERPRINT_VERSION`), not an env key | — | Canonical algorithm version (currently 1) |
 | `CLOCK_OFFSET_LIMIT_MS` | Yes | 100 ms unless approved requirement changes |
+| `DEPLOY_ENV` | No | Deployment environment (default `dev`); `prod` rejects `INGESTION_ALLOW_DEGRADED=true` and `ARROW_HFT_MULTI_CONNECTION_APPROVED=true` |
+| `ALLOW_RUNTIME_DDL` | No | `true` = DdlBootstrap may create missing tables at startup (local dev); default `false` = verify-only |
+| `CLOCK_CHECK_REQUIRED` | No | `true` = clock offset outside `CLOCK_OFFSET_LIMIT_MS` is FATAL at startup (exit 1); default `false` |
+| `UNCERTAINTY_JOURNAL_PATH` | No | Writable journal path (default `~/.local/state/trading-platform/ingestion/uncertainty-journal.jsonl`; container default `/data/ingestion/uncertainty-journal.jsonl`) |
+| `ACCOUNT_SCOPE_ID` | No | Account scope stamped on safety-halt evidence rows (default `QP3796`) |
+| `OTEL_COLLECTOR_HOST` | No | OTLP metrics endpoint (default `otel-collector:4318`) |
+| `READINESS_FILE_PATH` | No | Where the readiness marker is written; unset = no marker file |
+| `ARROW_BRIDGE_BIN` | No | Go arrow-bridge binary path (default `/app/arrow-bridge`) |
+| `NTP_SERVER` | No | Comma-separated NTP servers for the clock check (default `ntp.ubuntu.com,time.google.com,in.pool.ntp.org`) |
 
 Missing required configuration makes readiness false. Production never falls back to demo credentials or a guessed endpoint.
 
@@ -77,7 +103,7 @@ Missing required configuration makes readiness false. Production never falls bac
 3. Connect to Fluss and validate required table/schema version.
 4. Load exactly one approved instrument manifest snapshot.
 5. Validate every active row and routing field.
-6. Validate Go arrow-bridge binary is present and executable.
+6. Validate the Go arrow-bridge binary exists and is runnable; a missing or non-runnable binary is a FATAL startup error (clear message, non-zero exit).
 7. Start arrow-bridge as subprocess with configured auth env vars.
 8. Java reads NDJSON from bridge's stdout.
 9. Enter READY only after recent successful Fluss append acknowledgement and acceptable clock offset.
@@ -117,7 +143,7 @@ Fingerprint identity is best-effort, not broker-global identity.
 
 ### Backpressure and memory
 
-- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (50000 records) and `MAX_PENDING_APPEND_BYTES` (`min(67108864, floor(container_memory_limit_bytes × 0.10))`).
+- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (50000 records) and `MAX_PENDING_APPEND_BYTES` (default 67108864 bytes / 64 MiB).
 - Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.
 - At 80% of either pending limit: set readiness false, emit a warning event containing current records, current bytes, and both limits.
 - At 100% of either pending limit: stop broker reads/subscriptions, keep readiness false, emit a critical event, and preserve an acknowledged-loss/uncertainty record. Silently discarding data is prohibited.
@@ -134,13 +160,13 @@ When Fluss latency, retry count, pending records, or pending bytes cross a confi
 
 **Resolution:** Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required.
 
-**Remaining defensive bound:** Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
+**Remaining defensive bound:** Bounded pending-append limits (50,000 records / 64 MiB bytes default) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
 
 ### Failure matrix
 
 | Failure | Required behavior |
 | --- | --- |
-| Go bridge crash | Java detects stdin EOF, records `BRIDGE_CRASH` discontinuity, exits with non-zero |
+| Go bridge crash | Java detects the crash (stdin EOF / non-zero exit code), logs `BRIDGE_CRASH`, records a `DROP` discontinuity, restarts the bridge once, then stops cleanly (exit 0); not-ready is signalled by clearing the readiness marker |
 | Go bridge auth failure | Exit immediately with error to stderr; Java exits on pipe close |
 | Missing instrument | Quarantine; do not append keyed raw row |
 | Invalid trade values | Append evidence marked invalid; Compute excludes |
@@ -188,8 +214,7 @@ ING-RES-001 resilience coverage (Step 3 of the ingestion audit, `go-bridge/resil
 
 - `TestINGRES001OneHundredForcedDisconnectReconnectCycles` — drives `runReconnectLoop` with the real SDK connect path (`streamFactoryFor` → `ConnectHFTDataStreamURL`) through 100 forced disconnect/reconnect cycles against a wire drop broker (subscription response + one tick, then abrupt TCP close). Asserts ≥ 100 cycles complete, final goroutine count ≤ baseline + 2, final open-FD count ≤ baseline + 2, and a connection high-water mark ≤ 1 (no orphan sockets). Backoff is suppressed for wall-clock speed (~33s); backoff timing itself is unit-tested separately (`TestReconnectLoopEpochAndBackoffAfterForcedDisconnect`).
 - `TestINGRES001HealthySlotNotInterruptedByPeerReconnect` — real supervisor (`runHFTSupervisorWithFactory`) with slot `hft-0` on the real SDK + drop broker and slot `hft-1` on a healthy fake stream: the healthy slot stays `ACTIVE` with ticks flowing while the peer slot disconnects/reconnects through the supervisor's real 1s→2s backoff.
-- Java live-thread clause (within baseline + 2 after reconnects) is exercised by the JVM-level crash-restart harness `04_scripts/soak-reconnect-loop.sh` (restart budget 1, FD/thread baseline assertions after restart); the full wall-clock 100-cycle supervisor soak with real backoff remains the deferred mechanical run.
-
+- Java live-thread clause (within baseline + 2 after reconnects) is exercised by the JVM-level crash-restart harness `code/01_platform/04_scripts/soak-reconnect-loop.sh` (restart budget 1, FD/thread baseline assertions after restart); the full wall-clock 100-cycle supervisor soak with real backoff remains the deferred mechanical run.
 
 ### Implementation checklist (from [`01_plan.md`](./01-foundation.md) Task 2)
 
@@ -219,4 +244,4 @@ Implementation is complete only when the broker corpus and versions are pinned, 
 
 ## Verification mapping
 
-The required behavior above is verified by the canonical [Ingestion test design](./11-testing-and-release.md#ingestion): `ING-UNIT-001` to `ING-UNIT-007`, `ING-INT-001` to `ING-INT-003`, `BROKER-MD-001`, `ING-FAIL-001` to `ING-FAIL-003`, and `ING-PERF-001` to `ING-PERF-002`.
+The required behavior above is verified by the canonical [Ingestion test design](./11-testing-and-release.md#ingestion): `ING-UNIT-001` to `ING-UNIT-005`, `ING-INT-001` to `ING-INT-003`, `BROKER-MD-001`, `ING-FAIL-001` to `ING-FAIL-003`, and `ING-PERF-001` to `ING-PERF-002`.

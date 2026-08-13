@@ -80,7 +80,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | Broker protocols | Evidence-blocked | Implementing | Untested | Blocked |
 | DDL/schema | Design-ready | Implementing | Untested | Blocked |
 | Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
-| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified 2026-08-10, 34 tests green; candle dual-sink RETIRED / signal LOG+KV dual-sink re-scope pending — see `04-signal-job.md` banner, 2026-08-13) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live) | Blocked |
+| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 183 compute tests green + 7-test gated battery) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
 | Action Capture | Design-ready | Not-implemented | Untested | Blocked |
 | Babysitter | Design-ready | Not-implemented | Untested | Blocked |
 | Executor | Design-ready | Not-implemented | Untested | Blocked |
@@ -134,7 +134,7 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 
 ### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
 
-Status: Phases 2a-2g done — 149/155 tasks (96%); 78 tests (43 ingestion + 35 common), 0 failures; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Remaining: 3 evidence-gated, 3 blocked on Fluss multi-node cluster — see [`03-ingestion.md`](./03-ingestion.md) Status.
+Status: Phases 2a-2g done — 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 60k/90k perf gates not achieved (measured feed ceiling ≈58.9k rows/s); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 

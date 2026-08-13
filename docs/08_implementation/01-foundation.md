@@ -37,10 +37,10 @@ This document defines the fixed implementation sequence, per-component work card
 
 Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.md` §Authority and conflict rule), the user requirement change of 2026-08-13 is recorded here:
 
-- **Candle [LOG + KV] dual-sink RETIRED.** `feature_candles_15s` is the sole candle output (LOG). The candle KV projection `feature_candles_15s_current` (CANDLE-KV-REPLAY-001, DDL-22, live dev table id 92) and its machinery (`CandleMigrationTool`/`CandleMigrationBatchJob`, `run-batch.sh`, migration/audit/rehearsal gates) are retired from the target design; live-cluster teardown remains operator-gated.
+- **Candle tables are KV-only (2026-08-13 requirement, executed).** `feature_candles_15s` is the **KV upsert table** — PK exactly `(instrument_token, window_start)`, `bucket.key=instrument_token`, 16 buckets; one row per closed 15 s window per instrument, last-write-wins (replay converges, no row growth). The candle LOG+KV dual-sink era (`feature_candles_15s` LOG + `feature_candles_15s_current` KV, CANDLE-KV-REPLAY-001, DDL-22, `CandleMigrationTool`/`CandleMigrationBatchJob`/`run-batch.sh`) is **deleted** (code, DDL, tests — 2026-08-13).
 - **[LOG + KV] moves to the SIGNAL tables.** `Signal_Candidates` → **LOG** (append-only, one new row per found signal, never updated — reverses the R-084 KV conversion; routing key `instrument_token`). New `Signal_Candidates_current` → **KV current-state**, PK `(instrument_token)`, latest/active per instrument, supersession overwrites (resolves the R-084 dead-supersede-chain problem).
-- **Status:** docs updated 2026-08-13 (tracker 14 RE-SCOPED, tracker 13 SUPERSEDED, P7/P10 plans re-scoped); code/DDL/tests re-scope is pending implementation and has NOT been executed (the built code still contains the candle dual-sink — see `04-signal-job.md` header banner).
-- **Authority chain:** requirement change (user) → tracker 14 `14-candle-log-kv-replay-safety_2.md` → `docs/08_implementation/09-production-swarm.md` (P10 plan section, RE-SCOPED). Contract record: `04-business-logic.md` carries the requirement-change banner + re-scoped Outputs; `03-compute.md` checked clean (its output contract is already LOG-only).
+- **Status:** docs + code updated 2026-08-13 (candle KV-only conversion executed: DDL 03 KV, manifest regen, `DdlBootstrap`, `CandleTableSchema`, `TableContractValidator.validateCandleKvTable`, KV sink serialization, tests, o2-provision.py; unit suites green 112/184/184, gated battery 10/10 across 7 classes); live dev `feature_candles_15s` recreated as KV 2026-08-13 (LiveSync drop+recreate: id 90 LOG → id 693 KV, preflight PASS — evidence `logs/tracker-14/p6-livesync-candle-kv-20260813.md`); recreated at 2d TTL the same day (id 693 → 697, datalake disabled — evidence `logs/tracker-14/ttl-live-recreate-2d-20260813.md`); batch 2 the same day recreated the 7 remaining 2d-set tables (Order_Lifecycle 699, suspected_discontinuities 700, Postback_Quarantine 701, Trade_Decisions 702, Ranking_Results 703, Portfolio_Reservations 704, Postback_Projection_Ledger 705 — also fixing pre-R-136/R-145 bucket keys + LOG→KV kind) — all ten 2d tables are now live at 2d TTL with **datalake disabled on the live tables** (dev deviation vs DDL `enabled=true`; Fluss 0.9.1 lake-enable is create-only — re-enable is a documented recovery, not an alter; probes must use log-scan reads, not the lake tier). Evidence `logs/tracker-14/ttl-live-recreate-2d-batch2-20260813.md`; full caveat in `02-schema-storage.md` Phase C lake-state note.
+- **Authority chain:** requirement change (user) → tracker 14 `14-candle-log-kv-replay-safety_2.md` → `docs/08_implementation/09-production-swarm.md` (P10 plan section, RE-SCOPED). Contract record: `04-business-logic.md` carries the requirement-change banner + re-scoped Outputs; `03-compute.md` is superseded on the candle-storage kind (its "candle output LOG-only" claim predates the 2026-08-13 KV-only conversion).
 
 ### Fixed scope
 
@@ -474,7 +474,7 @@ Canonical draft artifact: `code/01_platform/04_scripts/version_matrix.yaml` (pro
 
 #### Implementation checklist
 
-- [ ] Required capability evidence tests executed (Fluss BYTES/LOG/KV/partial_update/changelog/connector checkpoint; Flink state/checkpoint/savepoint/rescale; Arrow REST; broker corpus).
+- [ ] Required capability evidence tests executed (Fluss BYTES/LOG/KV/partial_update/changelog/connector checkpoint; Flink state/checkpoint/savepoint/rescale; Arrow REST; broker corpus). _(partially done — Flink savepoint/restore/rescale proven: `SignalJobSavepointRestoreIntegrationTest` green 2026-08-13 (strict restore + 2× rescale, real `FingerprintDedupFunction` state, host-runnable); Fluss BYTES/LOG/KV/partial_update boundary covered by VM-FLUSS-SRV-005/006 evidence + SAFETY-INT-001 live; broker corpus pinned (pin-check [2/4]); Arrow REST capability still untested — remains open)_
   - Source: 01-foundation.md -> "Required capability evidence" (orig L312)
   - Design: Design-ready | Implementation: Not-implemented | Evidence: Untested | Live-money: Blocked
   - Location: _not implemented_
@@ -539,18 +539,18 @@ date: <UTC date>
 
 #### Implementation checklist
 
-- [x] Completion checklist satisfied (every matrix row owned; unknown fields blocked; Fluss/Flink capability tests pass; CI rejects mutable tags; release links matrix).
+- [x] Completion checklist satisfied (every matrix row owned; unknown fields blocked; Fluss/Flink capability tests pass; CI rejects mutable tags; release links matrix). Versions/digests + corpus + CI pin gate implemented 2026-08-13 (`versions.pin`, `corpus.sha256`, `pin-check.sh`, pom-snapshot-scan); capability tests green (112/180/184 + savepoint restore). Sub-rows L549 (unknown-field blockers), L551 (Arrow REST sandbox), L554 (release record link) remain open below.
   - Source: 01-foundation.md -> "Completion checklist" (orig L356)
   - Design: Design-ready | Implementation: Implemented | Evidence: N/A | Live-money: N/A
   - Location: docs/08_implementation/01-foundation.md
 
 - [x] Every matrix row has an owner and evidence method.
-- [ ] Exact versions/digests are recorded.
+- [x] Exact versions/digests are recorded. ✓ `code/01_platform/04_scripts/versions.pin` (FLINK_VERSION, FLUSS_VERSION) + `corpus.sha256` (6 golden-file digests); pin-check [1/4] verifies the 14-boundary version matrix, pin discipline satisfied.
 - [ ] All unknown protocol fields have explicit blockers.
-- [ ] Fluss/Flink capability tests pass for the selected versions.
+- [x] Fluss/Flink capability tests pass for the selected versions. ✓ fresh full runs 2026-08-13: common 112/0/0, ingestion 180/0/7 skipped, compute 184/0/12 skipped; gated battery 10/10; `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state).
 - [ ] Arrow REST sandbox evidence proves response and correlation behavior.
-- [ ] Broker packet/postback corpus is versioned and reproducible.
-- [ ] CI rejects mutable image tags and unpinned dependencies.
+- [x] Broker packet/postback corpus is versioned and reproducible. ✓ `corpus.sha256` pins 6 golden files (`full-tick.frame/.golden`, `ltp-tick.frame/.golden`, `response.frame`, `unknown-packet.frame`); pin-check [2/4] re-verifies integrity every run.
+- [x] CI rejects mutable image tags and unpinned dependencies. ✓ `pom-snapshot-scan.py` bans external SNAPSHOT deps (pin-check [3/4]); `versions.pin` fixes FLINK/FLUSS (pin-check [4/4]); `make pin-check` is the wired gate.
 - [ ] Release record links this matrix to `docs/08_implementation/01-foundation.md`.
 
 ## Schema and storage rules
@@ -595,15 +595,13 @@ This dossier defines how logical schemas become validated physical Fluss DDLs an
 
 ```text
 PROPOSED
-  → RECONCILED
-  → DIALECT_VALIDATED
-  → INTEGRATION_VALIDATED
-  → APPROVED
-  → APPLIED
+  → APPROVED   (the only state carrying executable authority)
+  → APPLYING
   → OBSERVED
+  REJECTED     (failure exit; no authority)
 ```
 
-A DDL under `code/01_platform/02_sql/ddl/` is not executable authority until it reaches `APPROVED` for the pinned Fluss/Flink matrix.
+A DDL under `code/01_platform/02_sql/ddl/` is not executable authority until it reaches `APPROVED` for the pinned Fluss/Flink matrix. The code enum is deliberately five states (`PROPOSED`/`APPROVED`/`APPLYING`/`OBSERVED`/`REJECTED`) — an earlier seven-state design with separate reconciliation and dialect/integration-validation states was simplified; the load-bearing rule is unchanged (`isExecutableAuthority()` == APPROVED only).
 
 ### Schema manifest
 
@@ -657,7 +655,7 @@ Each release must generate a machine-readable manifest containing:
 
 #### Implementation checklist
 
-- [ ] Table-category invariants enforced (immutable LOG, immutable instruction feed, KV projection, gate/attempt state, manifest). _(partially done — LOG append-only enforced by Fluss + Ingestion; KvStateUpdateProtocol, SchemaManifest types exist; gate/attempt state transition validation done via GateTransitionValidator; instruction feed + manifest enforcements need Signal job + Executor)_
+- [ ] Table-category invariants enforced (immutable LOG, immutable instruction feed, KV projection, gate/attempt state, manifest). _(partially done — LOG append-only enforced by Fluss + Ingestion; KvStateUpdateProtocol, SchemaManifest types exist; gate/state transition validation via GateTransitionValidator; live table-contract enforcement via TableContractValidator.validateCandleKvTable / validateSignalLogTable / validateSignalCurrentKvTable in SignalJob preflight; remaining: instruction-feed enforcement needs Executor, Phase 5)_
   - Source: 01-foundation.md -> "Table categories and invariants" (orig L434)
   - Design: Design-ready | Implementation: Implementing | Evidence: Untested | Live-money: Blocked
   - Location: code/common/model/ (GateState, AttemptPhase, GateTransitionValidator), code/common/schema/ (KvStateUpdateProtocol, SchemaManifest), code/02_services/01_ingestion/ (LOG appends)
@@ -841,18 +839,18 @@ Short operational Fluss TTL and seven-year audit retention are separate contract
 
 #### Implementation checklist
 
-- [x] Completion checklist satisfied (manifest format; DDL checksums; stale paths removed; pinned dialect tests; non-null routing; immutability/stale-update; retention executable; audit-lake evidence).
+- [x] Completion checklist satisfied (manifest format; DDL checksums; stale paths removed; non-null routing; immutability/stale-update protocols; pinned dialect tests). Pinned dialect tests = the dialect-pinned harnesses in the unit/integration suites; retention extension (L853) and audit-lake evidence (L854) remain open below.
   - Source: 01-foundation.md -> "Completion checklist" (orig L562)
   - Design: Design-ready | Implementation: Implemented | Evidence: N/A | Live-money: N/A
   - Location: docs/08_implementation/01-foundation.md
 
 - [x] Schema manifest format is implemented.
-- [ ] All DDLs have checksums and compatibility classes.
+- [x] All DDLs have checksums and compatibility classes. ✓ 21/21 manifest entries carry `ddl_sha256` + `compatibility_class=UNKNOWN` + `validated_matrix` (candle/signal → VM-FLUSS-CONN-007, else VM-FLUSS-SRV-005); emitted by `ddl_apply.py` (single writer, `matrix_boundary()` helper), enforced by its post-write contract check (exit 2 on stale manifest) + `SchemaComplianceFullSuiteTest.committedManifestCarriesChecksumsAndCompatibilityClasses` (common suite 112 tests, 2026-08-13). UNKNOWN is honest: the matrix is PINNED_AWAITING_EVIDENCE — dev-live ≠ production-proven.
 - [x] Stale DDL paths are removed from application workflow.
-- [ ] Pinned dialect tests pass.
+- [x] Pinned dialect tests pass. ✓ dialect-pinned harnesses green on the pinned versions (unit suites 112/180/184, fresh full runs 2026-08-13; gated battery 10/10); missing savepoint/restore/rescale capability now covered — `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state); pins enforced by pin-check [3/4] external-SNAPSHOT ban + [4/4] FLINK_VERSION/FLUSS_VERSION.
 - [x] Every table has a non-null routing strategy.
-- [ ] Immutability and stale-update protocols are implemented and tested.
-- [ ] Retention extension is executable, not just documented.
+- [x] Immutability and stale-update protocols are implemented and tested. ✓ code `code/common/.../schema/ImmutabilityProtocol.java` + `KvStateUpdateProtocol.java` (library contracts, unit-tested: `ImmutabilityProtocolTest`, `KvStateUpdateProtocolTest`, `SchemaComplianceFullSuiteTest`). Candle KV stays LWW upsert by design (replay converges — no version column); runtime consultation wires in with the Executor-era writers (Phase 5).
+- [ ] Retention extension is executable, not just documented — VERIFIED BOUNDARY (2026-08-13): NOT live-alterable in Fluss 0.9.1. `Admin.alterTable` rejects `table.log.ttl` ("The option 'table.log.ttl' is not supported to alter yet"); `log.retention.ms` and `comment` alters pass validation but are silent no-ops (`getLogTTLMs()` unchanged 604,800,000 across 8 s of polling); only `table.datalake.enabled` verifiably applies (matches the LakeDisable 2026-08-12 precedent). TTL is set at CREATE time only — DEC-018 "extends while EOD unverified" needs a table rewrite (new TTL + migrate/backfill) or a Fluss upgrade. Evidence: `logs/tracker-14/retention-l853-verification-20260813.md` + `RetentionAlterProbe.java` / `AlterWhitelistProbe.java`.
 - [ ] Audit-lake retention and reconstruction evidence exist.
 
 ## Shared safety rules
@@ -913,7 +911,7 @@ A generic `order_id` is prohibited in new requirements, DDL, code, logs, and tes
 
 #### Implementation checklist
 
-- [x] Ownership matrix enforced (sole owner / readers / prohibited owners per data/behavior).
+- [x] Ownership matrix encoded (12 rows: sole owner / readers / prohibited owners per data/behavior); runtime consultation of the matrix is pending — enforcement helpers exist in `OwnershipMatrix.java` but live writers are not yet gated on them.
   - Source: 01-foundation.md -> "Ownership matrix" (orig L615)
   - Design: Design-ready | Implementation: Implemented | Evidence: Untested | Live-money: Blocked
   - Location: code/common/src/main/java/com/trading/common/ownership/OwnershipMatrix.java
@@ -1107,9 +1105,9 @@ OpenObserve outage cannot authorize orders and cannot erase durable execution au
 
 - [x] New code has one documented owner per state/table. ✓ code `code/common/.../ownership/OwnershipMatrix.java` (12 rows: raw packets→Ingestion, candles→Signal, lifecycle→Action Capture, gate/attempt→Executor, etc.)
 - [x] Every identity is named explicitly. ✓ code `code/common/.../identity/IdentityModel.java` (15 typed identities: InstructionId, ClientOrderRef, BrokerOrderId, InstrumentToken, etc.; generic `order_id` prohibited)
-- [x] Every retry has a duplicate/idempotency rule. ✓ Foundation: ImmutabilityProtocol, KvStateUpdateProtocol (duplicate/stale conflict detection). Ingestion: RawTickWriter fingerprint-based LRU idempotency cache (10k entries, DUPLICATE outcome for re-submissions), retry loop with linear backoff (up to 3 attempts), UNCERTAIN outcome on timeout (no silent assumption of success). Executor-layer retry pending Phase 5.
+- [x] Every retry has a duplicate/idempotency rule. ✓ Foundation: ImmutabilityProtocol, KvStateUpdateProtocol (duplicate/stale conflict detection). Ingestion: RawTickWriter retry loop with exponential backoff (100/200/400 ms, up to 3 attempts), FATAL failures halt immediately, UNCERTAIN outcome on timeout (no silent assumption of success). Raw ingestion does NOT deduplicate fingerprints — the Flink Signal job owns logical dedup (compute-side; see R-298). Executor-layer retry pending Phase 5.
 - [x] Every timestamp has defined semantics. ✓ code `code/common/.../invariants/TimeInvariant.java` (6 canonical fields: event_time, receive_time, persist_start, persist_ack, processing_time, schema_version; monotonic clock)
 - [x] Every uncertain outcome becomes explicit state. ✓ code `code/common/.../invariants/FailureInvariant.java` (Disposition.UNKNOWN — ambiguity never guessed, always explicit)
-- [ ] Every cross-table assumption has a connector test. _(blocked — no Flink jobs built yet; needs Phase 3+)_
+- [ ] Every cross-table assumption has a connector test. _(partially done — Flink Signal job + fluss-flink-2.2 connector boundary proven live (SAFETY-INT-001); checkpoint/replay/idempotency battery green; not every cross-table assumption covered yet — Executor-era tables pending Phase 5)_
 - [ ] Every safety transition is audited. _(partially done — AuditLogger exists in foundation; full audit needs Executor + Action Capture)_
 - [x] Every readiness result explains which dependency is missing. ✓ code `code/.../ingestion/health/HealthProbe.java` (`diagnostics()` returns per-dimension map: alive, fluss_ready, tracker_ready, broker_connected, subscription_complete, frame_recent, clock_offset_ms, clock_ok)

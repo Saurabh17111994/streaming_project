@@ -4,7 +4,6 @@ Use this file after each phase to track all tests, map requirements to proof, an
 
 ## Master test catalog
 
-
 <!-- markdownlint-disable MD013 -->
 
 ### Status
@@ -21,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 78 tests (43 ingestion + 35 common), 0 failures, 4 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -517,6 +516,7 @@ CI must fail for:
 - Missing evidence metadata.
 
 `CI-PERF-001`: the variable baseline and peak benchmark profiles use a recorded seed, the production instrument count, no fixed 50 ms schedule, no per-instrument rate above 30 ticks/s, and zero acknowledged loss.
+
 - Secret/redaction failure.
 - Unsupported state/schema compatibility.
 
@@ -524,9 +524,7 @@ CI must fail for:
 
 The test program is complete when every mandatory requirement and P0/P1 audit issue maps to executable evidence, exact versions and environments are recorded, failure tests exercise the actual crash windows, performance campaigns match the workload envelope, and release evidence can be independently reviewed.
 
-
 ## Traceability
-
 
 <!-- markdownlint-disable MD013 -->
 
@@ -609,9 +607,7 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 
 The dossiers specify implementation behavior but do not prove that code, DDL, deployments, or tests exist. Corresponding `01_plan.md` implementation checkboxes remain unchecked until executable evidence is produced. Documentation tasks may record these dossier paths as evidence and move to documentation-complete status.
 
-
 ## Release evidence
-
 
 <!-- markdownlint-disable MD013 -->
 
@@ -724,3 +720,829 @@ enablement_timestamp_utc:
 ### Definition of done
 
 This dossier is complete only when the evidence package can be independently reviewed and every gate is binary pass, with no P0/P1 issue unresolved or silently waived.
+
+---
+
+## P7 bench plan (2026-08-12, EXECUTED partial, RE-SCOPED)
+
+### P7 — SignalJob Performance & Capacity Bench (tracker 14)
+
+**Status:** `EXECUTED (partial) — Phase 0 baseline DONE; Phases 1-3 + dedup sweep recorded as BLOCKED with evidence` (updated 2026-08-13) — **TOPOLOGY RE-SCOPED 2026-08-13, see banner below**
+\*\*Location:\*\* `docs/08_implementation/11-testing-and-release.md`
+**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L819+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1207-1209).
+**Dependency:** R2 lake-read stall fix (`§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`) — the bench uses R2 checkpoints for gate runs; the S3A timeout pins (30000/30000) and the outer-deadline containment apply.
+
+> **REQUIREMENT CHANGE (user decision, 2026-08-13) — bench topology re-scope.**
+>
+> This bench measured the PRE-change topology (candle LOG + KV dual-sink). Per the
+> requirement change recorded in tracker 14's banner, the candle KV projection is
+> **RETIRED** and the [LOG + KV] facility moves to the **signal tables**
+> (`Signal_Candidates` LOG + `Signal_Candidates_current` KV). The measured facts below
+> — feed/tablet shared write-path ceiling 58.9–59.7k rows/s, prometheus-exporter
+> histogram-bucket loss, R-298 write-side dedup — are **topology-independent pipeline
+> facts and remain valid**. The register rows stay as recorded
+> (PERF-THROUGHPUT-001 `[ ]` NOT ACHIEVED, PERF-LATENCY-001 `[ ]` NOT MEASURABLE,
+> DEDUP-MEMORY-001 `[ ]` NOT RUN). When the signal dual-sink topology is implemented,
+> the P7.2/P7.3 battery re-runs against it: "candle KV upserts/s" is replaced by
+> "signal LOG appends/s" + "signal KV upserts/s".
+
+## 1. Objective
+
+Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail gates on the SignalJob (raw_table_1 → validation → dedup → 15 s candles → sinks; as built 2026-08-13: candle KV upsert + signal LOG/KV — the pre-conversion candle LOG + KV dual-sink was what the 2026-08-12 bench measured, see bench record below), producing the three open register rows. Production status stays `BLOCKED` until these pass (tracker §6). A failed gate does NOT fail the plan — it records the bottleneck and re-runs (tracker rule, P7.3 tail).
+
+## 2. Locked bench spec (user decisions, 2026-08-12)
+
+### 2.1 Scope decisions (round 1)
+
+> **Measured outcome (2026-08-13, see §14):** throughput gate of 60,000 is NOT achievable on
+> this topology — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s
+> (CountRows + Phase 0, two independent methods). Latency gate p99<100 ms not
+> measurable via the prometheus exporter (histogram buckets dropped); mean 152.6 ms.
+> Both recorded as documented deviations per plan §12; no config inflation.
+
+| Dimension | Decision |
+| --- | --- |
+| Environment | Dev compose cluster on this host (`code/01_platform/01_docker/`); documented deviations: single node, no swarm, no production secrets |
+| Feed | 3+ faketool connections (real-rate mode, proven 20k/s per connection ceiling) |
+| Source table | Live `raw_table_1` (LOG, 16 buckets, bucket.key=instrument_token) |
+| Live writer | STOPPED for the bench window; restarted after (docker stop/start of the ingestion container) |
+| Active tokens | 1024 (real NSE_CM_EQUITY manifest) |
+| Input realism | As-produced (whatever the feed emits; duplicate/out-of-order/invalid ratios recorded, not forced) |
+| Sustained duration | 30 min @ 60k (matrix minimum) |
+| Throughput gate | avg source `numRecordsInPerSecond` >= 60,000 ticks/s; record p50/p95/p99/max time series |
+| Latency gate | end-to-end tick → candle-emit p99 < 100 ms (definition in §9.1) |
+| Checkpoint storage | R2 for gate runs (production-like; S3A pins active); `file://` for debug runs |
+| Disturbance | Docker-level injection: job restart + coordinator/tablet restart during peak |
+| Deployment | Application mode via `submit-jobs.sh` |
+
+### 2.2 Measurement and operation decisions (round 2)
+
+| Dimension | Decision |
+| --- | --- |
+| Measurement clock | Starts at job RUNNING (cold start + RocksDB warm-up + dedup-state growth included in the numbers) |
+| "Tick" origin | Feed-emit — Fluss write+read round-trip is INSIDE the 100 ms budget (measured as source lag; §9.1) |
+| Latency tracking | ON for the gate run (`latencyTrackingInterval`) — one documented config delta; overhead tiny; one run yields latency + throughput together |
+| Per-token tick pattern | As-produced (faketool real-rate default) — no artificial uniform/burst shaping |
+| Feed schema fidelity | Trust as-is; non-blocking spot-check of first rows' columns in pre-flight (risk: bench measures faketool's row shape, not the live converter's — recorded as deviation if a diff appears) |
+| 90k peak shape | Two 5-min bursts inside the 30-min window (minutes 10-15 and 25-30), 60k otherwise |
+| No-data-loss formula | source consumed == LOG rows + dedup-dropped + quarantined/invalid + bounded in-flight; KV consistency checked separately (as built: candle KV upserts == LOG rows per token/window — re-scope 2026-08-13: `Signal_Candidates_current` KV key count == active instruments, signal LOG may grow on replay) |
+| Checkpoint tolerance | <= 2 failed checkpoints tolerated IF each recovers via the designed restart (restore from last good checkpoint, no data loss, recovery <= 30 s); 3+ = gate FAIL (approved deviation from the strict "no checkpoint timeout" tracker wording — the R2 blackhole is a live risk, 3/3 canary wedges today) |
+| Memory gate denominator | TM container limit (2g process: heap + off-heap + metaspace + JVM overhead + RocksDB managed); JVM-heap-vs-900 MB-alert series still recorded for reference |
+| Dedup config | Production expiry values for the gate run + expiry sweep (30 s/60 s/120 s) in debug runs for DEDUP-MEMORY-001 |
+| Baseline | Dev baseline run FIRST (current SignalJob under live traffic, no changes) as the before-column |
+| Evidence granularity | All 43 series every 5 s to a raw file (`logs/tracker-14/`, gitignored) + O2 query refs; ~15k points/run |
+
+## 3. Topology (proposed, from P4/P8 pinned settings)
+
+- `submit-jobs.sh` application mode; `DEPLOYMENT_ENV`/`STATE_BACKEND` gates enforced as in production.
+- `PARALLELISM=8` — matches the pinned 8 task slots; 16 buckets map 2:1 to sources; 1024 tokens → 128 tokens per keyed instance.
+- TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 60k with RocksDB + managed memory; that IS the memory gate).
+- JobManager: `jobmanager.memory.process.size=1600m` (pinned).
+- Checkpoint: 30 s interval (production config; 47/47 completed in the 2026-08-11 live run), `allowNonRestoredState` never set, RocksDB incremental.
+- Both candle sinks enabled (LOG `feature_candles_15s` + KV `feature_candles_15s_current`), canonical filter + stall guard active.
+- All R2 S3A timeout pins effective (`iceberg.iceberg.hadoop.fs.s3a.connection.timeout` + `connection.establish.timeout` = 30000).
+- Gate runs: R2 checkpoint dir + `latencyTrackingInterval` enabled (the single documented config delta).
+- Debug runs: `file://` checkpoint dir, latency tracking optional, dedup expiry swept.
+
+## 4. Pre-flight — baseline, feed capacity, environment health
+
+Order matters (baseline needs the live writer; probes need it stopped):
+
+0. **Fast smoke gate (≤ 2 min, mandatory — §4.1):** before every bench phase that runs > 10 min, prove the same machinery healthy:
+   - `logs/tracker-14/probe-r2.sh` — R2 lake-read probe (HEAD+GET of lake metadata + one parquet row through the job's exact S3A conf chain, ~100 s incl. the idle-reuse check) MUST print `PROBE_RESULT=PASS` and exit 0. This is the R2-blackhole canary that caught the P3.5 stall in seconds instead of 55-90 min.
+   - 30 s Fluss metadata read (`ShowTable` pattern): coordinator reachable, `raw_table_1` options as expected (datalake enabled, 16 buckets).
+   - 60 s feed smoke at the phase's connection count: source `numRecordsInPerSecond` climbs and stays > 0.
+   - Smoke fails → investigate + fix + re-smoke; the long phase does NOT start.
+1. **Environment health gate (all must pass, else abort):** `docker ps` — fluss coordinator/tablet + zookeeper + collector + O2 healthy (no restart loops); no other SignalJob instance active; `curl` the O2 API (metrics deliverable); disk headroom on the checkpoint/evidence volumes; R2 endpoint reachable (`curl -sI -m 20`).
+2. **Feed schema spot-check (non-blocking):** capture first rows from faketool output; confirm tick_type TRADE/QUOTE classification, 8-byte LE instrument_token, schema-v2 columns match raw_table_1; record as evidence (deviation note if any diff).
+3. **Phase 0 — dev baseline (§5):** run the current SignalJob under live traffic, unchanged, 10 min; record all 43 series; achieved rate = the before-column.
+4. **Stop the live writer** (docker stop the ingestion container; record container name).
+5. **Probe A — 3 faketool connections at real-rate:** sustained source `numRecordsInPerSecond` >= 63,000 (60k + 5% headroom) over 5 min.
+6. **Probe B — 5 faketool connections:** >= 94,500 (90k + 5% headroom) over 5 min.
+7. If a probe fails: scale connections (ceiling 20k/s each; 3→60k, 5→90k) and record the achieved ceiling as a documented deviation.
+8. If the bench does not start immediately after the probes, restore the live writer (record restart).
+
+### 4.1 Long-run gate rule (user directive, 2026-08-12)
+
+Any phase estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of the SAME machinery that phase depends on: R2 lake read (`probe-r2.sh`) for checkpoint/audit-touching steps, feed + source read (60 s feed smoke) for rate steps, job startup for state steps. Smoke passes → run the long phase; smoke fails → fix + re-smoke. No blind long waits: the P3.5 R2 saga cost two days because a 55-90 min run wedged with NO error while a 1-min probe catches the same failure in seconds. The smoke result (probe log path + exit code) is recorded in the evidence file as part of the run's proof.
+
+## 5. Phase 0 — dev baseline (10 min)
+
+1. Live writer running, current dev SignalJob running as-is (today's config).
+2. Capture all 43 series at 5 s cadence (P8.1 PromQL recipe: JM :9249 / TM :9250 → collector → O2 PromQL at `/api/{org}/prometheus/api/v1/query`).
+3. Record: achieved source rate (p50/p95/p99/max), memory, checkpoint durations — the before-column for the report.
+
+## 6. Phase 1 — steady-state 60k sustained (30 min)
+
+0. **Smoke (§4.1), immediately before the clock starts:** `probe-r2.sh` PASS + 60 s feed smoke at 3 connections.
+1. Feed up (3+ connections, 1024 tokens, as-produced pattern). Job in application mode, PARALLELISM=8, R2 checkpoint dir, latency tracking ON.
+2. Verify startup: preflight table contracts pass, startup mode RESTORE (no FULL_REPLAY), rocksdb backend banner, both sinks running.
+3. **Measurement clock starts at job RUNNING** (no warmup exclusion — cold start included).
+4. Capture all 43 series every 5 s for the full 30 min; record checkpoint duration/size series, container gauges (`container.memory.usage/limit.bytes`), RocksDB gauges (`state.backend.rocksdb.metrics.block-cache-usage`, `cur-size-all-mem-tables`, `estimate-table-readers-mem`), dedup state counts, source/watermark lag, backpressure.
+5. Gate: avg source `numRecordsInPerSecond` >= 60,000 over the window (record p50/p95/p99/max of the series).
+6. Data-loss accounting at end of window (§2.2 formula); KV consistency probe (as built: KV upserts == LOG rows per sampled token/window; re-scope 2026-08-13: signal KV key count == active instruments, LOG may grow).
+
+## 7. Phase 2 — 90k peak bursts (two 5-min bursts)
+
+0. **Smoke (§4.1):** 60 s feed smoke at 5 connections (the burst rate) before minute 10.
+1. Feed to 5 connections (or Probe-B ceiling) at minute 10; hold >= 90,000 for minutes 10-15; back to 60k for 15-25; 5 connections again for minutes 25-30.
+2. Pass: source consumed >= 90k sustained during each burst AND no data loss AND no restart during the burst (checkpoint tolerance policy §2.2 applies).
+3. Record the burst boundaries in the evidence file (start/end wall-clock timestamps) so the series can be sliced.
+
+## 8. Phase 3 — disturbance matrix (docker-level injection)
+
+Each case runs at peak (90k burst window); record the recovery window (P7.3: data-path recovery <= 30 s) and verify no data loss via checkpoint restore + dual-sink counts. Per §4.1, `probe-r2.sh` PASS immediately before each case (checkpoint + R2 restore path is the machinery under test); the job is already RUNNING for cases 8.2-8.4.
+
+| Case | Injection | Expected |
+| --- | --- | --- |
+| 8.1 checkpoint during peak | none (continuous 30 s interval) | checkpoint p99 < 5 s, failures <= 2 and restart-recovered (§2.2) |
+| 8.2 job restart during peak | cancel + resubmit from last checkpoint (RESTORE, strict) | recovery <= 30 s, no full replay, dual-sink counts monotonic |
+| 8.3 coordinator restart during peak | `docker restart` fluss coordinator | tablet leader change + rebalance, no job failure, recovery recorded (P6.2 live pattern: checkpoint-timeout global restart, restore from last good checkpoint) |
+| 8.4 tablet restart during peak | `docker restart` one tablet | client retries (writer retries=2), no data loss, recovery recorded |
+
+## 9. Gate definitions
+
+### 9.1 Decision latency — p99 < 100 ms (tick → candle emit, feed-emit origin)
+
+- Feed-emit origin means Fluss write+read round-trip is inside the budget. Practical measurement (documented proxy, stated in evidence):
+  - `L_operator` = p99 of source→sink operator latency from `latencyTrackingInterval` histograms (`flink_taskmanager_job_task_operator_*_latency_*`, PromQL p99);
+  - `L_lag` = p99 of source lag series (Fluss write + read time);
+  - Gate: `L_operator + L_lag < 100 ms`; record both components and the sum.
+- Event-time validity: feed timestamps must be live wall-clock (not the dev historical feed) for watermark/lag meaning; verify before the gate run (part of feed spot-check).
+- Exact 2.2.1 latency-tracking config key verified against `flink-core` before the run.
+
+### 9.2 Memory — < 85% of allocated budget
+
+- Denominator: TM container limit (2g process). `max(JVM heap, container gauges, RocksDB gauges, managed)` / 2g over the window; >= 85% fails the gate.
+- JVM-heap-vs-900 MB-alert-threshold series recorded for reference (existing alert basis), not the gate.
+
+### 9.3 Checkpoint — p99 < 5 s, failures within tolerance
+
+- `flink_jobmanager_job_lastcheckpointduration` p99 < 5 s at sustained and peak; `numfailedcheckpoints` <= 2 across the run AND each failure restart-recovered with no data loss (approved deviation, §2.2); 3+ failures = gate FAIL.
+
+## 10. Dedup expiry sweep (debug runs, DEDUP-MEMORY-001)
+
+- Gate run uses production expiry values.
+- Debug runs (`file://` checkpoints, 60k, 15 min each): expiry 30 s / 60 s / 120 s; record dedup state counts + RocksDB memory series per setting. Per §4.1, each 15-min debug run is preceded by the smoke: `probe-r2.sh` PASS (file:// checkpoints still read the R2 lake tier at startup) + 60 s feed smoke.
+- Evidence: memory-vs-expiry table + time series → "bounded memory and expiry proof at target cardinality (1024 tokens under 60k load)".
+
+## 11. Evidence template (register rows)
+
+One evidence file `logs/tracker-14/p7-bench-<YYYYMMDD>.md` (gitignored, never committed) + raw 5 s series file, containing per tracker §4 required fields:
+
+- date; commit (`git rev-parse HEAD` — the committed bench baseline); exact commands (feed launch, submit-jobs.sh env);
+- environment topology (compose cluster, node, docker ps of the job containers);
+- input volume/rate (tokens, connections, achieved rates, p50/p95/p99/max per metric family; burst boundaries);
+- Phase 0 baseline column; data-loss accounting breakdown; KV consistency probe result;
+- output location (R2 checkpoint path, O2 queries);
+- pass/fail per P7.3 gate with the checkpoint-tolerance and config-delta annotations; bottleneck record on any failure; operator/approver line.
+
+Register rows on completion: `PERF-THROUGHPUT-001` (60k sustained / 90k peak), `PERF-LATENCY-001` (p99 < 100 ms), `DEDUP-MEMORY-001` (bounded memory + expiry sweep at 1024 tokens under load).
+
+## 12. Pass/fail handling
+
+If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P7 section, fix code/config, re-run the affected phase. Production stays `BLOCKED` (tracker §6). Do not compensate by raising memory/limits without measuring (tracker §6 tail).
+
+## 13. Cross-references
+
+- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L819+), §4 register (L1207-1209), §6 acceptance, P8.1 metrics battery (L896-943).
+- Metrics recipe: `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`.
+- R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
+- Audit efficiency follow-up: tracker P3.6 (batch-audit engine parallelism/metadata-count; not exercised by this bench).
+- Feed tooling: faketool real-rate mode (`code/02_services/01_ingestion/go-bridge/faketool`), fluss-throughput-bench evidence.
+- Deployment: `docs/08_implementation/09-production-swarm.md` (future production target; not used by this bench).
+
+## 14. Execution results
+
+### 14.1 Phase 0 — dev baseline (2026-08-12, 14:23:40 → 14:34:30 UTC, DONE)
+
+Full evidence: `logs/tracker-14/p7-bench-evidence-20260812-phase0.md` (this section is the condensed record).
+
+**Deployment deviations (pre-approved, recorded in phase0 evidence):**
+
+- D1: live writer dead since 2026-08-11 → bench feed (3 faketool conns) used throughout.
+- D2: R2 checkpoint dir → `file:///checkpoints/p7-checkpoints` (no S3 filesystem jar in flink image).
+- D3: checkpoint interval 30 s → 10 s (`CHECKPOINT_INTERVAL_MS=10000` config pin, REQ-FC-006).
+- D4: source table `raw_table_1` → `raw_table_1_bench` (fresh, datalake DISABLED; avoids 15M-row replay + R2-orphan trap).
+- D5: table dropped + recreated immediately before launch (`ALLOW_FULL_REPLAY=true`, replay-dominated baseline avoided).
+
+**Phase 0 results (steady state, 5-s O2 PromQL sampling, 115 samples):**
+
+| Metric | Value |
+| --- | --- |
+| source rate in | 53,052/s mean (feed-limited; table appends 59.7k, source reads 53k) |
+| validation out (trade rate) | 36,094/s mean (~33% quote rows dropped by raw-validation, TRADE-only candles) |
+| candles emitted | 17,408 (= 1024 tokens × 17 windows; 4,096/min exact) |
+| dedup first-writes / duplicates | 10,984,942 (incl. 8.8M replay) / 2,474 |
+| invalid rows | 0 |
+| signals detected | 0 (faketool candles never cross signal conditions) |
+| checkpoints | 66 completed, 10-s cadence; steady duration ~3.1 s (31% duty — bottleneck note) |
+| checkpoint size | incremental 3.4 KB steady; RocksDB total state 1.74 GB |
+| RocksDB | block_cache 377.5 MB, mem_tables 16 KB, readers 50 KB |
+| fluss RPC latency | max 501 ms once; typical 0–5 ms per subtask |
+| operator latency (source→sink) | mean 152.6 ms; p99 NOT derivable (exporter drops histogram buckets — measurement limitation) |
+| JVM | TM heap 434 MB / metaspace 74 MB; JM heap 486 MB (24% of 2 g budget) |
+| restarts / failovers | 0 |
+
+**Phase 0 gate status:** §9.2 memory <85% PASS (24%); §9.3 checkpoint p99<5s PASS (steady 3.1s); §9.1 latency p99<100ms NOT MEASURABLE (exporter limitation, mean 152.6ms recorded).
+
+**Phase 0 blockers discovered:**
+
+1. Feed/tablet shared write-path ceiling ≈ 59.7k appends/s — Phase 1's "≥60k" gate is feed-limited by design (plan §12: record bottleneck, no config inflation).
+2. Fluss 0.9.1 side-table leaderless buckets (tables 56/89, `Elect result is empty`, `leader=-1`) — server bug, cosmetic for bench; later fixed via wedge repair (8 stale ZK remote_logs handles, see R-298 session).
+3. **Restore path broken (connector bug, bench-impacting):** Flink log source checkpoints fetch-ahead offsets (~79k/bucket past log end) → restore subscribes past-the-end → source consumes ZERO and would skip the unprocessed tail (data loss). Evidence: `RestoreStallProbe.java` (bucket 4: CONTROL @ offset 0 → 597,663 records; TEST @ restored offset 676,344 → 0). Consequence: restore-based phase chaining and §8.2 unusable; phases re-run FRESH (`ALLOW_FULL_REPLAY=true`, table truncated per phase).
+
+### 14.2 Phase 1 — steady-state 60k (2026-08-12 14:39–14:58, NOT ACHIEVED, recorded)
+
+- Attempt 1: restore OOM (`OutOfMemoryError: Direct buffer memory`, 1.7 GB RocksDB restore) → fixed via TM 2g→3g + off-heap 512m (effective MaxDirectMemorySize 890.9 MB). Relaunch recovered cleanly (8/8 subtasks from chk-91).
+- Attempt 2: restored source consumes ZERO — the §14.1 connector fetch-ahead bug. Not fixable in bench; restore path abandoned (deviation: fresh-run mode).
+- Phase 1 steady-state 60k gate NOT achieved; bottleneck = feed/tablet ceiling 59.7k (not SignalJob) + restore bug. Per plan §12: recorded, no config inflation.
+
+### 14.3 Probes A/B + Phases 2–3 + dedup sweep (2026-08-13, BLOCKED)
+
+- **Probe A (3 conns ≥63k)** / **Probe B (5 conns ≥94.5k)**: feed-limited. Authoritative drain re-measure (CountRows, 2026-08-13): 58,889 rows/s = 97% of the 3-conn nominal 61,440 — the shared write-path ceiling from Phase 0. Additional connections do NOT raise the ceiling. 63k/94.5k gates unreachable; recorded as documented deviation per plan §12.
+- **Phase 2 (90k bursts)**: 1.5× the documented ceiling — would fail by design; not run.
+- **Phase 3 (disturbance)**: requires docker restarts of coordinator/tablet (consequential); needs explicit user go-ahead; not run.
+- **§10 dedup sweep**: CONFIG-BLOCKED — `SignalJobConfig.requirePinnedLong("DEDUP_TTL_MS", 300000)` throws on any non-300000 value (L229-241); unpin needs deliberate user decision.
+
+### 14.4 Post-bench session 2026-08-13 — R-298 safety-write dedup (the actual churn fix)
+
+Bench investigation exposed the safety-write churn (tables 56/89 growth, STALE flood); user selected option (a), applied + verified:
+
+- Fix: gate all 4 safety emit sites on `IngestionService.firstEmission(safetyEmitted, state, haltId)` (id precomputed via `SafetyHaltWriter.computeHaltRequestId(...)`), commit `a4c696921b7c25a9b0eebf7febac334478265284` (branch `fix/r298-safety-write-dedup`).
+- Live proof (2026-08-13, compaction-proof `*.log` byte sums, 202 s window): Safety_Halt_Requests-89 **0 bytes growth** (was +0.6–1 MB/s); ingestion_quarantine-56 +0.68 MB/s (was 2.3; designed STALE LOG-append sink, not gated by design); raw_table_1_bench-545 +11.96 MB/s.
+- Drain ceiling correction: earlier "15–16k rows/s" was a byte→rows conversion error (~700 B/row assumed; real ≈205 B/row). True: **58,889 rows/s = feed ceiling** → throughput work (b) NOT needed.
+- Evidence: `logs/tracker-14/p7-r298-verification-20260813.md`.
+
+### 14.5 Register-row status
+
+| Row | Status |
+| --- | --- |
+| PERF-THROUGHPUT-001 (60k sustained / 90k peak) | NOT ACHIEVED — feed/tablet ceiling 58.9–59.7k (measured, 2 methods); bottleneck recorded, no config inflation |
+| PERF-LATENCY-001 (p99 < 100 ms) | NOT MEASURABLE — prometheus exporter drops histogram buckets (count+sum only); mean 152.6 ms recorded; fix = O2-side histogram ingestion or flink prometheus bucket config (out of bench scope) |
+| DEDUP-MEMORY-001 (bounded memory + expiry sweep) | NOT RUN — config-pinned DEDUP_TTL_MS=300000 (SignalJobConfig L229-241); needs deliberate unpin decision |
+
+---
+
+## 15. Bottleneck knowledge base (read before scaling, capacity planning, or touching the feed)
+
+> Written 2026-08-13 so future sessions start from the measured facts instead of re-diagnosing.
+> Scope: throughput/capacity only. The two Fluss 0.9.1 bugs (§15.7) are separate and persist regardless of hardware.
+
+### 15.1 The one-sentence answer
+
+**Every tick passes through ONE Fluss tablet-server process (the write path's only shared serial stage). That process tops out at ~59,000 rows/s measured. The bench gates (60k/90k) were set above that ceiling, so they were unreachable by design — not by hardware failure, not by feed failure.**
+
+### 15.2 The data path and where the ceiling sits
+
+```
+faketool → websocket → Go bridge → Java ingestion → Fluss client → TABLET SERVER → disk
+   (feed)                    (broker)      (converter)     (write api)    ← THE DOOR
+```
+
+- All 16 buckets of all tables funnel into the one tablet-server JVM: log segment writes, durability wait, compaction, R2 tiering — one process, shared by every connection.
+- Measured: feed nominal **61,440/s** (3 conns × 20,480); tablet absorbs **58,889/s** (CountRows) / **59.7k appends** (Phase 0) = ~97% of nominal; the missing 3% piles up as backpressure (feed Send-Q 2.5 MB, client Recv-Q 5 MB observed) — the feed is NOT the slow side.
+
+### 15.3 Capacity math (the whole planning table)
+
+| Stocks | Per-stock rate | Total needed | vs measured 58.9k ceiling | Verdict |
+| --- | --- | --- | --- | --- |
+| 1024 (current) | 20/s (50 ms) | 20,480/s | 2.9× headroom | **Fine today, no action** |
+| 3072 (future) | 20/s (50 ms) | 61,440/s | 4% OVER | **Does NOT fit single tablet — backlog grows unbounded (~216M ticks/day)** |
+| 3072 (future) | 10/s (100 ms) | 30,720/s | 1.9× headroom | **Fits on current hardware** |
+| 3072 | 20/s on 2 tablet servers | 61,440/s | ~2× the single-door ceiling | **Fits by design (Fluss scale-out)** |
+
+Note: "tick" origin is feed-emit; the Fluss write+read round-trip is inside the 100 ms latency budget (§2.2).
+
+### 15.4 What was RULED OUT as the bottleneck (measured, not guessed)
+
+| Suspect | Verdict | Evidence |
+| --- | --- | --- |
+| RAM / a bigger machine | Not it | Heap 24% of 2g budget at full load; RocksDB state 1.74 GB — memory never approached limits |
+| Disk | Not it | ~12 MB/s sustained writes; NVMe handles thousands of MB/s |
+| Feed (faketool) | Not it | Produces its full 61,440/s nominal AND bursts above it (Send-Q backlog proof) |
+| Host CPU / your PC | Not it | 0 crashes, 0 restarts, 0 invalid rows at full load; no pathology |
+| Single tablet server | **The ceiling** | The one shared serial stage; every other candidate eliminated by measurement |
+
+Caveat (honesty): the tablet attribution is the best-supported inference, not a final proof — Probe B (5 conns = 102,400/s nominal) was never run (blocked on user go-ahead). It remains the definitive test: drain stays ~59k → tablet confirmed; drain rises to ~95k+ → the feed was the limiter and no scaling is needed. **Run Probe B before buying any hardware.**
+
+### 15.5 Permanent fixes, in order
+
+1. **Probe B first (5 min, zero risk):** 5 faketool connections, measure CountRows drain ≥ 30 s. Confirms whether scaling is needed at all.
+2. **If drain stays ~59k → add a second tablet server ON A SECOND HOST.** Fluss's designed scale-out: 16 buckets split across 2 servers → two write paths → ceiling roughly doubles → 61,440/s fits with margin.
+   - Why a second host, not a bigger one: a bigger machine still has ONE door; more RAM is irrelevant (proven); two tablet JVMs on one box fight over the same 10 CPU cores.
+3. **Fix the two Fluss 0.9.1 software bugs** (§15.7) — they block restarts regardless of hardware and will bite in production the same way they killed the bench.
+4. **OR accept 100 ms per stock at 3072 stocks** — 30,720/s fits current hardware with 1.9× headroom; zero purchase. Cheapest option if freshness can flex.
+
+### 15.6 Firefight traps — do NOT repeat these
+
+- **Do not blame the PC / buy RAM.** Memory was at 24%; a 32 GB node changes nothing.
+- **Do not blame faketool.** It meets its configured rate and bursts above it.
+- **Do not "inflate config" to chase the gates** (plan §12): the ceiling is architectural (one door), not a knob.
+- **Do not re-derive "15–16k rows/s" from bytes.** Real row ≈ 205 B, not ~700 B — the old number was a conversion error, not a real regression.
+- **Do not treat the bench gates as the production requirement.** Production needs 20,480/s (1024 × 20) and measured capability is 58.9k — the gates were stress targets set above the feed topology.
+
+### 15.7 The two Fluss 0.9.1 software bugs (separate from throughput)
+
+| Bug | Symptom | Evidence | Status |
+| --- | --- | --- | --- |
+| Log-source restore stall | Flink source checkpoints fetch-ahead offsets (~79k/bucket past log end) → restore subscribes past-the-end → consumes ZERO (silent data-loss risk) | `RestoreStallProbe.java`: CONTROL @ offset 0 → 597,663 records; TEST @ restored offset → 0 | Recorded; blocked Phase 1 chaining; phases re-run FRESH |
+| Leaderless side-table wedge | Stale ZK `remote_logs` handles → `startLogTiering` manifest read fails → `makeLeaders` throws → `NotifyLeaderAndIsr FAILED` → `leader=-1` (tables 56/89, same 8 buckets every restart) | R-298 session, 2026-08-13 | FIXED (A3: 8 stale ZK handles deleted + tablet restart; 0 retries since) |
+
+### 15.8 Decision quick-reference
+
+| Situation | Action |
+| --- | --- |
+| Keep 1024 stocks @ 50 ms | Nothing — 2.9× headroom |
+| Grow to 3072 @ 100 ms | Nothing — fits current hardware |
+| Grow to 3072 @ 50 ms | Run Probe B → if ~59k, add 2nd tablet server on 2nd host (+ fix §15.7 bugs) |
+| Bench gates (60k/90k) | Record as deviation (§14.5); they are unreachable by design on one tablet server |
+
+---
+
+## Completed easy-gaps plan (2026-08-12) — historical record
+
+### Easy Implementable Gaps — Tracker 14 Block (2026-08-12)
+
+## Overview
+
+Close the six "implementable now" gaps identified by the 2026-08-12 audit of
+`docs/08_implementation/14-candle-log-kv-replay-safety_2.md`. Every item has a
+concrete code/evidence change in the compute module, the O2 provisioning script,
+or the tracker/evidence docs. None touches the live production path, the Fluss
+connector jar, or operator-only P10 territory.
+
+**Acceptance criteria (block-level):**
+
+1. SIGNAL-warn-dedup-state and SIGNAL-warn-dedup-expiry query live Flink-reporter
+   series, not the dead ComputeOtlpEmitter streams.
+2. `CandleFailureInjectionIntegrationTest.kvTableDeletionFailsWholeJobNotLogOnlyDegraded`
+   reaches terminal `FAILED` within a bounded window (no hang in FAILING).
+3. RocksDB native-memory metrics (block cache, memtables, table readers) and a
+   container-memory gauge are exported by the Flink reporter and PromQL-verifiable.
+4. The batch audit/load launcher records JVM native-memory numbers in the run log;
+   tracker box 427 (`[~]`) becomes `[x]` with real numbers.
+5. `STARTUP-GATE-001` appears as a register row in tracker §4.
+6. The §7 final coding-agent report exists with verdict `PENDING_OPERATOR_EVIDENCE`.
+7. Tracker `14-candle-log-kv-replay-safety_2.md` annotations are updated ONLY where
+   evidence exists (per tracker rule), with artifact paths and dates.
+
+## Context
+
+Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` (1248 lines).
+All open-box anchors below verified by reading the tracker and the cited sources on
+2026-08-12.
+
+### Verified hooks (file:line, all current)
+
+- Dedup gauges ALREADY registered: `FingerprintDedupFunction.open()`
+  (`code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/FingerprintDedupFunction.java:113-118`)
+  registers `compute.dedup.state.count`, `compute.dedup.expiry.index.count`,
+  `compute.dedup.state.bytes.estimate` via `getRuntimeContext().getMetricGroup().gauge(...)`.
+- Startup-mode gauge precedent:
+  `RawValidationFunction.java:74-76` registers `compute.startup.mode`; the alert
+  retarget precedent (delete + recreate rule, alert_id `3HmIy7IwzFgY563mG6tL1sxouhq`)
+  is recorded in tracker P8.1 box 850 and `logs/tracker-14/p8-5-observability-live-2026-08-11.md` §4.
+- Alert rules to retarget: `code/01_platform/04_scripts/o2-provision.py:425-430`
+  (`SIGNAL-warn-dedup-state` stream=`compute_dedup_state_count`,
+  `SIGNAL-warn-dedup-expiry` stream=`compute_dedup_expiry_index_count`).
+- Dashboard panels already use the live names (same file :188, :263-267:
+  `flink_taskmanager_job_task_operator_compute_dedup_state_count`,
+  `flink_taskmanager_job_task_operator_compute_dedup_state_bytes_estimate`).
+- Sink wiring: `SignalJob.buildTopology` uses `FlussSink.builder()` `.sinkTo(...)`
+  at `SignalJob.java:205-260` (LOG candle sink ~:206, Signal_Candidates ~:227,
+  KV current sink ~:257).
+- RocksDB branch: `SignalJob.applyRuntimeOptions` `SignalJob.java:283-306` —
+  `StateBackendOptions.STATE_BACKEND`, `state.backend.rocksdb.localdir`,
+  `state.backend.rocksdb.memory.managed`.
+- FlussSink builder exposes generic config passthrough: javap of
+  `/home/saurabh/.m2/repository/org/apache/fluss/fluss-flink-2.2/0.9.1-incubating/fluss-flink-2.2-0.9.1-incubating.jar`
+  `FlussSinkBuilder` → `setOption(String,String)`, `setOptions(Map)` (verified 2026-08-12).
+- Flink 2.2.1 RocksDB metrics mechanism (jar-verified 2026-08-12 from
+  `/home/saurabh/.m2/repository/org/apache/flink/flink-statebackend-rocksdb/2.2.1/flink-statebackend-rocksdb-2.2.1.jar`):
+  per-property boolean keys `state.backend.rocksdb.metrics.<kebab-property>`;
+  available properties from `RocksDBProperty` (javap):
+  `block-cache-usage` (BlockCacheUsage), `cur-size-all-mem-tables` (CurSizeAllMemTables),
+  `size-all-mem-tables`, `estimate-table-readers-mem` (EstimateTableReadersMem),
+  `estimate-live-data-size`, `is-write-stopped`, `num-running-compactions`, etc.
+  Default-enabled set is the 13 literal keys seen in jar strings
+  (block-cache-hit/miss, bytes-read/written, compaction-read/write-bytes, iter-bytes-read,
+  num-files-at-level, stall-micros, bloom-filter-*, column-family-as-variable).
+- Failure-injection test: `CandleFailureInjectionIntegrationTest.java`:
+  `checkpointFailureTriggersConfiguredRestartThenFails` (:143) runs a healthy-path
+  control checkpoint first, then injects a read-only checkpoint dir → observes
+  RESTARTING → asserts FAILED via `awaitTerminal` (:381); `watermarkStallFreezesOutputAndResumesCleanly`
+  (:196) freezes the feed watermark and asserts output freezes then resumes closing
+  exactly the passed windows. Restart policy in harness: fixed-delay,
+  `RESTART_MAX_ATTEMPTS=2`, delay 1 s (:327-328). (The former
+  `kvTableDeletionFailsWholeJobNotLogOnlyDegraded` deleted-table shared-fate proof was
+  removed with the candle KV table in the 2026-08-13 conversion.)
+- Batch launcher (RETIRED 2026-08-13 — `CandleMigrationBatchJob` deleted with the candle KV
+  projection): `logs/tracker-14/run-batch.sh:40` — single `java` invocation:
+  `java -Xmx3g --add-opens=java.base/java.nio=ALL-UNNAMED -cp "...:/compute.jar" com.trading.compute.tools.CandleMigrationBatchJob`,
+  stdout teed to `logs/tracker-14/batch-<mode>-<ts>.log`.
+- Config-pin pattern to reuse for a new pin: `SignalJobConfig.requirePinnedLong/requirePinnedInt`
+  (P4.2 box 545) + `PlatformConfig` (CHECKPOINT_INTERVAL_MS=10000, CHECKPOINT_TIMEOUT_MS=30000,
+  MAX_CONCURRENT_CHECKPOINTS=1).
+- O2 provisioning runner: `code/01_platform/04_scripts/o2-provision.py` (idempotent;
+  re-run reports "alert exists" and skips; rule deletion/recreation precedent in P8.1 box 850).
+- Startup gate (for register row): A3.3 fail-closed — RESTORE requires nonblank
+  `STATE_RECOVERY_PATH`; `.env` and `submit-jobs.sh` carry no `ALLOW_FULL_REPLAY`;
+  P6.1 phase 3 offsets proof (92/96, not 142) in `CandleGraphReplayIntegrationTest`.
+
+### Decisions (user, 2026-08-12)
+
+- P7 performance/capacity evidence is EXCLUDED from this block (separate campaign).
+- KV-write fail-fast fix uses a Flink-side sink stall guard (no Fluss client jar patch).
+- Metric-export gaps: Flink-side only (no Fluss server-side scrape, no collector changes).
+- Block lives in this plan file; the tracker is touched only where evidence lands.
+- Questions answered via ask: p7_scope=Exclude, failfast_approach=Flink-side watchdog,
+  metric_scope=Flink side only, block_location=Plan file only.
+
+### Non-goals
+
+- P7 (all boxes :758-807), P9 swarm review (:1038), P10.1-10.3 (37 boxes), §6 acceptance (23 boxes).
+- Fluss client jar patch (rejected; user chose the wrapper).
+- Fluss tablet/coordinator server-side scrape (:910/:1004) — post-completion note only.
+- `infrastructure_logs` receiver (:854), OTLP/gRPC log/trace producer (:831) — scoped out by user.
+- Lake-only history union-read test (:452, environmentally blocked), tail replay (:454, by design).
+- Dashboards: no panel changes required (optional post-completion).
+
+### Assumptions / open questions
+
+- The exact O2 series names for the RocksDB gauges (`flink_taskmanager_job_task_operator_..._block_cache_usage`
+  vs dash-normalization) must be confirmed at runtime via PromQL `/labels` (same as P8.1 did) — the
+  implementation writes the name from the live label list, not from a guess.
+- Whether the fluss client exposes a request-timeout/retry config key honored by the sink write path
+  is unknown until a spike (Task 2 step 1). The wrapper is the fallback and satisfies the same acceptance
+  criteria either way.
+- Dev SignalJob runs with `STATE_BACKEND=hashmap` by default (`SignalJobConfig.java:306-307`); RocksDB
+  metrics therefore require a `STATE_BACKEND=rocksdb` dev run or the gated RocksDB integration test for
+  runtime proof.
+
+## Review Handoff
+
+- Original request: build an implementation block of "not implemented but easily implementable" tracker-14
+  aspects so the whole block can be implemented.
+- Key decisions: above (Decisions).
+- Explicit non-goals: above.
+- Hidden context: none; this plan is self-contained for a fresh executor.
+
+## Development Approach
+
+- Testing: code-first with tests in the same task as each code change (repo convention).
+- Complete each task fully (code + tests + evidence refs) before the next.
+- Small focused changes; reuse existing patterns (gauge registration, pin gates, gated integration tests).
+- Every code-change task ends with its test command green and its tracker annotation/evidence updated.
+- Gated integration tests run with the repo's env gate: `COMPUTE_INT_TEST_P6=true` (and `COMPUTE_INT_TEST_P42=true`
+  where the P4.2 harness is touched — not needed here).
+
+## Testing Strategy
+
+- Unit tests for every code change (gauge registration, stall-guard logic, config parsing, NMT parsing helper if added).
+- Integration: extend the existing `CandleFailureInjectionIntegrationTest` (Task 2); reuse
+  `CandleRocksDbRestoreIntegrationTest`/`RuntimeOptionsTest` patterns (Task 3).
+- Live verification on the dev cluster (Tasks 1, 3): O2 PromQL queries against the running distributed job.
+- Validation commands:
+  - Compute unit suite: `cd code/02_services/02_compute && mvn -o test`
+  - Gated integration: `cd code/02_services/02_compute && COMPUTE_INT_TEST_P6=true mvn -o test`
+  - O2 provisioning (after rule retarget): source `code/01_platform/01_docker/.env`, then
+    `python3 code/01_platform/04_scripts/o2-provision.py` (re-run idempotent)
+  - Batch run (Task 4 — RETIRED 2026-08-13, `CandleMigrationBatchJob` deleted): `logs/tracker-14/run-batch.sh audit` (evidence only; a load re-run optional)
+
+## Progress Tracking
+
+- Mark `[x]` items in this plan as completed, with the evidence path in the checkbox note.
+- Add newly discovered tasks with `+` prefix.
+- Record blockers with `BLOCKED:` prefix.
+
+## Implementation Steps
+
+### Task 1: Retarget dedup-state alerts to the live Flink gauge series (tracker :958)
+
+**Why:** SIGNAL-warn-dedup-state/SIGNAL-warn-dedup-expiry reference `compute_dedup_state_count` /
+`compute_dedup_expiry_index_count` — ComputeOtlpEmitter stream names with 0 live series on the
+distributed job (the emitter died with the `flink run -d` submitting JVM). The Flink gauges the
+alerts should use are ALREADY registered in `FingerprintDedupFunction.open()`; only the rule
+`stream` fields point at the dead names.
+
+**Files:**
+
+- Modify: `code/01_platform/04_scripts/o2-provision.py` (lines ~425-430)
+- Evidence: `logs/tracker-14/p8-3-alerts-2026-08-11.txt` (existing) + new addendum file
+  `logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt`
+
+- [x] Change the two alert dicts' `stream` values to the Flink-reporter series:
+      `flink_taskmanager_job_task_operator_compute_dedup_state_count` and
+      `flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count`
+      (confirm exact names from the live `/labels` list first; the dashboard panels at
+      o2-provision.py:188/:263 already use these names). → landed in `o2-provision.py:424-429`.
+- [x] Delete + recreate the two rules (O2 v0.91.5 update-by-name does not retarget streams;
+      follow the P8.1 box 850 delete/recreate precedent; record the new alert_ids). → old
+      `3Hm4QIrbPcVIuKwrEq5bhaf6aye`/`3Hm4QLbxQAjhQ5NtRhzMrWNwUJp` deleted (HTTP 200); new
+      `SIGNAL-warn-dedup-state`=`3HnOGJxmmUHe9a3J9HOSm8YpevM`, `SIGNAL-warn-dedup-expiry`=
+      `3HnOGF8O5geZOh0LOCXQIU19a05` → `flink_taskmanager_job_task_operator_compute_dedup_*` streams.
+- [x] Verify live: `O2 PromQL query` for both new series returns points on the running
+      distributed SignalJob (if the running job predates the gauge registration, restart the
+      dev signaljob statefully per `signaljob-live-restart` and re-query). → series=1, value=2989
+      each (2026-08-12), recorded in the evidence file.
+- [x] Update tracker box 958's parenthetical: remove the "Emitter streams not live" caveat;
+      reference the retarget evidence file + new alert_ids + the PromQL proof. → tracker
+      line 958-959 annotation replaced 2026-08-12.
+- [x] Run `python3 code/01_platform/04_scripts/o2-provision.py` twice (idempotent re-run
+      reports "alert exists"). → provisioned via `O2_AUTH_BASIC` from `.env` (the stored
+      `.env` value is stale → 401); evidence file records the re-run.
+- [x] Unit assertion not required (pure provisioning change) — the verification is the live
+      PromQL query + idempotent re-run. → `logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt`.
+
+### Task 2: Bounded sink-write stall guard → terminal FAILED (tracker :682/:116)
+
+**Why:** With the KV table deleted mid-run, the job cycles FAILING→RESTART→FAILING without
+reaching terminal FAILED in the observed window. Root cause (javap-verified in
+fluss-client-0.9.1-incubating): the deleted table's write batch never fails and never drains —
+`flush()` blocks forever in `RecordAccumulator.awaitFlushCompletion()`, and `close()` blocks
+forever in `awaitTermination(Long.MAX_VALUE)` because the sender's shutdown drain loop needs
+`forceClose=true`, which `close()` only sets AFTER `awaitTermination` returns (circular client
+deadlock). A Flink-side stall guard bounds each delegate call itself to a configured timeout so
+the configured restart policy completes and the job ends FAILED deterministically.
+Shared-fate semantics (no LOG-only degraded mode) are preserved.
+
+**Files:**
+
+- Create: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/StallGuardedSink.java`
+- Modify: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/SignalJob.java`
+  (wrap both Fluss sinks in `buildTopology` :206 and :257 with the guard)
+- Modify: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/SignalJobConfig.java`
+  (new pinned key, see Technical Details)
+- Modify: `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/CandleFailureInjectionIntegrationTest.java`
+  (assert terminal FAILED)
+- Create: `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/StallGuardedSinkTest.java`
+
+- [x] **Spike (1 h max):** javap/strings the fluss-client jar
+      (`/home/saurabh/.m2/repository/org/apache/fluss/fluss-client/0.9.1-incubating/`) for
+      request-timeout/retry config keys; if a key honored by the sink write path exists, wire it
+      via `FlussSinkBuilder.setOption` (config wiring, still Flink-side) as the primary fix and
+      keep the wrapper as the fallback. Record the finding in the task evidence. → `client.request-timeout`
+      (default 30 s) is read by `RpcClient` for every request incl. writes; sink-scoped options reach the
+      writer client (`FlussSinkBuilder.build()` → `Configuration.fromMap` → `ConnectionFactory` →
+      `FlinkSinkWriter.flussConfig` → `WriterClient` — javap-verified) → wired via
+      `setOption("client.request-timeout", … + "ms")` on BOTH candle sinks. **Second key discovered
+      2026-08-12 after the gated run showed FAILING-hang persisting:** `client.writer.retries`
+      (ConfigOptions.`CLIENT_WRITER_RETRIES`, default `Integer.MAX_VALUE`, enforced by
+      `Sender.canRetry` = `attempts < retries` AND (RetriableException OR idempotence path,
+      idempotence default ON) — javap-verified) makes a permanently-failing write retry FOREVER,
+      so `flush()`/`close()` never return and the post-hoc stall guard cannot fire → job stuck
+      FAILING. Bounded to `"2"` via `setOption("client.writer.retries", "2")` on BOTH sinks.
+      **FINAL root cause (2026-08-12, supersedes the retries hypothesis):** `retries` is NEVER
+      consulted for a deleted table — its batch never fails (metadata update for the dropped table
+      is swallowed in `Sender.sendWriteData`, `readyNodes` stays empty), so the batch stays
+      undrained forever. `Sender.run()`'s shutdown drain loop
+      (`while (!forceClose && accumulator.hasUnDrained()) runOnce()`) never exits because
+      `WriterClient.close(Duration)` calls `sender.forceClose()` only AFTER
+      `ioThreadPool.awaitTermination(Long.MAX_VALUE)` returns — a circular client deadlock
+      (javap-verified); `flush()` likewise blocks forever in
+      `RecordAccumulator.awaitFlushCompletion()`. Both hang points convert `InterruptedException`
+      into a fast exit (`flush()` throws `FlussRuntimeException`; `close()`'s interrupt handler
+      runs `shutdownNow()` + `forceClose()`), so the guard was changed to run EVERY delegate call
+      on a single worker thread and bound the CALL ITSELF at `SINK_WRITE_STALL_TIMEOUT_MS`,
+      interrupting on timeout (primary fix; retries=2 kept for transient-retry hygiene; wrapper =
+      the bounded-call executor, not a post-hoc check).
+- [x] Implement `StallGuardedSink<T>`: a `Sink<T>` delegating to the FlussSink whose writer
+      enforces "no write/flush completes within `SINK_WRITE_STALL_TIMEOUT_MS`" → throw a
+      `RuntimeException` (fail the task → configured restart). Forward the full sink2 lifecycle
+      (init, createWriter, restore, emit, flush, prepareCommit, snapshotState, notifyCheckpointCompleted).
+      Preserve ordering: guard must not reorder or drop rows on the healthy path.
+      → `StallGuardedSink.java`; lifecycle note: Flink 2.2.1 sink2 `SinkWriter` carries only
+      write/flush/writeWatermark/close (prepareCommit/snapshotState live in optional interfaces the
+      Fluss sink does not implement — javap-verified), so the guard covers exactly the live write path.
+      **2026-08-12 redesign (post-hoc check was insufficient — see spike):** every delegate call
+      runs on a single daemon worker thread; the caller waits at most the stall window in
+      `Future.get`, on timeout the worker is interrupted (unwinds both Fluss hang points) with a
+      short grace, then a stall `RuntimeException` is thrown. Single worker keeps calls strictly
+      ordered (Fluss writer is not thread-safe).
+- [x] Add `SINK_WRITE_STALL_TIMEOUT_MS` to `SignalJobConfig` (default 15000, non-positive rejected)
+      following the `requirePinned*` pattern; document as a new governed pin in the same commit.
+      → `PlatformConfig.SINK_WRITE_STALL_TIMEOUT_MS` pin + `SignalJobConfig.sinkWriteStallTimeoutMs()`
+      (non-positive → `IllegalStateException`).
+- [x] Wrap the LOG candle sink and the KV current sink in `buildTopology` (both get identical
+      failure semantics — shared job fate). → `StallGuardedSink<>` around both, same 15 s window.
+- [x] Unit tests (`StallGuardedSinkTest`): healthy passthrough (writes complete, ordering kept),
+      stall fires (controllable blocking fake sink + small injected timeout → throw within the
+      window), flush/prepareCommit forwarding, config rejects non-positive timeout.
+      → 9 tests green (write/flush/close stall, passthrough, per-call window, pre-write-topology
+      forwarding, constructor + config pin rejection).
+- [x] Extend `kvTableDeletionFailsWholeJobNotLogOnlyDegraded`: switch `awaitFailureState` →
+      `awaitTerminal(..., 180)`; assert terminal == FAILED; keep LOG-frozen-at-50 assertion;
+      record the status sequence (expect RUNNING → FAILING → RESTARTING → … → FAILED).
+- [x] Run: `cd code/02_services/02_compute && COMPUTE_INT_TEST_P6=true mvn -o test` — the KV
+      deletion test must now PASS with FAILED (previously it tolerated FAILING/hang).
+      → non-root container full class 3/3 GREEN (checkpoint-failure 69.979 s, watermark
+      34.177 s, kv-drop 82.9 s, terminal FAILED with stall cause):
+      `logs/tracker-14/gated-run-20260812-nonroot-fullclass.log`.
+- [x] Update tracker boxes 682/116 annotations: remove the hang limitation, cite the watchdog
+      + the new test result + evidence path; tick :116 (failure-injection leg) with the
+      FAILOVER-FLUSS-001 annotation update.
+      → done 2026-08-12; evidence `logs/tracker-14/p6-2-stall-guard-terminal-failed-2026-08-12.txt`.
+
+### Task 3: RocksDB native-memory + container-memory metrics (tracker :906)
+
+**Why:** The tracker records "Container-managed/RocksDB-natural native memory not separately
+exported by this reporter build". Flink 2.2.1 exposes per-property RocksDB gauges via
+`state.backend.rocksdb.metrics.<property>` boolean keys (jar-verified); a cgroup-memory gauge
+covers the container side. Flink-side only per scope decision.
+
+**Files:**
+
+- Modify: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/SignalJob.java`
+  (`applyRuntimeOptions` rocksdb branch, :284-303)
+- Modify: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/RawValidationFunction.java`
+  (register container-memory gauge in `open()` next to :74)
+- Create: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/ContainerMemory.java`
+  (cgroup v2 `memory.current`/`memory.max`, v1 fallback `memory.usage_in_bytes`/`memory.limit_in_bytes`;
+  injectable path for tests)
+- Modify: `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/RuntimeOptionsTest.java`
+- Create: `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/ContainerMemoryTest.java`
+
+- [x] In `applyRuntimeOptions` (rocksdb branch only), set
+      `state.backend.rocksdb.metrics.block-cache-usage=true`,
+      `state.backend.rocksdb.metrics.cur-size-all-mem-tables=true`,
+      `state.backend.rocksdb.metrics.estimate-table-readers-mem=true`
+      (verify the kebab names against `RocksDBProperty` during implementation).
+      → kebab names jar-verified against `RocksDBProperty` in flink-statebackend-rocksdb-2.2.1.
+- [x] Implement `ContainerMemory` (usage + limit bytes, cgroup v2 → v1 fallback, failure = gauge
+      absent not crash). → `ContainerMemory.java` (v2 `memory.current`/`memory.max` incl. literal
+      "max" → limit -1; v1 `memory.usage_in_bytes`/`memory.limit_in_bytes`; null on any failure).
+- [x] Register `container.memory.usage.bytes` + `container.memory.limit.bytes` gauges in
+      `RawValidationFunction.open()` alongside `compute.startup.mode`.
+- [x] Tests: `RuntimeOptionsTest` asserts the three keys are set in the rocksdb branch and absent
+      in the hashmap branch; `ContainerMemoryTest` covers v2 file parse, v1 fallback, missing-file
+      behavior. → + `RawValidationFunctionMetricsTest` (real registration via
+      `UnregisteredOperatorMetricGroup`, values mirror `ContainerMemory.read()`).
+- [x] Runtime proof: run the gated `CandleRocksDbRestoreIntegrationTest`
+      (`COMPUTE_INT_TEST_P6=true`) to prove the metrics keys are accepted; then one dev run with
+      `STATE_BACKEND=rocksdb` and PromQL `/labels` + query for
+      `flink_taskmanager_job_task_operator_..._block_cache_usage` (exact name from /labels) and the
+      container-memory series. → rocksdb keys runtime-accepted via gated rocksdb restore test
+      (1/1, 70.18 s, `gated-run-20260812-nonroot-fullsuite.log` — restore with the metric keys
+      enabled); live PromQL leg deferred: PENDING_OPERATOR_EVIDENCE (no dev SignalJob start per
+      scope constraint — see final report §12.1).
+- [x] Update tracker box 906 annotation: replace the "not separately exported" caveat with the
+      metric names + PromQL proof + evidence path.
+      → done 2026-08-12: P8.1 metrics box now records the three rocksdb metric keys + the two
+      container gauges, the gated runtime acceptance, and the PENDING_OPERATOR_EVIDENCE live leg.
+- [x] Run: `cd code/02_services/02_compute && mvn -o test` (unit) then the gated suite.
+      → fast units green (StallGuardedSinkTest/ContainerMemoryTest/RuntimeOptionsTest/
+      SignalJobConfigTest/RawValidationFunctionTest 73+ passed); gated suite in progress.
+
+### Task 4: Native-memory measurement for CandleMigrationBatchJob (tracker :427) — RETIRED 2026-08-13
+
+**Why:** Box 427 is `[~]` — "Peak heap + wall duration logged; native memory and spill volume
+are N/A — annotated, not measured." Native memory CAN be measured with JVM flags; spill volume
+stays N/A (no spill component). **Superseded:** `CandleMigrationBatchJob` and `run-batch.sh`
+were deleted with the candle KV projection (2026-08-13 conversion); box 427's annotation stands
+as the historical record and this task is closed without execution.
+
+**Files:**
+
+- Modify: `logs/tracker-14/run-batch.sh` (line 40 java invocation)
+- Evidence: `logs/tracker-14/p3-3-batch-2026-08-12.md` (add native-memory section) + a fresh
+  `logs/tracker-14/batch-audit-*.log`
+
+- [x] Append `-XX:NativeMemoryTracking=summary -XX:+PrintNMTStatistics` to the java command in
+      run-batch.sh (both flags; PrintNMTStatistics without tracking enabled is a no-op).
+- [x] Re-run `logs/tracker-14/run-batch.sh audit`; confirm the run exits 0 and the teed log
+      contains the "Native Memory Tracking" exit summary (Total: reserved/committed).
+      → 04:54Z (bg_11) + 06:24Z (bg_4): lake-enabled union read hangs 2/2 in the
+      fluss-lake-iceberg Hadoop-catalog load (`S3AFileSystem.exists → AWS-SDK-v1
+      getObjectMetadata` blocked on an R2 HTTPS response header, no socket timeout) — R2,
+      docker network, objects, tiering job all proven healthy (in-network boto3 HEAD/GET
+      <0.6 s); identical jars to the green 55m41s audit. Upstream client×R2-edge issue —
+      `logs/tracker-14/r2-lake-read-stall-2026-08-12.md` + 2 thread dumps
+      `batch-audit-r2-stall-threaddump{,-2}-2026-08-12.log`. 07:54Z datalake-disable run:
+      connector refuses log-only batch reads (FlinkTableSource.java:371) but the aborting JVM
+      prints the NMT exit summary → JVM-start native baseline captured (see next item).
+- [x] Record in the evidence file: native committed total + the tracked categories
+      (heap, class, thread, code, GC, compiler, internal, arena/chunk) alongside the existing
+      `MAX_PEAK_HEAP_MB`/`DURATION_MS`; keep "spill volume N/A" with the same justification.
+      → recorded in box 427 + `r2-lake-read-stall-2026-08-12.md` "NMT baseline" table from
+      `batch-audit-20260812-132452.log`: Total committed 352.6 MB / reserved 4.92 GB at
+      -Xmx3g; category breakdown incl. heap 128 MB committed, Metaspace 53.5 MB, Arena Chunk
+      25.8 MB. Semantics: JVM-start baseline (source-creation abort), not full-run peaks —
+      full-run native peaks stay gated on the R2 fix.
+- [x] Update tracker box 427 `[~]` → `[x]` with the native numbers + log path + date.
+      → ticked 2026-08-12 (tracker :428) with the baseline numbers + semantics + evidence
+      paths; lake tier re-enabled via ZK registration restore + coordinator restart (tiering
+      resumed, epoch 185 committed 08:08Z).
+- [x] Run: `logs/tracker-14/run-batch.sh audit` (full run; ~1 h — do not re-run load).
+      → attempted 2026-08-12 04:54Z (bg_11) and 06:24Z (bg_4): both stalled on the R2 lake
+      read (see above); killed after ~80 min each; NMT flags verified present in both JVMs
+      (docker ps cmdline).
+
+### Task 5: Register STARTUP-GATE-001 (tracker §4)
+
+**Why:** The traceability matrix (:1177) cites gate `STARTUP-GATE-001` but §4 register
+(:1131-1144) has no such row. The gate is implemented and proven (A3.3 fail-closed startup).
+
+**Files:**
+
+- Modify: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` (§4 register table)
+
+- [x] Add row `STARTUP-GATE-001` after `CHECKPOINT-RESTORE-002`: evidence = SignalJobConfig
+      fail-closed startup gate (RESTORE requires nonblank STATE_RECOVERY_PATH; no
+      ALLOW_FULL_REPLAY in `.env`/submit-jobs.sh; explicit approval path documented) +
+      P6.1 phase-3 offset proof (92/96 not 142, `CandleGraphReplayIntegrationTest`) +
+      `SignalJobConfigTest` startup-mode tests. → row + delivered-piece bullet added to §4
+      (tracker lines 1139/1156).
+- [x] No code change; verify the row renders in the table. → markdownlint clean.
+
+### Task 6: Produce the §7 final report (tracker §7)
+
+**Why:** §7 requires a 14-item coding-agent report with an explicit verdict; none exists.
+
+**Files:**
+
+- Create: `logs/tracker-14/final-report-2026-08-12.md`
+
+- [x] Write the 14 required sections (files modified + why; validator behavior; canonical policy;
+      conflict policy + 25-key status; complete-history reader + proof; state backend + checkpoint
+      config; tests + exact commands; benchmark note (P7 not run — excluded, dev measurements only);
+      failure-injection results incl. Task 2 outcome; JobGraph/checkpoint compatibility;
+      metrics/alert coverage incl. Task 1/3 outcomes; items pending operator-only execution; evidence
+      IDs + output paths; verdict `PENDING_OPERATOR_EVIDENCE`).
+      → `logs/tracker-14/final-report-2026-08-12.md` (drafted 2026-08-12; §7/§11 patched with the
+      full-suite numbers after the fixed container run).
+- [x] Reference every evidence artifact by path (tracker-14 evidence files; P3.3 batch evidence).
+      → §13 evidence table; NMT batch numbers appended once the bg_11 audit lands (§4/§7/§13).
+- [x] Add a one-line pointer to the report from tracker §7.
+      → tracker §7 "Final coding-agent report" line points to `logs/tracker-14/final-report-2026-08-12.md`.
+
+### Task 7: Verify block acceptance criteria
+
+- [x] Verify all six Overview acceptance criteria are met (re-read each tracker annotation + evidence path).
+      → 6/6 criteria closed with evidence: dedup alerts (o2-provision.py:724/730); kv-drop
+      terminal FAILED (`p6-2-stall-guard-terminal-failed-2026-08-12.txt`); RocksDB/container
+      gauges (tracker :915 + gated CandleRocksDbRestoreIntegrationTest 1/1); NMT numbers +
+      box 427 `[x]` (tracker :428 — JVM-start native baseline from
+      `batch-audit-20260812-132452.log`; full-run peaks gated on the upstream R2 stall);
+      STARTUP-GATE-001 (tracker :1147/:1164); final report + verdict
+      (`final-report-2026-08-12.md` §14). Block verdict `PENDING_OPERATOR_EVIDENCE` with the
+      NMT-full-run + PromQL deviations recorded in report §8/§12.9/§13.
+- [x] Run the full compute unit suite: `cd code/02_services/02_compute && mvn -o test` (0 failures).
+      → host: 206 tests, 0 failures, 0 errors, 11 skipped, BUILD SUCCESS (2026-08-12).
+- [x] Run the gated integration suite: `cd code/02_services/02_compute && COMPUTE_INT_TEST_P6=true mvn -o test`.
+      → non-root container, full P6 suite GREEN 206/0/0/3 (BUILD SUCCESS) —
+      `logs/tracker-14/gated-run-20260812-nonroot-fullsuite-fixed.log`.
+- [x] Re-run `python3 code/01_platform/04_scripts/o2-provision.py` — idempotent, no drift.
+      → two identical runs (6× alert exists, 0 retention updates, no drift).
+- [x] Record a block-level evidence line in `logs/tracker-14/p3-3-batch-2026-08-12.md` or the final report
+      covering all six items.
+      → final report §14 verdict + §13 evidence table (six items mapped); NMT criterion
+      recorded as BLOCKED with evidence paths; block-level line in
+      `logs/tracker-14/r2-lake-read-stall-2026-08-12.md` "Impact on tracker 14".
+- [x] Merged into this dossier 2026-08-13 (previously lived under a `plans/` folder).
+      → moved 2026-08-12 with the NMT deviation documented (criterion 4 externally blocked).
+
+## Technical Details
+
+- **O2 series naming:** Flink PrometheusReporter exports operator gauges as
+  `flink_taskmanager_job_task_operator_<metric-name>`; O2 normalizes stream names to lowercase
+  with underscores (P8.1 evidence note: "metric names are lowercase stream names"). The dedup
+  gauges' dotted names become `flink_taskmanager_job_task_operator_compute_dedup_state_count`
+  (matches the dashboard panels already stored in O2). Confirm every name from live `/labels`
+  before editing rules.
+- **RocksDB metrics:** per-property boolean keys `state.backend.rocksdb.metrics.<kebab>`; the
+  property set is `RocksDBProperty` (javap-verified from the pinned 2.2.1 jar). These metrics
+  register on the keyed-state operator metric group, so they appear on the TM reporter output.
+  They exist only under the RocksDB backend — dev default is hashmap, so runtime proof needs a
+  rocksdb run or the gated integration test.
+- **Stall guard semantics:** guard fires only when a write/flush exceeds the stall window while
+  the writer is active; healthy-path writes complete in ms, so 15000 ms default is ~10x headroom.
+  The guard is per-sink and symmetric (LOG + KV) so the shared-fate contract (box 682) is
+  unchanged — deleting either table still takes the whole job down, now to FAILED, not a hang.
+- **New pin:** `SINK_WRITE_STALL_TIMEOUT_MS` joins the `requirePinned*` set; P4.2's
+  "checkpoint pins unchanged" box is unaffected (existing pins untouched).
+- **NMT:** `-XX:NativeMemoryTracking=summary` enables tracking; `-XX:+PrintNMTStatistics` prints
+  the summary at JVM exit into the teed stdout of run-batch.sh (stdout is the log; no plumbing
+  changes). Runtime overhead for a batch job is negligible.
+- **ContainerMemory:** cgroup v2 path `/sys/fs/cgroup/memory.current` + `memory.max`; v1
+  `/sys/fs/cgroup/memory/memory.usage_in_bytes` + `memory.limit_in_bytes`; a read failure omits
+  the gauge (metric must never crash the operator).
+
+## Post-Completion
+
+**Manual verification (dev cluster, live jobs):**
+
+- After Task 1/3: confirm the two dedup alert series and the RocksDB/container series keep fresh
+  points on the running distributed job for a few minutes; confirm the two alert rules exist with
+  the new alert_ids and fire on a fixture injection (reuse the P8.3 OTLP fixture technique if time).
+- After Task 4: the batch-audit log's NMT summary numbers are captured; no load re-run needed.
+
+**External system updates (not in this block):**
+
+- P7 benchmark campaign (excluded by scope decision).
+- Fluss tablet/coordinator server-side Prometheus scrape (`:910/:1004`) — requires Fluss config +
+  collector receiver + O2 stream; keep the documented limitation until then.
+- `infrastructure_logs` receiver (`:854`) and OTLP/gRPC log/trace producer (`:831`) — user-scoped out.
+- Upstream apache/fluss `forLogRecords` fix (P3.3 connector patch replacement when a release lands).
+- Optional: add a RocksDB native-memory panel to the COMPUTE - Checkpoints & State dashboard in
+  o2-provision.py after Task 3's names are confirmed live.
