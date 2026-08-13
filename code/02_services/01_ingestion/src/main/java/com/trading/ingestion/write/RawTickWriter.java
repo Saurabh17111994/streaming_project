@@ -153,7 +153,20 @@ public final class RawTickWriter implements AutoCloseable {
      * completion handling runs on the future's completing thread.
      */
     private void submitAppend(TickPacket packet, int rowBytes, Instant acceptTime, int attempt) {
-        CompletableFuture<AppendResult> future = rowConverter.append(packet);
+        final CompletableFuture<AppendResult> future;
+        try {
+            future = rowConverter.append(packet);
+        } catch (Throwable t) {
+            // R-297 wedge fix: with a bounded client.writer.buffer.wait-timeout
+            // the Fluss client throws SYNCHRONOUSLY (EOFException) when the
+            // memory pool stays exhausted — e.g. the sender thread is wedged
+            // retrying leaderless tables. The tracker slot reserved in
+            // write() must release and the failure must classify/retry
+            // exactly like an async failure — never leak the reservation and
+            // never let the exception escape to the reader loop.
+            handleCompletion(packet, rowBytes, acceptTime, attempt, null, t);
+            return;
+        }
 
         // Per-attempt timeout: cancel the in-flight append when the deadline
         // passes — R-037: the tracker release is deferred to the future's

@@ -99,6 +99,10 @@ public class QuarantineWriter implements AutoCloseable {
 
         Configuration conf = new Configuration();
         conf.setString("bootstrap.servers", bootstrapServers);
+        // R-297 wedge fix: bound the writer memory-pool wait (default is
+        // infinite) so a wedged sender cannot park the ingestion main thread
+        // forever in append() — the quarantine write fails cleanly instead.
+        conf.setString("client.writer.buffer.wait-timeout", "30s");
 
         try {
             // R-253: retain Connection + Table so close() releases them.

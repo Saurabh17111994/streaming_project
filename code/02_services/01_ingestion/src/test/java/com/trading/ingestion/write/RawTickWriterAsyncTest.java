@@ -137,6 +137,71 @@ class RawTickWriterAsyncTest {
         writer.close();
     }
 
+    @Test
+    @DisplayName("sync pool-wait throw: write stays ACCEPTED, slot released at terminal (R-297)")
+    void syncPoolWaitThrowReleasesSlot() throws Exception {
+        // R-297 wedge fix: with a bounded client.writer.buffer.wait-timeout the
+        // Fluss client throws SYNCHRONOUSLY (EOFException "Failed to allocate
+        // new segment ...") when the memory pool is exhausted. submitAppend
+        // must contain it and route through handleCompletion: the reservation
+        // made in write() is released exactly at the terminal outcome, and the
+        // failure classifies RETRYABLE so retries run on the scheduler thread.
+        final int N = 3;
+        FlussRowConverter syncThrowing = new FlussRowConverter() {
+            @Override
+            public CompletableFuture<RawTickWriter.AppendResult> append(TickPacket packet) {
+                // EOFException is checked and the interface throws none; the
+                // Fluss client propagates it inside an unchecked wrapper whose
+                // cause chain carries the pool-wait message (classifier walks
+                // the chain either way).
+                throw new IllegalStateException(new java.io.EOFException(
+                        "Failed to allocate new segment within the configured max blocking time "
+                                + "30000 ms. Total memory: 67108864"));
+            }
+
+            @Override
+            public int estimatedRowSize(TickPacket packet) {
+                return 100;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        AppendTracker tracker = new AppendTracker();
+        RawTickWriter writer = new RawTickWriter(
+                syncThrowing, tracker, "default.raw_table_1",
+                Duration.ofSeconds(5), Duration.ofSeconds(30));
+        AtomicInteger terminals = new AtomicInteger();
+        CountDownLatch allDone = new CountDownLatch(N);
+        writer.setOutcomeListener(o -> {
+            terminals.incrementAndGet();
+            allDone.countDown();
+        });
+
+        for (int i = 0; i < N; i++) {
+            RawTickWriter.AppendOutcome outcome =
+                    writer.write(TickPacketFixtures.validTrade(i));
+            // The sync throw must NOT escape write() — the append is still
+            // accepted and its terminal outcome delivered async (after retries).
+            assertEquals(RawTickWriter.Status.ACCEPTED, outcome.status());
+        }
+        assertEquals(N, tracker.pendingRecords(), "reservations held during retries");
+
+        // Retries (backoff 100/200ms) exhaust MAX_RETRY_ATTEMPTS → FAILED.
+        writer.drain();
+        assertTrueAllDone(allDone, N);
+
+        assertEquals(N, terminals.get(), "one terminal outcome per write");
+        assertEquals(N, writer.errorCount(),
+                "each sync-throw append ends FAILED after retries exhausted");
+        assertEquals(0, tracker.pendingRecords(),
+                "sync-throw reservation released at terminal outcome");
+        assertEquals(0, tracker.pendingBytes());
+
+        writer.close();
+    }
+
     private static void assertTrueAllDone(CountDownLatch latch, int expected) {
         try {
             if (!latch.await(5, TimeUnit.SECONDS)) {

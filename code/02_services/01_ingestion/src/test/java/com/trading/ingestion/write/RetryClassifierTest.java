@@ -84,6 +84,19 @@ class RetryClassifierTest {
     }
 
     @Test
+    @DisplayName("pool-exhaustion EOFException is RETRYABLE (R-297)")
+    void poolExhaustionEofIsRetryable() {
+        // Fluss LazyMemorySegmentPool.waitForSegment throws exactly this when
+        // client.writer.buffer.wait-timeout elapses with the pool exhausted
+        // (sender wedged on leaderless tables). R-297: transient — retry on
+        // the scheduler thread once the wedge clears; never drop the tick.
+        Throwable t = new java.io.EOFException(
+                "Failed to allocate new segment within the configured max blocking time "
+                        + "30000 ms. Total memory: 67108864");
+        assertEquals(Classification.RETRYABLE, RetryClassifier.classify(t));
+    }
+
+    @Test
     @DisplayName("fatal deep in a three-link chain is still FATAL")
     void fatalDeepInChainIsStillFatal() {
         Throwable innermost = new AuthenticationException("denied");

@@ -57,6 +57,12 @@ final class FlussClientAdapter {
         // (default is 100ms; the batch-size cap alone is never the binding
         // wait at target rate).
         conf.setString("client.writer.batch-timeout", "20ms");
+        // R-297 wedge fix: bound the writer memory-pool wait. The default
+        // client.writer.buffer.wait-timeout is infinite — when the sender
+        // thread is wedged (leaderless tables) the 64MB pool exhausts and
+        // append() parks the calling thread forever, stalling the whole
+        // ingestion pipeline. 30s converts that park into a sync EOFException.
+        conf.setString("client.writer.buffer.wait-timeout", "30s");
 
         // 2. Create connection
         Connection connection = ConnectionFactory.createConnection(conf);

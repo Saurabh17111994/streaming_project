@@ -27,7 +27,9 @@ public final class PlatformConfig {
             FixedScope.MAX_TICKS_PER_INSTRUMENT_PER_SEC;
     public static final int INGESTION_MAX_BATCH_RECORDS = 1;
     public static final int INGESTION_MAX_BATCH_WAIT_MS = 0;
-    public static final int MAX_PENDING_APPEND_RECORDS = 10000;
+    // Note: MAX_PENDING_APPEND_RECORDS is owned by IngestionConfig (env default
+    // 50,000, range 100..1,000,000) — no duplicate constant here. A stale 10,000
+    // literal was removed 2026-08-13 (it was unused and contradicted the runtime).
     public static final int PENDING_APPEND_WARNING_PERCENT = 80;
 
     // ---- raw_table_1 schema contract ----

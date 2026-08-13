@@ -86,6 +86,10 @@ public final class SafetyHaltWriter implements AutoCloseable {
 
         Configuration conf = new Configuration();
         conf.setString("bootstrap.servers", bootstrapServers);
+        // R-297 wedge fix: bound the writer memory-pool wait (default is
+        // infinite) so a wedged sender cannot park the calling thread forever
+        // in append() — the safety-halt write fails cleanly instead.
+        conf.setString("client.writer.buffer.wait-timeout", "30s");
         try {
             // R-141: keep the Connection + Table so close() can release them
             // (previously local vars leaked until process exit).

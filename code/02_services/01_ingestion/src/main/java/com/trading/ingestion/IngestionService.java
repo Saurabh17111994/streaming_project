@@ -286,6 +286,30 @@ public final class IngestionService {
     // ---- bridge subprocess loop ----
 
     /**
+     * Validates that the Go arrow-bridge binary exists and is runnable before
+     * launch (startup step 6). Throws {@link IllegalStateException} with a
+     * clear message if the binary is missing or not executable — a FATAL
+     * startup error that propagates out of {@link #main} to a non-zero exit.
+     */
+    static void requireBridgeBinary(String bridgeBinary) {
+        if (bridgeBinary == null || bridgeBinary.isBlank()) {
+            throw new IllegalStateException(
+                    "arrow-bridge binary path is empty (set ARROW_BRIDGE_BIN)");
+        }
+        java.nio.file.Path bin = java.nio.file.Paths.get(bridgeBinary);
+        if (!java.nio.file.Files.exists(bin)) {
+            throw new IllegalStateException(
+                    "arrow-bridge binary not found: " + bridgeBinary
+                            + " (set ARROW_BRIDGE_BIN to the correct path)");
+        }
+        if (!java.nio.file.Files.isRegularFile(bin) || !java.nio.file.Files.isExecutable(bin)) {
+            throw new IllegalStateException(
+                    "arrow-bridge binary is not runnable: " + bridgeBinary
+                            + " (expected a regular executable file; set ARROW_BRIDGE_BIN)");
+        }
+    }
+
+    /**
      * Launch the Go arrow-bridge as a subprocess, read NDJSON from its stdout,
      * and pipe its stderr into SLF4J. This replaces the shell pipe
      * ({@code arrow-bridge | java}) with Java-managed lifecycle.
@@ -294,6 +318,7 @@ public final class IngestionService {
      * {@link #shutdown()}.
      */
     public void runWithBridge(String bridgeBinary) {
+        requireBridgeBinary(bridgeBinary);
         running = true;
         subscriptionPaused = false;
 

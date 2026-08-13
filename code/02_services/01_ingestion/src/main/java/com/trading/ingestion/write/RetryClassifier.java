@@ -78,7 +78,13 @@ public final class RetryClassifier {
                     || lower.contains("leader")
                     || lower.contains("unavailable")
                     || lower.contains("re-elect")
-                    || lower.contains("retry");
+                    || lower.contains("retry")
+                    // R-297 wedge fix: pool exhaustion after the bounded wait
+                    // ("Failed to allocate new segment within the configured
+                    // max blocking time ...") is transient — the sender drains
+                    // the pool once the leaderless-table wedge clears. Retry
+                    // on the scheduler thread instead of dropping the tick.
+                    || lower.contains("allocate new segment");
         }
         return false;
     }

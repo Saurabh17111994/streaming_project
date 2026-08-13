@@ -104,6 +104,10 @@ public class DiscontinuityWriter implements AutoCloseable {
 
         Configuration conf = new Configuration();
         conf.setString("bootstrap.servers", bootstrapServers);
+        // R-297 wedge fix: bound the writer memory-pool wait (default is
+        // infinite) so a wedged sender cannot park the calling thread forever
+        // in append() — the discontinuity write fails cleanly instead.
+        conf.setString("client.writer.buffer.wait-timeout", "30s");
 
         try {
             // R-062: retain so close() can release them.

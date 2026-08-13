@@ -123,7 +123,7 @@ public final class DdlBootstrap {
      * their creation is the offline DDL gate's job (schema reconciliation is
      * owned by {@code ddl_apply.py} / {@code schema_manifest.json}). The
      * compute tables ({@code feature_candles_15s}, {@code
-     * feature_candles_15s_current}, {@code Signal_Candidates}, {@code
+     * Signal_Candidates}, {@code
      * Signal_Candidates_current}, …) are
      * provisioned out-of-band; this method only ever creates
      * {@link #OWNED_TABLES}.
@@ -362,39 +362,19 @@ public final class DdlBootstrap {
             .build();
 
     /**
-     * Full 15-column schema for feature_candles_15s matching DDL 03
-     * (03_feature_candles_15s.sql, schema v2). Written by the compute job's
-     * candle slice. Column names/order mirror
+     * Full 15-column KV schema for feature_candles_15s matching DDL 03
+     * (03_feature_candles_15s.sql, schema v2): PK
+     * (instrument_token, window_start) — the storage layer enforces one row
+     * per closed window per instrument, so a replay/restart re-emits the same
+     * key as an idempotent upsert instead of a duplicate LOG append (user
+     * requirement 2026-08-13: candle tables are KV-only, no LOG+KV twin).
+     * Bucket key instrument_token is a strict subset of the PK (Fluss
+     * requires pk ⊇ bucketKey), keeping per-ticker colocation. Written by the
+     * compute job's candle slice; column names/order mirror
      * {@code com.trading.common.schema.CandleTableSchema} — the shared
-     * contract both candle sinks serialize against.
+     * contract the candle sink serializes against.
      */
     private static final Schema FEATURE_CANDLES_SCHEMA = Schema.newBuilder()
-            .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("exchange", org.apache.fluss.types.DataTypes.STRING())
-            .column("symbol", org.apache.fluss.types.DataTypes.STRING())
-            .column("window_start", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("window_end", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("open_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("high_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("low_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("close_paise", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("volume", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("tick_count", org.apache.fluss.types.DataTypes.INT())
-            .column("algorithm_version", org.apache.fluss.types.DataTypes.STRING())
-            .column("configuration_version", org.apache.fluss.types.DataTypes.STRING())
-            .column("output_ts", org.apache.fluss.types.DataTypes.BIGINT())
-            .column("schema_version", org.apache.fluss.types.DataTypes.STRING())
-            .build();
-
-    /**
-     * Full 15-column KV schema for feature_candles_15s_current matching DDL 22
-     * (CANDLE-KV-REPLAY-001): same columns as the LOG twin plus
-     * PRIMARY KEY (instrument_token, window_start) — the idempotent
-     * current-state projection that makes replay-safe candle writes possible.
-     * Bucket key instrument_token is a strict subset of the PK (Fluss
-     * requires pk ⊇ bucketKey), keeping per-ticker colocation with the LOG.
-     */
-    private static final Schema FEATURE_CANDLES_CURRENT_SCHEMA = Schema.newBuilder()
             .column("instrument_token", org.apache.fluss.types.DataTypes.BIGINT())
             .column("exchange", org.apache.fluss.types.DataTypes.STRING())
             .column("symbol", org.apache.fluss.types.DataTypes.STRING())
@@ -463,11 +443,6 @@ public final class DdlBootstrap {
                     Map.entry("feature_candles_15s",
                             TableDescriptor.builder()
                                     .schema(FEATURE_CANDLES_SCHEMA)
-                                    .distributedBy(16, "instrument_token")
-                                    .build()),
-                    Map.entry("feature_candles_15s_current",
-                            TableDescriptor.builder()
-                                    .schema(FEATURE_CANDLES_CURRENT_SCHEMA)
                                     .distributedBy(16, "instrument_token")
                                     .build()),
                     Map.entry("Signal_Candidates",

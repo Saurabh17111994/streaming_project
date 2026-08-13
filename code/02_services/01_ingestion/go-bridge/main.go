@@ -352,14 +352,19 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 				// Plan §Error Handling: burst threshold is 100 errors in 10
 				// seconds per slot; exceeding it closes that slot and reconnects.
 				if burst.exceeded {
-					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "feed_stalled", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotStalled), Reason: "decode_error_burst", ReceivedTsMs: time.Now().UnixMilli()})
+					// R-297 wedge fix: signal the epoch stop BEFORE the emit —
+					// EmitEvent blocks on a full NDJSON pipe, and the stop must
+					// never wait behind a write that cannot complete.
 					signalEpochStop()
+					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "feed_stalled", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotStalled), Reason: "decode_error_burst", ReceivedTsMs: time.Now().UnixMilli()})
 				}
 				return
 			}
+			// R-297 wedge fix: signal the epoch stop BEFORE the emit — a
+			// disconnect event must not block the reconnect behind a full pipe.
+			signalEpochStop()
 			_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "disconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: sanitizeDiagnostic(err.Error()), ReceivedTsMs: time.Now().UnixMilli()})
 			logf("HFT stream ended: %v", err)
-			signalEpochStop()
 		},
 	)
 
@@ -418,9 +423,12 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			select {
 			case <-heartbeat.C:
 				if err := stream.WriteText("PONG"); err != nil {
+					// R-297 wedge fix: signal the epoch stop BEFORE the emit —
+					// EmitEvent blocks on a full NDJSON pipe, and the stop must
+					// never wait behind a write that cannot complete.
+					signalEpochStop()
 					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "heartbeat_failed", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: sanitizeDiagnostic(err.Error()), ReceivedTsMs: time.Now().UnixMilli()})
 					logf("HFT heartbeat failed: %v", err)
-					signalEpochStop()
 					return
 				}
 			case <-ctx.Done():
@@ -438,8 +446,11 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			case <-watchdog.C:
 				last := lastFrameNanos.Load()
 				if last > 0 && time.Since(time.Unix(0, last)) > 15*time.Second {
-					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "feed_stalled", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotStalled), Reason: "no_tick_for_15s", ReceivedTsMs: time.Now().UnixMilli()})
+					// R-297 wedge fix: signal the epoch stop BEFORE the emit —
+					// the feed_stalled emit was blocking on a full NDJSON pipe,
+					// so the epoch never stopped and the slot never reconnected.
 					signalEpochStop()
+					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "feed_stalled", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotStalled), Reason: "no_tick_for_15s", ReceivedTsMs: time.Now().UnixMilli()})
 					return
 				}
 			case <-ctx.Done():

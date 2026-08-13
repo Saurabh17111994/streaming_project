@@ -63,7 +63,7 @@ The current architecture does **not** assume Arrow Trade, `seq_no`, exact sequen
 - [x] Real Fluss 0.9.1 client — `FlussClientAdapter.java` (199 lines)
 - [x] `RealFlussRowConverter` → 28-column `GenericRow` matching `raw_table_1` DDL
 - [x] `FlussRowConverter` interface — separates Fluss from business logic
-- [x] `RawTickWriter.java` — per-tick individual append (no batching) + fingerprint idempotency cache + retry loop with linear backoff (up to 3 attempts) + UNCERTAIN outcome on timeout
+- [x] `RawTickWriter.java` — per-tick individual append (no batching) + retry loop with exponential backoff (100/200/400 ms, up to 3 attempts) + UNCERTAIN outcome on timeout. Raw ingestion does not deduplicate fingerprints — the Signal job owns logical dedup
 - [x] `AppendTracker.java` — atomic bounded counters (10k records / 64MB)
 - [x] 80% warning → readiness false, warning event
 - [x] 100% → halt, readiness false, critical event, acknowledged-loss record
