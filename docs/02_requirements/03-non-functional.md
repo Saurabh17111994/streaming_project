@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | ASM-NFR-001 | TCP preserves order within each Arrow WebSocket connection, and the `raw_table_1` append order is sufficient for deterministic event-time replay. | ASM-001 |
 | ASM-NFR-002 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value for correlation. | ASM-002 |
-| ASM-NFR-003 | Four VMs can sustain the normal production baseline of variable 60,000 ticks/s average baseline and 90,000 ticks/s peak while one HA VM is unavailable. | ASM-005, RISK-010 |
+| ASM-NFR-003 | Four VMs can sustain the normal production baseline of variable 50,000 ticks/s average baseline while one HA VM is unavailable (the 90,000 ticks/s peak campaign is retired, DEC-036). | ASM-005, RISK-010 |
 | ASM-NFR-004 | S3 `ap-south-1` can complete verified EOD offload of a full trading day within 30 minutes. | ASM-006 |
 | ASM-NFR-005 | ~~OpenAlgo exposes deterministic REST order-submission responses~~ (obsolete — OpenAlgo removed per DEC-006). Arrow REST `POST /order/regular` returns deterministic order-submission responses and enough evidence to correlate broker order identity. | ASM-007 |
 | ASM-NFR-006 | The selected Fluss version supports BYTES payload, KV state tables, changelog images, three-node replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Flink checkpoints + Fluss remote storage + rebuild from audit), retention extension, and lake tiering properties. | ASM-008 |
@@ -45,7 +45,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **RPO is per-boundary, not a single platform claim:** Recovery Point Objective is defined separately for raw packets, immutable instructions, postback audit, Executor attempts/audit, projections, and EOD data.
 - **Health is multidimensional:** A single green/red indicator cannot represent the platform. Liveness, readiness, job health, and trading readiness are separate dimensions.
 - **Seven-year audit is encryption-gated:** Money-moving audit records are encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before seven years requires policy change, legal-hold release, and two-person authorization.
-- **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform maximum is 90,000 ticks/s, so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the ...
+- **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform’s theoretical cap ceiling is 90,000 ticks/s (3,000 × 30; sustained gate 50,000 per DEC-036), so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the ...
 
 ## Out of Scope
 
@@ -90,14 +90,14 @@ The following configuration values SHALL be enforced at startup. Deployment SHAL
 
 ### NFR-PERF-001: Workload envelope
 
-The active instrument manifest is fixed at **3,000 instruments** for a trading session. Runtime manifest changes require a controlled restart. The production baseline is **60,000 ticks/s on average** (20 ticks/s/instrument over the declared window); arrivals are variable, and each instrument is capped at **30 ticks/s**. The capacity peak is **90,000 ticks/s**.
+The active instrument manifest is fixed at **3,000 instruments** for a trading session. Runtime manifest changes require a controlled restart. The production baseline is **50,000 ticks/s on average** (≈16.7 ticks/s/instrument over the declared window); arrivals are variable, and each instrument is capped at **30 ticks/s**. The capacity-peak campaign at **90,000 ticks/s** is RETIRED (DEC-036); the theoretical cap ceiling (3,000 × 30) remains a generator stress bound only.
 
 Final machine sizing (CPU, RAM, disk I/O, network bandwidth) is evidence-gated by `PERF-PROD-60000-001` and the one-workload-VM-loss test.
 
 | Scenario | Rate | Duration | Required evidence |
 | --- | ---: | ---: | --- |
-| Variable baseline | 60,000 ticks/s average | Full production-equivalent trading session | p99 latency, checkpoint, loss, and recovery SLOs |
-| Capacity peak | 90,000 ticks/s; every instrument ≤30 ticks/s | Declared peak campaign | Bounded backlog/memory, checkpoint stability, recovery, and no acknowledged loss |
+| Variable baseline | 50,000 ticks/s average | Full production-equivalent trading session | p99 latency, checkpoint, loss, and recovery SLOs |
+| Capacity peak | ~~90,000 ticks/s~~ RETIRED (DEC-036); theoretical cap ceiling for generator stress only | — | No peak-capacity acceptance evidence required |
 
 Tests use the full 3,000-instrument production manifest, connection count, subscription mode, packet-size/type distribution, and exact software versions.
 
@@ -106,7 +106,7 @@ Tests use the full 3,000-instrument production manifest, connection count, subsc
 | Boundary                                                           | Target                                                                    |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------:|
 | Broker packet receive → raw append acknowledgement                 | p99 <50 ms target (≤ 20 ms transport linger), evidence-gated against actual protocol/client           |
-| Trigger tick consumed by Signal job → immutable instruction commit | **p99 <100 ms** at the 60,000 ticks/s variable baseline (3,000 instruments). Single release target; internal stage timings are diagnostic only. |
+| Trigger tick consumed by Signal job → immutable instruction commit | **p99 <100 ms** at the 50,000 ticks/s variable baseline (3,000 instruments). Single release target; internal stage timings are diagnostic only. |
 | Instruction commit → Executor receipt                              | Report p50/p95/p99; release threshold set after pinned connector baseline |
 | Arrow REST call start → verified broker response                     | Report separately; no unverified fixed SLA                                |
 | Failure detection → data processing resumed                        | <30 s                                                                     |
@@ -205,7 +205,7 @@ RPO SHALL be defined per durable boundary for raw accepted packets, immutable in
 
 ## 3.11 State and capacity budgets
 
-Every managed or durable state item SHALL have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, restore size/time, and skew behavior. Capacity acceptance SHALL include post-one-workload-VM-loss resources, Flink catch-up rate, checkpoint bandwidth, Fluss quorum/re-replication, maximum backlog, and sustained 60,000 ticks/s (3,000 instruments) operation.
+Every managed or durable state item SHALL have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, restore size/time, and skew behavior. Capacity acceptance SHALL include post-one-workload-VM-loss resources, Flink catch-up rate, checkpoint bandwidth, Fluss quorum/re-replication, maximum backlog, and sustained 50,000 ticks/s (3,000 instruments) operation.
 
 ### 3.11.1 Co-located resource monitoring
 
@@ -227,4 +227,4 @@ Required response to checkpoint or resource threshold breach:
 
 | Evidence ID | Purpose | Status |
 | --- | --- | --- |
-| `PERF-STATE-CHECKPOINT-60000-001` | State growth, checkpoint stability, and co-located resource use at 60,000 ticks/s (3,000 instruments) | `EVIDENCE-BLOCKED`; live-money blocking |
+| `PERF-STATE-CHECKPOINT-60000-001` | State growth, checkpoint stability, and co-located resource use at 50,000 ticks/s (3,000 instruments) | `EVIDENCE-BLOCKED`; live-money blocking |

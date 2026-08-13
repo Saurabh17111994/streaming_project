@@ -7,7 +7,7 @@ Every SLO must report p50, p95, and p99, the workload profile, UTC clock source,
 | Stage | Target | Measurement boundary |
 | --- | ---: | --- |
 | Decode to raw append acknowledgement | < 50 ms target | Broker event received → `raw_table_1` acknowledgement (includes ≤ 20 ms transport linger) |
-| Trigger tick to winner commit | **p99 < 100 ms** (single release target) | Signal-triggering tick consumed by Flink → `Trade_Decisions` commit at 60,000 ticks/s (3,000 instruments) |
+| Trigger tick to winner commit | **p99 < 100 ms** (single release target) | Signal-triggering tick consumed by Flink → `Trade_Decisions` commit at 50,000 ticks/s (3,000 instruments) |
 | Winner commit to Executor receipt | Baseline required | Instruction commit → Executor changelog receipt; set release threshold from the pinned connector benchmark |
 | Broker REST call | Baseline required | Arrow REST request start → verified broker response; separate from stream SLO and evidence-gated |
 | Data-path recovery | < 30 s target | Failure detection → ingestion and Flink processing resumed |
@@ -16,29 +16,29 @@ Every SLO must report p50, p95, and p99, the workload profile, UTC clock source,
 
 The 15-second event-time candle wait is a business/windowing characteristic, not hidden latency. Report it separately as `window_end → candle publication` and `trigger_tick → winner_commit`.
 
-Every latency report MUST include p50, p95, p99, UTC clock source, test duration, instrument count (3,000), the declared workload profile and observed total tick rate, failure/restart inclusion, exact software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, candidate/ranking evaluation, winner commit) are recorded for diagnosis but are not independent release gates — the single 100 ms p99 trigger-to-commit target applies to the 60,000 ticks/s baseline profile.
+Every latency report MUST include p50, p95, p99, UTC clock source, test duration, instrument count (3,000), the declared workload profile and observed total tick rate, failure/restart inclusion, exact software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, candidate/ranking evaluation, winner commit) are recorded for diagnosis but are not independent release gates — the single 100 ms p99 trigger-to-commit target applies to the 50,000 ticks/s baseline profile.
 
 ## Workload envelope
 
-The active instrument manifest is fixed at **3,000 instruments** for a trading session (runtime manifest changes require a controlled restart). Market-data arrival is variable: an instrument may receive fewer than 20 ticks/s, and no instrument may exceed **30 ticks/s**. The expected baseline is an average of **20 ticks/s per instrument** over the declared measurement window, or **60,000 ticks/s** across the manifest. The capacity peak is **90,000 ticks/s** (3,000 × 30). Arrival spacing is not fixed and a 50 ms per-instrument schedule is prohibited as a production claim.
+The active instrument manifest is fixed at **3,000 instruments** for a trading session (runtime manifest changes require a controlled restart). Market-data arrival is variable: an instrument may receive fewer than ≈16.7 ticks/s, and no instrument may exceed **30 ticks/s**. The expected baseline is an average of **≈16.7 ticks/s per instrument** over the declared measurement window, or **50,000 ticks/s** across the manifest. The capacity-peak campaign at **90,000 ticks/s** (3,000 × 30) is RETIRED (DEC-036); the theoretical cap ceiling remains a generator stress bound only. Arrival spacing is not fixed and a 50 ms per-instrument schedule is prohibited as a production claim.
 
 Final machine sizing (CPU, RAM, disk I/O, network bandwidth) is evidence-gated by `PERF-PROD-60000-001` and the one-workload-VM-loss test. Current deployment allocations (500 GB SSD per VM) are a starting point, not a proven sizing result.
 
 | Scenario | Tick rate | Duration | Purpose |
 | --- | ---: | --- | --- |
-| Variable baseline | 60,000 ticks/s average (3,000 instruments; average 20 ticks/s/instrument) | 30-minute production-manifest test | Required latency release gate |
-| Capacity peak | 90,000 ticks/s (3,000 instruments; each instrument ≤30 ticks/s) | Declared peak campaign | Bounded backlog, memory, checkpoint, recovery, and no acknowledged loss |
+| Variable baseline | 50,000 ticks/s average (3,000 instruments; ≈16.7 ticks/s/instrument average) | 30-minute production-manifest test | Required latency release gate |
+| Capacity peak | ~~90,000 ticks/s~~ RETIRED (DEC-036); theoretical cap ceiling (3,000 × 30) for generator stress only | — | No peak-capacity acceptance evidence required |
 
-Tests must use the full 3,000-instrument production manifest. Synthetic workloads must preserve variable per-instrument arrivals, maintain the declared average/cap, and record the generator seed/profile. The p99 <100 ms release target applies at the baseline; the peak campaign proves safety and boundedness rather than inventing a second latency threshold.
+Tests must use the full 3,000-instrument production manifest. Synthetic workloads must preserve variable per-instrument arrivals, maintain the declared average/cap, and record the generator seed/profile. The p99 <100 ms release target applies at the baseline; the gate proves safety and boundedness rather than inventing a second latency threshold (the peak campaign is retired, DEC-036).
 
-The platform must meet the production latency SLO at the 60,000 ticks/s baseline and must verify bounded backlog, backpressure, checkpoint stability, recovery, and absence of acknowledged data loss at the 90,000 ticks/s peak.
+The platform must meet the production latency SLO at the 50,000 ticks/s baseline and must verify bounded backlog, backpressure, checkpoint stability, recovery, and absence of acknowledged data loss at that gate (the 90,000 ticks/s peak is retired, DEC-036).
 
 ### Production-workload evidence record
 
 | ID | Purpose | Status |
 | --- | --- | --- |
-| `PERF-PROD-60000-001` | Daily declared-duration run at 3,000 instruments and 60,000 ticks/s with complete resource/checkpoint/latency report | `DEFERRED`; not a live-money blocker for the current testing phase. The current phase validates the 1,024-instrument / single-connection configuration. |
-| `PERF-PROD-90000-001` | Declared-duration peak run at 3,000 instruments and 90,000 ticks/s with every instrument capped at 30 ticks/s | `DEFERRED`; not a live-money blocker for the current testing phase. The current phase validates the 1,024-instrument / single-connection configuration. |
+| `PERF-PROD-60000-001` | Daily declared-duration run at 3,000 instruments and 50,000 ticks/s with complete resource/checkpoint/latency report | `DEFERRED`; not a live-money blocker for the current testing phase. The current phase validates the 1,024-instrument / single-connection configuration. |
+| `PERF-PROD-90000-001` | RETIRED with the peak campaign (DEC-036, 2026-08-13) — was: declared-duration peak run at 3,000 instruments and 90,000 ticks/s | `RETIRED`; no peak-capacity evidence row remains |
 
 ## Delivery guarantees
 

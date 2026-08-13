@@ -110,7 +110,7 @@ Show credential age/expiry/rotation/revocation; authentication/token-refresh fai
 
 #### `Safe to Trade` operator dashboard
 
-The primary operator dashboard is named **`Safe to Trade`**. It contains broker connection and subscription status; per-instrument freshness (`FRESH`, `STALE`, `UNKNOWN`, `MARKET_CLOSED`); current tick rate against the 60,000 ticks/s average baseline and 90,000 ticks/s peak (3,000-instrument production targets; the current testing phase runs the 1,024-instrument / 20,480 ticks/s envelope); decision and Fluss append percentiles; Flink checkpoint/restart state; per-VM CPU/memory/SSD/network; Executor gate state/epoch; unknown-attempt count/age; and active scoped halts.
+The primary operator dashboard is named **`Safe to Trade`**. It contains broker connection and subscription status; per-instrument freshness (`FRESH`, `STALE`, `UNKNOWN`, `MARKET_CLOSED`); current tick rate against the 50,000 ticks/s average baseline (the 90,000 ticks/s peak is retired, DEC-036; 3,000-instrument production targets; the current testing phase runs the 1,024-instrument / 20,480 ticks/s envelope); decision and Fluss append percentiles; Flink checkpoint/restart state; per-VM CPU/memory/SSD/network; Executor gate state/epoch; unknown-attempt count/age; and active scoped halts.
 
 `GREEN` means nominal, `YELLOW` means attention is needed without blocking new orders, and `RED` means orders are blocked or safety is violated. These colours are summaries only; the Executor gate is the authority for order placement.
 
@@ -123,14 +123,14 @@ After `PERF-PROD-60000-001` establishes the baseline, define the numeric review 
 | SLO | Boundary | Target |
 | --- | --- | --- |
 | Raw append | Broker packet received → Fluss append acknowledged | p99 <50 ms target (≤ 20 ms transport linger); evidence-gated |
-| Decision | Trigger tick consumed → immutable decision committed | p99 <100 ms at variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) |
+| Decision | Trigger tick consumed → immutable decision committed | p99 <100 ms at variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) |
 | Delivery | Decision committed → Executor received | Baseline then threshold |
 | Broker REST | Arrow REST request start → verified broker response | Report separately; evidence-gated |
 | Data recovery | Failure detected → processing resumed | <30 s accepted scenarios |
 | Safe halt | Uncertainty detected → calls blocked | <5 s |
 | EOD | Market close → verified manifest | <30 min target |
 
-Acceptance uses a full session at the variable 60,000 ticks/s average baseline and a 90,000 ticks/s peak, with every instrument capped at 30 ticks/s.
+Acceptance uses a full session at the variable 50,000 ticks/s average baseline, with every instrument capped at 30 ticks/s. (The 90,000 ticks/s peak is retired, DEC-036.)
 
 ### Alert contract
 
@@ -180,7 +180,7 @@ Hosts maintain UTC synchronization and expose offset. Durations use monotonic cl
 
 ### OpenObserve resource budget
 
-At the 60,000 ticks/s baseline on the 4-VM Swarm topology (Observability VM, 48 GB), allocate:
+At the 50,000 ticks/s baseline on the 4-VM Swarm topology (Observability VM, 48 GB), allocate:
 
 | Resource | Recommendation | Notes |
 | --- | --- | --- |

@@ -134,7 +134,7 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 
 ### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
 
-Status: Phases 2a-2g done — 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 60k/90k perf gates not achieved (measured feed ceiling ≈58.9k rows/s); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred — see [`03-ingestion.md`](./03-ingestion.md) Status.
+Status: Phases 2a-2g done — 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 
@@ -249,8 +249,8 @@ Read these **in order** before writing any code:
 | **Dossier** | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, release evidence |
 
 1. Wire all services in Docker Compose (already scaffolded)
-2. Run the 30-min variable-baseline perf test — current phase envelope: 1,024 instruments / 20,480 ticks/s average; the 3,000-instrument / 60k ticks/s average baseline is the deferred production target
-3. Run the peak-capacity campaign — current phase: sustained 20,480 ticks/s with ≤30 ticks/s per instrument; the 90k ticks/s peak campaign is the deferred production target
+2. Run the 30-min variable-baseline perf test — current phase envelope: 1,024 instruments / 20,480 ticks/s average; the 3,000-instrument / 50k ticks/s average baseline is the deferred production target
+3. Run the peak-capacity campaign — current phase: sustained 20,480 ticks/s with ≤30 ticks/s per instrument; the 90k ticks/s peak campaign is RETIRED (DEC-036); the 50k sustained gate is the production target
 4. Capability evidence: Fluss LOG/KV/changelog, Flink checkpoint/savepoint/rescale, Arrow REST sandbox
 5. Record evidence per `EvidenceRecord` format
 6. Produce release evidence package (`11-testing-and-release.md`)

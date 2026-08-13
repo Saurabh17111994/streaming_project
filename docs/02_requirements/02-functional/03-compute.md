@@ -4,7 +4,7 @@
 
 The Signal Flink job consumes `raw_table_1`, performs bounded best-effort deduplication, assigns event-time semantics, emits final MVP candles, and passes closed-candle plus forming-bar state to Business Logic within the same job. It does not read feature tables back from Fluss for signal generation.
 
-**Tier-scoped deployment (current testing phase):** the current phase builds and validates Compute on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 60,000 ticks/s variable baseline and 90,000 ticks/s peak remain the deferred production target; `PERF-PROD-60000-001` / `PERF-PROD-90000-001` and the 3,000-instrument acceptance rows (AC-FC-007/011, NFR-PERF-002) are not part of this phase's acceptance. Windowing, dedup, and candle logic are envelope-independent — only the load/acceptance profile differs.
+**Tier-scoped deployment (current testing phase):** the current phase builds and validates Compute on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s variable baseline remains the deferred production target; `PERF-PROD-60000-001` and the 3,000-instrument acceptance rows (AC-FC-007/011, NFR-PERF-002) are not part of this phase's acceptance. (`PERF-PROD-90000-001` and the 90,000 ticks/s peak are retired, DEC-036.) Windowing, dedup, and candle logic are envelope-independent — only the load/acceptance profile differs.
 
 ## Constraints
 
@@ -156,7 +156,7 @@ The term `allowed lateness` SHALL not imply correction/update rows in MVP. Event
 
 Deployment SHALL define `dedup_horizon` as the maximum supported append retry, connector replay/rewind, checkpoint restore rewind, broker replay, and approved operational replay interval, plus a documented safety margin. `DEDUP_TTL` shorter than this horizon or unbounded SHALL be rejected.
 
-The implementation SHALL report accepted event rate, dedup entries, serialized entry bytes, physical backend/checkpoint bytes, cleanup progress, and restore duration. Acceptance SHALL include state-growth evidence at the variable 60,000 ticks/s average baseline and 90,000 ticks/s peak.
+The implementation SHALL report accepted event rate, dedup entries, serialized entry bytes, physical backend/checkpoint bytes, cleanup progress, and restore duration. Acceptance SHALL include state-growth evidence at the variable 50,000 ticks/s average baseline. (The 90,000 ticks/s peak is retired, DEC-036.)
 
 ## REQ-FC-013: Typed closed-candle handoff
 
@@ -174,7 +174,7 @@ Acceptance tests SHALL prove:
 4. Final-only emission and late-data discard.
 5. Deterministic tie ordering from an identical input snapshot.
 6. Checkpoint restore without state duplication within the tested boundary.
-7. Backpressure and checkpoint stability at 60,000 ticks per second (3,000 instruments; 20 ticks/s/instrument average).
+7. Backpressure and checkpoint stability at 50,000 ticks per second (3,000 instruments; ≈16.7 ticks/s/instrument average).
 8. Safe-halt when state continuity or checkpoint health becomes uncertain.
 9. Source idleness, reconnect, reassignment, and watermark recovery.
 10. Dedup TTL rejection and state-growth evidence.

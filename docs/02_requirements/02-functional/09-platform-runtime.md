@@ -25,7 +25,7 @@ Compose behavior SHALL not be presented as proof of production HA.
 
 | ID | Assumption | Source |
 | --- | --- | --- |
-| ASM-PF-001 | Four VMs can sustain the normal production baseline of 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average) while one HA VM is unavailable. | ASM-005, RISK-010 |
+| ASM-PF-001 | Four VMs can sustain the normal production baseline of 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) while one HA VM is unavailable. | ASM-005, RISK-010 |
 | ASM-PF-002 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | ASM-009 |
 | ASM-PF-003 | S3 `ap-south-1` can complete verified EOD offload of a full trading day within 30 minutes. | ASM-006 |
 | ASM-PF-004 | Loss of any one workload VM at normal load is detected and the safe-halt completes within five seconds. | REQ-PF-002, RISK-003 |
@@ -67,7 +67,7 @@ Production manifests SHALL pin exact immutable image versions/digests for Fluss,
 
 The three workload VMs SHALL host Fluss replicas/quorum and Flink workload capacity with constraints preventing replica co-location. The observability VM SHALL not be required for order-safety correctness. Placement, resources, update order, restart policy, health checks, and rollback are explicit in the stack definition.
 
-Loss of any one workload VM SHALL be tested at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average). The test proves replica/quorum behavior, Flink recovery from S3 checkpoints, bounded backlog, data recovery under 30 seconds, and safe order halt under five seconds.
+Loss of any one workload VM SHALL be tested at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average). The test proves replica/quorum behavior, Flink recovery from S3 checkpoints, bounded backlog, data recovery under 30 seconds, and safe order halt under five seconds.
 
 ## REQ-PF-003: Networking
 
@@ -115,7 +115,7 @@ Schema-breaking clean-break migrations are allowed only before live-money releas
 
 The production-like Swarm environment SHALL pass:
 
-1. variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session with decision p99 <100 ms.
+1. variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) for a full session with decision p99 <100 ms.
 2. One workload VM loss at the per-instrument production rate.
 3. EOD full-volume manifest verification under 30 minutes target.
 4. No duplicate broker order in crash-window injection.
@@ -126,7 +126,7 @@ Tests cover network exposure, TLS, secret scanning/redaction, rotation/revocatio
 
 ## REQ-PF-011: N+1 resource and recovery budget
 
-The production-like Swarm environment SHALL document per-VM CPU, memory, network, disk, Flink slots, Fluss tablet/quorum capacity, checkpoint bandwidth, and catch-up service rate. After loss of any one workload VM, the remaining placement SHALL sustain the declared 90,000 ticks/s peak profile within the declared backlog, checkpoint, durability, and recovery thresholds.
+The production-like Swarm environment SHALL document per-VM CPU, memory, network, disk, Flink slots, Fluss tablet/quorum capacity, checkpoint bandwidth, and catch-up service rate. After loss of any one workload VM, the remaining placement SHALL sustain the declared 50,000 ticks/s average-baseline profile within the declared backlog, checkpoint, durability, and recovery thresholds. (The 90,000 ticks/s peak profile is retired, DEC-036.)
 
 The one-VM test SHALL report detection, safe halt, job restore, source catch-up, steady-state recovery, Fluss re-replication, and maximum backlog separately.
 

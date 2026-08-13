@@ -51,7 +51,7 @@ see `02-schema-storage.md` Phase C lake-state note 2026-08-13).
 > KV) are historical records of the pre-conversion build; the signal LOG + KV sinks are
 > the current dual-sink. Section content below annotates the affected rows.
 
-**Current-phase envelope:** build and validate on the approved 1,024-instrument / single-connection configuration (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 60,000 ticks/s baseline and 90,000 ticks/s peak stay deferred (`PERF-PROD-60000-001` / `PERF-PROD-90000-001`, AC-FC-007/011); the budgets below are 3,000-instrument production targets, not this phase's acceptance.
+**Current-phase envelope:** build and validate on the approved 1,024-instrument / single-connection configuration (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s baseline stays deferred (`PERF-PROD-60000-001`, AC-FC-007/011; `PERF-PROD-90000-001` retired with the peak campaign, DEC-036); the budgets below are 3,000-instrument production targets, not this phase's acceptance.
 
 - **DDL bootstrap:** production application of the compute output tables (`feature_candles_15s` KV, `Signal_Candidates` LOG v3 + `Signal_Candidates_current` KV, `Ranking_Results`, `Trade_Decisions`, `Portfolio_Reservations` — 2026-08-13 conversion: candle table is KV-only, DDL 03; DDL-22 `feature_candles_15s_current` deleted) stays behind the `make ddl` version gate (`12-version-compatibility-evidence.md`). For dev this is already solved: `DdlBootstrap.ALL_TABLES` registers the full platform table set (21 tables), but `ensureTables` creates **only the 3 ingestion-owned tables** (`raw_table_1` with the exact v2 schema, `suspected_discontinuities`, `ingestion_quarantine`); the compute tables are provisioned by the offline DDL gate (`ddl_apply.py` / `schema_manifest.json`) — a runtime bootstrap must never create them. `verifyTables` column-count-checks owned tables and existence-checks the rest. Note the offline-gate precedent used for `Safety_Halt_Requests` v3: datalake properties are skipped on the local cluster (no lake catalog).
 
@@ -84,7 +84,7 @@ MVP SHALL NOT use CEP. No `flink-cep` dependency, CEP operator, CEP job, or `org
 
 ### Latency budget per operator
 
-Approximate per-tick processing cost at 60,000 ticks/s baseline. Used to diagnose SLO misses (`p99 < 100 ms` trigger-tick-to-commit; `REQ-RNK-006`). Superseded by `PERF-PROD-60000-001`.
+Approximate per-tick processing cost at 50,000 ticks/s baseline. Used to diagnose SLO misses (`p99 < 100 ms` trigger-tick-to-commit; `REQ-RNK-006`). Superseded by `PERF-PROD-60000-001`.
 
 | Operator | Per-tick cost | Notes |
 | --- | --- | --- |
@@ -168,11 +168,11 @@ Identical legitimate events may be collapsed; this limitation must remain visibl
 
 ### Dedup state budget
 
-At the 60,000 ticks/s baseline workload (3,000 instruments; 20 ticks/s/instrument average):
+At the 50,000 ticks/s baseline workload (3,000 instruments; ≈16.7 ticks/s/instrument average):
 
 | Metric | Value | Derivation |
 | --- | --- | --- |
-| Steady-state entries | ~18,000,000 | 60,000 ticks/s × 300s TTL |
+| Steady-state entries | ~18,000,000 | 50,000 ticks/s × 300s TTL |
 | Raw state size (per entry ~32 bytes) | ~576 MB | Fingerprint + first-seen timestamp + expiry timestamp |
 | Expiry index (`expiry → key list`) | ~+100-150% of raw state | One list entry per live fingerprint; bounded with the dedup state itself (measured on the 1,024-instrument dev envelope: dedup state ~2 MB total) |
 | RocksDB overhead (LSM amplification) | ~1.7-2× | Block index, bloom filter, SST metadata |
@@ -249,7 +249,7 @@ Completed checkpoints are externalized with `RETAIN_ON_CANCELLATION` (set in `Si
 
 ### Checkpoint sizing
 
-Estimated checkpoint metrics at the 60,000 ticks/s baseline (3,000 instruments; 20 ticks/s/instrument average):
+Estimated checkpoint metrics at the 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average):
 
 | Metric | Estimate | Derivation |
 | --- | --- | --- |
@@ -257,7 +257,7 @@ Estimated checkpoint metrics at the 60,000 ticks/s baseline (3,000 instruments; 
 | Checkpoint write time | ~2-5 seconds | SSD write at ~500 MB/s; incremental checkpoints write only changed SST files |
 | Restore time | ~5-15 seconds | Read back RocksDB state from S3/local checkpoint; well within 30s data-path recovery target (REQ-FC-008) |
 
-These estimates confirm that the configured 10s checkpoint interval and 30s timeout are conservative even at peak (90,000 ticks/s). All figures are derived from the RocksDB state model, not measured — superseded by `PERF-PROD-60000-001`.
+These estimates confirm that the configured 10s checkpoint interval and 30s timeout are conservative even at the theoretical cap ceiling (90,000 ticks/s; sustained gate 50,000 per DEC-036). All figures are derived from the RocksDB state model, not measured — superseded by `PERF-PROD-60000-001`.
 
 ### Job submission contract
 
@@ -357,7 +357,7 @@ Before code is accepted, verify each item:
 
 #### Task 3 acceptance checks
 
-- 15-minute tests at the variable 60,000 ticks/s average baseline and 90,000 ticks/s peak (3,000 instruments; every instrument ≤30 ticks/s) report no state object containing raw packet bytes or a list of ticks.
+- 15-minute tests at the variable 50,000 ticks/s average baseline (3,000 instruments; every instrument ≤30 ticks/s; 90,000 ticks/s peak retired, DEC-036) report no state object containing raw packet bytes or a list of ticks.
 - Duplicate state for expired tick fingerprint is absent after its expiry timer runs.
 - One final candle per non-empty instrument/window and no correction candle after finalization.
 - Compute module has no `flink-cep` dependency and no `org.apache.flink.cep` import.
@@ -435,7 +435,7 @@ Each pending item below is a tracked work item with its solving method, prerequi
 | `STATE-COMPAT-001`, `COMPAT-FLINK-001` (serializer/savepoint change, source/sink checkpoint-restore-rescale on pinned versions) | `MiniClusterWithClientResource` (`flink-test-utils`, **already in compute pom test scope**) with pinned Flink 2.2.1 + `fluss-flink-2.2:0.9.1-incubating`; run topology, checkpoint, restore, assert state continuity; serializer-change compatibility blocks startup before unsafe use | Harness infra **landed**; **no cluster** | Restore succeeds through the approved path, or startup blocks before unsafe use |
 | `SIG-INT-001/002` (pinned Fluss source/sink boundary, partial visibility across outputs) | Env-gated live test on the dev Fluss cluster, same pattern as `SafetyHaltLiveIntegrationTest` (`COMPUTE_INT_TEST_SAFETY` → new `COMPUTE_INT_TEST_SIGNAL=true` gate): run the real `SignalJob` topology (or its source→sink shell) against live Fluss, assert candles land in `feature_candles_15s`; SIG-INT-002 uses two sinks + reconciliation to prove partial-visibility handling (as-built sinks were the candle LOG/KV pair — 2026-08-13: candle sink is the KV upsert, reconciliation targets the signal LOG/KV pair) | Live dev Fluss cluster (exists); Slice 2 sinks for the reconciliation half | Source/sink semantics work with approved versions; reconciliation identifies and handles partial visibility |
 | `SIG-FAIL-001` (checkpoint/continuity failure → safe halt) | MiniCluster failure injection: force checkpoint failure, assert fixed-delay restart ×3 then fail-job; decision-suppression + safe-halt half requires the decision operators | **Slice 3** for full semantics (shell-level checkpoint-failure test can precede) | New decisions suppressed; one idempotent safety halt published; no Arrow REST call from Flink |
-| `SIG-PERF-001` (variable-baseline and peak workload, decision p99) | Phase 6 perf campaign: soak suite (`run-full-suite.sh`) on the current 1,024-instrument / 20,480 t/s envelope; record decision p99, state size, checkpoint duration/size, memory | **Phase 6** + decision path (Slice 3) | p99 decision latency, state, checkpoint, memory within defined limits (current-phase envelope; 60k/90k deferred) |
+| `SIG-PERF-001` (variable-baseline and peak workload, decision p99) | Phase 6 perf campaign: soak suite (`run-full-suite.sh`) on the current 1,024-instrument / 20,480 t/s envelope; record decision p99, state size, checkpoint duration/size, memory | **Phase 6** + decision path (Slice 3) | p99 decision latency, state, checkpoint, memory within defined limits (current-phase envelope; 50k deferred; 90k retired, DEC-036) |
 | Beyond-lateness discard counter (REQ-FC-006) | Code: replace silent late-drop with `.sideOutputLateData(tag)` on the window operator + counting side-output; metric `compute.candles.late.dropped` carrying instrument/window/lateness/reason | Code change — Slice 2 backlog | Discard metric emitted with instrument/window/lateness/reason |
 | Source throughput/lag, watermark lag, dedup state size (REQ-FC-010) | Code: connector source-throughput metric, timestamp-assigner watermark-lag metric, dedup state-size probe (entry counter or sampled `MapState` size) | Code change — Slice 2 backlog | REQ-FC-010 metrics emitted |
 | `RESTART_MAX_ATTEMPTS` / `RESTART_DELAY_MS` pinning | Code: `intValue` → `requirePinnedInt`/`requirePinnedLong` in `SignalJobConfig.from` + rejection tests in `SignalJobConfigTest` (10-minute change, no cluster) | None — implementable now | Config test rejects deviations from 3 / 30000 |

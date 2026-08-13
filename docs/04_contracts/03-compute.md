@@ -4,7 +4,7 @@
 
 The Signal Flink job consumes `raw_table_1`, performs bounded fingerprint deduplication, computes final 15-second event-time candles, and passes forming-bar state directly to Business Logic in the same job.
 
-**Tier-scoped deployment (current testing phase):** the current phase builds and validates the Signal job on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 60,000 ticks/s variable baseline and 90,000 ticks/s peak remain the deferred production target (`PERF-PROD-60000-001` / `PERF-PROD-90000-001`); per-instrument windowing, dedup, and candle logic are identical across envelopes — only the load/acceptance profile differs.
+**Tier-scoped deployment (current testing phase):** the current phase builds and validates the Signal job on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s variable baseline remains the deferred production target (`PERF-PROD-60000-001`; `PERF-PROD-90000-001` retired with the peak campaign, DEC-036); per-instrument windowing, dedup, and candle logic are identical across envelopes — only the load/acceptance profile differs.
 
 ## State
 
@@ -31,7 +31,7 @@ A candle is final from its first write: the final row emits at first window fire
 
 ## Deduplication horizon
 
-The `dedup_horizon` is the maximum supported append retry, connector replay/rewind, checkpoint restore rewind, broker replay, and approved operational replay interval, plus a documented safety margin. `DEDUP_TTL_MS` SHALL be exactly `300000` (5 minutes) in MVP; deployment SHALL reject any other value. The implementation SHALL report accepted event rate, dedup entries, serialized entry bytes, physical backend/checkpoint bytes, and restore duration at the variable 60,000 ticks/s average baseline and 90,000 ticks/s peak.
+The `dedup_horizon` is the maximum supported append retry, connector replay/rewind, checkpoint restore rewind, broker replay, and approved operational replay interval, plus a documented safety margin. `DEDUP_TTL_MS` SHALL be exactly `300000` (5 minutes) in MVP; deployment SHALL reject any other value. The implementation SHALL report accepted event rate, dedup entries, serialized entry bytes, physical backend/checkpoint bytes, and restore duration at the variable 50,000 ticks/s average baseline. (The 90,000 ticks/s peak is retired, DEC-036.)
 
 ## Typed handoff to Business Logic
 

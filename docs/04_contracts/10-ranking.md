@@ -20,7 +20,7 @@ Same winner with unchanged parameters creates audit only. Changed parameters cre
 
 ## SLO and acceptance
 
-Trigger tick to instruction commit p99 is <100 ms at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak (20 ticks/s/instrument), with p50/p95/p99 and full measurement context. Tests cover ranges, NaN/null, ties, churn, capacity, stale state, replay, audit, and workload latency.
+Trigger tick to instruction commit p99 is <100 ms at the variable 50,000 ticks/s average baseline (≈16.7 ticks/s/instrument; 90,000 ticks/s peak retired, DEC-036), with p50/p95/p99 and full measurement context. Tests cover ranges, NaN/null, ties, churn, capacity, stale state, replay, audit, and workload latency.
 
 ## Requirement traceability
 

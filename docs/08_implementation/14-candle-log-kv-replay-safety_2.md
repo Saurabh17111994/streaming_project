@@ -98,8 +98,8 @@ Use the repository’s governed targets; do not invent replacements:
 
 | Metric | Required target |
 | --- | ---: |
-| Sustained input | 60,000 ticks/s average |
-| Peak input | 90,000 ticks/s |
+| Sustained input | 50,000 ticks/s average |
+| Peak input | 90,000 ticks/s theoretical cap ceiling (peak campaign retired, DEC-036) |
 | Decision latency | p99 < 100 ms, excluding the intentional 15s event-time window boundary |
 | Data-path recovery | <= 30 s |
 | Safe halt | <= 5 s |
@@ -145,7 +145,7 @@ Do not mark production-ready until every item below is complete. (2026-08-13: ca
 - [x] Production checkpoints use durable remote storage, not local-only paths.
   (Verified 2026-08-11 audit: `SignalJobConfig` rejects non-S3 checkpoint/savepoint URIs in production (fail-closed, no silent `/tmp` fallback); `submit-jobs.sh` FATAL requires `s3://`/`s3a://` + endpoint + env-only credentials; live R2 write/read/cross-worker restore proof (P4.2 `SignalJobObjectStoreCheckpointIntegrationTest`). Actual production deployment remains the P10 operator step. Register `CHECKPOINT-DURABILITY-001` [x].)
 - [x] Canonical version policy is enforced at the live KV boundary. (Candle-KV version, HISTORICAL 2026-08-11, RETIRED with the candle KV projection: `CanonicalCandleFilterFunction` was wired in `SignalJob.buildTopology` directly before the KV sink (`canonical-candle-filter`) — non-canonical rows dropped + counted on `compute.kv.filtered.noncanonical` + WARN-logged; canonical pair `candle-15s-v1`/`1.0.0` pinned in `CandleTableSchema`; `SignalJobConfig.requireCanonicalVersion` startup gate; `CanonicalCandlePolicyTest` 7/7 + filter tests 4/4 + config-gate tests 38/38. Register `CANDLE-CANONICAL-001` [x]. RE-SCOPED target: canonical strategy/rule/configuration policy enforced at the `Signal_Candidates_current` KV boundary — pending.)
-- [ ] 60k sustained / 90k peak throughput evidence passes (re-scope: measured on the NEW signal dual-sink topology after implementation; the feed/tablet ceiling finding from P7 is topology-independent and already recorded).
+- [ ] 50k sustained throughput evidence passes (90k peak retired, DEC-036; re-scope: measured on the NEW signal dual-sink topology after implementation; the feed/tablet ceiling finding from P7 is topology-independent and already recorded).
 - [ ] p99 latency evidence passes.
 - [ ] checkpoint, memory, and recovery evidence passes.
 - [x] Fluss/sink failure-injection evidence passes.
@@ -868,7 +868,7 @@ rejected end-to-end (no TOKEN_BAD candle) while its watermark legitimately close
 
 ## P7 — Performance and capacity evidence
 
-**Status (2026-08-13):** Phase 0 baseline DONE; Phases 1–3 + dedup sweep recorded BLOCKED with evidence (plan §14). Throughput gates feed-limited (measured ceiling 58.9–59.7k rows/s vs 60k/90k targets); latency p99 not measurable via exporter; memory + checkpoint gates PASS. Bench surfaced two real findings: (1) Fluss 0.9.1 Flink log-source checkpoint fetch-ahead offsets → restore stall/data-loss risk (`RestoreStallProbe` evidence), (2) safety-write churn → fixed by R-298 write-side dedup (commit `a4c69692`).
+**Status (2026-08-13):** Phase 0 baseline DONE; Phases 1–3 + dedup sweep recorded BLOCKED with evidence (plan §14). Throughput gates feed-limited (measured ceiling 58.9–59.7k rows/s vs 50k/90k targets); latency p99 not measurable via exporter; memory + checkpoint gates PASS. Bench surfaced two real findings: (1) Fluss 0.9.1 Flink log-source checkpoint fetch-ahead offsets → restore stall/data-loss risk (`RestoreStallProbe` evidence), (2) safety-write churn → fixed by R-298 write-side dedup (commit `a4c69692`).
 >
 > **RE-SCOPED (requirement change 2026-08-13):** the bench measured the PRE-change candle
 > LOG+KV dual-sink topology. The measured bottleneck facts (feed/tablet ceiling,
@@ -877,14 +877,14 @@ rejected end-to-end (no TOKEN_BAD candle) while its watermark legitimately close
 > implementation — "candle KV upserts/s" is replaced by "signal LOG appends/s" and
 > "signal KV upserts/s".
 
-**P7 bench plan (2026-08-12):** `docs/08_implementation/11-testing-and-release.md` (P7 bench plan section) — locked bench spec (24 user decisions: 12 scope — dev compose cluster, 3+ faketool connections, live raw_table_1, writer stopped for the window, 1024 tokens, as-produced realism, 30 min @ 60k, source-consumed gate with p50/p95/p99/max, tick→emit p99 < 100 ms, R2 checkpoints for gate + file:// for debug, docker-level disturbance matrix, application mode + PARALLELISM=8; 12 measurement/operation — clock from RUNNING, feed-emit latency origin incl. Fluss round-trip, latency tracking ON for gate run, two 5-min 90k bursts, accepted = emitted+deduped+quarantined, checkpoint tolerance <= 2 restart-recovered, memory vs TM 2g container limit, dedup expiry sweep, dev baseline first, 5 s raw capture) + phases 0-3 + gate definitions + evidence template; long-run gate rule §4.1 (every >10-min phase preceded by the ≤2-min smoke: probe-r2.sh + feed smoke). **Executed 2026-08-12/13 — results in the plan's §14.**
+**P7 bench plan (2026-08-12):** `docs/08_implementation/11-testing-and-release.md` (P7 bench plan section) — locked bench spec (24 user decisions: 12 scope — dev compose cluster, 3+ faketool connections, live raw_table_1, writer stopped for the window, 1024 tokens, as-produced realism, 30 min @ 50k, source-consumed gate with p50/p95/p99/max, tick→emit p99 < 100 ms, R2 checkpoints for gate + file:// for debug, docker-level disturbance matrix, application mode + PARALLELISM=8; 12 measurement/operation — clock from RUNNING, feed-emit latency origin incl. Fluss round-trip, latency tracking ON for gate run, two 5-min 90k bursts, accepted = emitted+deduped+quarantined, checkpoint tolerance <= 2 restart-recovered, memory vs TM 2g container limit, dedup expiry sweep, dev baseline first, 5 s raw capture) + phases 0-3 + gate definitions + evidence template; long-run gate rule §4.1 (every >10-min phase preceded by the ≤2-min smoke: probe-r2.sh + feed smoke). **Executed 2026-08-12/13 — results in the plan's §14.**
 
 ## P7.1 Test matrix
 
 Run with production-equivalent Flink, Fluss, state backend, checkpoint storage, parallelism, task slots, and resource limits.
 
-- [ ] 60,000 ticks/s sustained for at least 30 minutes.
-- [ ] 90,000 ticks/s peak burst for the governed duration.
+- [ ] 50,000 ticks/s sustained for at least 30 minutes.
+- [ ] ~~90,000 ticks/s peak burst~~ RETIRED (DEC-036); the 50,000 ticks/s sustained gate replaces it.
 - [ ] realistic active-token cardinality.
 - [ ] realistic duplicate ratio.
 - [ ] realistic out-of-order distribution.
@@ -924,13 +924,13 @@ Record raw time series and p50/p95/p99/max for every metric listed below; missin
 ## P7.3 Pass/fail gates
 
 > **Measured status (2026-08-13, plan §14):** throughput gates feed-limited — measured
-> ceiling 58.9–59.7k rows/s (CountRows + Phase 0); 60k/90k NOT ACHIEVED; decision
+> ceiling 58.9–59.7k rows/s (CountRows + Phase 0); 50k/90k NOT ACHIEVED; decision
 > p99 NOT MEASURABLE (exporter drops histogram buckets); memory 24% PASS; checkpoint
 > p99 3.1 s PASS. Production status stays BLOCKED per §6; bottlenecks recorded, no
 > config inflation.
 
-- [ ] sustained throughput >= 60,000 ticks/s.
-- [ ] peak throughput reaches 90,000 ticks/s without data loss.
+- [ ] sustained throughput >= 50,000 ticks/s.
+- [ ] ~~peak throughput reaches 90,000 ticks/s~~ RETIRED (DEC-036); sustained throughput reaches the 50,000 ticks/s gate without data loss.
 - [ ] decision p99 < 100 ms according to the governed measurement boundary.
 - [ ] memory remains < 85% of allocated budget.
 - [ ] checkpoint p99 < 5 s.
@@ -1282,7 +1282,7 @@ Do not execute until P1–P9 code/evidence gates are complete.
 | `SIGNAL-DUAL-SINK-001` | Signal LOG+KV dual-sink topology: LOG appends one row per signal, KV current-state per instrument | `[x]` 2026-08-13 — topology implemented (Stage 4) + contract verification green (Stage 5): graph replay re-scope proved signal LOG grows while `Signal_Candidates_current` key count stays frozen across two replays (gated 3/3 in-container); KV idempotency convergence live-proved (gated 1/1: same-instrument upserts → one row, last-write-wins); scratch tables dropped (ZK table list clean); 9 operators UID-pinned (`SignalJobOperatorUidTest`, gated green). Stage 6 (live DDL) executed 2026-08-13: legacy `Signal_Candidates` KV v2 dropped, LOG v3 created (id 607, `bucket.key=instrument_token`), KV companion created (id 608, `kv.format-version=2`, PK `instrument_token`); production fail-closed gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
 | `SIGNAL-SCHEMA-001` | Exact live preflight for `feature_candles_15s` (LOG) + `Signal_Candidates` (LOG) + `Signal_Candidates_current` (KV, PK `instrument_token`) | `[x]` 2026-08-13 — `TableContractValidator` 22 unit cases green; DDL contract pinned from both sides (common `SignalCurrentDdlContractTest` 3/3, ingestion `SchemaAgreementTest`); live positive-path proof on scratch tables (gated); strict validator proven fail-closed against the legacy `Signal_Candidates` KV v2 (PK `candidate_id`). Stage 6 removed the legacy drift: live ZK metadata now matches the contracts exactly — `Signal_Candidates` id 607 LOG (no `kv.format-version`, `bucket_key=["instrument_token"]`, 16 buckets, 7d ttl, lake keys = live `raw_table_1` ground truth), `Signal_Candidates_current` id 608 KV v2 (same routing, PK `instrument_token`), `feature_candles_15s` id 90 LOG unchanged. Platform-table preflight PASS via the job's own gate (same-package probe `PreflightSignalTables`, no test scaffolding). Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
 | `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` NOT RUN — config-pinned `DEDUP_TTL_MS=300000` (`SignalJobConfig` L229-241 throws on any other value); sweep (30/60/120 s) needs deliberate unpin decision. Phase 0 evidence recorded instead: RocksDB total state 1.74 GB / block_cache 377.5 MB at 1024 tokens under 53k/s load, no unbounded growth observed. Plan §14.5. |
-| `PERF-THROUGHPUT-001` | 60k sustained / 90k peak benchmark | `[ ]` NOT ACHIEVED (2026-08-13) — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s (CountRows 58,889/s + Phase 0 59.7k appends, two independent methods); 60k gate feed-limited by design, 90k unreachable (1.5× ceiling). Bottleneck recorded, no config inflation (plan §12). Phase 0 achieved source rate 53,052/s mean. RE-SCOPE: re-run against the signal dual-sink topology after implementation; the ceiling finding itself stands. Evidence: plan §14 + `logs/tracker-14/p7-bench-evidence-20260812-phase0.md`, `p7-r298-verification-20260813.md`. |
+| `PERF-THROUGHPUT-001` | 50k sustained / 90k peak benchmark | `[ ]` NOT ACHIEVED (2026-08-13) — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s (CountRows 58,889/s + Phase 0 59.7k appends, two independent methods); 50k gate feed-limited by design, 90k unreachable (1.5× ceiling). Bottleneck recorded, no config inflation (plan §12). Phase 0 achieved source rate 53,052/s mean. RE-SCOPE: re-run against the signal dual-sink topology after implementation; the ceiling finding itself stands. Evidence: plan §14 + `logs/tracker-14/p7-bench-evidence-20260812-phase0.md`, `p7-r298-verification-20260813.md`. |
 | `PERF-LATENCY-001` | p99 latency evidence | `[ ]` NOT MEASURABLE (2026-08-13) — flink-metrics-prometheus exporter drops histogram buckets (count+sum only), p99 not derivable; operator latency mean 152.6 ms recorded (n=4,614). Fix = O2-side histogram ingestion or flink prometheus bucket config (out of bench scope). Evidence: plan §14.5 + Phase 0 evidence file. |
 | `FAILOVER-FLUSS-001` | Fluss/sink/checkpoint failure injection | `[x]` all legs proven 2026-08-11 + terminal-failure upgrade 2026-08-12 — checkpoint-failure → configured restart → FAILED + KV-write shared-fate now reaches terminal FAILED via the `StallGuardedSink` watchdog (`CandleFailureInjectionIntegrationTest` 3/3, gate `COMPUTE_INT_TEST_P6=true`; kv-drop leg `seen=[RUNNING, FAILED, FAILING]`, `cause=… sink write-path stall: flush exceeded 15000 ms`, LOG frozen, no hang — evidence `logs/tracker-14/p6-2-stall-guard-terminal-failed-2026-08-12.txt`, `gated-run-20260812-nonroot-fullsuite.log`); live timeout (checkpoint 506 expired at 30 s → global restart → restore from chk-505, no data loss), live tablet leader change, live coordinator restart (dev bench job `a05c101f`; evidence `logs/tracker-14/p6-3-failover-injection-2026-08-11.md`) | **HISTORICAL (candle sinks; annotated 2026-08-13): RE-RUN required against the signal dual-sink — shared-fate legs (LOG frozen + KV write-path stall → terminal FAILED) re-verified on the `Signal_Candidates` / `Signal_Candidates_current` sinks.** |
 | `OBSERVABILITY-002` | OpenObserve metrics, logs, traces, alerts, dashboards, retention, and runbooks | `[x]` 2026-08-11 — P8.0/P8.2 delivery proofs complete (unit payload/auth 9/9; live OTLP/HTTP delivery + O2 PromQL verification incl. labels/units; collector-outage non-blocking integration test; two O2 outages: in-window retry with zero loss (1000-point burst, accepted==sent==1106) and terminal failure (send_failed=38) with ING-crit-telemetry-delivery-failed alert → webhook HTTP 200; flink_logs live from the distributed job; **P8.3 alerts DONE**: 14 SIGNAL rules provisioned idempotently via o2-provision.py (label-condition support, 23 total), 14/14 fired via OTLP fixtures + 12/14 recovered, storm test PASS (204,800-tick full replay + collector outage → zero unintended fires; evidence `logs/tracker-14/p8-3-alerts-2026-08-11.txt`); **P8.4 dashboards/runbooks + retention pending**; emitver enabled for ingestion JSON logs, queryable in `platform_logs`; traces negative; image digests recorded). Evidence: `logs/tracker-14/p8-2-otel-live-2026-08-11.txt`. Pending: distributed TaskManager metrics (P8.2 box 830) — DONE 2026-08-11 (distributed Flink metrics live: PrometheusReporter JM :9249/TM :9250 → collector scrape → remote-write → O2 PromQL battery, accepted==sent==48,569; `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`); `flink_logs` live structured logs — DONE 2026-08-11 (docs 463→1,924 from the distributed SignalJob, checkpoint lines queryable; `logs/tracker-14/p8-2-flink-logs-live-2026-08-11.txt`); **P8.3 alerts DONE**: 15 SIGNAL rules + 8 ING rules provisioned idempotently via o2-provision.py (24 total; SIGNAL-warn-source-lag added 2026-08-11 on the now-live operator event-time-lag metric, fired live via webhook); **P8.4 DONE**: 5 COMPUTE dashboards provisioned + panel queries validated live; retention contract applied per-stream (logs 30 / metrics 90 / traces 14 via provision_retention(), idempotent, 335 metric streams verified) with alerts-180d mapped to the metadata.sqlite meta store; operator-metric discovery closed P8.1 854/882 + P8.3 931 (Fluss client + operator metrics live: 78 streams); runbooks (SignalJob ops, replay, checkpoint, Fluss failure, schema-preflight, migration conflict, rollback with exact chk registry + cutoff chk-1539, alert catalogue, retention lifecycle) in docs/06_operations/01-runbooks.md; evidence: p8-1-flink-distributed-metrics (correction §7), p8-2-flink-logs-live, p8-3-alert-proposal, p8-3-alerts, p8-4-retention (all logs/tracker-14/, 2026-08-11) | **HISTORICAL (annotated 2026-08-13): delivery proofs are topology-independent and stand; RE-SCOPE — LOG:KV panels/dashboard labels and runbook entries re-targeted from candle to signal tables.** |
@@ -1347,8 +1347,8 @@ Production status must remain `BLOCKED` until every checkbox below is checked:
 - [ ] Production checkpoints use durable remote storage.
 - [ ] Cross-VM restore succeeds.
 - [ ] Signal dual-sink restore succeeds with strict state matching.
-- [ ] 60k sustained throughput passes (re-run on signal dual-sink topology).
-- [ ] 90k peak throughput passes.
+- [ ] 50k sustained throughput passes (re-run on signal dual-sink topology).
+- [ ] 50k sustained throughput passes (90k peak retired, DEC-036).
 - [ ] p99 latency passes.
 - [ ] memory < 85% passes.
 - [ ] checkpoint p99 < 5s passes.

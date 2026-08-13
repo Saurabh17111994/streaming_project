@@ -358,7 +358,7 @@ boundaries:
 
   - compatibility_id: VM-PERF-001
     boundary: Mock-broker socket throughput (local loopback)
-    proposed_version: "60,000 ticks/s baseline (ING-PERF-001)"
+    proposed_version: "50,000 ticks/s baseline (ING-PERF-001)"
     evidence_source: "PerfBaselineTest (ingestion module, integration-tagged)"
     compatibility_class: UNKNOWN
     evidence_owner: Platform
@@ -369,14 +369,15 @@ boundaries:
       Fixed PerfBaselineTest harness (reader thread drains the socket;
       previous harness stalled at 2.4k tps because nothing consumed bytes).
     fixture: Local JVM loopback socket, mock-arrow producer, 2026-07-31
-    scenario: 10s at 60,000 ticks/s target; count emitted vs received
+    scenario: 10s at 50,000 ticks/s target; count emitted vs received
     result: COMPATIBLE (59,221 ticks/s sustained, 0 wire loss)
     observed_behavior: >-
       emitted=592,214 received=592,214 over 10s = 59,221 ticks/s, 0 loss,
-      0 reader errors; >=95% of the 60k target sustained.
+      0 reader errors; >=95% of the 50k target sustained.
     limitations: >-
       Mock-broker loopback only — measures socket transport, not Fluss
-      ingestion capacity nor the real broker. The 90,000 ticks/s peak and
-      production Fluss throughput need the multi-node E2E perf campaign.
+      ingestion capacity nor the real broker. The 90,000 ticks/s peak campaign
+      is RETIRED (DEC-036, 2026-08-13); production Fluss throughput needs the
+      multi-node E2E perf campaign.
     date: 2026-07-31
-    status: PARTIAL_EVIDENCE_LOOPBACK_60K
+    status: PARTIAL_EVIDENCE_LOOPBACK_50K

@@ -39,14 +39,15 @@ Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.
 
 - **Candle tables are KV-only (2026-08-13 requirement, executed).** `feature_candles_15s` is the **KV upsert table** — PK exactly `(instrument_token, window_start)`, `bucket.key=instrument_token`, 16 buckets; one row per closed 15 s window per instrument, last-write-wins (replay converges, no row growth). The candle LOG+KV dual-sink era (`feature_candles_15s` LOG + `feature_candles_15s_current` KV, CANDLE-KV-REPLAY-001, DDL-22, `CandleMigrationTool`/`CandleMigrationBatchJob`/`run-batch.sh`) is **deleted** (code, DDL, tests — 2026-08-13).
 - **[LOG + KV] moves to the SIGNAL tables.** `Signal_Candidates` → **LOG** (append-only, one new row per found signal, never updated — reverses the R-084 KV conversion; routing key `instrument_token`). New `Signal_Candidates_current` → **KV current-state**, PK `(instrument_token)`, latest/active per instrument, supersession overwrites (resolves the R-084 dead-supersede-chain problem).
-- **Status:** docs + code updated 2026-08-13 (candle KV-only conversion executed: DDL 03 KV, manifest regen, `DdlBootstrap`, `CandleTableSchema`, `TableContractValidator.validateCandleKvTable`, KV sink serialization, tests, o2-provision.py; unit suites green 112/184/184, gated battery 10/10 across 7 classes); live dev `feature_candles_15s` recreated as KV 2026-08-13 (LiveSync drop+recreate: id 90 LOG → id 693 KV, preflight PASS — evidence `logs/tracker-14/p6-livesync-candle-kv-20260813.md`); recreated at 2d TTL the same day (id 693 → 697, datalake disabled — evidence `logs/tracker-14/ttl-live-recreate-2d-20260813.md`); batch 2 the same day recreated the 7 remaining 2d-set tables (Order_Lifecycle 699, suspected_discontinuities 700, Postback_Quarantine 701, Trade_Decisions 702, Ranking_Results 703, Portfolio_Reservations 704, Postback_Projection_Ledger 705 — also fixing pre-R-136/R-145 bucket keys + LOG→KV kind) — all ten 2d tables are now live at 2d TTL with **datalake disabled on the live tables** (dev deviation vs DDL `enabled=true`; Fluss 0.9.1 lake-enable is create-only — re-enable is a documented recovery, not an alter; probes must use log-scan reads, not the lake tier). Evidence `logs/tracker-14/ttl-live-recreate-2d-batch2-20260813.md`; full caveat in `02-schema-storage.md` Phase C lake-state note.
+- **Status:** docs + code updated 2026-08-13 (candle KV-only conversion executed: DDL 03 KV, manifest regen, `DdlBootstrap`, `CandleTableSchema`, `TableContractValidator.validateCandleKvTable`, KV sink serialization, tests, o2-provision.py; unit suites green 112/188/184, gated battery 10/10 across 7 classes); live dev `feature_candles_15s` recreated as KV 2026-08-13 (LiveSync drop+recreate: id 90 LOG → id 693 KV, preflight PASS — evidence `logs/tracker-14/p6-livesync-candle-kv-20260813.md`); recreated at 2d TTL the same day (id 693 → 697, datalake disabled — evidence `logs/tracker-14/ttl-live-recreate-2d-20260813.md`); batch 2 the same day recreated the 7 remaining 2d-set tables (Order_Lifecycle 699, suspected_discontinuities 700, Postback_Quarantine 701, Trade_Decisions 702, Ranking_Results 703, Portfolio_Reservations 704, Postback_Projection_Ledger 705 — also fixing pre-R-136/R-145 bucket keys + LOG→KV kind) — all ten 2d tables are now live at 2d TTL with **datalake disabled on the live tables** (dev deviation vs DDL `enabled=true`; Fluss 0.9.1 lake-enable is create-only — re-enable is a documented recovery, not an alter; probes must use log-scan reads, not the lake tier). Evidence `logs/tracker-14/ttl-live-recreate-2d-batch2-20260813.md`; full caveat in `02-schema-storage.md` Phase C lake-state note.
 - **Authority chain:** requirement change (user) → tracker 14 `14-candle-log-kv-replay-safety_2.md` → `docs/08_implementation/09-production-swarm.md` (P10 plan section, RE-SCOPED). Contract record: `04-business-logic.md` carries the requirement-change banner + re-scoped Outputs; `03-compute.md` is superseded on the candle-storage kind (its "candle output LOG-only" claim predates the 2026-08-13 KV-only conversion).
+- **Sustained-throughput gate re-scoped 60,000 → 50,000 ticks/s (2026-08-13, DEC-036).** The average-baseline acceptance gate is now **50,000 ticks/s** (≈16.7 ticks/s/instrument over 3,000 instruments); the **90,000 ticks/s capacity-peak campaign is RETIRED** (DEC-036) — the per-instrument-cap ceiling (3,000 × 30) remains only as a generator stress bound. Per-instrument hard cap (30 ticks/s) and the 3,000-instrument envelope are unchanged; the generator retains a 20 ticks/s/instrument capability (MOCK-UNIT-002). Code: `FixedScope.MAX_SUSTAINED_TICKS_PER_SEC` → 50_000 (`PerfBaselineTest` gate 50k/48k-floor); every forward-looking perf/acceptance/storage/DR row in docs was reconciled; executed bench plans/results (P7) stay locked as historical evidence.
 
 ### Fixed scope
 
 #### Implementation checklist
 
-- [x] Fixed-scope hard limits enforced (3,000 instruments; 60k/90k ticks/s; 30/instrument cap; INGESTION batch=1/wait=0; MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; no CEP; every tick -> raw_table_1; no Flink->Fluss->Flink round trip).
+- [x] Fixed-scope hard limits enforced (3,000 instruments; 50k sustained gate / 90k theoretical cap ceiling; 30/instrument cap; INGESTION batch=1/wait=0; MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; no CEP; every tick -> raw_table_1; no Flink->Fluss->Flink round trip).
   - Source: 01-foundation.md -> "Fixed scope" (orig L23)
   - Design: Design-ready | Implementation: Implemented | Evidence: Untested | Live-money: Blocked
   - Location: code/common/src/main/java/com/trading/common/config/FixedScope.java
@@ -54,9 +55,9 @@ Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.
 | Item | Fixed value |
 | --- | --- |
 | Broker delivery rate | Variable; no fixed per-instrument arrival interval |
-| Per-instrument rate | Expected baseline average 20 ticks/second; hard maximum 30 ticks/second |
+| Per-instrument rate | Expected baseline average ≈16.7 ticks/second at the 50k gate (generator retains 20 ticks/s capability, MOCK-UNIT-002); hard maximum 30 ticks/second |
 | Active instrument count | **3,000 instruments** (fixed per trading session; runtime changes require controlled restart) |
-| Total rate | **60,000 ticks/second average baseline** (= 3,000 × 20); **90,000 ticks/second capacity peak** (= 3,000 × 30) |
+| Total rate | **50,000 ticks/second average baseline** (≈ 3,000 × 16.7); **90,000 ticks/second theoretical cap ceiling** (= 3,000 × 30; peak campaign retired, DEC-036) |
 | Architecture | `Arrow → Ingestion → Fluss raw_table_1 → one Signal Flink job → Trade_Decisions`; `Positions → separate Babysitter Flink job` |
 | MVP CEP | Disabled. No CEP operator, CEP job, or CEP dependency permitted |
 | Raw data | Every accepted tick appended to `raw_table_1`; no accepted tick silently dropped |
@@ -106,7 +107,7 @@ Tasks must be completed in this sequence. Do not begin a later task until all ac
 
 | Sequence | Task | Component Dossier | |
 | --- | --- | --- | --- |
-| 1 | Make the mock broker per-instrument, variable, and deterministic | [`11-testing-and-release.md`](./11-testing-and-release.md#performance-benchmark-procedure) | Seeded variable profile averages 20 ticks/s/instrument at baseline, caps every instrument at 30 ticks/s, and supports the 90,000 ticks/s peak |
+| 1 | Make the mock broker per-instrument, variable, and deterministic | [`11-testing-and-release.md`](./11-testing-and-release.md#performance-benchmark-procedure) | Seeded variable profile averages ≈16.7 ticks/s/instrument at the 50k-gate baseline, caps every instrument at 30 ticks/s, and supports the 90,000 ticks/s theoretical cap ceiling (generator stress bound; peak campaign retired, DEC-036) |
 | 2 | Implement immediate, bounded ingestion writes | `docs/08_implementation/03-ingestion.md` | No batching; 80%/100% backpressure; per-tick append latency tracking |
 | 3 | Implement compact, bounded Signal-job state | `docs/08_implementation/04-signal-job.md` | Dedup state contains fingerprint+timestamps only; candle state contains OHLCV fields only; no CEP |
 | 4 | Bound candidate work and preserve in-job ranking | `docs/08_implementation/04-signal-job.md` (Ranking section) | MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; rejection codes; no Fluss round trip for ranking |
@@ -130,7 +131,7 @@ The required behavior above is verified by the canonical [Foundation and workloa
 Implementation is complete only when all conditions below are true:
 
 1. All tasks in this plan pass their acceptance checks.
-2. The 30-minute variable-baseline performance test and the 90,000 ticks/s peak-capacity campaign pass every applicable condition in the E2E test matrix.
+2. The 30-minute variable-baseline performance test passes every applicable condition in the E2E test matrix. (The 90,000 ticks/s peak-capacity campaign is retired, DEC-036.)
 3. Old fixed-20/50-ms, `75k`/`112.5k`/`150k` workload requirements are absent from active code, active documentation, CI gates, benchmark examples, and release criteria.
 4. MVP contains no CEP dependency or CEP implementation.
 5. Architecture unchanged: one Ingestion service, Fluss raw storage, one Signal job, one separate Babysitter job.

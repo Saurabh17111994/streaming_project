@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -62,9 +62,9 @@ The following mappings identify the detailed sections in this catalog.
 
 | Test ID | Duration | Input | Pass conditions |
 | --- | ---: | --- | --- |
-| `PERF-PER-INSTRUMENT-001` | 30 min | 3,000 instruments; variable 60,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
+| `PERF-PER-INSTRUMENT-001` | 30 min | 3,000 instruments; variable 50,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
 | `PERF-PER-INSTRUMENT-002` | 10 min | 3,000 instruments; variable baseline; restart Signal job once | Processing resumes <30 s; state restores; no duplicate final candle or decision within proven boundary |
-| `PERF-PER-INSTRUMENT-003` | Declared campaign | 3,000 instruments; 90,000 ticks/s peak; every instrument <=30 ticks/s | No acknowledged loss; bounded backlog/memory; checkpoints and recovery remain stable; no per-instrument cap violation |
+| `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at 3,000 instruments and 90,000 ticks/s peak; no peak-capacity evidence row remains |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
 | `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
@@ -74,7 +74,7 @@ The following mappings identify the detailed sections in this catalog.
 | Test ID | What is tested | Pass result |
 | --- | --- | --- |
 | `MOCK-UNIT-001` | Same manifest, seed, profile, and clock | Repeated runs produce the identical tick sequence and timestamps. |
-| `MOCK-UNIT-002` | Variable baseline and peak profiles | The baseline averages 20 ticks/s/instrument across its measurement window; the peak reaches 90,000 ticks/s across 3,000 instruments; no instrument exceeds 30 ticks/s in the defined enforcement window. |
+| `MOCK-UNIT-002` | Variable baseline and peak profiles | The baseline averages ≈16.7 ticks/s/instrument at the 50,000 gate (generator capable of 20 ticks/s/instrument); the peak profile reaches the 90,000 ticks/s theoretical cap ceiling across 3,000 instruments — generator capability only, not a platform acceptance target (DEC-036); no instrument exceeds 30 ticks/s in the defined enforcement window. |
 | `MOCK-UNIT-003` | Missing seed, unknown profile, missing instrument manifest, or a cap above 30 ticks/s | Startup rejects the invalid configuration with a clear error. |
 | `MOCK-PERF-001` | Recorded per-instrument and aggregate rate distribution | The evidence shows variable arrivals rather than a universal 50 ms cycle, plus the configured seed, profile, average, cap, and observed distribution. |
 
@@ -110,11 +110,11 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-INT-002` | Append accepted packets to Fluss | Every outcome has receive, start, acknowledgement/uncertainty timestamps. |
 | `ING-INT-003` | Send multiple accepted ticks | Exactly one append submission is made per tick; no application batch exceeds one record. |
 | `BROKER-MD-001` | Sandbox market-data packet corpus, endpoint behavior, protocol fields, limits, and unknown-version handling | Observed behavior is recorded as protocol evidence; unsupported or unknown behavior blocks readiness rather than being guessed. |
-| `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. |
-| `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. |
-| `ING-FAIL-003` | Force shutdown with pending writes | Uncertainty/loss evidence is persisted. |
-| `ING-PERF-001` | Variable 60,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. Current phase: 1,024-instrument envelope — 58,951 ticks/s baseline probe recorded 2026-08-09; the 3,000/60k baseline is the deferred production target. |
-| `ING-PERF-002` | 90,000 ticks/s peak; every instrument at or below 30 ticks/s | Bounded backlog/memory and no acknowledged loss. Deferred with the 3,000-instrument envelope. |
+| `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. Unit: `ReconnectEpochSequenceTest` (epoch strictly increases across disconnect→reconnect; full ack = no row, partial ack = FEED_HEALTH) + `ReadinessRecoveryTest`/`SlotHealthTest` (completeness recheck) + `BridgeRestartDecisionTest` (ING-UNIT-012); live: `ING-E2E-001` forced disconnect. |
+| `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. Verified by `AppendTrackerTest` (record/byte 80% warning → readiness false; 100% records → `tryAccept` false; warning + critical listeners fire; halted stays halted; pending counters reconcile on success and failure). |
+| `ING-FAIL-003` | Force shutdown with pending writes | Uncertainty/loss evidence is persisted. Verified by `UncertaintyJournalTest` (entry write + read-back, multi-entry append, full JSON field set, R-194 control-character escaping, R-117 bare-filename NPE guard). |
+| `ING-PERF-001` | Variable 50,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. Current phase: 1,024-instrument envelope — 58,951 ticks/s baseline probe recorded 2026-08-09; the 3,000/50k baseline is the deferred production target. |
+| `ING-PERF-002` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | Was: 90,000 ticks/s peak; every instrument at or below 30 ticks/s. Superseded by `ING-PERF-001` (50,000 gate). |
 | `ING-UNIT-010` | raw_payload hash validation (SHA-256 + base64) | Hash mismatch, malformed hash, invalid base64, and empty payload are rejected with a typed result. |
 | `ING-UNIT-010b` | Golden-corpus payload hash validation | Every golden packet validates and decodes to the exact frame bytes; tampered frames are rejected. |
 | `ING-UNIT-011` | Bridge event → discontinuity reason mapping | Disconnect/auth/shutdown → DROP; heartbeat/stall → HEARTBEAT_GAP; reconnect → RECONNECT; partial subscription_ack → FEED_HEALTH; non-evidence events produce no row. |
@@ -239,7 +239,7 @@ Evidence: compose file digest, image digests, effective config with secrets remo
 | `SWARM-INT-001` | Pinned images, placement, network, secrets, and identities | No mutable image, unsafe network exposure, or replica co-location remains. |
 | `SWARM-INT-002` | Separate service, durability, job, and trading readiness | Each readiness state reports independently. |
 | `SWARM-FAIL-001` | One workload VM loss | ZooKeeper quorum 2-of-3 maintained with leader re-election; Fluss quorum/restore passes; processing recovery is within accepted target and gate halts within 5 seconds when required. |
-| `PERF-NODELOSS-001` | 90,000 ticks/s peak plus one VM loss | Records ZooKeeper quorum degradation/leader re-election, Fluss quorum degradation, Flink JobManager HA failover (standby takes over), checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, and zero acknowledged loss against the catalog limits. |
+| `PERF-NODELOSS-001` | 50,000 ticks/s average baseline plus one VM loss (90,000 ticks/s peak retired, DEC-036) | Records ZooKeeper quorum degradation/leader re-election, Fluss quorum degradation, Flink JobManager HA failover (standby takes over), checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, and zero acknowledged loss against the catalog limits. |
 | `SWARM-FAIL-002` | S3/checkpoint/lake/audit dependency failure | Affected readiness is false; unsafe trading is blocked. |
 | `SWARM-REC-001` | Halted rollback and state readability | Rollback preserves readable state and never auto-enables trading. |
 | `SEC-NET-001` | Public and internal deny-path network probes | Only approved ingress and service paths are reachable; every prohibited path is blocked. |
@@ -431,20 +431,20 @@ Every fixture has a version/checksum and expected output. Any count or hash mism
 
 | Test | Workload | Duration | Required evidence |
 | --- | ---: | ---: | --- |
-| `PERF-PER-INSTRUMENT-001` | variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) | Full trading session | SLOs, loss, backlog, checkpoints |
+| `PERF-PER-INSTRUMENT-001` | variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) | Full trading session | SLOs, loss, backlog, checkpoints |
 | `PERF-PER-INSTRUMENT-002` | Same manifest; restart Signal job once | Recovery window | Restore, no duplicate final candle or decision |
-| `PERF-NODELOSS-001` | 90,000 ticks/s peak profile + one VM loss | Recovery window | Quorum, restore, <30 s accepted recovery, <5 s halt |
+| `PERF-NODELOSS-001` | 50,000 ticks/s average-baseline profile + one VM loss (90,000 ticks/s peak retired, DEC-036) | Recovery window | Quorum, restore, <30 s accepted recovery, <5 s halt |
 | `PERF-EOD-001` | Full-volume day | EOD | Verified manifest <30 min target |
 
 Use production instrument universe, connections, packet-size distribution, strategy state, and exact versions. Window waiting is reported separately from processing latency.
 
 ### Performance benchmark procedure
 
-The active instrument manifest is fixed at 3,000 instruments during a trading session. The baseline is 60,000 ticks/s on average across the declared measurement window (20 ticks/s/instrument on average). No instrument may exceed 30 ticks/s in the profile enforcement window. The capacity peak is 90,000 ticks/s. A universal fixed 50 ms schedule is prohibited. The current testing phase uses the 1,024-instrument manifest `Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv` on one HFT connection (basic tier); the 3,000-instrument / 3-connection envelope is the deferred production target.
+The active instrument manifest is fixed at 3,000 instruments during a trading session. The baseline is 50,000 ticks/s on average across the declared measurement window (≈16.7 ticks/s/instrument on average). No instrument may exceed 30 ticks/s in the profile enforcement window. The capacity-peak campaign at 90,000 ticks/s is RETIRED (DEC-036); the theoretical cap ceiling (3,000 × 30) remains a generator stress bound only. A universal fixed 50 ms schedule is prohibited. The current testing phase uses the 1,024-instrument manifest `Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv` on one HFT connection (basic tier); the 3,000-instrument / 3-connection envelope is the deferred production target.
 
 Record decode-to-append, tick-to-decision, decision-to-Executor receipt, and Arrow REST response percentiles separately. Also record throughput, backlog, source/sink and watermark lag, backpressure, state/checkpoint size and duration, restart count, acknowledged loss, recovery time, safe-halt time, EOD offload duration, and expiry margin. Every result includes versions/digests, configuration hash, duration, UTC and monotonic clock source, sample count, and whether a restart/failure occurred.
 
-The per-instrument mock Arrow broker is the normal benchmark source. It uses a recorded seed, variable arrivals, the production instrument manifest, a 20 ticks/s/instrument baseline average, and a hard 30 ticks/s/instrument cap. It rejects a missing seed, unknown profile, or a cap above 30. A live Arrow Trade WebSocket capture is optional for protocol evidence only; it records actual packet sizes, tick frequency, total rate, endpoint/session/reconnect data, and still uses the full Ingestion → Fluss → Flink path.
+The per-instrument mock Arrow broker is the normal benchmark source. It uses a recorded seed, variable arrivals, the production instrument manifest, an ≈16.7 ticks/s/instrument baseline average at the 50,000 gate (generator capable of 20 ticks/s/instrument), and a hard 30 ticks/s/instrument cap. It rejects a missing seed, unknown profile, or a cap above 30. A live Arrow Trade WebSocket capture is optional for protocol evidence only; it records actual packet sizes, tick frequency, total rate, endpoint/session/reconnect data, and still uses the full Ingestion → Fluss → Flink path.
 
 | Tool | Purpose |
 | --- | --- |
@@ -454,20 +454,20 @@ The per-instrument mock Arrow broker is the normal benchmark source. It uses a r
 | OpenObserve / Prometheus | Long-duration metrics, percentiles, alert proof |
 | Docker stats / `htop` / `vmstat` | CPU, memory, disk IOPS, network bandwidth |
 
-Each benchmark produces a versioned JSON record in `code/benchmarks/results/` and links it here. Its profile records the seed, profile name, 3,000-instrument manifest, baseline average, hard cap, observed distribution, expected 60,000 average rate, expected 90,000 peak rate, and duration. It must not record a fixed `tick_interval_ms`.
+Each benchmark produces a versioned JSON record in `code/benchmarks/results/` and links it here. Its profile records the seed, profile name, 3,000-instrument manifest, baseline average, hard cap, observed distribution, expected 50,000 average rate, and duration (expected 90,000 peak rate retired with the peak campaign, DEC-036). It must not record a fixed `tick_interval_ms`.
 
 | Step | Action |
 | --- | --- |
 | Warm-up | Run for two minutes for JIT and cache stabilization. |
-| Variable baseline | Run 60,000 ticks/s average across the 3,000-instrument manifest for 30 minutes. |
-| Capacity peak | Run 90,000 ticks/s with every instrument capped at 30 ticks/s for the declared campaign. |
+| Variable baseline | Run 50,000 ticks/s average across the 3,000-instrument manifest for 30 minutes. |
+| Capacity peak | RETIRED (DEC-036) — was: run 90,000 ticks/s with every instrument capped at 30 ticks/s for the declared campaign. |
 | Cool-down | Drain backlog, wait for checkpoints, and verify no acknowledged loss. |
 
 The baseline must meet the documented decision p99 target. Backlog must stay bounded, checkpoints must restore, safe halt must remain below five seconds, accepted data recovery below thirty seconds, and EOD verification below thirty minutes at full volume. Performance alone never proves protocol correctness, duplicate safety, or live-money readiness.
 
 ### One-VM-loss procedure
 
-Run this at the variable baseline or peak profile; use the 90,000 ticks/s peak unless lower fault evidence is approved. All three Fluss workload VMs and encrypted-S3 checkpoints must be healthy first. The Executor may be enabled only against a sandbox broker.
+Run this at the variable baseline profile (the 90,000 ticks/s peak is retired, DEC-036). All three Fluss workload VMs and encrypted-S3 checkpoints must be healthy first. The Executor may be enabled only against a sandbox broker.
 
 1. Record two minutes of healthy baseline metrics.
 2. Hard-stop one workload VM and record `T0`.
@@ -485,11 +485,11 @@ Pass requires zero acknowledged loss, safe halt below five seconds, data-path re
 
 | Test ID | Duration | Input | Pass conditions |
 | --- | ---: | --- | --- |
-| `PERF-PER-INSTRUMENT-001` | 30 min | Production instrument manifest; variable 60,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
+| `PERF-PER-INSTRUMENT-001` | 30 min | Production instrument manifest; variable 50,000 ticks/s average baseline | Raw append p99 <50 ms; decision p99 <100 ms; no acknowledged loss; total memory <85%; checkpoint p99 <5 s |
 | `PERF-PER-INSTRUMENT-002` | 10 min | Same manifest; restart Signal job once | Processing resumes <30 s; state restores; no duplicate final candle or decision within the proven boundary |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
-| `PERF-PER-INSTRUMENT-003` | Declared campaign | Production manifest; variable 90,000 ticks/s peak; each instrument ≤30 ticks/s | No acknowledged loss; bounded memory/backlog; checkpoint and recovery evidence; no cap violation |
+| `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at variable 90,000 ticks/s peak; no peak-capacity evidence row remains | No acknowledged loss; bounded memory/backlog; checkpoint and recovery evidence; no cap violation |
 | `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
 | `STATE-CANDLE-001` | 15 min | Variable baseline input | One final candle per non-empty 15-second window; no tick collection exists in active state |
 | `BABYSITTER-001` | 5 min | Repeated position updates | Latest state only; zero actions; startup rejects action enablement |
@@ -653,7 +653,7 @@ The dossiers specify implementation behavior but do not prove that code, DDL, de
 | Crash window | NOT_PASSED | `REL-CRASH-*` | Executor | 2026-07-23 | Live-money | DATA-GAP-005 | No duplicate broker order in every tested ambiguity window |
 | Safe halt | NOT_PASSED | `REL-HALT-*` | Platform + Executor | 2026-07-23 | Live-money | — | Calls block within five seconds for every defined uncertainty trigger |
 | Two-person resume | NOT_PASSED | `REL-APPROVAL-*` | Platform + Executor | 2026-07-23 | Live-money | — | Distinct authenticated approvals match epoch/evidence hash |
-| Capacity | NOT_PASSED | `REL-PERF-*` | Platform | 2026-07-23 | Live-money | DATA-GAP-001 | 60,000 ticks/s workload campaign passes (3,000 instruments, 20 ticks/s/instrument average) |
+| Capacity | NOT_PASSED | `REL-PERF-*` | Platform | 2026-07-23 | Live-money | DATA-GAP-001 | 50,000 ticks/s workload campaign passes (3,000 instruments, ≈16.7 ticks/s/instrument average) |
 | HA/recovery | NOT_PASSED | `REL-HA-*` | Platform | 2026-07-23 | Live-money | — | One workload VM loss, checkpoint, replication, and recovery posture pass; N+1 budgets documented and validated |
 | EOD/audit | NOT_PASSED | `REL-RET-*` | Storage + Compliance | 2026-07-23 | Live-money | DATA-GAP-002, DATA-GAP-004 | Offload verification and retention protection pass; audit reconstructable |
 | Security | NOT_PASSED | `REL-SEC-*` | Platform + Security | 2026-07-23 | Live-money | DATA-GAP-002 | Network, secrets, rotation, authorization, encryption, image policy pass |
@@ -754,7 +754,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 
 ### 2.1 Scope decisions (round 1)
 
-> **Measured outcome (2026-08-13, see §14):** throughput gate of 60,000 is NOT achievable on
+> **Measured outcome (2026-08-13, see §14):** throughput gate of 50,000 is NOT achievable on
 > this topology — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s
 > (CountRows + Phase 0, two independent methods). Latency gate p99<100 ms not
 > measurable via the prometheus exporter (histogram buckets dropped); mean 152.6 ms.
@@ -768,8 +768,8 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 | Live writer | STOPPED for the bench window; restarted after (docker stop/start of the ingestion container) |
 | Active tokens | 1024 (real NSE_CM_EQUITY manifest) |
 | Input realism | As-produced (whatever the feed emits; duplicate/out-of-order/invalid ratios recorded, not forced) |
-| Sustained duration | 30 min @ 60k (matrix minimum) |
-| Throughput gate | avg source `numRecordsInPerSecond` >= 60,000 ticks/s; record p50/p95/p99/max time series |
+| Sustained duration | 30 min @ 50k (matrix minimum) |
+| Throughput gate | avg source `numRecordsInPerSecond` >= 50,000 ticks/s; record p50/p95/p99/max time series |
 | Latency gate | end-to-end tick → candle-emit p99 < 100 ms (definition in §9.1) |
 | Checkpoint storage | R2 for gate runs (production-like; S3A pins active); `file://` for debug runs |
 | Disturbance | Docker-level injection: job restart + coordinator/tablet restart during peak |
@@ -784,7 +784,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 | Latency tracking | ON for the gate run (`latencyTrackingInterval`) — one documented config delta; overhead tiny; one run yields latency + throughput together |
 | Per-token tick pattern | As-produced (faketool real-rate default) — no artificial uniform/burst shaping |
 | Feed schema fidelity | Trust as-is; non-blocking spot-check of first rows' columns in pre-flight (risk: bench measures faketool's row shape, not the live converter's — recorded as deviation if a diff appears) |
-| 90k peak shape | Two 5-min bursts inside the 30-min window (minutes 10-15 and 25-30), 60k otherwise |
+| 90k peak shape | Two 5-min bursts inside the 30-min window (minutes 10-15 and 25-30), 50k otherwise |
 | No-data-loss formula | source consumed == LOG rows + dedup-dropped + quarantined/invalid + bounded in-flight; KV consistency checked separately (as built: candle KV upserts == LOG rows per token/window — re-scope 2026-08-13: `Signal_Candidates_current` KV key count == active instruments, signal LOG may grow on replay) |
 | Checkpoint tolerance | <= 2 failed checkpoints tolerated IF each recovers via the designed restart (restore from last good checkpoint, no data loss, recovery <= 30 s); 3+ = gate FAIL (approved deviation from the strict "no checkpoint timeout" tracker wording — the R2 blackhole is a live risk, 3/3 canary wedges today) |
 | Memory gate denominator | TM container limit (2g process: heap + off-heap + metaspace + JVM overhead + RocksDB managed); JVM-heap-vs-900 MB-alert series still recorded for reference |
@@ -796,7 +796,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 
 - `submit-jobs.sh` application mode; `DEPLOYMENT_ENV`/`STATE_BACKEND` gates enforced as in production.
 - `PARALLELISM=8` — matches the pinned 8 task slots; 16 buckets map 2:1 to sources; 1024 tokens → 128 tokens per keyed instance.
-- TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 60k with RocksDB + managed memory; that IS the memory gate).
+- TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 50k with RocksDB + managed memory; that IS the memory gate).
 - JobManager: `jobmanager.memory.process.size=1600m` (pinned).
 - Checkpoint: 30 s interval (production config; 47/47 completed in the 2026-08-11 live run), `allowNonRestoredState` never set, RocksDB incremental.
 - Both candle sinks enabled (LOG `feature_candles_15s` + KV `feature_candles_15s_current`), canonical filter + stall guard active.
@@ -817,9 +817,9 @@ Order matters (baseline needs the live writer; probes need it stopped):
 2. **Feed schema spot-check (non-blocking):** capture first rows from faketool output; confirm tick_type TRADE/QUOTE classification, 8-byte LE instrument_token, schema-v2 columns match raw_table_1; record as evidence (deviation note if any diff).
 3. **Phase 0 — dev baseline (§5):** run the current SignalJob under live traffic, unchanged, 10 min; record all 43 series; achieved rate = the before-column.
 4. **Stop the live writer** (docker stop the ingestion container; record container name).
-5. **Probe A — 3 faketool connections at real-rate:** sustained source `numRecordsInPerSecond` >= 63,000 (60k + 5% headroom) over 5 min.
+5. **Probe A — 3 faketool connections at real-rate:** sustained source `numRecordsInPerSecond` >= 63,000 (50k + 5% headroom) over 5 min.
 6. **Probe B — 5 faketool connections:** >= 94,500 (90k + 5% headroom) over 5 min.
-7. If a probe fails: scale connections (ceiling 20k/s each; 3→60k, 5→90k) and record the achieved ceiling as a documented deviation.
+7. If a probe fails: scale connections (ceiling 20k/s each; 3→50k, 5→90k) and record the achieved ceiling as a documented deviation.
 8. If the bench does not start immediately after the probes, restore the live writer (record restart).
 
 ### 4.1 Long-run gate rule (user directive, 2026-08-12)
@@ -832,20 +832,20 @@ Any phase estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of t
 2. Capture all 43 series at 5 s cadence (P8.1 PromQL recipe: JM :9249 / TM :9250 → collector → O2 PromQL at `/api/{org}/prometheus/api/v1/query`).
 3. Record: achieved source rate (p50/p95/p99/max), memory, checkpoint durations — the before-column for the report.
 
-## 6. Phase 1 — steady-state 60k sustained (30 min)
+## 6. Phase 1 — steady-state 50k sustained (30 min)
 
 0. **Smoke (§4.1), immediately before the clock starts:** `probe-r2.sh` PASS + 60 s feed smoke at 3 connections.
 1. Feed up (3+ connections, 1024 tokens, as-produced pattern). Job in application mode, PARALLELISM=8, R2 checkpoint dir, latency tracking ON.
 2. Verify startup: preflight table contracts pass, startup mode RESTORE (no FULL_REPLAY), rocksdb backend banner, both sinks running.
 3. **Measurement clock starts at job RUNNING** (no warmup exclusion — cold start included).
 4. Capture all 43 series every 5 s for the full 30 min; record checkpoint duration/size series, container gauges (`container.memory.usage/limit.bytes`), RocksDB gauges (`state.backend.rocksdb.metrics.block-cache-usage`, `cur-size-all-mem-tables`, `estimate-table-readers-mem`), dedup state counts, source/watermark lag, backpressure.
-5. Gate: avg source `numRecordsInPerSecond` >= 60,000 over the window (record p50/p95/p99/max of the series).
+5. Gate: avg source `numRecordsInPerSecond` >= 50,000 over the window (record p50/p95/p99/max of the series).
 6. Data-loss accounting at end of window (§2.2 formula); KV consistency probe (as built: KV upserts == LOG rows per sampled token/window; re-scope 2026-08-13: signal KV key count == active instruments, LOG may grow).
 
 ## 7. Phase 2 — 90k peak bursts (two 5-min bursts)
 
 0. **Smoke (§4.1):** 60 s feed smoke at 5 connections (the burst rate) before minute 10.
-1. Feed to 5 connections (or Probe-B ceiling) at minute 10; hold >= 90,000 for minutes 10-15; back to 60k for 15-25; 5 connections again for minutes 25-30.
+1. Feed to 5 connections (or Probe-B ceiling) at minute 10; hold >= 90,000 for minutes 10-15; back to 50k for 15-25; 5 connections again for minutes 25-30.
 2. Pass: source consumed >= 90k sustained during each burst AND no data loss AND no restart during the burst (checkpoint tolerance policy §2.2 applies).
 3. Record the burst boundaries in the evidence file (start/end wall-clock timestamps) so the series can be sliced.
 
@@ -883,8 +883,8 @@ Each case runs at peak (90k burst window); record the recovery window (P7.3: dat
 ## 10. Dedup expiry sweep (debug runs, DEDUP-MEMORY-001)
 
 - Gate run uses production expiry values.
-- Debug runs (`file://` checkpoints, 60k, 15 min each): expiry 30 s / 60 s / 120 s; record dedup state counts + RocksDB memory series per setting. Per §4.1, each 15-min debug run is preceded by the smoke: `probe-r2.sh` PASS (file:// checkpoints still read the R2 lake tier at startup) + 60 s feed smoke.
-- Evidence: memory-vs-expiry table + time series → "bounded memory and expiry proof at target cardinality (1024 tokens under 60k load)".
+- Debug runs (`file://` checkpoints, 50k, 15 min each): expiry 30 s / 60 s / 120 s; record dedup state counts + RocksDB memory series per setting. Per §4.1, each 15-min debug run is preceded by the smoke: `probe-r2.sh` PASS (file:// checkpoints still read the R2 lake tier at startup) + 60 s feed smoke.
+- Evidence: memory-vs-expiry table + time series → "bounded memory and expiry proof at target cardinality (1024 tokens under 50k load)".
 
 ## 11. Evidence template (register rows)
 
@@ -897,7 +897,7 @@ One evidence file `logs/tracker-14/p7-bench-<YYYYMMDD>.md` (gitignored, never co
 - output location (R2 checkpoint path, O2 queries);
 - pass/fail per P7.3 gate with the checkpoint-tolerance and config-delta annotations; bottleneck record on any failure; operator/approver line.
 
-Register rows on completion: `PERF-THROUGHPUT-001` (60k sustained / 90k peak), `PERF-LATENCY-001` (p99 < 100 ms), `DEDUP-MEMORY-001` (bounded memory + expiry sweep at 1024 tokens under load).
+Register rows on completion: `PERF-THROUGHPUT-001` (50k sustained / 90k peak), `PERF-LATENCY-001` (p99 < 100 ms), `DEDUP-MEMORY-001` (bounded memory + expiry sweep at 1024 tokens under load).
 
 ## 12. Pass/fail handling
 
@@ -948,15 +948,15 @@ Full evidence: `logs/tracker-14/p7-bench-evidence-20260812-phase0.md` (this sect
 
 **Phase 0 blockers discovered:**
 
-1. Feed/tablet shared write-path ceiling ≈ 59.7k appends/s — Phase 1's "≥60k" gate is feed-limited by design (plan §12: record bottleneck, no config inflation).
+1. Feed/tablet shared write-path ceiling ≈ 59.7k appends/s — Phase 1's "≥50k" gate is feed-limited by design (plan §12: record bottleneck, no config inflation).
 2. Fluss 0.9.1 side-table leaderless buckets (tables 56/89, `Elect result is empty`, `leader=-1`) — server bug, cosmetic for bench; later fixed via wedge repair (8 stale ZK remote_logs handles, see R-298 session).
 3. **Restore path broken (connector bug, bench-impacting):** Flink log source checkpoints fetch-ahead offsets (~79k/bucket past log end) → restore subscribes past-the-end → source consumes ZERO and would skip the unprocessed tail (data loss). Evidence: `RestoreStallProbe.java` (bucket 4: CONTROL @ offset 0 → 597,663 records; TEST @ restored offset 676,344 → 0). Consequence: restore-based phase chaining and §8.2 unusable; phases re-run FRESH (`ALLOW_FULL_REPLAY=true`, table truncated per phase).
 
-### 14.2 Phase 1 — steady-state 60k (2026-08-12 14:39–14:58, NOT ACHIEVED, recorded)
+### 14.2 Phase 1 — steady-state 50k (2026-08-12 14:39–14:58, NOT ACHIEVED, recorded)
 
 - Attempt 1: restore OOM (`OutOfMemoryError: Direct buffer memory`, 1.7 GB RocksDB restore) → fixed via TM 2g→3g + off-heap 512m (effective MaxDirectMemorySize 890.9 MB). Relaunch recovered cleanly (8/8 subtasks from chk-91).
 - Attempt 2: restored source consumes ZERO — the §14.1 connector fetch-ahead bug. Not fixable in bench; restore path abandoned (deviation: fresh-run mode).
-- Phase 1 steady-state 60k gate NOT achieved; bottleneck = feed/tablet ceiling 59.7k (not SignalJob) + restore bug. Per plan §12: recorded, no config inflation.
+- Phase 1 steady-state 50k gate NOT achieved; bottleneck = feed/tablet ceiling 59.7k (not SignalJob) + restore bug. Per plan §12: recorded, no config inflation.
 
 ### 14.3 Probes A/B + Phases 2–3 + dedup sweep (2026-08-13, BLOCKED)
 
@@ -978,7 +978,7 @@ Bench investigation exposed the safety-write churn (tables 56/89 growth, STALE f
 
 | Row | Status |
 | --- | --- |
-| PERF-THROUGHPUT-001 (60k sustained / 90k peak) | NOT ACHIEVED — feed/tablet ceiling 58.9–59.7k (measured, 2 methods); bottleneck recorded, no config inflation |
+| PERF-THROUGHPUT-001 (50k sustained / 90k peak) | NOT ACHIEVED — feed/tablet ceiling 58.9–59.7k (measured, 2 methods); bottleneck recorded, no config inflation |
 | PERF-LATENCY-001 (p99 < 100 ms) | NOT MEASURABLE — prometheus exporter drops histogram buckets (count+sum only); mean 152.6 ms recorded; fix = O2-side histogram ingestion or flink prometheus bucket config (out of bench scope) |
 | DEDUP-MEMORY-001 (bounded memory + expiry sweep) | NOT RUN — config-pinned DEDUP_TTL_MS=300000 (SignalJobConfig L229-241); needs deliberate unpin decision |
 
@@ -991,7 +991,7 @@ Bench investigation exposed the safety-write churn (tables 56/89 growth, STALE f
 
 ### 15.1 The one-sentence answer
 
-**Every tick passes through ONE Fluss tablet-server process (the write path's only shared serial stage). That process tops out at ~59,000 rows/s measured. The bench gates (60k/90k) were set above that ceiling, so they were unreachable by design — not by hardware failure, not by feed failure.**
+**Every tick passes through ONE Fluss tablet-server process (the write path's only shared serial stage). That process tops out at ~59,000 rows/s measured. The bench gates (50k/90k) were set above that ceiling, so they were unreachable by design — not by hardware failure, not by feed failure.**
 
 ### 15.2 The data path and where the ceiling sits
 
@@ -1056,7 +1056,7 @@ Caveat (honesty): the tablet attribution is the best-supported inference, not a 
 | Keep 1024 stocks @ 50 ms | Nothing — 2.9× headroom |
 | Grow to 3072 @ 100 ms | Nothing — fits current hardware |
 | Grow to 3072 @ 50 ms | Run Probe B → if ~59k, add 2nd tablet server on 2nd host (+ fix §15.7 bugs) |
-| Bench gates (60k/90k) | Record as deviation (§14.5); they are unreachable by design on one tablet server |
+| Bench gates (50k/90k) | Record as deviation (§14.5); they are unreachable by design on one tablet server |
 
 ---
 

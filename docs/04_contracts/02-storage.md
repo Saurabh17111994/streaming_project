@@ -8,7 +8,7 @@ Exact Fluss DDL properties are version-gated; unsupported syntax is not invented
 
 ## Production topology
 
-Three Fluss replicas/quorum are placed across the three workload VMs with anti-co-location. One-VM-loss tests at variable 60,000 ticks/s average baseline and 90,000 ticks/s peak are mandatory.
+Three Fluss replicas/quorum are placed across the three workload VMs with anti-co-location. One-VM-loss tests at the variable 50,000 ticks/s average baseline are mandatory. (The 90,000 ticks/s peak is retired, DEC-036.)
 
 ## Required schemas
 

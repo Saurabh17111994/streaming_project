@@ -99,7 +99,7 @@ Liveness, readiness, job health, trading readiness, and durability readiness are
 
 The production-like environment must test:
 
-- variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session with trigger-tick-to-instruction p99 below 100 ms
+- variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) for a full session with trigger-tick-to-instruction p99 below 100 ms
 - One workload VM loss at the per-instrument production rate
 - Data-path recovery under 30 seconds for accepted scenarios
 - Safe-halt under five seconds

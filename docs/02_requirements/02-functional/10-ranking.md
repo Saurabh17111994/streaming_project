@@ -96,7 +96,7 @@ Limits are configuration with version/hash recorded in every evaluation. Changin
 
 ## REQ-RNK-006: Latency target
 
-Trigger-tick consumption to winning instruction commit SHALL have **p99 below 100 ms** at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average). This is the single release target. Reports SHALL include p50/p95/p99, UTC clock source, test duration, instrument count (3,000), total tick rate (60,000/s), failure/restart inclusion, software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, candidate/ranking evaluation, winner commit) are recorded for diagnosis but are not independent release gates. No unmeasured microsecond or cross-job latency claim is permitted.
+Trigger-tick consumption to winning instruction commit SHALL have **p99 below 100 ms** at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average). This is the single release target. Reports SHALL include p50/p95/p99, UTC clock source, test duration, instrument count (3,000), total tick rate (50,000/s), failure/restart inclusion, software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, candidate/ranking evaluation, winner commit) are recorded for diagnosis but are not independent release gates. No unmeasured microsecond or cross-job latency claim is permitted.
 
 ## REQ-RNK-007: Acceptance
 

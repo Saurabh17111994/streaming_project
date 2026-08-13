@@ -41,7 +41,7 @@ The production stack must define:
 - Health checks and readiness dependencies.
 - Restart, update, rollback, and shutdown policies.
 - Encrypted overlay/TLS-protected transport mandatory for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, money-moving/state traffic).
-- N+1 resource budget: per-VM CPU, memory, network, disk, Flink slots, Fluss capacity, checkpoint bandwidth, and catch-up rate documented; post-loss validation at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average).
+- N+1 resource budget: per-VM CPU, memory, network, disk, Flink slots, Fluss capacity, checkpoint bandwidth, and catch-up rate documented; post-loss validation at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average).
 - Internal-only Fluss/tablet/checkpoint ports.
 - Swarm secrets and least-privilege identities.
 - Durable per-node Fluss volumes.
@@ -80,7 +80,7 @@ Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert Zo
 - Flink checkpoints/savepoints use encrypted versioned S3; Flink JobManager HA metadata (`high-availability.storageDir`) uses the same encrypted S3 store, with leadership in ZooKeeper.
 - Iceberg/audit storage uses encryption, versioning, and approved retention/lifecycle policy.
 - Operational projections are rebuildable from immutable events/audit or a tested backup.
-- Loss of any one workload VM is tested at 60,000 ticks/s variable average baseline (3,000 instruments; 20 ticks/s/instrument average).
+- Loss of any one workload VM is tested at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average).
 - RPO/RTO is recorded per failure scenario; no untested global claim is made.
 - Flink JobManager HA: `high-availability.type: zookeeper` with `high-availability.zookeeper.quorum` = the 3-node ensemble, `high-availability.storageDir` = encrypted S3, `high-availability.zookeeper.path.root: /flink`, per-cluster `high-availability.cluster-id`. Multiple standby JobManagers run across workload VMs; ZooKeeper elects the leader, and a standby takes over JobManager failure without a full job re-submission.
 - Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`, estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time.]
@@ -118,7 +118,7 @@ Any uncertain rollback returns the Executor gate to `HALTED`. Schema-breaking cl
 
 The production-like topology must prove:
 
-- variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session with decision p99 under 100 ms.
+- variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) for a full session with decision p99 under 100 ms.
 - One workload VM loss at the per-instrument production rate.
 - Data recovery under 30 seconds for accepted scenarios.
 - Safe-halt under five seconds.

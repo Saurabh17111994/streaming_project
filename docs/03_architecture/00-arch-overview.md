@@ -127,7 +127,7 @@ A missing, mismatched, stale, or unauthorized cross-scope operation fails closed
 | Local/integration | Docker Compose, single host | Development, deterministic tests, component integration |
 | Production | Docker Swarm, four VMs | Three workload/HA VMs plus one dedicated observability VM. Each workload VM: 500 GB SSD starting allocation. Final CPU, RAM, SSD IOPS/throughput, and network bandwidth are `EVIDENCE-BLOCKED` until `PERF-PROD-60000-001` and `FAIL-VM-LOSS-60000-001` pass. |
 
-Compose is not evidence of production HA. Production must prove three-node Fluss replication/quorum, anti-co-location (all three replicas of any critical Fluss/Flink role across separate VMs), encrypted S3 checkpoints, one-workload-VM loss tolerance, safe halt under five seconds, and data recovery under thirty seconds at 60,000 ticks/s (3,000 instruments). A cloud provider's uptime claim is not proof of application, broker-route, or order-path availability.
+Compose is not evidence of production HA. Production must prove three-node Fluss replication/quorum, anti-co-location (all three replicas of any critical Fluss/Flink role across separate VMs), encrypted S3 checkpoints, one-workload-VM loss tolerance, safe halt under five seconds, and data recovery under thirty seconds at 50,000 ticks/s (3,000 instruments). A cloud provider's uptime claim is not proof of application, broker-route, or order-path availability.
 
 ## Architecture references
 
@@ -183,7 +183,7 @@ Every managed and durable state category must have a defined capacity budget for
 | Postback quarantine | unresolved records | Per-quarantine entry ~2 KB | N/A (LOG durable state) | Manual disposition or expiry |
 | Suspected discontinuities | operational investigation window | Per-discontinuity ~512 B | N/A (LOG durable state) | Time-based cleanup |
 
-All bounds that depend on external configuration (instruments, portfolios, rate) must be workload-validated at the variable 60,000 ticks/s average baseline and the 90,000 ticks/s peak with every instrument capped at 30 ticks/s. State categories without a measured bound are evidence-gated until measurement.
+All bounds that depend on external configuration (instruments, portfolios, rate) must be workload-validated at the variable 50,000 ticks/s average baseline with every instrument capped at 30 ticks/s. (The 90,000 ticks/s peak is retired, DEC-036.) State categories without a measured bound are evidence-gated until measurement.
 
 ## Required logical state inventory
 

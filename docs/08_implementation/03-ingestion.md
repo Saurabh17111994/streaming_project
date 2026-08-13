@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation active; Phases 2a-2g complete; 296 tests (184 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: 60k/90k perf gates not achieved (measured feed ceiling ≈58.9k rows/s); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred |
+| Status | Implementation active; Phases 2a-2g complete; 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips. Open items: 50k perf gate not achieved (measured feed ceiling ≈58.9k rows/s; 90k peak campaign retired, DEC-036); ING-RES-001 real-backoff soak not yet run; 3,000-instrument / 3-connection envelope deferred |
 | Owner | Ingestion Team |
 | Requirements | `REQ-ING-001`–`REQ-ING-016` |
 | Build contract | `docs/04_contracts/01-ingestion.md` |
@@ -158,7 +158,7 @@ Fingerprint identity is best-effort, not broker-global identity.
 
 When Fluss latency, retry count, pending records, or pending bytes cross a configured threshold, the platform alerts immediately and automatic system checks determine readiness.
 
-**Resolution:** Fluss ingests up to 1-2 million ticks/s, and the platform's maximum is 90,000 ticks/s (3,000 instruments × 30 ticks/s). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required.
+**Resolution:** Fluss ingests up to 1-2 million ticks/s, and the platform's theoretical cap ceiling is 90,000 ticks/s (3,000 instruments × 30 ticks/s; sustained gate 50,000 per DEC-036). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required.
 
 **Remaining defensive bound:** Bounded pending-append limits (50,000 records / 64 MiB bytes default) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
 
@@ -200,8 +200,8 @@ Logs include service, instance, connection scope, decoder/protocol version, mani
 - `ING-FAIL-001` reconnect/resubscribe/epoch.
 - `ING-FAIL-002` bounded append backpressure (80% warning, 100% critical halt, no unrecorded drop).
 - `ING-FAIL-003` forced shutdown and uncertainty accounting.
-- `ING-PERF-001` variable 60,000 ticks/s average-baseline full session; broker_receive_to_fluss_ack p99 <50 ms.
-- `ING-PERF-002` 90,000 ticks/s peak with every instrument ≤30 ticks/s; bounded append backlog/memory and no acknowledged loss.
+- `ING-PERF-001` variable 50,000 ticks/s average-baseline full session; broker_receive_to_fluss_ack p99 <50 ms.
+- `ING-PERF-002` ~~90,000 ticks/s peak~~ RETIRED with the peak campaign (DEC-036, 2026-08-13); superseded by the 50,000 ticks/s gate (`ING-PERF-001`).
 
 Current golden-corpus coverage (Step 2 of the ingestion audit):
 
@@ -233,7 +233,7 @@ Before code is accepted, verify each item:
 
 #### Acceptance checks
 
-- At the variable 60,000 ticks/s average baseline and 90,000 ticks/s peak (3,000 instruments; every instrument ≤30 ticks/s), one append submission per accepted input tick; no application batch contains more than one record. The current testing phase uses the 1,024-instrument manifest on one connection; the 3,000-instrument / 3-connection envelope is the deferred target.
+- At the variable 50,000 ticks/s average baseline (3,000 instruments; every instrument ≤30 ticks/s; the 90,000 ticks/s peak is retired, DEC-036), one append submission per accepted input tick; no application batch contains more than one record. The current testing phase uses the 1,024-instrument manifest on one connection; the 3,000-instrument / 3-connection envelope is the deferred target.
 - `broker_receive_to_fluss_ack_p99_ms < 50` over a 30-minute 3,000-instrument production-manifest test.
 - Simulated slow Fluss writer reaches 80% warning condition before exceeding a pending limit.
 - Simulated unavailable Fluss writer reaches 100% condition without exceeding either limit and without an unrecorded drop.

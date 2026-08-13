@@ -28,14 +28,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * ING-PERF-001: 60k ticks/s baseline via MockArrowServer.
+ * ING-PERF-001: 50k ticks/s baseline via MockArrowServer.
  *
  * <p>Set {@code INGESTION_INT_TEST_PERF=true} to run.
  *
  * <p>Phase 7 certification (EXECUTION_PLAN §Phase 7): after Phases 1–6 the
- * pipeline must still meet the documented 58k ticks/s floor with 0 wire loss,
+ * pipeline must still meet the documented 48k ticks/s floor with 0 wire loss,
  * and the per-tick append path must stay under the 5 ms p99 budget
  * (docs/08_implementation/03-ingestion.md: broker_receive_to_fluss_ack p99 &lt; 5 ms).
+ *
+ * <p>Gate re-scoped 2026-08-13 (DEC-036): the sustained-baseline acceptance
+ * gate is 50,000 ticks/s (measured feed/tablet ceiling 58.9–59.7k rows/s);
+ * the 90,000 ticks/s peak-capacity test (ING-PERF-002) is retired.
  *
  * <p>Fixed harness: a dedicated reader thread drains the accepted socket
  * continuously while the producer writes, so throughput is measured by what
@@ -43,23 +47,23 @@ import org.slf4j.LoggerFactory;
  * with nobody reading (the previous harness stalled at ~2.4k tps and broke
  * the pipe because nothing consumed the bytes).
  */
-@DisplayName("ING-PERF-001: 60k ticks/s — Phase 7 certification")
+@DisplayName("ING-PERF-001: 50k ticks/s — Phase 7 certification")
 class PerfBaselineTest {
 
     private static final Logger LOG = LoggerFactory.getLogger(PerfBaselineTest.class);
 
     /**
      * Certification floor for the REAL pipeline hot path (plan §Phase 7 exit
-     * gate: ≥ 58k ticks/s). The mock-feed socket test uses its own 95% floor
-     * below — it is a feed simulator, not the pipeline, and its spin-paced
-     * delivery is hostage to host scheduler load (measured 57,959 under 10×
-     * load on a 16-core box).
+     * gate: ≥ 48k ticks/s, 95% of the 50k gate). The mock-feed socket test
+     * uses its own 95% floor below — it is a feed simulator, not the
+     * pipeline, and its spin-paced delivery is hostage to host scheduler
+     * load (measured 57,959 under 10× load on a 16-core box).
      */
-    private static final int FLOOR_TPS = 58_000;
+    private static final int FLOOR_TPS = 48_000;
 
-    /** Socket-harness floor: 95% of the 60k target (the original test's semantics). */
-    private static final int SOCKET_FLOOR_TPS = 57_000;
-    private static final int TARGET_TPS = 60_000;
+    /** Socket-harness floor: 95% of the 50k target (the original test's semantics). */
+    private static final int SOCKET_FLOOR_TPS = 47_500;
+    private static final int TARGET_TPS = 50_000;
     private static final int DURATION_SEC = 10;
 
     /** p99 append-latency budget in nanoseconds (docs/08_implementation/03-ingestion.md). */
@@ -71,8 +75,8 @@ class PerfBaselineTest {
     }
 
     @Test
-    @DisplayName("60k ticks/s for 10s — ≥58k floor, 0 loss, wire p99 < 5ms")
-    void baseline60k() throws Exception {
+    @DisplayName("50k ticks/s for 10s — ≥48k floor, 0 loss, wire p99 < 5ms")
+    void baseline50k() throws Exception {
         assumeTrue(perfEnabled(), "Skipping — set INGESTION_INT_TEST_PERF=true");
 
         ServerSocket server = new ServerSocket(0);
@@ -231,9 +235,10 @@ class PerfBaselineTest {
     }
 
     /**
-     * ING-PERF-002 (Phase 7): the real ingestion hot path — {@link RawTickWriter}
-     * through a stub converter — must sustain ≥ 58k ticks/s with p99 append
-     * latency (accept → ack) under 5 ms.
+     * ING-PERF-001 (hot-path evidence; formerly mislabeled ING-PERF-002 — the
+     * 90k peak test is retired 2026-08-13, DEC-036): the real ingestion hot
+     * path — {@link RawTickWriter} through a stub converter — must sustain
+     * ≥ 48k ticks/s with p99 append latency (accept → ack) under 5 ms.
      *
      * <p>This exercises the exact code R-214/R-215/R-140/R-252/R-276 touched:
      * row conversion, backpressure reservation, submit, and ack handling.
@@ -241,7 +246,7 @@ class PerfBaselineTest {
      * {@code FlussAppendAckTest} against a live cluster.
      */
     @Test
-    @DisplayName("hot-path append: ≥58k tps, p99 accept→ack < 5ms, 0 failures")
+    @DisplayName("hot-path append: ≥48k tps, p99 accept→ack < 5ms, 0 failures")
     void appendHotPathP99() throws Exception {
         assumeTrue(perfEnabled(), "Skipping — set INGESTION_INT_TEST_PERF=true");
 

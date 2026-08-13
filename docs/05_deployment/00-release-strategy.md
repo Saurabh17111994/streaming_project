@@ -70,7 +70,7 @@ Use Compose to validate:
 
 Use the four-VM Swarm topology to validate:
 
-- variable 60,000 ticks/s average baseline (3,000 instruments; 20 ticks/s/instrument average) for a full session
+- variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) for a full session
 - One workload VM loss at the per-instrument production rate
 - p50/p95/p99 SLO reporting with exact workload/version context
 - One workload VM loss at the normal baseline
@@ -103,7 +103,7 @@ Live-money deployment requires all of the following:
 - Unknown outcomes halt within five seconds and cannot retry automatically
 - Restart with unverifiable Executor state defaults to `HALTED`
 - Fencing prevents concurrent active Executors
-- variable 60,000 ticks/s average-baseline and 90,000 ticks/s peak workload tests passes
+- variable 50,000 ticks/s average-baseline workload tests passes (90,000 ticks/s peak retired, DEC-036)
 - One-workload-VM failure posture is proven
 - Data recovery target under 30 seconds is met for accepted scenarios
 - EOD offload and three-day retention safety are proven
