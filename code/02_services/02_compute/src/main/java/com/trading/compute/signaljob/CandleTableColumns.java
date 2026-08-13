@@ -11,13 +11,13 @@ import org.apache.flink.table.types.logical.VarCharType;
 
 /**
  * Physical column layout of the feature-candle rows written by the Signal job
- * to both the LOG ({@code feature_candles_15s}) and the KV current-state
- * ({@code feature_candles_15s_current}) sinks.
+ * to the LOG sink ({@code feature_candles_15s}) — the sole candle output
+ * since the KV current-state twin was retired 2026-08-13.
  *
  * <p>Must mirror {@link CandleTableSchema} (the shared 15-column v2 contract,
  * CANDLE-KV-REPLAY-001) — {@link #FIELD_COUNT} and {@link #NAMES} derive from
- * it, and {@code code/01_platform/02_sql/ddl/03_feature_candles_15s.sql} /
- * {@code 22_feature_candles_15s_current.sql} exactly. The Fluss sink's
+ * it, and {@code code/01_platform/02_sql/ddl/03_feature_candles_15s.sql}
+ * exactly. The Fluss sink's
  * {@code RowDataSerializationSchema} writes rows in table column order, so
  * emitted {@code GenericRowData} fields must be positioned accordingly
  * (R-012).

@@ -3,28 +3,18 @@ package com.trading.common.schema;
 import java.util.List;
 
 /**
- * Shared, versioned contract for the feature-candle tables
+ * Shared, versioned contract for the feature-candle table
  * (CANDLE-KV-REPLAY-001, docs/08_implementation/13-candle-log-kv-replay-safety.md).
  *
- * <p>Two tables carry the same 15-column v2 candle row
+ * <p>One table carries the 15-column v2 candle row
  * ({@code code/01_platform/02_sql/ddl/03_feature_candles_15s.sql},
  * R-012):
  * <ul>
  *   <li>{@link #LOG_TABLE} — immutable LOG, one final row per non-empty 15s
  *       window. The append-only evidence trail; duplicates from a full replay
- *       are permanent (no row-level delete on a LOG).</li>
- *   <li>{@link #CURRENT_TABLE} — KV companion keyed by
- *       {@code (instrument_token, window_start)}. Idempotent: a replayed or
- *       re-emitted candle upserts the same key instead of appending a
- *       duplicate, so consumers always read the canonical current row.</li>
+ *       are permanent (no row-level delete on a LOG). The sole candle output
+ *       since the KV current-state twin was retired 2026-08-13.</li>
  * </ul>
- *
- * <p>The KV primary key is a <em>superset</em> of the bucket key: the Fluss
- * connector requires only {@code bucket.key ⊆ primary key} (fluss-common
- * {@code TableDescriptor}: {@code pkColumns.containsAll(bucketKeys)}), so the
- * KV table keeps {@code bucket.key=instrument_token} and colocates with the
- * LOG table — every candle of a ticker lands in the same bucket in both
- * tables.
  *
  * <p>{@code output_ts} is emit metadata, not row identity: two rows for the
  * same key that agree on the business fields are the same canonical candle
@@ -41,20 +31,17 @@ public final class CandleTableSchema {
     /** Immutable LOG table (evidence trail). */
     public static final String LOG_TABLE = "feature_candles_15s";
 
-    /** KV current-state table (idempotent canonical rows). */
-    public static final String CURRENT_TABLE = "feature_candles_15s_current";
-
-    /** Both tables use 16 buckets. */
+    /** The table uses 16 buckets. */
     public static final int BUCKET_COUNT = 16;
 
-    /** Both tables route by instrument_token (colocation contract). */
+    /** The table routes by instrument_token. */
     public static final String BUCKET_KEY = "instrument_token";
 
     /**
      * The 15 candle columns in DDL index order (v2, R-012). Physical writer
      * layouts ({@code CandleTableColumns}) MUST derive from this list so the
-     * LOG and KV sinks, the preflight metadata validator, the migration tool,
-     * and the DDLs cannot drift apart.
+     * LOG sink, the preflight metadata validator, and the DDL cannot drift
+     * apart.
      */
     public static final List<String> COLUMNS = List.of(
             "instrument_token",
@@ -75,8 +62,8 @@ public final class CandleTableSchema {
 
     /**
      * Fluss {@code DataTypeRoot} name per column, DDL index order (tracker 14
-     * P1 — CANDLE-SCHEMA-002). Mirrors {@code 03_feature_candles_15s.sql} /
-     * {@code 22_feature_candles_15s_current.sql} exactly: 9× BIGINT
+     * P1 — CANDLE-SCHEMA-002). Mirrors {@code 03_feature_candles_15s.sql}
+     * exactly: 9× BIGINT
      * (instrument_token, window_start, window_end, open/high/low/close_paise,
      * volume, output_ts), 1× INTEGER (tick_count), 5× STRING (exchange,
      * symbol, algorithm_version, configuration_version, schema_version).
@@ -104,32 +91,28 @@ public final class CandleTableSchema {
             "STRING");
 
     /**
-     * DDL nullability intent per column (all NOT NULL in both DDLs).
+     * DDL nullability intent per column (all NOT NULL in the DDL).
      *
      * <p><b>Enforcement caveat (tracker 14 P1):</b> Fluss does not carry DDL
-     * NOT NULL into live metadata except on KV primary-key columns — a live
-     * LOG table reports every column nullable, and a KV table reports only its
-     * PK columns non-nullable (verified against the dev cluster 2026-08-10).
-     * The validator therefore enforces nullability ONLY where Fluss actually
-     * enforces it (KV PK columns); this list is the DDL intent used for the
-     * evidence report.
+     * NOT NULL into live metadata — a live LOG table reports every column
+     * nullable (verified against the dev cluster 2026-08-10). The validator
+     * therefore does not enforce nullability; this list is the DDL intent
+     * used for the evidence report.
      */
     public static final List<Boolean> COLUMN_NULLABLE_IN_DDL = List.of(
             false, false, false, false, false, false, false, false, false,
             false, false, false, false, false, false);
 
-    /** KV primary key of {@link #CURRENT_TABLE} (canonical row identity). */
-    public static final List<String> KEY_COLUMNS = List.of("instrument_token", "window_start");
-
     /**
      * Canonical algorithm/configuration pair (tracker 14 P2 —
-     * CANDLE-CANONICAL-001). A candle row may enter the KV current-state
-     * projection only when BOTH version columns equal these values exactly
-     * ({@code CanonicalCandlePolicy}); any other combination is non-canonical
-     * and must be excluded. The pair is pinned here as the single source of
-     * truth so {@code SignalJobConfig} (startup gate), the KV-sink boundary
-     * filter, and {@code CandleMigrationTool} (audit filter) cannot drift.
-     * Changing the pair is a governed change, not a tuning knob.
+     * CANDLE-CANONICAL-001). A candle row passes validation only when BOTH
+     * version columns equal these values exactly ({@code CanonicalCandlePolicy});
+     * any other combination is non-canonical and must be excluded — emitted
+     * candle LOG rows carry the canonical pair as part of their row identity
+     * for replay evidence. The pair is pinned here as the single source of
+     * truth so {@code SignalJobConfig} (startup gate) and the validation
+     * filter cannot drift. Changing the pair is a governed change, not a
+     * tuning knob.
      */
     public static final String CANONICAL_ALGORITHM_VERSION = "candle-15s-v1";
     public static final String CANONICAL_CONFIGURATION_VERSION = "1.0.0";

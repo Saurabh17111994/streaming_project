@@ -45,7 +45,6 @@ class ComputeOtlpLiveDeliveryTest {
         }
 
         ComputeOtlpEmitter.recordSchemaVersionRejection();
-        ComputeOtlpEmitter.recordKvFilteredNonCanonical();
         ComputeOtlpEmitter.recordDedupStateDelta(3L);
         ComputeOtlpEmitter.recordDedupExpiryIndexDelta(2L);
         ComputeOtlpEmitter.recordDedupBytesDelta(3L * 128L + 2L * 64L);
@@ -56,6 +55,6 @@ class ComputeOtlpLiveDeliveryTest {
                 "collector must accept the payload (received=" + code + ")");
         System.out.println("P8.2[live-delivery] collector=" + host + " http=" + code
                 + " metric=compute.invalid.byReason.schema-version"
-                + " (delta + kv-filtered + dedup gauges in the same payload)");
+                + " (delta + dedup gauges in the same payload)");
     }
 }
