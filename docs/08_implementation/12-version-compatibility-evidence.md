@@ -50,11 +50,23 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 5a | ZooKeeper ensemble (3.9.2) | VM-ZK-013 | `SWARM-INT-002`; `SWARM-FAIL-001`; `PERF-NODELOSS-001` | 3-node ensemble starts; quorum 2-of-3 survives one node loss; Fluss coordinator/tablet register via `zookeeper.address`; Flink JobManager HA leader election + failover works |
 
 **Partial evidence recorded (2026-08-09, SAFETY-INT-001):** `fluss-flink-2.2:0.9.1-incubating` resolves from Maven Central; `FlussSource.build()` performs a live `Admin.getTableInfo` (fail-fast); live KV upsert → primary-key lookup → `RowDataDeserializationSchema` read worked against Fluss 0.9.1-incubating. This covers the connector boundary partially (VM-FLUSS-CONN-007 remains `UNKNOWN` — full checkpoint/restore `COMPAT-FLINK-001` / `SIG-INT-001` still pending). Evidence: `docs/08_implementation/04-signal-job.md` §Connector and compile evidence, `logs/safety-int-001/`.
-| 6 | Broker market feed | VM-BROKER-MKT-008 | `BROKER-MD-001` | Sandbox corpus decodes to typed fields; unknown protocol version quarantined; behavior recorded as evidence — `TO_BE_VERIFIED` |
+| 6 | Broker market feed | VM-BROKER-MKT-008 | `BROKER-MD-001` | Live corpus (2026-08-13) decodes to typed fields on both feeds; full-mode 249 B confirmed; unknown protocol version quarantined; behavior recorded as evidence — `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`) |
 | 7 | Broker postback | VM-BROKER-PBK-009 | `BROKER-PB-001` | Postback status/identity/timestamp/optional-field behavior recorded; unsupported behavior quarantined — `TO_BE_VERIFIED` |
 | 8 | Arrow REST API | VM-ARROW-010 | `ARROW-REST-001`, `ARROW-REST-002` | Request/response/auth/timeout captured; client-reference correlates one attempt to one broker order — `TO_BE_VERIFIED` |
 | 9 | OpenObserve | VM-OPENOBS-011 | `OPS-INT-001`, `OPS-FAIL-001` | Telemetry envelope/redaction correct; OpenObserve outage leaves durable audit available — `TO_BE_VERIFIED` |
 | 10 | Base images | VM-IMAGES-012 | `LOCAL-INT-002`; `SWARM-INT-001`; `SEC-IMAGE-001` | Images referenced by digest; no mutable tag; SBOM/vulnerability policy passes |
+
+**Live evidence recorded (2026-08-13, BROKER-MD-001):** real wire frames from both
+Arrow feeds (ds.arrow.trade standard 13/17/93/249 B big-endian + socket.arrow.trade
+HFT 40/196 B zstd LE) captured raw and decoded to typed fields; full-mode byte size
+resolved — 249 B (docs) is the live wire, 241 B is the legacy layout (8 reserved
+bytes at 101:109, depth at 109); paise scaling cross-validated across feeds;
+AutoLogin (non-interactive, no device token) verified after the vendored-SDK fix
+(validate-2fa host api.arrow.trade + `appID` body field). VM-BROKER-MKT-008 flipped
+`COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`). Limitations: live reconnect/replay/echo not
+re-exercised in the 30 s capture (covered at bridge level by ING-RES-001 in-process
+100-cycle soak, PASS 2026-08-13); CAS +16 B trailer source-derived, not yet observed
+live. Evidence: `logs/broker-md-001/`.
 
 ## Environment tiers
 

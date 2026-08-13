@@ -42,6 +42,18 @@ OAuth-style token exchange. Credentials: `appID` + `appSecret` (never exposed cl
    → `{ "data": { "name", "token": <ACCESS_TOKEN>, "userID" }, "status": "success" }`
 4. All API + WebSocket calls use headers `appID` + `token`.
 
+**Non-interactive alternative (verified 2026-08-13):** `Client.AutoLogin(userID,
+password, totpSecret)` completes the same flow programmatically — no request
+token, no redirect. The Go SDK's login step POSTs to
+`https://api.arrow.trade/auth/validate-2fa` with `{code, requestId, userID}`
+after the initial login (body: `userID`, `password`, `captchaValue`,
+`captchaID`, `appID`, `isAppLogin`); the exchange then POSTs to
+`https://edge.arrow.trade/auth/app/authenticate-token` with the same
+`checkSum` (SHA256 `appID:appSecret:request-token`). Requires the same
+`appID` + `appSecret` credentials (TOTP secret base32-decoded, standard 30 s
+window). Python client `auto_login(user_id, password, api_secret,
+totp_secret)` mirrors this flow.
+
 **Constraints:**
 
 - Access token lifespan **24h** (regulatory). No refresh token by default — executor must re-authenticate before expiry.
@@ -53,7 +65,7 @@ Two WebSocket feeds. Both carry `Token` (int32) as the instrument key.
 
 ### 2a. Standard Data Stream — `wss://ds.arrow.trade?appID=&token=`
 
-- Binary, **big-endian**. Modes: `ltp` (13B), `ltpc` (17B), `quote` (93B), `full` (249B per docs; **241B in go-arrow SDK — verify**).
+- Binary, **big-endian**. Modes: `ltp` (13B), `ltpc` (17B), `quote` (93B), `full` (249B — verified live 2026-08-13, BROKER-MD-001; 241B legacy layout still parsed: depth at 101, current wire has 8 reserved bytes at 101:109, depth at 109).
 - Subscribe: JSON `{ "code": "sub", "mode", "<mode>": [tokens] }`. Unsub: `code: "unsub"`.
 - Prices are integer-scaled (paise, ×100) for NSE/BSE equities.
 - `full` depth: 5-level bid/ask (qty int64, price int32, orders int16).
@@ -68,7 +80,7 @@ Two WebSocket feeds. Both carry `Token` (int32) as the instrument key.
 - **Tier scope:** basic tier = 1 WebSocket connection; premium tier = 3 connections. The current testing phase uses the basic tier (1 connection) with the 1,024-instrument manifest. The 3-connection / 3,000-instrument coverage is the deferred future production target and requires account capability evidence before activation.
 - **Recommendation (foundation):** use HFT feed for the tick path (low-latency, relevant to trading). Standard feed is fallback.
 
-**Verification flags:** full-mode byte size (249 vs 241); confirm paise scaling on both feeds against a live sample.
+**Verification flags:** full-mode byte size = 249B live (resolved 2026-08-13, BROKER-MD-001; paise scaling confirmed on both feeds against a live sample — RELIANCE ltp 131700 identical standard/HFT). After ~15:15 IST every mode appends a 16-byte Closing Auction Session trailer (29/33/109/265; imbalance_qty i64 + indicative_close i32 + ref_price i32).
 
 ## 3. Order API (`arrow_rest`)
 

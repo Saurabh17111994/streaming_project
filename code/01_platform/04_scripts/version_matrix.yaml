@@ -254,21 +254,38 @@ boundaries:
       mandatory 8 Jul 2026, modes ltpc/full)
     evidence_source: >-
       docs.arrow.trade/rest-api/market-data + hft-stream; go-arrow
-      streams.go + hft_stream.go (symbol/token join = Token int32)
-    compatibility_class: UNKNOWN
+      streams.go + hft_stream.go (symbol/token join = Token int32);
+      live capture 2026-08-13 (BROKER-MD-001)
+    compatibility_class: COMPATIBLE
     evidence_owner: Ingestion
     evidence_method: >-
       Build versioned broker packet corpus (both feeds); assert decoder
       handles identity (Token), timestamps, status, limits, reconnect,
       replay, echo. Verify full-mode byte size (249 docs vs 241 SDK).
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    source_artifact: logs/broker-md-001/marketdata-capture-20260813.jsonl
+    fixture: >-
+      logs/broker-md-001/marketdata-capture-20260813.jsonl (52 records, both
+      feeds); live-wire hex fixtures in
+      third_party/go-arrow/arrow/streams_test.go
+    scenario: >-
+      Live capture 2026-08-13 via cmd/capture-marketdata: AutoLogin auth
+      (no device token), standard ltp/ltpc/quote/full + HFT ltpc/full,
+      5 tokens, 30 s
+    result: >-
+      PASS — decode layouts match live wire on both feeds; standard full =
+      249 B (docs correct; 241 legacy retired, depth offset 109 vs 101);
+      HFT 40/196 zstd; AutoLogin works after SDK fix (validate-2fa host
+      api.arrow.trade + appID body field)
+    observed_behavior: >-
+      Standard full 249 B (8 reserved bytes at 101:109, depth at 109); CAS
+      +16 B trailer after ~15:15 IST (29/33/109/265, source-derived);
+      heartbeat 1 B ignored; HFT ts_ns = ~5.4-day counter, not epoch-ns
+    limitations: >-
+      Live reconnect/replay/echo not re-exercised (30 s capture, no forced
+      disconnect) — covered at bridge level by ING-RES-001 in-process soak
+      (PASS 2026-08-13); CAS trailer not yet observed live (unit-tested)
+    date: 2026-08-13
+    status: EVIDENCE_RECORDED_LIVE
 
   - compatibility_id: VM-BROKER-PBK-009
     boundary: Broker postback protocol
