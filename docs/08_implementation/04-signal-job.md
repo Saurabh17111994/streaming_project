@@ -508,3 +508,218 @@ Implements plan.md §"Slot-scoped safety propagation" for the Signal Job: consum
 - The tracker lives per-task in the job shell; when the decision operators land it moves to broadcast state so `isTokenSuppressed` / `SuppressionGate` gate candidates/rankings/reservations/decisions. A tick alone never clears unsafe state; RECOVERED admits only post-recovery input.
 - The job itself (live `FlussSource` consume path end-to-end) runs only after production approval; SAFETY-INT-001 already exercises the production bridge/parser/tracker against live Fluss.
 
+---
+
+## Current build plan — Signal LOG/KV dual-sink (2026-08-13)
+
+### Signal LOG/KV Dual-Sink Implementation (Requirement Change 2026-08-13)
+
+## Overview
+
+Implement the 2026-08-13 requirement change: **retire the candle [LOG + KV] dual-sink** and **build the signal [LOG + KV] dual-sink**.
+
+Target topology (source of truth: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` §1, tracker header):
+
+```
+raw_table_1 → validation → dedup → 15s candles ── feature_candles_15s (LOG, sole candle output)
+                                              └─ signal detection ── Signal_Candidates (LOG, append per signal)
+                                                                  └─ Signal_Candidates_current (KV, PK instrument_token)
+```
+
+- `feature_candles_15s` — LOG, unchanged (15 cols, `bucket.key=instrument_token`).
+- `Signal_Candidates` — **LOG v3** (was KV v2, R-084): no primary key, `bucket.key=instrument_token`, append-only, one row per fired signal, never updated.
+- `Signal_Candidates_current` — **NEW KV**: PK exactly `(instrument_token)`, `bucket.key=instrument_token`, 16 buckets, latest/active candidate per instrument, supersession overwrites in place.
+- `feature_candles_15s_current` — **DELETED** (DDL 22 + live dev table id 92; live drop is operator-gated, Post-Completion).
+
+**Row layout is FROZEN**: both signal tables share the pre-change 22-column `Signal_Candidates` v2 layout (`SignalCandidatesTableColumns`, `schema_version="2"` per tracker §1.3). `SignalDetectionFunction` and its emitted row do NOT change. Only storage kind, DDL, sink serialization, and config keys change.
+
+### Acceptance criteria
+
+1. Compute topology emits: candle LOG only; signal LOG append + signal KV upsert (PK `instrument_token`).
+2. `SchemaAgreementTest` (ingestion) pins `Signal_Candidates` LOG + `Signal_Candidates_current` KV; green.
+3. Stateful Flink operator IDs (`raw-validation` chain, `fingerprint-dedup`, `candle-15s`, `signal-detection`) unchanged vs the Stage 0 baseline — proven by `JobGraphDump` diff. **SUPERSEDED 2026-08-13** (Stage 4 evidence): unsatisfiable as written — Flink IDs derive from the transitive topology hash and the baseline `candle-15s` vertex chained `canonical-candle-filter`, so the Stage 3 deletion alone shifted that vertex and all downstream IDs. Durable equivalent delivered: explicit `.uid(...)` on all 9 operators (UID-anchored restore, pinned by `SignalJobOperatorUidTest`); full analysis in `logs/tracker-14/jobgraph-signal-rescope-evidence-20260813.md`.
+4. All retired candle-KV code deleted with no aliases/shims: `CanonicalCandleFilterFunction`, `CandleMigrationTool`, `CandleMigrationBatchJob`, candle-KV tests, DDL 22.
+5. Full common + compute + ingestion suites green.
+6. Live-cluster teardown (table 92, p10 trio) executed only after explicit user confirmation (Post-Completion).
+
+## Context
+
+### Files involved (verified 2026-08-13)
+
+- DDL: `code/01_platform/02_sql/ddl/05_signal_candidates.sql` (KV v2, PK `candidate_id`), `ddl/03_feature_candles_15s.sql` (LOG, unchanged), `ddl/22_feature_candles_15s_current.sql` (delete), `ddl/schema_manifest.json`, `code/01_platform/04_scripts/ddl_apply.py` (stub), `code/01_platform/02_sql/README.md` (rows already annotated).
+- Ingestion: `code/02_services/01_ingestion/src/main/java/com/trading/ingestion/DdlBootstrap.java` (Signal_Candidates 22-col KV descriptor), `src/test/java/com/trading/ingestion/SchemaAgreementTest.java` (L178–179 pins `PRIMARY KEY (candidate_id)` — breaks), `DdlBootstrapSchemaAgreementTest.java`.
+- Compute main: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/` — `SignalJob.java` (topology L115–299: candle LOG sink L228–240; signal KV sink L254–261; candle KV block L263–296 with `CanonicalCandleFilterFunction`; `preflightTableContracts` L399–426), `SignalJobConfig.java` (record field `candleCurrentTable` L40, env `CANDLE_CURRENT_TABLE` L91, `signalCandidatesTable` L57/env L110), `CandleTableContractValidator.java`, `CanonicalCandleFilterFunction.java`, `StallGuardedSink.java` (retained), `SignalCandidatesTableColumns.java` (22-col, unchanged), `SignalDetectionFunction.java` (unchanged); `com/trading/compute/telemetry/ComputeOtlpEmitter.java` (`KV_FILTERED_NON_CANONICAL` + `recordKvFilteredNonCanonical()` — only called by the retiring filter); `com/trading/compute/tools/` — `CandleMigrationTool.java`, `CandleMigrationBatchJob.java`, `JobGraphDump.java` (reused for evidence).
+- Common: `code/common/src/main/java/com/trading/common/schema/CandleTableSchema.java` (15-col candle contract + `CANONICAL_ALGORITHM_VERSION`/`CANONICAL_CONFIGURATION_VERSION` — constants stay, used by `SignalJobConfig.requireCanonicalVersion`), `CanonicalCandlePolicy.java` (verify references before deleting), `code/common/src/test/java/com/trading/common/schema/CandleCurrentDdlContractTest.java` (delete).
+- Compute tests: `signaljob/` — `CandleTableContractValidatorTest.java`, `CanonicalCandleFilterFunctionTest.java` (delete), `CandleCurrentKvIdempotencyTest.java` (delete), `CandleEmitFunctionTest.java` (references `CanonicalCandlePolicy` — keep if policy kept), `CandleGraphReplayIntegrationTest.java` (re-scope), `SignalJobConfigTest.java` (`defaultsCandleCurrentTableAndHonorsOverride` — remove); `tools/` — `CandleMigrationToolTest.java`, `CandleMigrationBatchJobTest.java` (delete).
+
+### Commands (verified)
+
+- Build + test: `cd code && mvn -o test -pl 02_services/02_compute -am`
+- Ingestion pin tests: `cd code && mvn -o test -pl 02_services/01_ingestion -am -Dtest=SchemaAgreementTest,DdlBootstrapSchemaAgreementTest -Dsurefire.failIfNoSpecifiedTests=false`
+- JobGraphDump (Stage 0 / post-change): build then run **inside the trading-net** — the host fails: the coordinator answers `localhost:9123` but advertises the tablet as `fluss-tablet:9124`, which does not resolve on the host. Verified recipe: `docker run --rm --network 01_docker_trading-net -v <repo>:/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/streaming_project -v ~/.m2:/home/saurabh/.m2:ro -w <repo> maven:3.9-eclipse-temurin-17 sh -c 'env FLUSS_BOOTSTRAP_SERVERS=fluss-coordinator:9123 OTEL_COLLECTOR_HOST=otel-collector:4318 DEDUP_TTL_MS=300000 CANDLE_WINDOW_MS=15000 CHECKPOINT_INTERVAL_MS=10000 CHECKPOINT_TIMEOUT_MS=30000 MAX_CONCURRENT_CHECKPOINTS=1 CHECKPOINT_DIR=file:///tmp/signaljob-checkpoints ALLOW_FULL_REPLAY=true PARALLELISM=16 java -cp "code/02_services/02_compute/target/classes:$(cat logs/tracker-14/jobgraph-signal-baseline/classpath.txt)" com.trading.compute.tools.JobGraphDump <out-dir>'`. The classpath file (host paths, valid in-container because `.m2` is mounted at the same absolute path) is produced by `cd code/02_services/02_compute && mvn -o dependency:build-classpath -Dmdep.outputFile=…`; `fluss-flink-2.2` is a shaded jar carrying `org.apache.fluss.client` (no separate fluss-client needed). The dump is read-only against the dev Fluss (metadata lookups only).
+- Config defaults (from `SignalJobConfig.fromEnv`): `FLUSS_BOOTSTRAP_SERVERS=localhost:9123`, `FLUSS_DATABASE=default`, `CANDLE_CURRENT_TABLE=feature_candles_15s_current`, `SIGNAL_CANDIDATES_TABLE=Signal_Candidates`, `PARALLELISM` default 1 (evidence convention: 16).
+
+### Operator-ID mechanism (from `logs/candle-kv-replay-001/p6-evidence-2026-08-10.md`)
+
+`StreamGraphHasherV2` BFS-walks from sorted source IDs; each node's hash folds in its BFS index + chain config + upstream hashes. New nodes shift every node processed after them. P6 final arrangement (candle KV sink emitted LAST) froze the stateful set for THAT code; the P6 historical IDs no longer match current code (post-P6 edits: StallGuardedSink wiring, R-298, checkpoint config). Sinks are stateless (`FlinkSinkWriter implements SinkWriter`, not `StatefulSinkWriter`) — sink ID changes orphan nothing. **Stage 0 baseline (2026-08-13, `logs/tracker-14/jobgraph-signal-baseline/job-vertices.txt`), the authoritative anchor:**
+
+- `Source: raw-table-1 -> raw-validation | cbc357ccb763df2852fee8c4fc7d55f2` (STATEFUL — source)
+- `candle-15s -> canonical-candle-filter | e883208d19e3c34f8aaf2a3168a63337` (STATEFUL — candle windows; chained vertex)
+- `feature-candles-15s-current-kv-sink: Writer | 64ca712eb37af98fa4ecb0da1ab73dae` (stateless — Track A deletes)
+- `feature-candles-15s-sink: Writer | 5810cf80e04eec437823a019a6af4c20` (stateless)
+- `fingerprint-dedup | 9dd63673dd41ea021b896d5203f3ba7c` (STATEFUL — dedup cache)
+- `signal-candidates-sink: Writer | 34ffd5126a7f2c583cc02eb4b474fdd0` (stateless)
+- `signal-detection | 73cecb2424528f03e5e7967ff89ef48a` (STATEFUL — signal state)
+  **Stateful set that must never move: `cbc357cc…`, `e883208d…`, `9dd63673…`, `73cecb24…`.**
+
+### Constraints
+
+- Governance (tracker-14 rule): no production code, DDL application, or live-cluster mutation until operator-gated steps. This plan's Stages 1–5 are repo-only.
+- Live teardown (drop table id 92, stop p10 trio) requires explicit user confirmation at execution time.
+- Long-run gate (user directive 2026-08-12): any test >10 min must be preceded by a ≤2-min smoke of the same machinery.
+- Docs-first workflow: docs updated 2026-08-13 (trackers 13/14, P7/P10 plans, 04-signal-job.md, compute README, foundation, SQL README, business-logic contract); this plan covers the remaining authority docs in Stage 1.
+- GitButler workspace (`gitbutler/workspace` branch): commit per stage via `but`.
+
+## Review Handoff
+
+- Original request: user approved implementation 2026-08-13 ("go ahead"); design locked: candles LOG-only, signals LOG + KV (`Signal_Candidates_current` PK `(instrument_token)`).
+- Key decisions: 22-col layout frozen (no `SignalDetectionFunction` churn); Track A (retire) before Track B (new facility); one commit per stage; `StallGuardedSink` retained on all sinks; validator re-targeted (clean cutover, no alias).
+- Non-goals: no candle migration/audit/conflict machinery (retired); no row-layout change; no live DDL application in Stages 1–5; no performance re-measurement (P7 authority unchanged).
+- Open question (verify at Stage 3): whether `CanonicalCandlePolicy`/`CanonicalCandlePolicyTest` stay (used by `SignalJobConfig.requireCanonicalVersion` startup gate) or are deleted with the filter.
+- Hidden context: none; this plan is self-contained.
+
+## Development Approach
+
+- Regular (not TDD): each stage edits code + its pin tests together, then runs the module suite before the next stage.
+- Small focused changes; every code-change task updates or deletes its pin tests in the same stage.
+- Update this plan when scope changes during execution.
+
+## Testing Strategy
+
+- Unit + pin tests per stage as listed; full module suites at Stages 3, 4, 5.
+- JobGraphDump diff (stateful-ID stability) at Stages 3 and 4 against the Stage 0 baseline.
+- Env-gated integration tests (live Fluss) remain gated; `SignalCurrentKvIdempotencyTest` follows the `CandleCurrentKvIdempotencyTest` pattern (scratch table, tagged `integration`, never touches platform tables).
+- Long-run gate applies to any >10-min run.
+
+## Progress Tracking
+
+- `[x]` done; `+` new task; `BLOCKED:` blockers; keep in sync.
+
+## Implementation Steps
+
+### Stage 0: JobGraphDump baseline (BEFORE any code change)
+
+**Why:** the checkpoint-restore anchor — prove later that stateful operator IDs never move.
+
+- [x] Build compute + common (compute is NOT in the root reactor — R-272 comment in `code/pom.xml` L16–18; build it standalone from `code/02_services/02_compute`, parent + common already in `.m2`; rebuilt common first — the installed jar was stale vs source)
+- [x] Build classpath: `cd code/02_services/02_compute && mvn -o dependency:build-classpath -Dmdep.outputFile=/tmp/compute-cp.txt` (52 flink/fluss/common/slf4j jars; staged copy in the baseline dir)
+- [x] Run `JobGraphDump` **inside `01_docker_trading-net`** (host run fails: `fluss-tablet:9124` unresolvable from host) → `logs/tracker-14/jobgraph-signal-baseline/`
+- [x] Verify 3 artifacts + record the stateful-ID set (see Operator-ID mechanism section): `cbc357cc…`, `e883208d…`, `9dd63673…`, `73cecb24…`
+
+### Stage 1: Upstream authority docs (banner-annotate, no code)
+
+**Why:** the conflict rule requires the requirement change recorded at requirements/contracts/decisions layers, not only implementation docs.
+
+**Files (modify):**
+
+- `docs/02_requirements/02-functional/02-storage.md` (table rows L84–86, REQ-FLS-006 heading + paragraph, REQ-FLS-007 paragraph — LOG v3 + current-state KV, candle KV RETIRED)
+- `docs/04_contracts/02-storage.md` (L15 candle-KV retirement + L17 strategy sentence)
+- `docs/01_project/04-decisions.md` (DEC-035 row added after DEC-034; historical DEC-034 text preserved)
+- `docs/08_implementation/02-schema-storage.md` (L90 routing-key row + `Signal_Candidates_current` row + 2026-08-13 note after the 2026-08-10 note)
+- `docs/02_requirements/04-data.md` (ownership-table row + `Signal_Candidates_current` subsection)
+- `docs/02_requirements/02-functional/04-business-logic.md` (L16/L36 KV-overwrite caveats)
+- `docs/03_architecture/00-arch-overview.md`, `01-technology-choices.md`, `02-data-pipeline.md`, `platform-architecture.md` (`Signal_Candidates_current` enumerations)
+
+- [x] Annotate each stale site (KV→LOG v3 + new current-state table; candle KV retired; DEC-035 records the requirement change), same style as the 6 already-updated docs — executed 2026-08-13 across 10 files
+- [x] Verify: no un-annotated `Signal_Candidates` KV / active candle-KV refs remain in `docs/` (grep clean; remaining matches are DEC-034 history, 04-business-logic L7 banner superseded by L9, and 04-signal-job implementation-history lines already covered by its re-scope banner)
+
+### Stage 2: DDL + schema contract (one atomic commit)
+
+**EXECUTED 2026-08-13** — commit `074f02f` (Change-ID `oqs`) on `stage2-signal-ddl-contract`: 9 files, ingestion pin tests 18/18 green. `ddl_apply.py` needed no change (no hardcoded table list — it derives the manifest from the DDL dir; manifest regenerated via `--force`).
+
+**Why:** DDL and the descriptors/tests that pin it move together (cross-boundary pin habit) or pin tests break.
+
+**Files:**
+
+- Modify: `code/01_platform/02_sql/ddl/05_signal_candidates.sql`, `ddl/schema_manifest.json`, `code/01_platform/04_scripts/ddl_apply.py`, `code/02_services/01_ingestion/src/main/java/com/trading/ingestion/DdlBootstrap.java`, `code/02_services/01_ingestion/src/test/java/com/trading/ingestion/SchemaAgreementTest.java`
+- Create: `code/01_platform/02_sql/ddl/23_signal_candidates_current.sql`
+- Delete: `code/01_platform/02_sql/ddl/22_feature_candles_15s_current.sql`
+
+- [x] Rewrite `05_signal_candidates.sql` → LOG v3: drop `PRIMARY KEY (candidate_id) NOT ENFORCED`; `bucket.key` → `instrument_token`; header → v3 (supersede columns stay — 22-col layout frozen, audit linkage)
+- [x] Create `23_signal_candidates_current.sql` → KV: PK `(instrument_token) NOT ENFORCED`, `bucket.num=16`, `bucket.key=instrument_token`, same 22 columns + datalake options as 05
+- [x] Update `schema_manifest.json` (05 kind LOG + bucket key, add 23, remove 22) — regenerated by `ddl_apply.py --force` (21 tables; no hardcoded list to edit)
+- [x] Update `DdlBootstrap.java`: `Signal_Candidates` → LOG descriptor (no PK), register `Signal_Candidates_current` with the 22-col KV descriptor (`distributedBy(16, "instrument_token")`)
+- [x] Update `SchemaAgreementTest` L178–179 → assert `Signal_Candidates` has NO primary key (LOG) + add `Signal_Candidates_current` KV pin (`PRIMARY KEY (instrument_token)`)
+- [x] Run: `cd code && mvn -o test -pl 02_services/01_ingestion -am -Dtest=SchemaAgreementTest,DdlBootstrapSchemaAgreementTest -Dsurefire.failIfNoSpecifiedTests=false` — green (18 tests, 0 failures) before Stage 3
+
+### Stage 3: Track A — retire candle KV (deletion)
+
+**Why:** remove-before-add; pure deletion, no schema change to live LOG, smallest risk first.
+
+**Files:**
+
+- Modify: `code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/SignalJob.java`, `SignalJobConfig.java`, `CandleTableContractValidator.java`, `CandleTableColumns.java` (javadoc), `code/02_services/02_compute/src/main/java/com/trading/compute/telemetry/ComputeOtlpEmitter.java`, `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/SignalJobConfigTest.java`
+- Delete: `signaljob/CanonicalCandleFilterFunction.java`, `tools/CandleMigrationTool.java`, `tools/CandleMigrationBatchJob.java`, `code/common/src/test/java/com/trading/common/schema/CandleCurrentDdlContractTest.java`, compute tests `CandleCurrentKvIdempotencyTest.java`, `CanonicalCandleFilterFunctionTest.java`, `tools/CandleMigrationToolTest.java`, `tools/CandleMigrationBatchJobTest.java`
+- Keep (verify references first): `CanonicalCandlePolicy.java` + `CanonicalCandlePolicyTest.java` if `SignalJobConfig.requireCanonicalVersion` still calls `isCanonical`; `CandleTableSchema.java` (15-col LOG contract + version constants). If no caller remains, delete both.
+
+- [ ] `SignalJob.java`: remove the candle KV block L263–296 (`canonical-candle-filter` + `feature-candles-15s-current-kv-sink`); update class javadoc L26–44 (candle LOG sole output)
+- [ ] `SignalJobConfig.java`: remove `candleCurrentTable` field, `CANDLE_CURRENT_TABLE` env line, related javadoc; fix the record constructor call sites (fromEnv)
+- [ ] `SignalJobConfigTest.java`: remove `defaultsCandleCurrentTableAndHonorsOverride`
+- [ ] `ComputeOtlpEmitter.java`: remove `KV_FILTERED_NON_CANONICAL` + `recordKvFilteredNonCanonical()` (only caller deleted)
+- [ ] `CandleTableContractValidator.java`: drop candle-KV validation; keep candle-LOG checks
+- [ ] `CandleTableColumns.java`: update javadoc (no KV twin)
+- [ ] Run: `cd code && mvn -o test -pl 02_services/02_compute -am` — green
+- [ ] Re-run JobGraphDump → `logs/tracker-14/jobgraph-signal-post-track-a/`; diff `job-vertices.txt` vs Stage 0 baseline: stateful set unchanged (only candle KV sink + canonical filter gone)
+
+### Stage 4: Track B — signal LOG/KV dual-sink
+
+**Why:** the new facility — LOG audit + KV current-state per instrument.
+
+**Files:**
+
+- Modify: `SignalJobConfig.java`, `SignalJob.java`, `CandleTableContractValidator.java` → `TableContractValidator.java`, `ComputeOtlpEmitter.java`, `ComputeOtlpEmitterTest.java`, `SignalJobConfigTest.java`, `SignalCandidatesTableColumns.java`
+- Create: `signaljob/CanonicalSignalPolicy.java` + `CanonicalSignalPolicyTest.java`, `signaljob/CanonicalSignalFilterFunction.java` + `CanonicalSignalFilterFunctionTest.java`, `signaljob/TableContractValidatorTest.java`
+
+- [x] `SignalJobConfig.java`: added `signalCurrentTable` field + `SIGNAL_CURRENT_TABLE` env (default `Signal_Candidates_current`); canonical-identity defaults now reference `SignalCandidatesTableColumns` constants (`SCHEMA_VERSION_V2="2"`, `CANONICAL_STRATEGY_ID="simple-breakout"`, `CANONICAL_STRATEGY_VERSION="1.0.0"`, `CANONICAL_RULE_ID="breakout-20-bullish-trend"`); javadoc documents the dual-sink (LOG keeps every signal, KV filtered + counted); `SignalJobConfigTest` default + override legs green (41 tests, 0 failures)
+- [x] `SignalJob.java`:
+  - `signal-candidates-sink` serialization `(false,false)` → `(true,true)` (LOG append)
+  - added `signal-candidates-current-sink` after it, `RowDataSerializationSchema(false,false)` (KV upsert), wrapped in `StallGuardedSink` with the same `client.request-timeout` / `client.writer.retries=2` options — LAST node of the `signals` stream (BFS-order discipline from P6)
+  - class javadoc updated (topology → signal dual-sink DEC-035, serialization flags per sink kind)
+  - `preflightTableContracts`: validates `feature_candles_15s` LOG + `Signal_Candidates` LOG (no PK, `bucket.key=instrument_token`) + `Signal_Candidates_current` KV (PK exactly `[instrument_token]`, bucket key subset of PK, 16 buckets, 22 cols); logs `schemaReport` per table (DDL-vs-live nullability divergence marker)
+- [x] `CandleTableContractValidator.java`: re-targeted → three tables above (SIGNAL-SCHEMA-001 / CANDLE-SCHEMA-002); renamed to `TableContractValidator`, references migrated cleanly (no alias); `schemaReport(TableInfo, List<Boolean> nullableInDdl)`; `TableContractValidatorTest` 22 cases green
+- [x] `CanonicalSignalPolicy.java`: canonical check on signal `(schema_version, strategy_id, strategy_version, rule_id)`; `CanonicalSignalFilterFunction` wired before the signal KV current sink only (LOG sink keeps every signal); counter `compute.signal.kv.filtered.noncanonical` added to `ComputeOtlpEmitter` (DELTA non-monotonic sum, drained pre-POST, present at 0); `CanonicalSignalPolicyTest` (4) + `CanonicalSignalFilterFunctionTest` (3) + `ComputeOtlpEmitterTest` (16) green
+- [x] Run: compute suite green 2026-08-13 — 182 tests, 0 failures, 11 skipped (env-gated ITs, incl. `SignalJobOperatorUidTest`). Note: `mvn -o test -pl 02_services/02_compute -am` from `code/` cannot run — compute is excluded from the root reactor (R-272); executed module-locally in `code/02_services/02_compute` instead (same gate as Stage 3)
+- [x] JobGraphDump re-run → `logs/tracker-14/jobgraph-signal-post-track-b/`. Result: the literal "stateful IDs unchanged vs baseline" criterion is **impossible** — Flink derives IDs from the transitive topology hash, and the baseline's `candle-15s` vertex CHAINED `canonical-candle-filter`, so Stage 3's filter deletion alone shifted that stateful vertex and everything downstream (post-track-a was never captured). Fix (documented in `logs/tracker-14/jobgraph-signal-rescope-evidence-20260813.md`): explicit `.uid(...)` on all 9 operators — restore anchors are now UID-derived and durable; `SignalJobOperatorUidTest` (env-gated) pins the UID set (green in-container 2026-08-13); pre-rescope checkpoints were invalidated by DEC-035 regardless (no restore-into-new-topology path existed); scratch tables `sig4_log_scratch`/`sig4_current_scratch` created for the preflight, used for the dump, then dropped
+
+### Stage 5: Contract tests + verification
+
+- [x] Create `code/common/src/test/java/com/trading/common/schema/SignalCurrentDdlContractTest.java` (3 cases, green 2026-08-13): LOG DDL stays LOG (no PK — a PK flips it to KV and breaks the audit trail), KV DDL PK exactly `(instrument_token)`, both DDLs agree column-for-column (22 cols, identical types), `bucket.key=instrument_token` + 16 buckets + 7d retention on both
+- [x] Create `code/02_services/02_compute/src/test/java/com/trading/compute/signaljob/SignalCurrentKvIdempotencyTest.java` (env-gated `COMPUTE_INT_TEST_SIGNAL_KV=true`, scratch table, `@Tag("integration")`): same-instrument upserts converge to one row, last-write-wins, never touches platform tables — green in-container 2026-08-13 (1/1)
+- [x] Re-scope `CandleGraphReplayIntegrationTest.java`: candle LOG-only + signal LOG/KV; replay twice → signal LOG grows, `Signal_Candidates_current` key count frozen — green in-container 2026-08-13 (3/3, 134.9 s: dual-sink replay, P6.2 preflight fail-closed, data-quality/window semantics). Shared scratch plumbing extracted to `ScratchTables` (single DDL-mirror source, both gated tests); `SignalJobOperatorUidTest` is now hermetic — the strict validator correctly rejects the dev cluster's legacy `Signal_Candidates` KV v2, so the UID test preflights contract-correct scratch tables instead of Stage 6-dependent platform metadata
+- [x] Run full suites module-locally (R-272: compute is excluded from the root reactor): compute 182/0/11 skipped, common 104/0/0, ingestion 180/0/7 skipped — all green 2026-08-13
+- [x] Final JobGraphDump diff evidence file: `logs/tracker-14/jobgraph-signal-rescope-evidence-20260813.md` (baseline vs post-A vs post-B tables) — written at Stage 4 closeout, 2026-08-13
+- [x] Long-run gate: gated in-container battery (5 tests) finished in 155 s wall — below the 10-min smoke threshold, no pre-smoke required
+
+### Stage 6 (Post-Completion, operator-gated): live cluster
+
+- [x] Drop live dev table `feature_candles_15s_current` (id 92) — user-confirmed ("ok now go ahead for stage 6"); `DropTable.java` trading-net procedure, `DROP_STATUS=OK` 2026-08-13. Also dropped legacy `Signal_Candidates` KV v2 (id 91, PK `candidate_id`) for the v3 re-create — preflight showed neither carried `table.datalake.enabled` (no R2 orphan). Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`
+- [x] Apply new DDLs to dev (gated path: `schema_manifest.json` + evidence-gated application) — 2026-08-13: `ddl_apply.py --apply-verified --matrix-evidence logs/tracker-14/p6-stage5-contract-evidence-20260813.md` → version gate PASS, manifest current (21 tables), apply stage reached (exit 0). Real application via new probe `logs/tracker-14/ApplySignalDdl.java` (Fluss 0.9.1 has no SQL client; the script's apply arm is a documented stub): `CREATE_STATUS=OK` for `Signal_Candidates` (LOG v3, id 607) + `Signal_Candidates_current` (KV v2, PK `instrument_token`, id 608), 22-col schemas mirroring `ScratchTables`, 16 buckets, `table.log.ttl=7d`, lake keys copied from live `raw_table_1` ZK (`table.datalake.{enabled,format,freshness,auto-compaction}`). Live proof: new same-package probe `PreflightSignalTables` ran the production fail-closed gate `SignalJob.preflightTableContracts` against the platform tables → `PREFLIGHT_STATUS=PASS tables=feature_candles_15s,Signal_Candidates,Signal_Candidates_current`
+- [x] Stop the idle p10 rehearsal trio (`p10-zookeeper-1`, `p10-fluss-coordinator-1`, `p10-fluss-tablet-1`) — user-confirmed as part of Stage 6; all three `Exited (143)` (SIGTERM, graceful) 2026-08-13. Final ZK registry: 22 tables, no scratch leftovers, `feature_candles_15s_current` absent
+- [ ] Commit discipline: `but` commit per stage (0→5); teardown evidence recorded in tracker 14
+
+## Technical Details
+
+- Serialization: LOG append = `RowDataSerializationSchema(true, true)`; KV upsert = `RowDataSerializationSchema(false, false)` (INSERT RowKind → UPSERT for KV writer, chosen from live table metadata at `FlussSink.build()`).
+- Stall guards: every sink stays inside `StallGuardedSink` with `client.request-timeout = SINK_WRITE_STALL_TIMEOUT_MS ms` + `client.writer.retries=2` (R-298-era hang containment; identical on all sinks).
+- Operator-ID discipline: new sinks are appended LAST on their stream, after `signal-detection` is attached (P6 BFS-order evidence) so stateful IDs stay pinned. Sinks are stateless; ID changes there are checkpoint-safe.
+- Startup gates preserved unchanged: `STATE_RECOVERY_PATH` / `ALLOW_FULL_REPLAY` fail-closed gate, `RETAIN_ON_CANCELLATION`, pinned checkpoint contract.
+
+## Post-Completion
+
+**Manual verification (after Stages 5, before Stage 6):**
+
+- Review the three JobGraphDump diffs and confirm the stateful-ID set never moved. — **SUPERSEDED 2026-08-13** (see Stage 4 JobGraphDump item above): literal ID preservation is impossible (transitive topology hash); replaced by the explicit UID-anchor contract, enforced by `SignalJobOperatorUidTest` (gated green in-container)
+
+**External system updates:**
+
+- Live dev cluster: drop table id 92, apply 05-v3 + 23 DDLs, drop p10 trio — **EXECUTED 2026-08-13** (Stage 6, user-confirmed): id 92 + legacy `Signal_Candidates` KV v2 dropped, `Signal_Candidates` LOG v3 (id 607) + `Signal_Candidates_current` KV (id 608) created lake-enabled, p10 trio stopped, platform-table preflight PASS. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`

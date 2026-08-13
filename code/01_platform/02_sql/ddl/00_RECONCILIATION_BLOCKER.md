@@ -20,6 +20,12 @@
 > **Implemented 2026-08-13 (Stage 2):** repo DDL/manifest/bootstrap now carry
 > `Signal_Candidates` LOG v3 + the `Signal_Candidates_current` KV table; live
 > dev-cluster apply and candle-KV drop remain Stage 6 (operator-gated).
+> **Stage 6 executed (2026-08-13):** live dev-cluster apply done — legacy
+> `Signal_Candidates` KV v2 and `feature_candles_15s_current` dropped, `Signal_Candidates`
+> LOG v3 (table_id 607) + `Signal_Candidates_current` KV PK `instrument_token` (608) created
+> lake-enabled through the gated manifest path; the SignalJob production preflight passes
+> against the platform tables (`PREFLIGHT_STATUS=PASS`). Evidence:
+> `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`.
 
 ## Status: REQUIREMENTS RECONCILED — SQL GENERATED — VERSION PINNING PENDING
 
