@@ -234,26 +234,28 @@ Before implementation:
 
 ## 5.1 Requirement traceability
 
+The requirements in this table are **scoped to this dossier** (prefix `REQ13-*`): they are implementation constraints for the candle LOG→KV replay-safety program, not global `REQ-*` requirements, and they do not appear in the acceptance matrix. Global requirement coverage for the signal job is [`04-signal-job.md`](./04-signal-job.md) (`REQ-FC-*`, `REQ-SS-*`, `REQ-RNK-*`).
+
 | Requirement | Required behavior | Owner phase | Proving test/evidence | Completion gate |
 | --- | --- | --- | --- | --- |
-| `REQ-CKV-001` | Preserve existing candle LOG unchanged | 1, 5 | DDL contract test; sink configuration test | P1, P5 |
-| `REQ-CKV-002` | Add canonical KV with exact key and bucket routing | 1, 4, 5 | DDL test; metadata validator; KV integration test | P1, P4, P7 |
-| `REQ-CKV-003` | Preserve exact 15-column row contract and schema version `2` | 1 | shared-contract and DDL parity tests | P1 |
-| `REQ-CKV-004` | Permit only configured canonical algorithm/configuration | 2, 8 | policy unit tests; migration audit/load evidence | P2, P8 |
-| `REQ-CKV-005` | Write every candle to LOG and KV without a Fluss read-back | 5 | graph/sink wiring test; JobGraph evidence | P5, P6 |
-| `REQ-CKV-006` | Keep signal detection on the in-memory candle stream | 5 | graph/wiring test and code review | P5 |
-| `REQ-CKV-007` | Reject missing/wrong table contracts before execution | 4 | pure metadata-validator tests; integration preflight | P4, P7 |
-| `REQ-RPL-001` | Require exactly one startup mode | 3 | startup-mode unit matrix | P3 |
-| `REQ-RPL-002` | Never fall back from failed restore to replay | 3, 8 | configuration/control-flow test; runbook review | P3, P8 |
-| `REQ-RPL-003` | Full replay is explicit break-glass and observable | 3, 9 | unit tests; structured startup event | P3, P9 |
-| `REQ-CHK-001` | Preserve existing stateful operator identity or stop | 6 | deterministic old/new JobGraph comparison | P6 code |
-| `REQ-CHK-002` | Prove restore with a copied checkpoint | 6 | isolated restore and first successful checkpoint | P6 operational |
-| `REQ-MIG-001` | Read complete LOG plus Iceberg history | 8 | catalog union-read evidence | P8 audit |
-| `REQ-MIG-002` | Abort on conflicting candle business values | 8 | dry-run conflict report | P8 audit |
-| `REQ-MIG-003` | Load one canonical row per key and retain LOG | 8 | source/destination reconciliation | P8 load |
-| `REQ-MIG-004` | Bounded replay does not increase KV keys | 7, 8 | gated KV test; bounded operational replay | P7, P8 cutover |
-| `REQ-OPS-001` | Shared dual-sink failures remain fail-closed | 5, 8 | failure-semantics review and rollback runbook | P5, P8 |
-| `REQ-OPS-002` | Runtime bootstrap cannot create compute tables | 4 | DdlBootstrap ownership/creation tests | P4 |
+| `REQ13-CKV-001` | Preserve existing candle LOG unchanged | 1, 5 | DDL contract test; sink configuration test | P1, P5 |
+| `REQ13-CKV-002` | Add canonical KV with exact key and bucket routing | 1, 4, 5 | DDL test; metadata validator; KV integration test | P1, P4, P7 |
+| `REQ13-CKV-003` | Preserve exact 15-column row contract and schema version `2` | 1 | shared-contract and DDL parity tests | P1 |
+| `REQ13-CKV-004` | Permit only configured canonical algorithm/configuration | 2, 8 | policy unit tests; migration audit/load evidence | P2, P8 |
+| `REQ13-CKV-005` | Write every candle to LOG and KV without a Fluss read-back | 5 | graph/sink wiring test; JobGraph evidence | P5, P6 |
+| `REQ13-CKV-006` | Keep signal detection on the in-memory candle stream | 5 | graph/wiring test and code review | P5 |
+| `REQ13-CKV-007` | Reject missing/wrong table contracts before execution | 4 | pure metadata-validator tests; integration preflight | P4, P7 |
+| `REQ13-RPL-001` | Require exactly one startup mode | 3 | startup-mode unit matrix | P3 |
+| `REQ13-RPL-002` | Never fall back from failed restore to replay | 3, 8 | configuration/control-flow test; runbook review | P3, P8 |
+| `REQ13-RPL-003` | Full replay is explicit break-glass and observable | 3, 9 | unit tests; structured startup event | P3, P9 |
+| `REQ13-CHK-001` | Preserve existing stateful operator identity or stop | 6 | deterministic old/new JobGraph comparison | P6 code |
+| `REQ13-CHK-002` | Prove restore with a copied checkpoint | 6 | isolated restore and first successful checkpoint | P6 operational |
+| `REQ13-MIG-001` | Read complete LOG plus Iceberg history | 8 | catalog union-read evidence | P8 audit |
+| `REQ13-MIG-002` | Abort on conflicting candle business values | 8 | dry-run conflict report | P8 audit |
+| `REQ13-MIG-003` | Load one canonical row per key and retain LOG | 8 | source/destination reconciliation | P8 load |
+| `REQ13-MIG-004` | Bounded replay does not increase KV keys | 7, 8 | gated KV test; bounded operational replay | P7, P8 cutover |
+| `REQ13-OPS-001` | Shared dual-sink failures remain fail-closed | 5, 8 | failure-semantics review and rollback runbook | P5, P8 |
+| `REQ13-OPS-002` | Runtime bootstrap cannot create compute tables | 4 | DdlBootstrap ownership/creation tests | P4 |
 
 ## 5.2 Dependency and execution order
 
@@ -947,7 +949,7 @@ Business conflict fields exclude `output_ts` and include all other business/sche
   `Restoring job 87c48642… from Savepoint 1538`, checkpoint numbering continued
   1539→1540→1541 (323 MB, 610–991 ms).)
 - [x] Abort rather than automatically full-replay if restore fails.
-  (Startup gate A3.2/REQ-RPL-002 — no fallback path; restore failure is fatal.
+  (Startup gate A3.2/REQ13-RPL-002 — no fallback path; restore failure is fatal.
   Restore succeeded in this run, so the abort path itself was not triggered live;
   its behavior is pinned by `SignalJobConfigTest` + control-flow coverage.)
 - [x] Use FULL_REPLAY only with explicit operator approval, capacity review, and `ALLOW_FULL_REPLAY=true`.

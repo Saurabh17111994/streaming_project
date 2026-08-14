@@ -27,6 +27,16 @@ Checks:
       bridge ns->ms conversion; ledger + halt tables KV in manifest and DDL;
       ledger live-in-dev evidence; exactly 21 DDLs with no dedup DDL yet; dedup
       marked planned; forming_bar + ingestion_quarantine in all four inventories.
+  C10 Dossier traceability (2026-08-14 five-fix traceability work): the
+      11-testing-and-release.md acceptance-criteria coverage table lists every
+      matrix AC domain with an owning dossier and ranges equal to the matrix;
+      dossier status rows (02-10) cite only real, owned AC ids; every matrix
+      AC id is covered by a dossier or the coverage table; REQ13-* ids appear
+      only in dossier 13 and are all defined in its requirement traceability.
+  C11 Verification mapping: every functional dossier (01-10) has a
+      "## Verification mapping" section, and every link in those sections to
+      11-testing-and-release.md#anchor resolves (GitHub-slugged) to a heading
+      under its "## Component test designs" section — no dead test-design links.
 """
 
 import glob
@@ -585,6 +595,256 @@ def c9_dec039_invariants():
     check("C9 inventories include both tables", not missing_inv, f"{missing_inv}")
 
 
+# ---------------------------------------------------------------------------
+# C10 — dossier traceability (2026-08-14 five-fix traceability work)
+# ---------------------------------------------------------------------------
+
+IMPLEMENTATION_DIR = os.path.join(DOCS_DIR, "08_implementation")
+DOSSIER_TRACE_PATH = os.path.join(IMPLEMENTATION_DIR, "11-testing-and-release.md")
+DOSSIER13_PATH = os.path.join(
+    IMPLEMENTATION_DIR, "13-candle-log-kv-replay-safety.md"
+)
+
+# Functional dossiers whose status tables carry Requirements/Acceptance rows.
+COVERAGE_DOSSIERS = [
+    "02-schema-storage.md",
+    "03-ingestion.md",
+    "04-signal-job.md",
+    "05-action-capture.md",
+    "06-babysitter.md",
+    "07-executor.md",
+    "08-local-compose.md",
+    "09-production-swarm.md",
+    "10-observability.md",
+]
+COVERAGE_ROW_CELLS = (
+    "Requirements",
+    "Acceptance criteria",
+    "Source requirements",
+    "Sources",
+)
+
+AC_RANGE_RE = re.compile(r"`?(AC-[A-Z]+-\d+)`?\s*[\u2013\u2014-]\s*`?(AC-[A-Z]+-\d+)`?")
+AC_SINGLE_RE = re.compile(r"`(AC-[A-Z]+-\d+)`")
+REQ13_RE = re.compile(r"REQ13-[A-Z]+-\d+")
+
+
+def _ac_prefix(ac_id):
+    return ac_id.rsplit("-", 1)[0]
+
+
+def _expand_ac(text):
+    """Set of AC ids mentioned in text, expanding `AC-X-a`–`AC-X-b` ranges
+    (same domain only; cross-domain ranges keep both endpoints)."""
+    ids = set()
+    for m in AC_RANGE_RE.finditer(text):
+        a, b = m.group(1), m.group(2)
+        if _ac_prefix(a) == _ac_prefix(b):
+            lo, hi = int(a.rsplit("-", 1)[1]), int(b.rsplit("-", 1)[1])
+            for n in range(lo, hi + 1):
+                ids.add(f"{_ac_prefix(a)}-{n:03d}")
+        else:
+            ids.update((a, b))
+    ids.update(AC_SINGLE_RE.findall(text))
+    return ids
+
+
+def _matrix_ac_by_prefix():
+    """AC prefix (AC-ING, …) -> set of matrix AC ids (backticks stripped).
+    Reads the AC id from the first cell of each `| `AC-X-NNN` |` row (the
+    C8 _ac_rows helper returns the requirement cell, which is cells[1])."""
+    txt = safe_read(MATRIX_PATH)
+    if txt is None:
+        return {}
+    prefix_of = {
+        domain: "AC-" + prefix[4:] for domain, (prefix, _) in REQ_FILES.items()
+    }
+    prefix_of[NFR_DOMAIN] = "AC-NFR"
+    out = {}
+    for domain, sec in _matrix_sections(txt).items():
+        prefix = prefix_of.get(domain)
+        if not prefix:
+            continue
+        ids = set()
+        for line in sec.splitlines():
+            if not line.startswith("| `AC-"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells and cells[0].startswith("`AC-"):
+                ids.add(cells[0].strip("`"))
+        out[prefix] = ids
+    return out
+
+
+def c10_dossier_traceability():
+    # --- coverage table in 11-testing-and-release.md ---
+    tt = safe_read(DOSSIER_TRACE_PATH)
+    if tt is None:
+        return check("C10 traceability doc readable", False, DOSSIER_TRACE_PATH)
+    m = re.search(
+        r"^### Acceptance criteria coverage\s*\n(.*?)(?=\n### |\Z)",
+        tt,
+        flags=re.M | re.S,
+    )
+    sec = m.group(1) if m else ""
+    if not sec:
+        return check("C10 acceptance-criteria coverage section found", False)
+
+    table_ids, owner = {}, {}
+    for ln in sec.splitlines():
+        if not ln.startswith("| `AC-"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        dom = cells[0].strip("`").rstrip("-*")
+        table_ids[dom] = _expand_ac(cells[1])
+        owner[dom] = set(re.findall(r"[0-9]{2}-[a-z0-9-]+\.md", cells[2]))
+
+    matrix = _matrix_ac_by_prefix()
+    check(
+        "C10 coverage table lists every AC domain",
+        not (set(matrix) - set(table_ids)),
+        f"missing={sorted(set(matrix) - set(table_ids))}",
+    )
+    check(
+        "C10 no phantom AC domain rows",
+        not (set(table_ids) - set(matrix)),
+        f"phantom={sorted(set(table_ids) - set(matrix))}",
+    )
+    check(
+        "C10 every domain has an owning dossier",
+        not [d for d, ds in owner.items() if not ds],
+        f"{sorted(d for d, ds in owner.items() if not ds)}",
+    )
+    bad_range = sorted(d for d, ids in table_ids.items() if ids != matrix.get(d, set()))
+    check("C10 coverage ranges match matrix", not bad_range, f"{bad_range}")
+
+    # --- dossier status rows (02-10) ---
+    row_ids = {}
+    for f in COVERAGE_DOSSIERS:
+        body = safe_read(os.path.join(IMPLEMENTATION_DIR, f)) or ""
+        ids = set()
+        for ln in body.splitlines():
+            if ln.startswith("| ") and ln.split("|")[1].strip() in COVERAGE_ROW_CELLS:
+                ids |= _expand_ac(ln)
+        if ids:
+            row_ids[f] = ids
+
+    all_matrix_ids = set().union(*matrix.values()) if matrix else set()
+    phantom_ids = sorted(
+        {ac for ids in row_ids.values() for ac in ids} - all_matrix_ids
+    )
+    check("C10 dossier rows cite real AC ids", not phantom_ids, f"{phantom_ids}")
+
+    bad_owner = []
+    for f, ids in row_ids.items():
+        for ac in sorted(ids):
+            owned = owner.get(_ac_prefix(ac), set())
+            if f not in owned:
+                bad_owner.append(f"{f}: {ac} (domain owned by {sorted(owned)})")
+    check("C10 dossiers claim only owned AC domains", not bad_owner, "; ".join(bad_owner[:6]))
+
+    covered = set().union(*row_ids.values()) | set().union(*table_ids.values())
+    orphan = sorted(all_matrix_ids - covered)
+    check("C10 no orphan AC id", not orphan, f"{orphan}")
+
+    # --- REQ13-* ids are scoped to dossier 13 and defined there ---
+    leaks = []
+    for root, _, files in os.walk(DOCS_DIR):
+        for f in files:
+            if not f.endswith(".md"):
+                continue
+            path = os.path.join(root, f)
+            if os.path.abspath(path) == os.path.abspath(DOSSIER13_PATH):
+                continue
+            if REQ13_RE.search(safe_read(path) or ""):
+                leaks.append(os.path.relpath(path, ROOT))
+    check("C10 REQ13 ids stay in dossier 13", not leaks, f"{leaks}")
+
+    d13 = safe_read(DOSSIER13_PATH) or ""
+    m13 = re.search(
+        r"^## 5\.1 Requirement traceability\s*\n(.*?)(?=\n## 5\.2|\Z)",
+        d13,
+        flags=re.M | re.S,
+    )
+    defined13 = set(REQ13_RE.findall(m13.group(1) if m13 else ""))
+    undefined13 = sorted(set(REQ13_RE.findall(d13)) - defined13)
+    check("C10 REQ13 ids defined in 13", not undefined13, f"{undefined13}")
+
+
+# ---------------------------------------------------------------------------
+# C11 — verification-mapping links resolve to real test-design sections
+# ---------------------------------------------------------------------------
+
+VERIFICATION_DOSSIERS = COVERAGE_DOSSIERS + ["01-foundation.md"]
+
+
+def _gh_slug(heading):
+    """GitHub-style heading anchor: lowercase; drop punctuation; spaces -> '-'."""
+    s = re.sub(r"[^\w\s-]", "", heading.strip().lower())
+    return re.sub(r"\s+", "-", s)
+
+
+TEST_DESIGN_SECTIONS = ("Component test designs", "Shared testing rules")
+
+
+def _test_design_section_anchors(txt):
+    """GitHub anchors for every heading under the master catalog's two
+    test-design regions ('## Component test designs' and
+    '## Shared testing rules' — the latter holds the performance-benchmark
+    and security/CI procedures that verification mappings also link to)."""
+    anchors = set()
+    inside = None
+    for line in txt.splitlines():
+        m = re.match(r"^(#{2,4}) (.+)$", line)
+        if not m:
+            continue
+        level, heading = len(m.group(1)), m.group(2).strip()
+        if level == 2:
+            inside = heading if heading in TEST_DESIGN_SECTIONS else None
+            continue
+        if inside:
+            anchors.add(_gh_slug(heading))
+    return anchors
+
+
+def c11_verification_mapping():
+    tt = safe_read(DOSSIER_TRACE_PATH)
+    if tt is None:
+        return check("C11 traceability doc readable", False, DOSSIER_TRACE_PATH)
+    anchors = _test_design_section_anchors(tt)
+
+    missing_secs = []
+    for f in VERIFICATION_DOSSIERS:
+        body = safe_read(os.path.join(IMPLEMENTATION_DIR, f)) or ""
+        if not re.search(r"^## Verification mapping\s*$", body, flags=re.M):
+            missing_secs.append(f)
+    check("C11 all dossiers have a Verification mapping", not missing_secs, f"{missing_secs}")
+
+    dead = []
+    for f in sorted(os.listdir(IMPLEMENTATION_DIR)):
+        if not f.endswith(".md"):
+            continue
+        body = safe_read(os.path.join(IMPLEMENTATION_DIR, f)) or ""
+        m = re.search(
+            r"^## Verification mapping\s*\n(.*?)(?=\n## |\Z)", body, flags=re.M | re.S
+        )
+        if not m:
+            continue
+        for link in re.finditer(
+            r"\]\((?:\\./)?[^)#]*11-testing-and-release\.md#([^)]+)\)", m.group(1)
+        ):
+            anchor = link.group(1)
+            if anchor not in anchors:
+                dead.append(f"{f}: #{anchor}")
+    check(
+        "C11 verification links resolve to test-design sections",
+        not dead,
+        "; ".join(dead[:6]),
+    )
+
+
 def main():
     c1_manifest()
     c2_ownership_matrix()
@@ -595,13 +855,8 @@ def main():
     c7_version_pins()
     c8_acceptance_matrix()
     c9_dec039_invariants()
-    c1_manifest()
-    c2_ownership_matrix()
-    c3_schema_state_diagram()
-    c4_compat_vocabulary()
-    c5_stale_phrases()
-    c6_test_counts()
-    c7_version_pins()
+    c10_dossier_traceability()
+    c11_verification_mapping()
     if failures:
         print(f"\ndocs-audit: {len(failures)} check(s) FAILED — fix before proceeding")
         return 1

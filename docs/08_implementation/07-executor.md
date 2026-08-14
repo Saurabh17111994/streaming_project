@@ -12,7 +12,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready, broker/API/fencing evidence blocked |
 | Owner | Execution Team |
-| Requirements | `REQ-EXE-001`–`REQ-EXE-013` |
+| Requirements | `REQ-EXE-001`–`REQ-EXE-013` → `AC-EXE-001`–`AC-EXE-016` |
 | Contract | `docs/04_contracts/07-executor.md` |
 | Default | `HALTED`; broker calls disabled |
 | Sole side effect | Money-moving Arrow REST call, only after all gates |

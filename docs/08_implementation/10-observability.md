@@ -14,6 +14,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Owner | Platform/Operations; component owners emit telemetry |
 | Backend | OpenObserve target plus immutable local execution audit |
 | Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |
+| Acceptance criteria | `AC-OBS-001`–`AC-OBS-010` (proving families: `OPS-UNIT-*`, `OPS-INT-*`, `OPS-FAIL-*`, `OPS-RUNBOOK-001`, `OPS-REL-001`) |
 
 ### Common telemetry envelope
 

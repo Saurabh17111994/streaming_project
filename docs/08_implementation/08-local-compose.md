@@ -14,6 +14,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Owner | Platform Team |
 | Runtime | Docker Compose, single host |
 | Prohibited use | Production HA evidence or live-money enablement |
+| Acceptance criteria | `AC-PF-016` (Compose network-isolation subset); the full `REQ-PF-001`–`REQ-PF-012` / `AC-PF-001`–`AC-PF-019` family is owned by [`09-production-swarm.md`](./09-production-swarm.md) |
 
 ### Local topology
 

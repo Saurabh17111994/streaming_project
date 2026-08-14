@@ -15,6 +15,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Topology | Four VMs: three workload/HA, one observability |
 | EOD controller | Named service or scheduled job owning manifest lifecycle |
 | Live-money | Disabled until Phase 12 evidence passes |
+| Acceptance criteria | `REQ-PF-001`–`REQ-PF-012` → `AC-PF-001`–`AC-PF-019` (proving families: `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001`; local subset in `08-local-compose.md`) |
 
 ### Placement model
 

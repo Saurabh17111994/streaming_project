@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 304 tests (192 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 300 tests (188 ingestion + 112 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -626,6 +626,24 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 | `REQ-EXE-*` | Executor |
 | `REQ-OBS-*` | Observability/operations |
 | `REQ-PF-*` | Local/production deployment and version compatibility |
+
+### Acceptance criteria coverage
+
+Every acceptance-test row in the [acceptance matrix](../02_requirements/09-acceptance-matrix.md) is owned by an implementation dossier and proven by that dossier's test families from the master test catalog. Matrix AC ids are contiguous per domain; the counts below reconcile to 152 rows (15 ING + 17 FLS + 16 FC + 12 SS + 9 RNK + 17 AC + 9 BB + 16 EXE + 10 OBS + 19 PF + 12 NFR).
+
+| AC domain | AC ids | Owning dossier(s) | Dossier test families (master catalog) |
+| --- | --- | --- | --- |
+| `AC-ING-*` | `AC-ING-001`–`AC-ING-015` | [`03-ingestion.md`](./03-ingestion.md) | `ING-*`, `BROKER-MD-001`, `STATE-DEDUP-001`, `FAIL-PENDING-001`, `THR-PROBE-001`, `MOCK-*` |
+| `AC-FLS-*` | `AC-FLS-001`–`AC-FLS-017` | [`02-schema-storage.md`](./02-schema-storage.md) | `SCHEMA-*`, `COMPAT-FLUSS-*`, `COMPAT-FLINK-001`, `DDL-*` |
+| `AC-FC-*` | `AC-FC-001`–`AC-FC-016` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*`, `STATE-CANDLE-001`, `STATE-COMPAT-001`, `SAFETY-INT-001` |
+| `AC-SS-*` | `AC-SS-001`–`AC-SS-012` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (slot-scoped safety consumer), `SAFETY-INT-001` |
+| `AC-RNK-*` | `AC-RNK-001`–`AC-RNK-009` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (in-operator ranking) |
+| `AC-AC-*` | `AC-AC-001`–`AC-AC-017` | [`05-action-capture.md`](./05-action-capture.md) | `AC-UNIT-*`, `AC-INT-001`, `AC-FAIL-*`, `AC-REC-001`, `BROKER-PB-001` |
+| `AC-BB-*` | `AC-BB-001`–`AC-BB-009` | [`06-babysitter.md`](./06-babysitter.md) | `BAB-*`, `BABYSITTER-001` |
+| `AC-EXE-*` | `AC-EXE-001`–`AC-EXE-016` | [`07-executor.md`](./07-executor.md) | `EXE-*`, `ARROW-REST-*` |
+| `AC-OBS-*` | `AC-OBS-001`–`AC-OBS-010` | [`10-observability.md`](./10-observability.md) | `OPS-*` |
+| `AC-PF-*` | `AC-PF-001`–`AC-PF-019` | [`08-local-compose.md`](./08-local-compose.md) (local subset, e.g. Compose isolation), [`09-production-swarm.md`](./09-production-swarm.md) | `LOCAL-*`, `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001` |
+| `AC-NFR-*` | `AC-NFR-001`–`AC-NFR-012` | Cross-cutting: [`01-foundation.md`](./01-foundation.md) + this catalog (performance campaigns, security tests, ops acceptance) | `PERF-*`, `SEC-*`, `OPS-*`, `CI-PERF-001` |
 
 ### Documentation completion statement
 

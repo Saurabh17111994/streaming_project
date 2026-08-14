@@ -13,7 +13,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready, broker-postback evidence blocked |
 | Owner | Action Capture Team; position projection ownership remains explicit |
-| Requirements | `REQ-AC-001`–`REQ-AC-013` |
+| Requirements | `REQ-AC-001`–`REQ-AC-013` → `AC-AC-001`–`AC-AC-017` |
 | Contract | `docs/04_contracts/06-action-capture.md` |
 | Writes | `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine` |
 | Must not own | Strategy, ranking, order submission, gate approval |

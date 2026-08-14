@@ -13,7 +13,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready MVP no-op; future action contract deferred |
 | Owner | Babysitter Team |
-| Requirements | `REQ-BB-*` |
+| Requirements | `REQ-BB-001`–`REQ-BB-008` → `AC-BB-001`–`AC-BB-009` |
 | Contract | `docs/04_contracts/05-babysitter.md` |
 | MVP output | No actions |
 | Safety rule | Babysitter never calls broker/Arrow REST directly |

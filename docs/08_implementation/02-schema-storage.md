@@ -13,6 +13,7 @@ Use this file to build the data tables and the tests that prove they are safe.
 | Status              | Design-ready; Phase A (21 DDLs) complete; Phase B (static validation) complete; Phase C partially complete (live dev cluster active; SCH-17 verified, SCH-12/13 partial, SCH-14-16 open); Phase D partially complete; Phase E deferred                                         |
 | Owner               | Storage/Platform Team                                                                                 |
 | Source requirements | `REQ-FLS-*`, `docs/02_requirements/04-data.md`, `DEC-001`, `DEC-005`, `DEC-018`, `DEC-020`, `DEC-021` |
+| Acceptance criteria | `AC-FLS-001`–`AC-FLS-017` (proving families: `SCHEMA-*`, `COMPAT-FLUSS-*`, `COMPAT-FLINK-001`, `DDL-*`) |
 | Migration posture   | Pre-production clean break until live-money release                                                   |
 
 ### Purpose
