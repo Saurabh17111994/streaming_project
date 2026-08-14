@@ -136,7 +136,7 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 
 ### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
 
-Status: Phases 2a-2g done — 300 tests (188 ingestion + 112 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append 49,578 tps / p99 &lt; 5 ms; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak PASS (100/100 cycles, 2852.7 s, no leak; hub res001-soak, 2026-08-13); the 3,000-instrument / 3-connection production-envelope run is removed from acceptance (DEC-037) — see [`03-ingestion.md`](./03-ingestion.md) Status.
+Status: Phases 2a-2g done — 327 tests (188 ingestion + 139 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common +27 seven-year-audit core tests 2026-08-14), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append 49,578 tps / p99 &lt; 5 ms; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak PASS (100/100 cycles, 2852.7 s, no leak; hub res001-soak, 2026-08-13); the 3,000-instrument / 3-connection production-envelope run is removed from acceptance (DEC-037) — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 

@@ -8,7 +8,7 @@ Local Compose maintenance is not production procedure or HA evidence.
 
 ## Planned maintenance procedure
 
-1. Create a change record with scope, affected components, requirements/contracts/DDL/interfaces, versions, state impact, risk, rollback, and acceptance checks.
+1. Create a change record with scope, affected components, requirements/contracts/DDL/interfaces, versions, state impact, risk, rollback, and acceptance checks. Records are filed in [`../05_deployment/change-records/`](../05_deployment/change-records/_template.md) as `CHG-<N>.md` using the template, and must name the six fields validated by docs-audit C14.
 2. Schedule outside critical workload windows where possible and verify EOD retention margin.
 3. Confirm backup/checkpoint/savepoint and audit availability.
 4. Halt new money-moving calls and reconcile attempts, orders, fills, positions, reservations, mappings, and projections.

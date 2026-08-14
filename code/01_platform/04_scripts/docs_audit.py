@@ -37,6 +37,17 @@ Checks:
       "## Verification mapping" section, and every link in those sections to
       11-testing-and-release.md#anchor resolves (GitHub-slugged) to a heading
       under its "## Component test designs" section — no dead test-design links.
+  C12 WORM/Object-Lock statements name the R2 mechanism (bucket locks) or the
+      S3 Object Lock API limitation, or are marked evidence-gated — no bare
+      'WORM/Object Lock' claim without a mechanism or gate (2026-08-14 sweep).
+  C13 Runbook index <-> requirements sync: every runbook_id in
+      docs/06_operations front matter appears in the §6.9 runbook coverage
+      table of 06-operational.md, and no phantom id sits in the table.
+  C14 Change-control reconciliation: every change record in
+      docs/05_deployment/change-records/ names the six required fields
+      (affected artifacts, compatibility class, savepoint impact, test
+      updates, rollback behavior, plan tasks) with a valid compatibility
+      class (01-foundation.md "Change control", orig L205).
 """
 
 import glob
@@ -45,6 +56,8 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+
+import change_control_check  # same directory; C14 record validator
 
 ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -845,6 +858,158 @@ def c11_verification_mapping():
     )
 
 
+# ---------------------------------------------------------------------------
+# C12 — WORM/Object-Lock statements must name the R2 mechanism or be gated
+# (2026-08-14 repo-wide sweep: every WORM/Object Lock statement either names
+#  the R2 'bucket locks' mechanism or the S3 Object Lock API limitation, or is
+#  marked evidence-gated; a bare claim with neither is drift reintroduced.)
+# ---------------------------------------------------------------------------
+
+WORM_TRIGGER_RE = re.compile(r"\b(worm|object[ _-]lock|write-once)\b", re.I)
+WORM_MECHANISM_RE = re.compile(r"bucket[ _-]lock", re.I)  # the R2 WORM mechanism
+WORM_API_LIMIT_RE = re.compile(r"object[ _-]lock api", re.I)  # the S3 API R2 doesn't implement
+WORM_CTRL_REF_RE = re.compile(r"AC-NFR-005|NFR 3\.4\.1|SCH-24")  # IDs that pin the mechanism
+WORM_GATE_RES = [
+    re.compile(r"evidence[ -]gated", re.I),
+    re.compile(r"evidence[ -]blocked", re.I),
+    re.compile(r"deferred", re.I),
+    re.compile(r"pending", re.I),
+    re.compile(r"not implemented", re.I),
+    re.compile(r"not-implemented", re.I),
+    re.compile(r"not yet", re.I),
+    re.compile(r"to be determined", re.I),
+    re.compile(r"\btbd\b", re.I),
+    re.compile(r"\btodo\b", re.I),
+    re.compile(r"\bopen\b", re.I),
+]
+
+
+def c12_worm_statements():
+    hits = []
+    for root, _, files in os.walk(DOCS_DIR):
+        for f in files:
+            if not f.endswith(".md"):
+                continue
+            path = os.path.join(root, f)
+            txt = safe_read(path)
+            if txt is None:
+                continue
+            lines = txt.splitlines()
+            # The doc names the mechanism somewhere -> headings within it are grounded.
+            doc_mechanism = bool(WORM_MECHANISM_RE.search(txt))
+            for i, ln in enumerate(lines):
+                if not WORM_TRIGGER_RE.search(ln):
+                    continue
+                # Trigger only inside a backticked identifier (e.g. `audit-worm-indefinite`)
+                # is a name, not a statement.
+                if not WORM_TRIGGER_RE.search(re.sub(r"`[^`]*`", "", ln)):
+                    continue
+                if ln.lstrip().startswith("#") and doc_mechanism:
+                    continue  # heading in a doc that establishes the mechanism
+                # A statement may wrap across lines; judge the 3-line window.
+                window = " ".join(lines[max(0, i - 1) : i + 2])
+                if WORM_MECHANISM_RE.search(window):
+                    continue
+                if WORM_API_LIMIT_RE.search(window):
+                    continue
+                if WORM_CTRL_REF_RE.search(window):
+                    continue
+                if any(g.search(window) for g in WORM_GATE_RES):
+                    continue
+                rel = os.path.relpath(path, ROOT)
+                hits.append(f"{rel}:{i + 1}: {ln.strip()[:100]}")
+    check(
+        "C12 WORM statements name R2 bucket locks or are evidence-gated",
+        not hits,
+        "; ".join(hits[:6]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# C13 — runbook index <-> requirements sync: every runbook_id in
+# docs/06_operations front matter must appear in the §6.9 runbook coverage
+# table of 06-operational.md (and no phantom id may sit in the table).
+# ---------------------------------------------------------------------------
+
+OPS_DIR = os.path.join(DOCS_DIR, "06_operations")
+OPERATIONAL_REQ_PATH = os.path.join(DOCS_DIR, "02_requirements", "06-operational.md")
+RUNBOOK_ID_RE = re.compile(r"^runbook_id:\s*([A-Z][A-Z0-9-]*)", re.M)
+
+
+def c13_runbook_coverage():
+    ids = {}
+    for f in sorted(os.listdir(OPS_DIR)):
+        if not f.endswith(".md"):
+            continue
+        txt = safe_read(os.path.join(OPS_DIR, f)) or ""
+        m = RUNBOOK_ID_RE.search(txt)
+        if m:
+            ids[m.group(1)] = f
+    if not ids:
+        return check("C13 runbook ids found in front matter", False, "none found")
+
+    req = safe_read(OPERATIONAL_REQ_PATH) or ""
+    m = re.search(
+        r"^## 6\.9 Observability and alert response\s*\n(.*?)(?=\n## |\Z)",
+        req,
+        flags=re.M | re.S,
+    )
+    sec = m.group(1) if m else ""
+    if not sec:
+        return check("C13 §6.9 coverage section found", False, OPERATIONAL_REQ_PATH)
+
+    missing = sorted(rb_id for rb_id in ids if rb_id not in sec)
+    check(
+        "C13 every runbook_id appears in §6.9 coverage table",
+        not missing,
+        f"missing={missing}",
+    )
+
+    table_ids = set(
+        t for t in re.findall(r"`([^`]+)`", sec) if t.startswith("OPS-")
+    )
+    phantom = sorted(table_ids - set(ids))
+    check(
+        "C13 no phantom runbook ids in §6.9 table",
+        not phantom,
+        f"phantom={phantom}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# C14 — change-control reconciliation records (01-foundation.md "Change
+# control", orig L205): every record in docs/05_deployment/change-records/
+# must name the six required fields with a valid compatibility class.
+# ---------------------------------------------------------------------------
+
+CHANGE_RECORDS_DIR = os.path.join(DOCS_DIR, "05_deployment", "change-records")
+
+
+def c14_change_control():
+    files, issues, missing = change_control_check.scan_records(CHANGE_RECORDS_DIR)
+    if missing:
+        return check(
+            "C14 change-records directory exists", False, CHANGE_RECORDS_DIR
+        )
+    if not files:
+        return check(
+            "C14 change records on file", True, "none — nothing to validate"
+        )
+    for f in files:
+        iss = issues[f]
+        check(
+            f"C14 {f} names all required fields",
+            not iss,
+            "; ".join(iss),
+        )
+    bad = [f for f, iss in issues.items() if iss]
+    check(
+        "C14 all change records complete",
+        not bad,
+        f"incomplete={bad}",
+    )
+
+
 def main():
     c1_manifest()
     c2_ownership_matrix()
@@ -857,6 +1022,9 @@ def main():
     c9_dec039_invariants()
     c10_dossier_traceability()
     c11_verification_mapping()
+    c12_worm_statements()
+    c13_runbook_coverage()
+    c14_change_control()
     if failures:
         print(f"\ndocs-audit: {len(failures)} check(s) FAILED — fix before proceeding")
         return 1

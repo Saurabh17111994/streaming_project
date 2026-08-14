@@ -117,6 +117,16 @@ Security incidents halt affected order flow, rotate credentials, preserve eviden
 
 MVP runbooks cover all order-safety, streaming-health, storage-safety, and security alerts defined in `02-functional/08-observability.md`. Every critical alert has owner role, acknowledgement target, diagnostic evidence, halt behavior, escalation, remediation, and closure evidence. Due dates remain TBD until assigned; live-money release cannot proceed with unowned critical alerts.
 
+Runbook coverage (kept in sync with the runbook index in `../06_operations/`):
+
+| Runbook | Runbook ID | Alert family / scope |
+| --- | --- | --- |
+| [`../06_operations/01-runbooks.md`](../06_operations/01-runbooks.md) — Operational runbooks | — | Order-safety, streaming-health, storage-safety, and security alerts (gate halt, reconciliation/resume, checkpoint failure, replay incident, cluster, schema-preflight, credential incident) |
+| [`../06_operations/02-ingestion-alerting.md`](../06_operations/02-ingestion-alerting.md) — Ingestion alerting contract | — | Ingestion alerts (`ING-*`) |
+| [`../06_operations/04-dr-plan.md`](../06_operations/04-dr-plan.md) — Disaster recovery plan | — | Recovery and VM-loss exercise procedures |
+| [`../06_operations/05-maintenance.md`](../06_operations/05-maintenance.md) — Maintenance and change operations | — | Planned maintenance and change records |
+| [`../06_operations/06-audit-store.md`](../06_operations/06-audit-store.md) — Seven-year audit store (R2 bucket locks) | `OPS-AUDIT-STORE-001` | Storage-safety: seven-year audit retention WORM (NFR 3.4.1 / AC-NFR-005); provisioning and validation (`audit_r2.py`) |
+
 ## 6.11 Control-plane operations
 
 The platform SHALL define versioned, authenticated, idempotent interfaces for halt, reconciliation start/completion, approval, approval expiry/revocation, quarantine disposition, manual unknown-attempt disposition, gate inspection, and audit retrieval. Every command includes scope, actor, request ID, expected epoch/version, evidence hash where applicable, authorization result, and immutable audit outcome.

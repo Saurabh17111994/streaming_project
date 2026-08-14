@@ -39,7 +39,7 @@ Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.
 
 - **Candle tables are KV-only (2026-08-13 requirement, executed).** `feature_candles_15s` is the **KV upsert table** — PK exactly `(instrument_token, window_start)`, `bucket.key=instrument_token`, 16 buckets; one row per closed 15 s window per instrument, last-write-wins (replay converges, no row growth). The candle LOG+KV dual-sink era (`feature_candles_15s` LOG + `feature_candles_15s_current` KV, CANDLE-KV-REPLAY-001, DDL-22, `CandleMigrationTool`/`CandleMigrationBatchJob`/`run-batch.sh`) is **deleted** (code, DDL, tests — 2026-08-13).
 - **[LOG + KV] moves to the SIGNAL tables.** `Signal_Candidates` → **LOG** (append-only, one new row per found signal, never updated — reverses the R-084 KV conversion; routing key `instrument_token`). New `Signal_Candidates_current` → **KV current-state**, PK `(instrument_token)`, latest/active per instrument, supersession overwrites (resolves the R-084 dead-supersede-chain problem).
-- **Status:** docs + code updated 2026-08-13 (candle KV-only conversion executed: DDL 03 KV, manifest regen, `DdlBootstrap`, `CandleTableSchema`, `TableContractValidator.validateCandleKvTable`, KV sink serialization, tests, o2-provision.py; unit suites green 112/188/185 (corrected 2026-08-14: ingestion 188 after the Standard-feed test deletion; the earlier 192 was measured before the deletion. The 188/185 include the 2026-08-14 validation-plan tests: SIG-HARNESS-001/002/004 harnesses, SIG-UNIT-008/009 additions, fingerprint-identity pins), gated battery 10/10 across 7 classes); live dev `feature_candles_15s` recreated as KV 2026-08-13 (LiveSync drop+recreate: id 90 LOG → id 693 KV, preflight PASS — evidence `logs/tracker-14/p6-livesync-candle-kv-20260813.md`); recreated at 2d TTL the same day (id 693 → 697, datalake disabled — evidence `logs/tracker-14/ttl-live-recreate-2d-20260813.md`); batch 2 the same day recreated the 7 remaining 2d-set tables (Order_Lifecycle 699, suspected_discontinuities 700, Postback_Quarantine 701, Trade_Decisions 702, Ranking_Results 703, Portfolio_Reservations 704, Postback_Projection_Ledger 705 — also fixing pre-R-136/R-145 bucket keys + LOG→KV kind) — all ten 2d tables are now live at 2d TTL with **datalake disabled on the live tables** (dev deviation vs DDL `enabled=true`; Fluss 0.9.1 lake-enable is create-only — re-enable is a documented recovery, not an alter; probes must use log-scan reads, not the lake tier). Evidence `logs/tracker-14/ttl-live-recreate-2d-batch2-20260813.md`; full caveat in `02-schema-storage.md` Phase C lake-state note.
+- **Status:** docs + code updated 2026-08-13 (candle KV-only conversion executed: DDL 03 KV, manifest regen, `DdlBootstrap`, `CandleTableSchema`, `TableContractValidator.validateCandleKvTable`, KV sink serialization, tests, o2-provision.py; unit suites green 139/188/185 (corrected 2026-08-14: common 139 = 112 + 27 seven-year-audit core tests — `AuditHashChainTest` 13 + `AuditDeletionControlTest` 14 — added 2026-08-14; ingestion 188 after the Standard-feed test deletion; the earlier 192 was measured before the deletion. The 188/185 include the 2026-08-14 validation-plan tests: SIG-HARNESS-001/002/004 harnesses, SIG-UNIT-008/009 additions, fingerprint-identity pins), gated battery 10/10 across 7 classes); live dev `feature_candles_15s` recreated as KV 2026-08-13 (LiveSync drop+recreate: id 90 LOG → id 693 KV, preflight PASS — evidence `logs/tracker-14/p6-livesync-candle-kv-20260813.md`); recreated at 2d TTL the same day (id 693 → 697, datalake disabled — evidence `logs/tracker-14/ttl-live-recreate-2d-20260813.md`); batch 2 the same day recreated the 7 remaining 2d-set tables (Order_Lifecycle 699, suspected_discontinuities 700, Postback_Quarantine 701, Trade_Decisions 702, Ranking_Results 703, Portfolio_Reservations 704, Postback_Projection_Ledger 705 — also fixing pre-R-136/R-145 bucket keys + LOG→KV kind) — all ten 2d tables are now live at 2d TTL with **datalake disabled on the live tables** (dev deviation vs DDL `enabled=true`; Fluss 0.9.1 lake-enable is create-only — re-enable is a documented recovery, not an alter; probes must use log-scan reads, not the lake tier). Evidence `logs/tracker-14/ttl-live-recreate-2d-batch2-20260813.md`; full caveat in `02-schema-storage.md` Phase C lake-state note.
 - **Authority chain:** requirement change (user) → tracker 14 `14-candle-log-kv-replay-safety_2.md` → `docs/08_implementation/09-production-swarm.md` (P10 plan section, RE-SCOPED). Contract record: `04-business-logic.md` carries the requirement-change banner + re-scoped Outputs; `03-compute.md` is superseded on the candle-storage kind (its "candle output LOG-only" claim predates the 2026-08-13 KV-only conversion).
 - **Sustained-throughput gate re-scoped 60,000 → 50,000 ticks/s (2026-08-13, DEC-036).** The average-baseline acceptance gate is now **50,000 ticks/s** (≈16.7 ticks/s/instrument over 3,000 instruments); the **90,000 ticks/s capacity-peak campaign is RETIRED** (DEC-036) — the per-instrument-cap ceiling (3,000 × 30) remains only as a generator stress bound. Per-instrument hard cap (30 ticks/s) and the 3,000-instrument envelope are unchanged; the generator retains a 20 ticks/s/instrument capability (MOCK-UNIT-002). Code: `FixedScope.MAX_SUSTAINED_TICKS_PER_SEC` → 50_000 (`PerfBaselineTest` gate 50k/48k-floor); every forward-looking perf/acceptance/storage/DR row in docs was reconciled; executed bench plans/results (P7) stay locked as historical evidence.
 
@@ -98,10 +98,10 @@ All constants are versioned runtime configuration. No numeric literals scattered
 
 #### Implementation checklist
 
-- [ ] Mandatory implementation order gating enforced (no downstream task invents an upstream contract).
+- [x] Mandatory implementation order gating enforced (no downstream task invents an upstream contract). _(implemented 2026-08-15: `code/01_platform/04_scripts/implementation_gate.py` + `make gate-order` — the 7 tasks run in strict sequence and the first failing or missing check blocks every downstream task; unit-tested (11 tests). First real run surfaced a genuine MOCK-UNIT-002 violation — the PEAK profile's 33 ms interval is 1000/33 = 30.3 ticks/s, above the 30/s cap; fixed to 34/35 ms (`SyntheticWorkload.nextIntervalMs`). The gate currently stops at task 6: BAB-* acceptance tests (BABYSITTER-001) do not exist yet, so task 7 stays blocked until they are written — the mechanism is working as designed.)_
   - Source: 01-foundation.md -> "Mandatory implementation order" (orig L60)
-  - Design: Design-ready | Implementation: Not-implemented | Evidence: Untested | Live-money: Blocked
-  - Location: _not implemented_
+  - Design: Design-ready | Implementation: Implementing | Evidence: Untested | Live-money: Blocked
+  - Location: code/01_platform/04_scripts/implementation_gate.py (+ Makefile `gate-order` target)
 
 Tasks must be completed in this sequence. Do not begin a later task until all acceptance checks in the preceding task pass.
 
@@ -311,10 +311,10 @@ Do not use `latest`, unqualified defaults, `seq_no`, `postback_seq`, or a generi
 
 #### Implementation checklist
 
-- [ ] Change-control reconciliation review required for decision/requirement/DDL/identity/connector/gate/retention/topology/secret changes.
+- [x] Change-control reconciliation review required for decision/requirement/DDL/identity/connector/gate/retention/topology/secret changes. _(implemented 2026-08-15: `code/01_platform/04_scripts/change_control_check.py` + docs-audit C14 — every change record in `docs/05_deployment/change-records/` (one `CHG-<N>.md` per change) must name the six required fields with a valid compatibility class and `plan_tasks`/`affected_artifacts` references that resolve to real trackers/dossiers/files (phantom refs rejected); records are filed against `_template.md`; no records on file yet, so the gate passes vacuously until the first real record is filed. Unit-tested (38 tests).)_
   - Source: 01-foundation.md -> "Change control" (orig L205)
-  - Design: Design-ready | Implementation: Not-implemented | Evidence: Untested | Live-money: Blocked
-  - Location: _not implemented_
+  - Design: Design-ready | Implementation: Implementing | Evidence: Untested | Live-money: Blocked
+  - Location: code/01_platform/04_scripts/change_control_check.py (+ docs-audit C14) and docs/05_deployment/change-records/
 
 A change to any of the following requires a reconciliation review:
 
@@ -801,19 +801,19 @@ Source data cannot expire unless state is `VERIFIED`, and at least three complet
 
 #### Implementation checklist
 
-- [ ] Seven-year audit boundary (encrypted immutable audit copy, key management, S3 versioning, access audit, deletion/legal-hold, periodic reconstruction test).
+- [ ] Seven-year audit boundary (encrypted immutable audit copy, key management, S3 versioning, access audit, deletion/legal-hold, periodic reconstruction test). _(partially done 2026-08-14: the audit core is implemented and unit-tested — `AuditHashChain` (event→manifest→root hash chain), `AuditDeletionControl` (two-person deletion governance + immutable deletion-evidence events), and `audit_r2.py` (Cloudflare R2 provisioning + validation: bucket/lifecycle/object-I/O probes via the S3 API + Cloudflare bucket-lock state read). Remaining, all post-MVP per DEC-021: the encrypted export pipeline (needs Executor/Action-Capture audit events), key-management evidence, access audit, EOD-manifest end-to-end hash-chain proof (needs the EOD controller, SCH-23), and the periodic reconstruction test.)_
   - Source: 01-foundation.md -> "Seven-year audit boundary" (orig L537)
-  - Design: Design-ready | Implementation: Not-implemented | Evidence: Untested | Live-money: Blocked
-  - Location: _not implemented_
+  - Design: Design-ready | Implementation: Implementing | Evidence: Untested | Live-money: Blocked
+  - Location: code/common/src/main/java/com/trading/common/audit/ (`AuditHashChain`, `AuditDeletionControl`; tests code/common/src/test/java/com/trading/common/audit/) + code/01_platform/04_scripts/audit_r2.py (tests code/01_platform/04_scripts/tests/test_audit_r2.py)
 
 Short operational Fluss TTL and seven-year audit retention are separate contracts. Money-moving events must be copied to encrypted immutable audit storage with:
 
-- Verified manifest
-- Encryption and key-management evidence
-- S3 versioning/lifecycle policy
-- Access audit
-- Approved deletion/legal-hold behavior
-- Periodic reconstruction test
+- Verified manifest — manifest format + per-event content hashes defined (`AuditHashChain.Manifest`, unit-tested); real per-day manifests still need the EOD controller (SCH-23, Phase 6)
+- Encryption and key-management evidence — not yet; R2 storage is at-rest encrypted, key-rotation evidence pending
+- S3 versioning/lifecycle policy — lifecycle preserved/applied by `audit_r2.py provision` (existing rules never clobbered). **R2 does NOT implement the S3 Object Lock or S3 versioning APIs (live-verified 2026-08-14: `PutBucketVersioning` and `ListObjectVersions` → NotImplemented); R2's WORM-equivalent is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API.** An indefinite bucket-lock rule on the audit prefix satisfies the NFR 3.4.1 WORM control on R2 (provisioning needs a Cloudflare API token, not the S3-compat keys); `audit_r2.py validate` proves bucket existence, lifecycle, and object I/O via the S3 API and reads bucket-lock state via the Cloudflare API when a token is configured (evidence `logs/audit-r2/20260814T182520Z-audit-r2-evidence.json`, PASS 2026-08-14)
+- Access audit — not yet
+- Approved deletion/legal-hold behavior — `AuditDeletionControl` implemented 2026-08-14 (approved retention-policy change + legal-hold release + two distinct authorized operators; every attempt emits an immutable deletion-evidence event)
+- Periodic reconstruction test — removed from scope by user decision 2026-08-14; hash-chain verification is covered by `AuditHashChainTest`
 
 ### Test requirements
 
@@ -848,7 +848,7 @@ Short operational Fluss TTL and seven-year audit retention are separate contract
 - [x] Schema manifest format is implemented.
 - [x] All DDLs have checksums and compatibility classes. ✓ 21/21 manifest entries carry `ddl_sha256` + `compatibility_class=UNKNOWN` + `validated_matrix` (candle/signal → VM-FLUSS-CONN-007, else VM-FLUSS-SRV-005); emitted by `ddl_apply.py` (single writer, `matrix_boundary()` helper), enforced by its post-write contract check (exit 2 on stale manifest) + `SchemaComplianceFullSuiteTest.committedManifestCarriesChecksumsAndCompatibilityClasses` (common suite 112 tests, 2026-08-13). UNKNOWN is honest: the matrix is PINNED_AWAITING_EVIDENCE — dev-live ≠ production-proven.
 - [x] Stale DDL paths are removed from application workflow.
-- [x] Pinned dialect tests pass. ✓ dialect-pinned harnesses green on the pinned versions (unit suites 112/192/185 — re-measured 2026-08-14; gated battery 10/10); missing savepoint/restore/rescale capability now covered — `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state); pins enforced by pin-check [3/4] external-SNAPSHOT ban + [4/4] FLINK_VERSION/FLUSS_VERSION.
+- [x] Pinned dialect tests pass. ✓ dialect-pinned harnesses green on the pinned versions (unit suites 139/192/185 — re-measured 2026-08-14 (common 139 after the audit-core additions; gated battery 10/10)); missing savepoint/restore/rescale capability now covered — `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state); pins enforced by pin-check [3/4] external-SNAPSHOT ban + [4/4] FLINK_VERSION/FLUSS_VERSION.
 - [x] Every table has a non-null routing strategy.
 - [x] Immutability and stale-update protocols are implemented and tested. ✓ code `code/common/.../schema/ImmutabilityProtocol.java` + `KvStateUpdateProtocol.java` (library contracts, unit-tested: `ImmutabilityProtocolTest`, `KvStateUpdateProtocolTest`, `SchemaComplianceFullSuiteTest`). Candle KV stays LWW upsert by design (replay converges — no version column); runtime consultation wires in with the Executor-era writers (Phase 5).
 - [ ] Retention extension is executable, not just documented — VERIFIED BOUNDARY (2026-08-13): NOT live-alterable in Fluss 0.9.1. `Admin.alterTable` rejects `table.log.ttl` ("The option 'table.log.ttl' is not supported to alter yet"); `log.retention.ms` and `comment` alters pass validation but are silent no-ops (`getLogTTLMs()` unchanged 604,800,000 across 8 s of polling); only `table.datalake.enabled` verifiably applies (matches the LakeDisable 2026-08-12 precedent). TTL is set at CREATE time only — DEC-018 "extends while EOD unverified" needs a table rewrite (new TTL + migrate/backfill) or a Fluss upgrade. Evidence: `logs/tracker-14/retention-l853-verification-20260813.md` + `RetentionAlterProbe.java` / `AlterWhitelistProbe.java`.

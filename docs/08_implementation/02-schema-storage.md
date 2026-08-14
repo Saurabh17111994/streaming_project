@@ -276,7 +276,7 @@ upstream is complete.
 | ID | Task | Status | Location / Evidence |
 | --- | --- | --- | --- |
 | SCH-23 | Retention extension executable: EOD controller extends live retention for unverified days | [ ] | **Deferred** — EOD controller is a Phase 6 service |
-| SCH-24 | Seven-year audit pipeline: encrypted immutable S3 copy, key management, periodic reconstruction test | [ ] | **Deferred** — post-MVP separate pipeline (DEC-021) |
+| SCH-24 | Seven-year audit pipeline: encrypted immutable S3 copy, key management, periodic reconstruction test | [ ] | **Deferred** — post-MVP separate pipeline (DEC-021). **2026-08-14 partial:** audit core implemented + unit-tested — `AuditHashChain` + `AuditDeletionControl` (`code/common/audit/`) and `audit_r2.py` R2 provisioning/validation (`code/01_platform/04_scripts/`; live evidence `logs/audit-r2/20260814T182520Z-audit-r2-evidence.json`, PASS 2026-08-14). R2 confirmed to NOT implement the S3 Object Lock/versioning APIs (live-verified 2026-08-14); R2's WORM-equivalent is 'bucket locks' (indefinite prefix rule) via the Cloudflare dashboard/Wrangler/API — NFR 3.4.1 can be satisfied on R2 once the rule is applied (needs a Cloudflare API token). Export pipeline, key-management evidence, and the reconstruction test remain deferred |
 | SCH-25 | Clean-break reset + replay: destructive approval, state reset, full replay from broker/log | [ ] | **Deferred** — pre-production drill, needs all services |
 
 #### Test mapping
@@ -305,7 +305,7 @@ Each SCH task maps to a test ID from `11-testing-and-release.md`:
 - [x] Every table has a non-null routing strategy. ✓ `RoutingKeyRule.java` + all 21 DDLs have `bucket.key` or `PRIMARY KEY` (SCH-07)
 - [x] Immutability and stale-update protocols are implemented and tested. ✓ `ImmutabilityProtocol.java` + `KvStateUpdateProtocol.java` + unit tests (SCH-08, SCH-09)
 - [ ] Retention extension is executable, not just documented. _(deferred — needs EOD controller, SCH-23)_
-- [ ] Audit-lake retention and reconstruction evidence exist. _(deferred — post-MVP, SCH-24, SCH-25)
+- [ ] Audit-lake retention and reconstruction evidence exist. _(deferred — post-MVP, SCH-24, SCH-25; 2026-08-14: the R2 validation tooling (`audit_r2.py`) is ready — real-bucket evidence not yet captured)_
 
 ## Verification mapping
 

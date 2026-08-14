@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion gate static-check docs-audit pin-check
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit pin-check
 
 help:
 	@echo "Targets:"
@@ -20,7 +20,10 @@ help:
 	@echo "  cep-check   fail if Flink CEP is referenced (project policy)"
 	@echo "  test        run unit tests (common + ingestion)"
 	@echo "  test-ingestion  run only the ingestion module tests"
+	@echo "  test-audit-r2   run audit_r2.py unit tests (stdlib unittest, no R2 access needed)"
 	@echo "  gate        run the full Monday verification gate (static + compose + go + java + schema/perf)"
+	@echo "  gate-order  mandatory implementation order gate (01-foundation.md): 7 tasks in sequence,"
+	@echo "              stops if any upstream task's acceptance checks are red or missing"
 	@echo "  static-check  bash -n + shellcheck every repo shell script"
 	@echo "  docs-audit  doc-vs-code truth gate (foundation L388): manifest, ownership matrix,"
 	@echo "              schema-state diagram, compat vocabulary, stale phrases, test counts, version pins"
@@ -63,9 +66,20 @@ test:
 test-ingestion:
 	cd code && $(MVN) -q test -pl 02_services/01_ingestion -am
 
+# audit_r2.py unit tests (stdlib unittest — SigV4 golden vector, config
+# parsing, provisioning/validation against an in-memory fake client).
+test-audit-r2:
+	python3 -m unittest discover -s code/01_platform/04_scripts/tests -v
+
 # Phase 8: every guard fires on every run — the full Monday gate.
 gate:
 	bash code/01_platform/04_scripts/run-monday-gates.sh
+
+# 01-foundation.md "Mandatory implementation order": enforce the 7-task
+# sequence — refuse to proceed past a task whose acceptance checks are red
+# or missing. Tasks run in order; the first failing task blocks all downstream.
+gate-order:
+	@python3 code/01_platform/04_scripts/implementation_gate.py
 
 # Phase 8 G4: static script hygiene without needing the full gate.
 static-check:

@@ -176,7 +176,7 @@ Eligible immutable event tables offload at EOD to encrypted Iceberg/S3. The EOD 
 
 Every offload produces a manifest with source range, counts, bytes, schema versions, hashes/checksums, commit identifier, verification status, and retries.
 
-A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated.
+A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; an indefinite rule on the audit prefix is the WORM-equivalent (the S3 Object Lock API is not implemented on R2).**
 
 ## Safe-halt coupling
 

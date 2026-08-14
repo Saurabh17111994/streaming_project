@@ -54,7 +54,7 @@ Restart/recovery and checkpoint behavior that depends on exact connector semanti
 
 ## Retention and lake
 
-Eligible live event tables keep at least three complete trading days and extend retention while an EOD manifest is unverified, retryable, or under reconciliation. Execution, order, fill, gate, correlation, approval, reconciliation, and future position-action audit is immutable, encrypted, and retained seven years in Iceberg/S3.
+Eligible live event tables keep at least three complete trading days and extend retention while an EOD manifest is unverified, retryable, or under reconciliation. Execution, order, fill, gate, correlation, approval, reconciliation, and future position-action audit is immutable, encrypted, and retained seven years in Iceberg/S3. **WORM control (2026-08-14): the object store is Cloudflare R2; immutability is enforced by an R2 'bucket lock' rule — an indefinite (retain-forever) rule on the audit prefix (tooling default `audit/`), configured via the Cloudflare dashboard/Wrangler/API. The S3 Object Lock API is NOT implemented on R2, so S3-style compliance-mode locking is not available; the bucket-lock rule is the WORM-equivalent (NFR 3.4.1 / AC-NFR-005). Provisioning and verification: `code/01_platform/04_scripts/audit_r2.py provision --set-lock` / `validate` (requires `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`).**
 
 Each manifest includes schema/table version, date/source range, rows/bytes, hashes/checksums, commit ID, verification state, and retries.
 

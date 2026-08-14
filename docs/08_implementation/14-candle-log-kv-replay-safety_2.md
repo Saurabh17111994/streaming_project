@@ -634,8 +634,10 @@ Use the repository’s pinned Flink 2.2.1-compatible embedded RocksDB state back
   PASS; lifecycle = ONLY the 7-day multipart-abort rule (no retention/expiration — dev has no 7y
   audit requirement); versioning UNSET (disabled — R2 S3 API `PutBucketVersioning` returns
   NotImplemented; dashboard-only toggle → dev gap recorded); bucket policy N/A (R2 has no
-  GetBucketPolicy/PutBucketPolicy API — access control = scoped R2 API tokens); object lock not
-  configured (WORM only if the 7y control requires immutability — paid plan); lake tier active
+  GetBucketPolicy/PutBucketPolicy API — access control = scoped R2 API tokens); the S3 Object
+  Lock API is not implemented on R2 — the WORM control = bucket locks (indefinite prefix rule
+  via the Cloudflare dashboard/Wrangler/API, 2026-08-14, superseding the earlier "paid plan"
+  framing); lake tier active
   (`lake/default/raw_table_1/data/instrument_token_bucket=0..15/*.parquet`). PRODUCTION bucket
   evidence template (versioning ENABLED / SSE / 7y lifecycle / token scoping / WORM decision)
   documented in logs/tracker-14/p4-2-bucket-policy-2026-08-11.md §2 — box stays open until the
