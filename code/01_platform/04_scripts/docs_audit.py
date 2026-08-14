@@ -17,6 +17,16 @@ Checks:
   C5  No known-stale phrases anywhere in docs/.
   C6  Test counts in 01-foundation.md L42 match current surefire totals.
   C7  versions.pin holds FLINK/FLUSS pins; no 'latest' / placeholder.
+  C8  Acceptance matrix (09-acceptance-matrix.md): AC/EB/NI totals match the
+      pinned baseline (152/13/139, DEC-039); coverage + summary tables equal
+      the actual rows; every defined REQ maps to an AC row (no unmapped, no
+      phantom refs); NFR rows resolve to real sections in 03-non-functional.md.
+  C9  DEC-039 invariants: no stale 4-mode / seconds-timestamp / checkpoint-
+      durability / LOG-control / ledger-skipped claims outside the dated
+      decisions index; HFT frame sizes 40/196 B and ltpc+full-only mode switch;
+      bridge ns->ms conversion; ledger + halt tables KV in manifest and DDL;
+      ledger live-in-dev evidence; exactly 21 DDLs with no dedup DDL yet; dedup
+      marked planned; forming_bar + ingestion_quarantine in all four inventories.
 """
 
 import glob
@@ -250,7 +260,341 @@ def c7_version_pins():
     )
 
 
+# ---------------------------------------------------------------------------
+# C8 — acceptance-matrix integrity (docs/02_requirements/09-acceptance-matrix.md)
+# ---------------------------------------------------------------------------
+
+MATRIX_PATH = os.path.join(DOCS_DIR, "02_requirements", "09-acceptance-matrix.md")
+NFR_PATH = os.path.join(DOCS_DIR, "02_requirements", "03-non-functional.md")
+DECISIONS_PATH = os.path.join(DOCS_DIR, "01_project", "04-decisions.md")
+
+# Baseline agreed 2026-08-14 (DEC-039) — bump these when the matrix
+# legitimately grows and update the doc's Coverage summary / Summary tables.
+EXPECTED_AC_TOTAL = 152
+EXPECTED_EB_TOTAL = 13
+EXPECTED_NI_TOTAL = 139
+
+REQ_FILES = {  # domain (as used in the matrix tables) -> (prefix, requirement file)
+    "Ingestion": ("REQ-ING", "02-functional/01-ingestion.md"),
+    "Storage": ("REQ-FLS", "02-functional/02-storage.md"),
+    "Compute": ("REQ-FC", "02-functional/03-compute.md"),
+    "Business Logic": ("REQ-SS", "02-functional/04-business-logic.md"),
+    "Ranking": ("REQ-RNK", "02-functional/10-ranking.md"),
+    "Action Capture": ("REQ-AC", "02-functional/06-action-capture.md"),
+    "Executor": ("REQ-EXE", "02-functional/07-executor.md"),
+    "Babysitter": ("REQ-BB", "02-functional/05-babysitter.md"),
+    "Observability": ("REQ-OBS", "02-functional/08-observability.md"),
+    "Platform": ("REQ-PF", "02-functional/09-platform-runtime.md"),
+}
+NFR_DOMAIN = "Non-functional"
+
+INVENTORY_FILES = [  # all four table inventories must list both tables (DEC-039)
+    "02_requirements/04-data.md",
+    "03_architecture/00-arch-overview.md",
+    "03_architecture/02-data-pipeline.md",
+    "03_architecture/01-technology-choices.md",
+]
+
+
+def _ac_rows(section):
+    """Return (rows, malformed) for every AC row in a matrix section.
+
+    Every row must have the 8-column header shape (Acceptance ID | Requirement |
+    Coverage type | Uncovered criteria | Fixture / Workload | Threshold |
+    Evidence Artifact | Status). Malformed rows (wrong cell count) are returned
+    separately so C8 can fail on them; requirement is always cell 1 and status
+    is always the last cell's token."""
+    rows, malformed = [], []
+    for line in section.splitlines():
+        if not line.startswith("| `AC-"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 8:
+            malformed.append(line.strip()[:90])
+            continue
+        m = re.search(r"`([A-Z_]+)`", cells[-1])  # last cell: status token
+        rows.append((cells[1], m.group(1) if m else None))
+    return rows, malformed
+
+
+def _matrix_sections(txt):
+    """domain (as used in the tables) -> section body. Normalizes
+    'Platform / Runtime' (section header) to 'Platform' (table rows)."""
+    sections = {}
+    for part in re.split(r"^### ", txt, flags=re.M)[1:]:
+        name = part.splitlines()[0].strip().replace(" / Runtime", "")
+        sections[name] = part
+    return sections
+
+
+def _section_under(txt, header):
+    """Text of the section whose `## header` line starts the section."""
+    m = re.search(rf"^## {re.escape(header)}\s*\n(.*?)(?=\n## |\Z)", txt, flags=re.M | re.S)
+    return m.group(1) if m else ""
+
+
+def _coverage_map(section):
+    """Domain -> (requirements, acceptance_ids) from the Coverage summary table.
+    Tolerates `**bold**` cells (the Total row is fully bold)."""
+    out = {}
+    for m in re.finditer(
+        r"^\| \*{0,2}([\w /-]+?)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \|",
+        section,
+        flags=re.M,
+    ):
+        out[m.group(1)] = (int(m.group(2)), int(m.group(3)))
+    return out
+
+
+def _summary_map(section):
+    """Domain -> (total, passed, failed, evidence_blocked, not_implemented)
+    from the Summary table. Tolerates `**bold**` cells (the Total row is bold)."""
+    out = {}
+    for m in re.finditer(
+        r"^\| \*{0,2}([\w /-]+?)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \| \*{0,2}(\d+)\*{0,2} \|",
+        section,
+        flags=re.M,
+    ):
+        out[m.group(1)] = tuple(map(int, m.groups()[1:]))
+    return out
+
+
+def _defined_reqs():
+    """domain -> set of `## REQ-XXX-NNN` headers defined in its requirement file."""
+    defined = {}
+    for domain, (prefix, f) in REQ_FILES.items():
+        body = safe_read(os.path.join(DOCS_DIR, "02_requirements", f)) or ""
+        defined[domain] = set(
+            re.findall(rf"^#+\s*({re.escape(prefix)}-\d+)", body, flags=re.M)
+        )
+    return defined
+
+
+def c8_acceptance_matrix():
+    txt = safe_read(MATRIX_PATH)
+    if txt is None:
+        return check("C8 matrix readable", False, MATRIX_PATH)
+    sections = _matrix_sections(txt)
+    coverage = _coverage_map(_section_under(txt, "Coverage summary"))
+    summary = _summary_map(_section_under(txt, "Summary"))
+
+    row_n, eb_n, ni_n = {}, {}, {}
+    refs, nfr_cells, malformed_all = set(), [], []
+    for domain, sec in sections.items():
+        rows, malformed = _ac_rows(sec)
+        malformed_all += [f"{domain}: {m}" for m in malformed]
+        row_n[domain] = len(rows)
+        eb_n[domain] = sum(1 for _, s in rows if s == "EVIDENCE_BLOCKED")
+        ni_n[domain] = sum(1 for _, s in rows if s == "NOT_IMPLEMENTED")
+        for req_cell, _ in rows:
+            refs |= set(re.findall(r"REQ-[A-Z0-9-]+", req_cell))
+            if domain == NFR_DOMAIN:
+                nfr_cells.append(req_cell.strip())
+
+    tot_rows, tot_eb, tot_ni = sum(row_n.values()), sum(eb_n.values()), sum(ni_n.values())
+    check("C8 every AC row has 8 columns", not malformed_all, "; ".join(malformed_all[:4]))
+    check(
+        "C8 AC rows match baseline",
+        tot_rows == EXPECTED_AC_TOTAL,
+        f"rows={tot_rows} expected={EXPECTED_AC_TOTAL}",
+    )
+    check(
+        "C8 evidence-blocked match baseline",
+        tot_eb == EXPECTED_EB_TOTAL,
+        f"eb={tot_eb} expected={EXPECTED_EB_TOTAL}",
+    )
+    check(
+        "C8 not-implemented match baseline",
+        tot_ni == EXPECTED_NI_TOTAL,
+        f"ni={tot_ni} expected={EXPECTED_NI_TOTAL}",
+    )
+
+    cov_bad = [
+        d for d, (_, acs) in coverage.items() if d != "Total" and acs != row_n.get(d)
+    ]
+    check("C8 coverage table matches rows", not cov_bad, f"{cov_bad}")
+
+    sum_bad = [
+        d
+        for d, (t, _p, _f, eb, ni) in summary.items()
+        if d != "Total" and (t, eb, ni) != (row_n.get(d), eb_n.get(d), ni_n.get(d))
+    ]
+    check("C8 summary table matches rows", not sum_bad, f"{sum_bad}")
+    check(
+        "C8 summary totals sum",
+        summary.get("Total") == (tot_rows, 0, 0, tot_eb, tot_ni),
+        f"total={summary.get('Total')} computed=({tot_rows},0,0,{tot_eb},{tot_ni})",
+    )
+
+    defined = _defined_reqs()
+    all_defined = set().union(*defined.values()) if defined else set()
+    unmapped = sorted(all_defined - refs)
+    phantom = sorted(refs - all_defined)
+    check("C8 every defined REQ mapped", not unmapped, f"unmapped={unmapped}")
+    check("C8 no phantom REQ refs", not phantom, f"phantom={phantom}")
+    req_bad = [
+        d
+        for d, (reqs, _) in coverage.items()
+        if d != "Total" and d != NFR_DOMAIN and reqs != len(defined.get(d, ()))
+    ]
+    check("C8 coverage requirements == defined", not req_bad, f"{req_bad}")
+    check(
+        "C8 coverage requirements total == 132",
+        coverage.get("Total", (0, 0))[0] == 132,
+        f"total={coverage.get('Total')}",
+    )
+
+    nfr = safe_read(NFR_PATH) or ""
+    unresolved = []
+    for cell in nfr_cells:
+        if re.fullmatch(r"NFR-PERF-\d+", cell):
+            if not re.search(rf"^#+\s*{re.escape(cell)}\b", nfr, flags=re.M):
+                unresolved.append(cell)
+        else:
+            m = re.fullmatch(r"NFR (\d+\.\d+(?:\.\d+)?)", cell)
+            if m and not re.search(
+                rf"^#+\s*{re.escape(m.group(1))}\b", nfr, flags=re.M
+            ):
+                unresolved.append(cell)
+    check("C8 NFR rows resolve to sections", not unresolved, f"{unresolved}")
+
+
+# ---------------------------------------------------------------------------
+# C9 — DEC-039 invariants (2026-08-14 doc-consistency reconciliation)
+# ---------------------------------------------------------------------------
+
+DEC039_DOC_PHRASES = {
+    "no 4-mode HFT claims": [
+        "LTP/LTPC/Quote/Full",
+        "all four modes",
+        "four modes",
+        "4 modes",
+        "LTP, LTPC, QUOTE, FULL",
+    ],
+    "no seconds timestamps": ["int32 epoch seconds", "epoch seconds"],
+    "no checkpoint-durability claim": ["durability via Flink checkpoints"],
+}
+DEC039_LINE_PAIRS = {
+    "no Safety_Halt_Requests LOG/control": ("Safety_Halt_Requests", "LOG/control"),
+    "no ledger skipped in MVP": ("Postback_Projection_Ledger", "skipped"),
+    "no ledger absent from MVP": ("Postback_Projection_Ledger", "in MVP"),
+}
+
+
+def c9_dec039_invariants():
+    # --- doc scans (04-decisions.md is the dated record: DEC-012/018/039) ---
+    hits = []
+    for root, _, files in os.walk(DOCS_DIR):
+        for f in files:
+            if not f.endswith(".md"):
+                continue
+            path = os.path.join(root, f)
+            if path == DECISIONS_PATH:
+                continue
+            txt = safe_read(path)
+            if txt is None:
+                continue
+            for ln in txt.splitlines():
+                if "removed 2026-08-14" in ln:
+                    continue  # dated Standard-feed history annotations are allowed
+                for label, phrases in DEC039_DOC_PHRASES.items():
+                    if any(phrase in ln for phrase in phrases):
+                        hits.append(f"{os.path.relpath(path, ROOT)}: {label}")
+                        break
+                for label, (a, b) in DEC039_LINE_PAIRS.items():
+                    if a in ln and b in ln:
+                        hits.append(f"{os.path.relpath(path, ROOT)}: {label}")
+    check("C9 no stale DEC-039 doc claims", not hits, "; ".join(hits[:6]))
+
+    # --- code: HFT modes ltpc (40 B) + full (196 B), nothing else accepted ---
+    hft = safe_read(
+        os.path.join(
+            INGEST_DIR, "go-bridge", "third_party", "go-arrow", "arrow", "hft_stream.go"
+        )
+    )
+    if hft is None:
+        check("C9 hft_stream readable", False)
+    else:
+        check(
+            "C9 HFT frame sizes 40/196 B",
+            "hftSizeLTP      = 40" in hft and "hftSizeFull     = 196" in hft,
+        )
+        m = re.search(r"func normalizeHFTMode.*?\n}", hft, flags=re.S)
+        fn = m.group(0) if m else ""
+        check(
+            "C9 HFT modes ltpc+full only",
+            'case "l", "ltpc":' in fn
+            and 'case "f", "full":' in fn
+            and '"quote"' not in fn
+            and '"ltp"' not in fn,
+        )
+
+    # --- code: bridge converts ns -> ms ---
+    main_go = safe_read(os.path.join(INGEST_DIR, "go-bridge", "main.go")) or ""
+    check("C9 bridge TS ns->ms", "/ 1_000_000" in main_go)
+
+    # --- manifest/DDL: ledger + halt kinds KV; ledger live in dev ---
+    manifest = safe_read_json(os.path.join(DDL_DIR, "schema_manifest.json")) or {}
+    kinds = {
+        t["table_name"]: (str(t.get("table_kind", "")), t.get("primary_key"))
+        for t in manifest.get("tables", [])
+    }
+    check(
+        "C9 ledger manifest KV",
+        kinds.get("Postback_Projection_Ledger") == ("KV", "postback_event_id"),
+        f"got {kinds.get('Postback_Projection_Ledger')}",
+    )
+    check(
+        "C9 halt manifest KV",
+        kinds.get("Safety_Halt_Requests") == ("KV", "halt_request_id"),
+        f"got {kinds.get('Safety_Halt_Requests')}",
+    )
+    check(
+        "C9 ledger DDL exists",
+        os.path.exists(os.path.join(DDL_DIR, "17_postback_projection_ledger.sql")),
+    )
+    ddl18 = safe_read(os.path.join(DDL_DIR, "18_safety_halt_requests.sql")) or ""
+    check("C9 halt DDL is KV control", "KV control table" in ddl18 and "was LOG" in ddl18)
+    foundation = safe_read(
+        os.path.join(DOCS_DIR, "08_implementation", "01-foundation.md")
+    ) or ""
+    check("C9 ledger live-in-dev evidence", "Postback_Projection_Ledger 705" in foundation)
+
+    # --- no dedup DDL yet; exactly 21 DDLs; dedup marked planned ---
+    sqls = sorted(f for f in os.listdir(DDL_DIR) if f.endswith(".sql"))
+    check("C9 DDL count = 21", len(sqls) == 21, f"got {len(sqls)}")
+    check("C9 dedup DDL not yet applied", not any(f.startswith("24_") for f in sqls))
+    obs = safe_read(os.path.join(DOCS_DIR, "08_implementation", "10-observability.md")) or ""
+    rb = safe_read(os.path.join(DOCS_DIR, "06_operations", "01-runbooks.md")) or ""
+    check(
+        "C9 dedup marked planned (observability)",
+        "fingerprint_dedup" in obs and "DDL not yet applied" in obs,
+    )
+    check(
+        "C9 dedup marked planned (runbooks)",
+        "fingerprint_dedup" in rb and "DDL not yet applied" in rb,
+    )
+
+    # --- inventories include forming_bar + ingestion_quarantine ---
+    missing_inv = []
+    for f in INVENTORY_FILES:
+        body = safe_read(os.path.join(DOCS_DIR, f)) or ""
+        for tbl in ("forming_bar", "ingestion_quarantine"):
+            if tbl not in body:
+                missing_inv.append(f"{f}: {tbl}")
+    check("C9 inventories include both tables", not missing_inv, f"{missing_inv}")
+
+
 def main():
+    c1_manifest()
+    c2_ownership_matrix()
+    c3_schema_state_diagram()
+    c4_compat_vocabulary()
+    c5_stale_phrases()
+    c6_test_counts()
+    c7_version_pins()
+    c8_acceptance_matrix()
+    c9_dec039_invariants()
     c1_manifest()
     c2_ownership_matrix()
     c3_schema_state_diagram()

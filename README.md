@@ -49,18 +49,18 @@ Read [`docs/08_implementation/00-start-here.md`](docs/08_implementation/00-start
 
 ### `code/` — production implementation
 
-Code is not yet implemented. The service directories currently contain scaffolding and entry-point placeholders. Use the phase-by-phase [`implementation guide`](docs/08_implementation/00-start-here.md) before writing code.
+Implementation status varies by service — see each implementation dossier for the evidence-backed detail ([start here](docs/08_implementation/00-start-here.md)):
 
 ```text
 code/
 ├── 01_platform/
-│   ├── 01_docker/               local Compose scaffolding
+│   ├── 01_docker/               local Compose stack
 │   ├── 02_sql/ddl/              reconciled DDL proposals; version validation pending
-│   └── 03_fluss/                Fluss configuration scaffolding
+│   └── 03_fluss/                Fluss configuration
 └── 02_services/
-    ├── 01_ingestion/            ingestion scaffolding → raw_table_1
-    ├── 02_compute/              Signal + Babysitter job scaffolding
-    ├── 03_action_capture/       postback/lifecycle/position scaffolding
+    ├── 01_ingestion/            implemented & validated (Phase 2)
+    ├── 02_compute/              Signal job Slice 1 + Slice 2.1 implemented; ranking/reservations pending
+    ├── 03_action_capture/       scaffold
     ├── 04_executor/             Executor scaffold; starts disabled and halted
     ├── 05_mock_arrow/           Mock Arrow broker (per-instrument, deterministic)
     └── 06_mock_openalgo/        Retained for compatibility; no longer active

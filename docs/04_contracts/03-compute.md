@@ -20,14 +20,6 @@ Production checkpoints/savepoints use encrypted S3. The exact state backend and 
 
 **Restart contract:** restore the compact Flink checkpoint → verify Fluss authoritative-state availability and compatibility → rehydrate only the working state actually needed → resume. Fluss unavailability/incompatibility fails the job closed (no silent replay); deterministic continuation and safe degradation are preserved.
 
-## Event-time contract
-
-The deployed watermark, allowed-lateness, and source-idleness values are configuration parameters, not universal protocol constants. The default profile is bounded out-of-orderness of five seconds, allowed lateness of five seconds, and source idleness of fifteen seconds, as specified by the requirements; each value may be changed only through a tested deployment profile. A source without a verified event timestamp cannot advance the watermark.
-
-A candle is final from its first write: the final row emits at first window fire (watermark ≥ `window_end`), an `emitted` window-state flag makes any allowed-lateness re-trigger a no-op (late-within-lateness folds into the accumulator and is counted, never re-written), and no correction/update row exists in MVP. The "final after `window_end + allowed_lateness`" phrasing means the finalization boundary — the candle is not corrected after that point.
-
-Open/close tie ordering is deterministic from the versioned fingerprint specification, not broker `seq_no`.
-
 ## Event-time and finalization
 
 The deployed watermark, allowed-lateness, and source-idleness values are configuration parameters, not universal protocol constants. The default profile is bounded out-of-orderness of five seconds, allowed lateness of five seconds, and source idleness of fifteen seconds. Each value may be changed only through a tested deployment profile. A source without a verified event timestamp cannot advance the watermark.

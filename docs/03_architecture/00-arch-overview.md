@@ -195,6 +195,7 @@ The architecture mandates these logical tables before physical DDL generation:
 | --- | --- | --- |
 | `raw_table_1` | LOG | Ingestion |
 | `feature_candles_15s` | KV (PK `instrument_token, window_start` — sole candle output, 2026-08-13) | Signal job |
+| `forming_bar` | KV (PK `instrument_token`) | Signal job |
 | `Signal_Candidates` | LOG | Signal job |
 | `Signal_Candidates_current` | KV | Signal job |
 | `Ranking_Results` | LOG | Signal job |
@@ -209,8 +210,9 @@ The architecture mandates these logical tables before physical DDL generation:
 | `Execution_Attempts` | KV | Executor |
 | `Order_Correlation` | KV | Executor |
 | `Execution_Audit` | LOG | Executor |
-| `Safety_Halt_Requests` | LOG/control | Authorized components |
+| `Safety_Halt_Requests` | KV | Authorized components |
 | `suspected_discontinuities` | LOG | Ingestion |
+| `ingestion_quarantine` | LOG | Ingestion |
 | `instruments` | Manifest | Operators |
 | `Position_Actions` | Future LOG | Babysitter (post-MVP) |
 

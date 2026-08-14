@@ -47,7 +47,7 @@ The requirements in this directory enforce these decisions:
 | 6     | [`06-operational.md`](06-operational.md)             | Deployment, startup, health, recovery, and release gates          |
 | 7     | [`07-requirement-authoring-template.md`](07-requirement-authoring-template.md) | Standard owner/state/failure/acceptance structure for requirements |
 | 8     | [`08-reading-guide.md`](08-reading-guide.md)          | Human/LLM navigation, canonical scope, timestamps, and safety vocabulary |
-| 9     | [`09-acceptance-matrix.md`](09-acceptance-matrix.md)  | Requirement-to-test traceability; 116 acceptance IDs across all domains  |
+| 9     | [`09-acceptance-matrix.md`](09-acceptance-matrix.md)  | Requirement-to-test traceability; 151 acceptance IDs across all domains  |
 
 ## Requirement conventions
 

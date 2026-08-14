@@ -82,7 +82,7 @@ Contract version is integer `2` (v2.2 is an additive document revision — see V
 | `received_ts_ms` | `int64` | epoch ms | Java-side receive time (required) |
 | `feed_sequence_local` | `int64` | — | Monotonic per-slot tick sequence starting at 1, reset per connection epoch (required). Diagnostic ordering evidence; not part of the dedup fingerprint. |
 | `feed` | `string` | — | `"hft"` (the only feed — Standard removed 2026-08-14) |
-| `mode` | `string` | — | `"ltp"`, `"ltpc"`, `"quote"`, or `"full"` |
+| `mode` | `string` | — | `"ltpc"` or `"full"` (the only HFT modes — Standard feed carrying `ltp`/`quote` removed 2026-08-14) |
 | `token` | `int32` | — | Arrow instrument token (bucket key for `raw_table_1`) |
 | `ltp_paise` | `int32` | paise | Last traded price (₹1 = 100 paise) |
 | `close_paise` | `int32` | paise | Previous close price |
@@ -240,7 +240,7 @@ Java hash-validates `raw_payload` against `payload_hash` and persists to `ingest
 
 1. **All prices in paise.** Never rupees. Code must not divide-by-100 or assume decimal.
 2. **All timestamps in epoch milliseconds UTC.** Never seconds, never local time.
-3. **Depth arrays are 5-element.** `full` mode always provides 5 bids + 5 asks. `ltp`/`ltpc`/`quote` modes may have zero-length or null arrays.
+3. **Depth arrays are 5-element.** `full` mode always provides 5 bids + 5 asks. `ltpc` mode may have zero-length or null arrays.
 4. **Missing/unknown fields are omitted.** JSON `omitempty` — do NOT send `0` or `null` for absent fields. Java side defaults to zero.
 5. **feed+mode disambiguate the data.** `feed=hft, mode=full` has more fields populated than `feed=hft, mode=ltpc` (HFT is the only feed — Standard removed 2026-08-14).
 6. **No duplicate ticks assumed to be identical.** Two ticks with the same `token`+`ltp_paise`+`ts_ms` but different `ltq` or `bid_px` are different events.

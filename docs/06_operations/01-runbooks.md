@@ -225,8 +225,8 @@ history (`ALLOW_FULL_REPLAY=true` accepted via A3.4).
 ## Checkpoint failure (SignalJob)
 
 Trigger: `SIGNAL-crit-checkpoint-failed` (failed checkpoints > 0) or
-`SIGNAL-error-checkpoint-slow` (duration >= 240000 ms = 80% of the pinned
-300000 ms timeout).
+`SIGNAL-error-checkpoint-slow` (duration >= 24000 ms = 80% of the pinned
+30000 ms timeout).
 
 1. Capture JobID, failed checkpoint count, last completed checkpoint, source
    offsets, state size, and sink status.
@@ -347,18 +347,18 @@ All rules route to the `dev-webhook` destination in dev (receiver logs:
 alerts have no first-class severity field — severity rides the rule-name prefix
 (`SIGNAL-crit`/`error`/`warn`, `ING-crit`/`warn`). Realtime rules evaluate
 continuously; while a condition holds, fires repeat on the ~30–75 s window
-cadence. 24 rules provisioned (9 ING- ingestion + 15 SIGNAL- compute).
+cadence. 26 rules provisioned (9 ING- ingestion + 17 SIGNAL- compute).
 
 Compute/SignalJob rules:
 
 | Rule | Severity | Condition | Response | Recovery |
 | --- | --- | --- | --- | --- |
 | SIGNAL-crit-checkpoint-failed | Critical | failed checkpoints > 0 | Checkpoint failure runbook | checkpoint completes, count resets |
-| SIGNAL-error-checkpoint-slow | Error | duration >= 240000 ms | Checkpoint failure runbook | duration back under 80% of timeout |
+| SIGNAL-error-checkpoint-slow | Error | duration >= 24000 ms | Checkpoint failure runbook | duration back under 80% of timeout |
 | SIGNAL-error-job-restarting | Error | restarts > 0 | Check flink_logs for the restart cause | restarts stop |
 | SIGNAL-error-source-stalled | Error | source rate == 0 (2 min) | Check feed/bridge; **false-fires on quiesced dev feed** | feed resumes |
 | SIGNAL-warn-kv-sink-zero | Warning | kv-sink rate == 0 (2 min) | Check KV sink task; **false-fires on quiesced dev feed** | sink writes resume |
-| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup`, not Flink state | table size plateaus back under envelope |
+| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup` (planned — DDL not yet applied), not Flink state | table size plateaus back under envelope |
 | SIGNAL-warn-dedup-expiry | Warning | expired-row cleanup backlog > bound | Check the dedup cleanup pass (`DEDUP_CLEANUP_INTERVAL_MS`) and delete throughput | backlog drains |
 | SIGNAL-warn-dedup-cache-hit | Warning | dedup cache hit ratio below threshold (60 s) | Hot path degrading toward per-tick Fluss lookups — check cache bound vs envelope (DEC-038) | hit ratio recovers |
 | SIGNAL-warn-schema-rejected-rate | Warning | rejects per flush > 10 | Check raw_table_1 schema vs validator | rejects stop |

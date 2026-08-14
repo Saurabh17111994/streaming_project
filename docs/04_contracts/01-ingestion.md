@@ -9,7 +9,7 @@ Two colocated processes in the same container consume the evidence-approved brok
 - Versioned instrument manifest (loaded from Arrow `GET /all` or `GET /nse` CSV, refreshed daily 8 AM IST)
 - Arrow market-data WebSocket: `wss://socket.arrow.trade?appID=X&token=Y&zstd=1` (HFT feed — the Standard feed `wss://ds.arrow.trade` was removed 2026-08-14)
 - Binary protocol: HFT modes — LTPC (40 bytes), Full (196 bytes), little-endian, zstd-compressed
-- Prices in **paise** (int32, ÷100 for rupees); timestamps in int32 epoch seconds (convert to UTC epoch ms)
+- Prices in **paise** (int32, ÷100 for rupees); raw frame timestamps in **nanoseconds (unix)**, converted by the bridge to UTC **epoch milliseconds** (`ts_ms` — the platform's canonical unit; never seconds)
 - Subscribe via JSON: `{"code":"sub","mode":"full","full":[tokens]}`
 - Heartbeat: client sends `PONG` text every 3s; read timeout 5s
 - Auth: token from `/auth/app/authenticate-token` (24hr TTL, refreshable)

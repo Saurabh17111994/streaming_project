@@ -31,10 +31,10 @@ The platform separates the **data path** from the **order path**:
 
 ## In scope for MVP
 
-- Arrow market-data ingestion (binary protocol: LTP/LTPC/Quote/Full modes)
+- Arrow market-data ingestion (binary protocol: HFT LTPC/Full modes — Standard feed carrying LTP/Quote removed 2026-08-14)
 - Single Arrow Trade account; NSE, NFO, MCX, and INDEX segments
 - Fluss raw and feature LOG tables
-- Flink 2.2.0 deduplication, event-time windows, candle computation
+- Flink 2.2.1 deduplication, event-time windows, candle computation
 - Stateful signal detection and in-operator ranking
 - `Signal_Candidates` (+ `Signal_Candidates_current` current-state KV), `Ranking_Results`, and `Trade_Decisions` outputs
 - Independent postback capture into `Fills` via `wss://order-updates.arrow.trade`

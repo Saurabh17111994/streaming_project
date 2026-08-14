@@ -104,9 +104,10 @@ RECEIVED
 → LIFECYCLE_APPLIED
 → POSITION_APPLIED_OR_NOT_REQUIRED
 → COMPLETE
+→ UNKNOWN (conflict/regressive evidence/ambiguous broker status)
 ```
 
-Each step is idempotent. Restart scans non-complete records and resumes from persisted evidence. A duplicate immutable audit row does not authorize duplicate state effect.
+Each step is idempotent. Restart scans non-complete records and resumes from persisted evidence. A duplicate immutable audit row does not authorize duplicate state effect. `UNKNOWN` matches REQ-AC-011 and the contract: conflicting or regressive evidence moves the record to `UNKNOWN`, halts affected order flow, and alerts — it is not a completion state and does not release capacity.
 
 The physical location of the ledger must be reconciled into the validated schema before implementation; it cannot be in-memory only.
 

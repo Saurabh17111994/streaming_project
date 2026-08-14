@@ -136,13 +136,14 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | --- | --- | --- | --- | --- |
 | `raw_table_1` | LOG | Ingestion | Signal job | ≥3 trading days; EOD Iceberg |
 | `feature_candles_15s` | KV (upsert, PK `(instrument_token, window_start)` — sole candle output, 2026-08-13) | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
+| `forming_bar` | KV (PK `instrument_token`) | Signal job | Business Logic (Slice 2.2) / reconciliation | Current state; rebuildable from raw_table_1 replay |
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Signal_Candidates_current` | KV | Signal job | Current-state readers/reconciliation | Current state; rebuildable from LOG |
 | `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Trade_Decisions` | Immutable feed | Signal job | Executor | Replay/reconciliation buffer; audit-linked |
 | `Portfolio_Reservations` | KV/logical state | Signal job | Executor/reconciliation | Active + rebuild window |
 | `Postback_Projection_Ledger` | KV | Action Capture | Recovery scanner | Incomplete + recovery window |
-| `Safety_Halt_Requests` | LOG/control | Authorized components | Executor | Safety/reconciliation window |
+| `Safety_Halt_Requests` | KV | Authorized components | Executor | Safety/reconciliation window |
 | `Fills` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
 | `Order_Lifecycle` | KV | Action Capture | Executor/operations | Current state; rebuildable |
 | `Positions` | KV | Position projector | Babysitter/Executor | Current state; rebuildable |
@@ -152,6 +153,7 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `Execution_Audit` | LOG | Executor | Operations/audit | Encrypted seven-year audit |
 | `Postback_Quarantine` | LOG | Action Capture | Reconciliation | Until disposition plus evidence retention |
 | `suspected_discontinuities` | LOG | Ingestion | Operations | Investigation window |
+| `ingestion_quarantine` | LOG | Ingestion | Operations/quarantine review | Investigation window (2d TTL) |
 | `instruments` | Manifest | Operators | Ingestion | Current and prior versions |
 | `Position_Actions` | Future LOG | Babysitter | Executor | Disabled in MVP |
 

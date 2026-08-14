@@ -12,8 +12,7 @@ No broker `postback_seq` or overloaded `order_id` is assumed.
 2. `Order_Lifecycle` KV keyed by `broker_order_id`.
 3. `Positions` KV keyed by `position_id` and linked by `trade_context_id`.
 4. `Postback_Quarantine` for unknown schema/status or missing/ambiguous correlation.
-
-**MVP (2026-07-23): `Postback_Projection_Ledger` skipped.** On restart, re-process recent postbacks. Safe because Fills/Quarantine are append-only LOGs and Lifecycle/Positions KV writes are idempotent.
+5. `Postback_Projection_Ledger` KV keyed by `postback_event_id` (durable projection status — DDL `17_postback_projection_ledger.sql`, live in dev 2026-08-13).
 
 ## Ordering and identity
 

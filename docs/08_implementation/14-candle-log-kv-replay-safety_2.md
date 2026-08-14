@@ -1097,7 +1097,7 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] source lag exceeds threshold.
   (CLOSED 2026-08-11: SIGNAL-warn-source-lag provisioned — `flink_taskmanager_job_task_operator_currentfetcheventtimelag >= 600000` (10 min, period 2), the 15th approved rule (was documented not-expressible at P8.3 time; the operator-metric discovery made it expressible). Fired live: webhook POST /noop `{"alert":{"name":"SIGNAL-warn-source-lag"}}` at 15:52Z with the post-storm quiesced feed at 3.5M ms; eval cadence 15 s, re-fire ~30-75 s while held. Caveat: dev feed baseline ~244 s (historical-timestamp replay) — threshold 600 s sits above it; fires continuously while the dev feed is stopped (feed-state-driven, same class as source-stalled).)
 - [x] checkpoint duration approaches timeout.
-  (SIGNAL-error-checkpoint-slow, lastcheckpointduration >= 240000 ms = 80% of pinned CHECKPOINT_TIMEOUT_MS=300000; fixture-fired + recovered. Live: 181-262 ms.)
+  (SIGNAL-error-checkpoint-slow, lastcheckpointduration >= 24000 ms = 80% of pinned CHECKPOINT_TIMEOUT_MS=30000 (corrected 2026-08-14 — the provisioned 240000/300000 basis contradicted the pinned 30000 ms value; runbook documents 24000 ms); fixture-fired + recovered. Live: 181-262 ms.)
 - [x] checkpoint failure/timeout occurs.
   (SIGNAL-crit-checkpoint-failed, numberoffailedcheckpoints > 0; fixture-fired + recovered. Live: 0 failed across 304 + 29 checkpoints.)
 - [x] KV write failure occurs.

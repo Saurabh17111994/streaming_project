@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -12,14 +11,36 @@ import (
 )
 
 // captureBridge runs fn with a fresh buffer-backed emitter so tests can assert
-// on the NDJSON events produced by runHFTEpoch.
+// on the NDJSON events produced by runHFTEpoch. The capture buffer is the
+// package-level syncBuffer (fault_injection_test.go): runHFTEpoch writes from
+// its own emit goroutines while the test reads after fn returns, so a plain
+// bytes.Buffer would race under -race.
 func captureBridge(t *testing.T, fn func()) string {
 	t.Helper()
 	old := bridgeEmitter
-	var out bytes.Buffer
-	bridgeEmitter = NewBridgeEmitter(&out)
+	out := newSyncBuffer()
+	bridgeEmitter = NewBridgeEmitter(out)
 	defer func() { bridgeEmitter = old }()
 	fn()
+	// The epoch's read/heartbeat goroutines emit one final event after
+	// runHFTEpoch returns (signalEpochStop fires before the emit — R-297), so
+	// wait for the capture to settle before the deferred restore of the global
+	// bridgeEmitter — a straggler read would race the restore under -race.
+	settle := func() bool {
+		prev := -1
+		for i := 0; i < 500; i++ { // up to 5 s (10 ms steps); stragglers finish in µs
+			cur := len(out.String())
+			if cur == prev {
+				return true
+			}
+			prev = cur
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	if !settle() {
+		t.Logf("capture buffer still growing after settle window")
+	}
 	return out.String()
 }
 

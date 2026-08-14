@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 304 tests (192 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -753,7 +753,7 @@ This dossier is complete only when the evidence package can be independently rev
 
 **Status:** `EXECUTED (partial) — Phase 0 baseline DONE; Phases 1-3 + dedup sweep recorded as BLOCKED with evidence` (updated 2026-08-13) — **TOPOLOGY RE-SCOPED 2026-08-13, see banner below**
 \*\*Location:\*\* `docs/08_implementation/11-testing-and-release.md`
-**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L819+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1207-1209).
+**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L870+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1331-1333).
 **Dependency:** R2 lake-read stall fix (`§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`) — the bench uses R2 checkpoints for gate runs; the S3A timeout pins (30000/30000) and the outer-deadline containment apply.
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13) — bench topology re-scope.**
@@ -929,7 +929,7 @@ If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P
 
 ## 13. Cross-references
 
-- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L819+), §4 register (L1207-1209), §6 acceptance, P8.1 metrics battery (L896-943).
+- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L870+), §4 register (L1331-1333), §6 acceptance (L1387+), P8.1 metrics battery (L1007-1059).
 - Metrics recipe: `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`.
 - R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
 - Audit efficiency follow-up: tracker P3.6 (batch-audit engine parallelism/metadata-count; not exercised by this bench).
