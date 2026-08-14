@@ -70,7 +70,6 @@ class FullStackE2ETest {
             env.put("RAW_TABLE_NAME", "raw_table_1");
             env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
             env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
-            env.put("ARROW_USE_STANDARD", "false");
             env.put("GO_ARROW_SDK_VERSION", "v0.0.0-20260622-7cce1630");
             env.put("ARROW_HFT_CONNECTIONS", "1");
             // Manifest: the fake broker emits token 757614 (present in the

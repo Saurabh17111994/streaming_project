@@ -121,6 +121,12 @@ public final class IngestionService {
     private final BridgeEventParser bridgeEventParser = new BridgeEventParser(MAPPER);
     private final AtomicLong connectionEpoch = new AtomicLong(0);
     private volatile DiscontinuityWriter.LastTickSnapshot lastTickSnapshot;
+    /** Current arrow-bridge subprocess, so shutdown can signal it (SIGTERM) and
+     *  let it emit its final ARROW_TICK_COUNTS report before the pipe closes. */
+    private volatile Process currentBridgeProcess;
+    /** stderr drain thread for the current bridge, joined at shutdown so the
+     *  final tick-count report is flushed into the log before JVM halt. */
+    private volatile Thread currentBridgeStderrThread;
 
     public IngestionService(String instanceId,
                              List<Instrument> instruments,
@@ -363,12 +369,14 @@ public final class IngestionService {
 
             try {
                 bridgeProcess = startBridge(bridgeBinary);
+                currentBridgeProcess = bridgeProcess;
                 final Process proc = bridgeProcess;
 
                 Thread stderrThread = new Thread(() -> drainStderr(proc),
                         "bridge-stderr");
                 stderrThread.setDaemon(true);
                 stderrThread.start();
+                currentBridgeStderrThread = stderrThread;
 
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(bridgeProcess.getInputStream(), StandardCharsets.UTF_8))) {
@@ -710,7 +718,9 @@ public final class IngestionService {
             // AC-ING-002: an unrecognized broker protocol version is quarantined
             // (UNKNOWN_VERSION) before any trade classification — the raw bytes
             // are preserved but the tick can never become a trade decision.
-            if (!"hft".equals(gt.feed) && !"standard".equals(gt.feed)) {
+            // HFT is the only supported feed (the Standard feed was removed
+            // 2026-08-14); any other feed value is rejected.
+            if (!"hft".equals(gt.feed)) {
                 quarantineWriter.write(rawBytes,
                         QuarantineWriter.Reason.INVALID_SCHEMA,
                         "unknown broker protocol version: " + (gt.feed == null ? "<null>" : gt.feed),
@@ -734,17 +744,6 @@ public final class IngestionService {
                         validityReason,
                         instr.instrumentToken(), instr.exchange(), instr.tradingSymbol());
                 metrics.incrementDecodeError("INVALID_VALUES");
-                return;
-            }
-
-            if ("full".equals(gt.mode)
-                    && gt.lower_limit_paise > 0 && gt.upper_limit_paise > 0
-                    && (gt.ltp_paise < gt.lower_limit_paise || gt.ltp_paise > gt.upper_limit_paise)) {
-                quarantineWriter.write(rawBytes, QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION,
-                        "ltp outside broker circuit limits",
-                        instr.instrumentToken(), instr.exchange(), instr.tradingSymbol());
-                emitQualityUnsafe(gt.slot_id, gt.connection_epoch,
-                        QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION);
                 return;
             }
 
@@ -1086,13 +1085,13 @@ public final class IngestionService {
 
     /**
      * Quality-class slot-unsafe evidence (plan §Market-data quality
-     * classification): FUTURE_BROKER_TIMESTAMP, STALE_BROKER_TIMESTAMP and
-     * BROKER_LIMIT_VIOLATION quarantine rows also emit one UNSAFE safety
-     * request per slot/epoch, so Signal suppresses decisions for the slot
-     * while the broker's timestamps/prices are untrustworthy. Rows are
-     * deduped by halt_request_id (tuple = fp|slot|epoch|state|reason); the
-     * plan's "once per instrument/slot/epoch" collapses to once per
-     * slot/epoch because the tuple carries no instrument.
+     * classification): FUTURE_BROKER_TIMESTAMP and STALE_BROKER_TIMESTAMP
+     * quarantine rows also emit one UNSAFE safety request per slot/epoch, so
+     * Signal suppresses decisions for the slot while the broker's timestamps
+     * are untrustworthy. Rows are deduped by halt_request_id (tuple =
+     * fp|slot|epoch|state|reason); the plan's "once per
+     * instrument/slot/epoch" collapses to once per slot/epoch because the
+     * tuple carries no instrument.
      */
     private void emitQualityUnsafe(String slotId, long epoch,
                                    QuarantineWriter.Reason quarantineReason) {
@@ -1124,7 +1123,6 @@ public final class IngestionService {
         return switch (quarantineReason) {
             case FUTURE_BROKER_TIMESTAMP -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.FUTURE_BROKER_TIMESTAMP;
             case STALE_BROKER_TIMESTAMP -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.STALE_BROKER_TIMESTAMP;
-            case BROKER_LIMIT_VIOLATION -> com.trading.ingestion.safety.SafetyHaltWriter.ReasonCode.BROKER_LIMIT_VIOLATION;
             default -> null;
         };
     }
@@ -1180,6 +1178,40 @@ public final class IngestionService {
         if (!shutdownStarted.compareAndSet(false, true)) {
             LOG.debug("ingestion: duplicate shutdown ignored");
             return;
+        }
+        // Signal the bridge (SIGTERM) so its ctx.Done handler runs the final
+        // ARROW_TICK_COUNTS report before the pipe closes. Without this the
+        // bridge dies of SIGPIPE (exit 141) on JVM halt and the shutdown report
+        // — the authoritative per-token count for ING-TCP-001 — is lost.
+        //
+        // Ordering is critical: `running` must stay true until the bridge has
+        // exited. The main read loop exits (closing the stdout pipe) as soon
+        // as `running` flips false, and a still-writing bridge would then get
+        // SIGPIPE before its final report. Signal first, wait for the bridge
+        // to exit cleanly (it emits the report, then EOFs its stdout), THEN
+        // flip running so the loop unwinds normally.
+        Process bp = currentBridgeProcess;
+        if (bp != null && bp.isAlive()) {
+            LOG.info("ingestion: signaling arrow-bridge (SIGTERM) for final tick-count report");
+            bp.destroy();
+            try {
+                if (!bp.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                    bp.destroyForcibly();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // Let the stderr drain thread flush the bridge's final report into the
+        // log before the JVM halts (the drain thread is daemon and would
+        // otherwise be killed mid-read).
+        Thread st = currentBridgeStderrThread;
+        if (st != null) {
+            try {
+                st.join(5_000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
         }
         running = false;
         // Stop the staleness watchdog (R-108).
@@ -1297,14 +1329,7 @@ public final class IngestionService {
         public long[] bid_qty;
         @com.fasterxml.jackson.annotation.JsonProperty("ask_qty")
         public long[] ask_qty;
-        @com.fasterxml.jackson.annotation.JsonProperty("change_flag")
-        public int change_flag;
-        @com.fasterxml.jackson.annotation.JsonProperty("avg_price_paise")
-        public long avg_price_paise;
-        @com.fasterxml.jackson.annotation.JsonProperty("lower_limit_paise")
-        public long lower_limit_paise;
-        @com.fasterxml.jackson.annotation.JsonProperty("upper_limit_paise")
-        public long upper_limit_paise;
+
     }
 
     // ---- helpers ----

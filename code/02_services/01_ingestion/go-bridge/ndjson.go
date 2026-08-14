@@ -131,12 +131,25 @@ func (e *BridgeEmitter) resetSeq(slotID string) {
 // The counts are reported to stderr on the interval AND once at shutdown as:
 //
 //	arrow-tick-counts: total=N t=TOKEN:n t=TOKEN:n ...
-//
 var (
 	tickCountsOn bool
 	tickCountsMu sync.Mutex
 	tickCounts   map[int32]int64
 )
+
+// finalTickCountReport guards the shutdown report so it is emitted exactly
+// once even though both the interval goroutine (on ctx.Done) and main (after
+// runHFT returns) may reach for it. main's synchronous call is authoritative:
+// a goroutine-only report can be killed mid-write when Go main returns on
+// SIGTERM, which would lose the ING-TCP-001 epoch count.
+var finalTickCountReport sync.Once
+
+// tickCountsFilePath is where the final report is ALSO written (in addition
+// to stderr). The Java parent closes the child's pipe streams as soon as its
+// own JVM shutdown begins, so a stderr-only report can be lost to SIGPIPE
+// (exit 141) before the reconcile can read it. A file survives the teardown.
+// Env: ARROW_TICK_COUNTS_FILE (default /tmp/arrow-tick-counts.txt).
+var tickCountsFilePath = "/tmp/arrow-tick-counts.txt"
 
 func recordTickCount(token int32) {
 	tickCountsMu.Lock()
@@ -166,21 +179,30 @@ func reportTickCounts() {
 		total += tickCounts[t]
 	}
 	lines := (len(keys) + tickCountChunkSize - 1) / tickCountChunkSize
+	// Build the full report in memory first.
+	var buf strings.Builder
 	for c := 0; c < lines; c++ {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "arrow-tick-counts: total=%d chunk=%d/%d", total, c, lines)
+		fmt.Fprintf(&buf, "arrow-tick-counts: total=%d chunk=%d/%d", total, c, lines)
 		lo, hi := c*tickCountChunkSize, (c+1)*tickCountChunkSize
 		if hi > len(keys) {
 			hi = len(keys)
 		}
 		for _, t := range keys[lo:hi] {
-			fmt.Fprintf(&sb, " t=%d:n=%d", t, tickCounts[t])
+			fmt.Fprintf(&buf, " t=%d:n=%d", t, tickCounts[t])
 		}
-		tickCountsMu.Unlock()
-		fmt.Fprintln(os.Stderr, sb.String())
-		tickCountsMu.Lock()
+		buf.WriteByte('\n')
 	}
 	tickCountsMu.Unlock()
+	// Persist to a file FIRST (while stderr is still open). The parent JVM
+	// closes the child's pipe streams as soon as its own shutdown begins, so
+	// a stderr write after that point dies with SIGPIPE (exit 141) and the
+	// ING-TCP-001 reconcile would lose the epoch count. The file survives.
+	if err := os.WriteFile(tickCountsFilePath, []byte(buf.String()), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "arrow-tick-counts: WARN file write failed %s: %v\n", tickCountsFilePath, err)
+	}
+	// Then mirror to stderr (best-effort; may die on SIGPIPE if the parent
+	// already closed the pipe, but the file above is already written).
+	fmt.Fprint(os.Stderr, buf.String())
 }
 
 func (e *BridgeEmitter) EmitTick(t Tick, connectionID, slotID string, epoch uint64, received time.Time, rawPayload []byte) error {

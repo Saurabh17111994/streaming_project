@@ -61,16 +61,9 @@ totp_secret)` mirrors this flow.
 
 ## 2. Market data feed (`broker_market`)
 
-Two WebSocket feeds. Both carry `Token` (int32) as the instrument key.
+One WebSocket feed (the Standard feed `wss://ds.arrow.trade` was removed 2026-08-14 — HFT only). Carries `Token` (int32) as the instrument key.
 
-### 2a. Standard Data Stream — `wss://ds.arrow.trade?appID=&token=`
-
-- Binary, **big-endian**. Modes: `ltp` (13B), `ltpc` (17B), `quote` (93B), `full` (249B — verified live 2026-08-13, BROKER-MD-001; 241B legacy layout still parsed: depth at 101, current wire has 8 reserved bytes at 101:109, depth at 109).
-- Subscribe: JSON `{ "code": "sub", "mode", "<mode>": [tokens] }`. Unsub: `code: "unsub"`.
-- Prices are integer-scaled (paise, ×100) for NSE/BSE equities.
-- `full` depth: 5-level bid/ask (qty int64, price int32, orders int16).
-
-### 2b. HFT Data Stream — `wss://socket.arrow.trade?appID=&token=&zstd=1`
+### 2a. HFT Data Stream — `wss://socket.arrow.trade?appID=&token=&zstd=1`
 
 - Binary, **little-endian**, **zstd-compressed inbound** (mandatory from **8 July 2026**).
 - Modes: `ltpc` (40B), `full` (196B). Tick interval `latency` 50ms–60000ms (default 1000).
@@ -78,9 +71,7 @@ Two WebSocket feeds. Both carry `Token` (int32) as the instrument key.
 - Prices in **paise** (×100); timestamps in **nanoseconds** (unix).
 - Per connection: ≤1024 symbols; ≤512 per subscription request.
 - **Tier scope:** basic tier = 1 WebSocket connection; premium tier = 3 connections. The current testing phase uses the basic tier (1 connection) with the 1,024-instrument manifest. The 3-connection / 3,000-instrument coverage is the deferred future production target and requires account capability evidence before activation.
-- **Recommendation (foundation):** use HFT feed for the tick path (low-latency, relevant to trading). Standard feed is fallback.
-
-**Verification flags:** full-mode byte size = 249B live (resolved 2026-08-13, BROKER-MD-001; paise scaling confirmed on both feeds against a live sample — RELIANCE ltp 131700 identical standard/HFT). After ~15:15 IST every mode appends a 16-byte Closing Auction Session trailer (29/33/109/265; imbalance_qty i64 + indicative_close i32 + ref_price i32).
+**Verification flags:** HFT full-mode 196B verified live (BROKER-MD-001, 2026-08-13). The Standard feed (13/17/93/249 B big-endian layouts, 249B full mode) was removed with the Standard feed 2026-08-14.
 
 ## 3. Order API (`arrow_rest`)
 
@@ -131,7 +122,7 @@ version + ingestion protocol (OTLP / HTTP JSON) to pin.
 
 ## Capability tests that verify this contract
 
-- `BROKER-MD-001/002` — parse standard + HFT binary ticks (token + price join).
+- `BROKER-MD-001/002` — parse HFT binary ticks (token + price join).
 - `BROKER-PB-001` — parse order-update JSON → `Fills` mapping.
 - `ARROW-REST-001` — build `/order/regular` request with `remarks`=client_order_ref(≤16), parse response `orderNo`.
 - See `docs/08_implementation/12-version-compatibility-evidence.md`.

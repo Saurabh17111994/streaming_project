@@ -23,9 +23,9 @@ class ArrowMarketTickParseTest {
         ArrowMarketTick tick = ArrowMarketTick.builder()
             .exchange(new ExchangeId("NSECM"))
             .instrumentToken(new InstrumentToken(26009))
-            .feed(ArrowMarketTick.Feed.STANDARD)
+            .feed(ArrowMarketTick.Feed.HFT)
             .mode(ArrowMarketTick.Mode.FULL)
-            .exchangeTimestamp(1_752_539_000L) // epoch s on standard feed
+            .exchangeTimestamp(1_752_539_000_000_000L) // epoch ns on HFT feed
             .lastTradedPrice(297510L)          // paise
             .lastTradedQty(10L)
             .volume(1_000L)
@@ -37,8 +37,8 @@ class ArrowMarketTickParseTest {
         assertThat(tick.lastTradedPrice()).isEqualTo(297510L);
         // Prices carried in paise; divide by 100 for rupees.
         assertThat(tick.priceInRupees()).isEqualTo(2975.10);
-        // R-042: standard feed timestamp is epoch s -> ms conversion.
-        assertThat(tick.exchangeTimestampMillis()).isEqualTo(1_752_539_000_000L);
+        // R-042: HFT feed timestamp is epoch ns -> ms conversion.
+        assertThat(tick.exchangeTimestampMillis()).isEqualTo(1_752_539_000L);
     }
 
     @Test

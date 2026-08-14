@@ -34,7 +34,6 @@ public final class IngestionConfig {
     public final String arrowUserId;
     public final String arrowPassword;
     public final String arrowTotpKey;
-    public final boolean arrowUseStandard;
     public final int arrowHftLatencyMs;
     public final String arrowInstrumentTokens;
     public final String flussBootstrap;
@@ -74,7 +73,6 @@ public final class IngestionConfig {
         this.arrowUserId = b.arrowUserId;
         this.arrowPassword = b.arrowPassword;
         this.arrowTotpKey = b.arrowTotpKey;
-        this.arrowUseStandard = b.arrowUseStandard;
         this.arrowHftLatencyMs = b.arrowHftLatencyMs;
         this.arrowInstrumentTokens = b.arrowInstrumentTokens;
         this.flussBootstrap = b.flussBootstrap;
@@ -141,8 +139,7 @@ public final class IngestionConfig {
             errors.add("Either ARROW_TOKEN or ARROW_USER_ID+PASSWORD+TOTP_KEY must be set");
         }
 
-        // ---- Arrow feed ----
-        b.arrowUseStandard = "true".equalsIgnoreCase(env.getOrDefault("ARROW_USE_STANDARD", "false"));
+        // ---- Arrow feed (HFT only — the Standard feed was removed 2026-08-14) ----
         b.arrowHftLatencyMs = intRange(env, "ARROW_HFT_LATENCY_MS", 50, 50, 60_000, errors);
         b.arrowInstrumentTokens = optional(env, "ARROW_INSTRUMENT_TOKENS");
 
@@ -241,7 +238,6 @@ public final class IngestionConfig {
         m.put("ARROW_TOKEN", arrowToken.isBlank() ? "(not set)" : "***");
         m.put("ARROW_USER_ID", arrowUserId.isBlank() ? "(not set)" : "***");
         m.put("ARROW_AUTH_METHOD", !arrowToken.isBlank() ? "token" : "autologin");
-        m.put("ARROW_USE_STANDARD", arrowUseStandard);
         m.put("ARROW_HFT_LATENCY_MS", arrowHftLatencyMs);
         m.put("ARROW_INSTRUMENT_TOKENS", arrowInstrumentTokens.isBlank() ? "(synthetic)" : "***");
         m.put("FLUSS_BOOTSTRAP", flussBootstrap);
@@ -407,7 +403,6 @@ public final class IngestionConfig {
     private static class Builder {
         String arrowAppId = "", arrowAppSecret = "", arrowToken = "";
         String arrowUserId = "", arrowPassword = "", arrowTotpKey = "";
-        boolean arrowUseStandard;
         int arrowHftLatencyMs = 50;
         String arrowInstrumentTokens = "";
         String flussBootstrap = "fluss-coordinator:9123";

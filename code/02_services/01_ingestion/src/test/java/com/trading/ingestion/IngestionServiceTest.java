@@ -37,8 +37,6 @@ class IngestionServiceTest {
                 "ask_px":[234600,234700,234800,234900,235000],
                 "bid_qty":[500,300,200,100,50],
                 "ask_qty":[400,350,250,150,100],
-                "change_flag":1,"avg_price_paise":234100,
-                "lower_limit_paise":210000,"upper_limit_paise":258000,
                 "feed_sequence_local":17}""";
 
         Object gt = MAPPER.readValue(json, GoTickClass());
@@ -72,9 +70,7 @@ class IngestionServiceTest {
                 "vwap_paise":0,"ltq":10,"volume":0,"total_buy_qty":0,"total_sell_qty":0,
                 "atv":0,"btv":0,"open_interest":0,"ts_ms":1719000001000,
                 "bid_px":[0,0,0,0,0],"ask_px":[0,0,0,0,0],
-                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0],
-                "change_flag":0,"avg_price_paise":0,
-                "lower_limit_paise":0,"upper_limit_paise":0}""";
+                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0]}""";
 
         Object gt = MAPPER.readValue(json, GoTickClass());
         assertNotNull(gt);
@@ -93,9 +89,7 @@ class IngestionServiceTest {
                 "ltq":50,"volume":125000,"total_buy_qty":800,"total_sell_qty":600,
                 "atv":500,"btv":45,"open_interest":0,"ts_ms":1719000002000,
                 "bid_px":[0,0,0,0,0],"ask_px":[0,0,0,0,0],
-                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0],
-                "change_flag":0,"avg_price_paise":234100,
-                "lower_limit_paise":210000,"upper_limit_paise":258000}""";
+                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0]}""";
 
         Object gt = MAPPER.readValue(json, GoTickClass());
         assertNotNull(gt);
@@ -125,9 +119,7 @@ class IngestionServiceTest {
                 "open_paise":0,"high_paise":0,"low_paise":0,"vwap_paise":0,"ltq":1,
                 "volume":0,"total_buy_qty":0,"total_sell_qty":0,"atv":0,"btv":0,
                 "open_interest":0,"ts_ms":1,"bid_px":[0,0,0,0,0],"ask_px":[0,0,0,0,0],
-                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0],
-                "change_flag":0,"avg_price_paise":0,
-                "lower_limit_paise":0,"upper_limit_paise":0}""";
+                "bid_qty":[0,0,0,0,0],"ask_qty":[0,0,0,0,0]}""";
 
         Object gt = MAPPER.readValue(json, GoTickClass());
         assertNotNull(gt);

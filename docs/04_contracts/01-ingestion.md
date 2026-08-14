@@ -7,8 +7,8 @@ Two colocated processes in the same container consume the evidence-approved brok
 ## Inputs
 
 - Versioned instrument manifest (loaded from Arrow `GET /all` or `GET /nse` CSV, refreshed daily 8 AM IST)
-- Arrow market-data WebSocket: `wss://ds.arrow.trade?appID=X&token=Y`
-- Binary protocol: 4 modes — LTP (13 bytes), LTPC (17 bytes), Quote (93 bytes), Full (241 bytes), all big-endian ints
+- Arrow market-data WebSocket: `wss://socket.arrow.trade?appID=X&token=Y&zstd=1` (HFT feed — the Standard feed `wss://ds.arrow.trade` was removed 2026-08-14)
+- Binary protocol: HFT modes — LTPC (40 bytes), Full (196 bytes), little-endian, zstd-compressed
 - Prices in **paise** (int32, ÷100 for rupees); timestamps in int32 epoch seconds (convert to UTC epoch ms)
 - Subscribe via JSON: `{"code":"sub","mode":"full","full":[tokens]}`
 - Heartbeat: client sends `PONG` text every 3s; read timeout 5s

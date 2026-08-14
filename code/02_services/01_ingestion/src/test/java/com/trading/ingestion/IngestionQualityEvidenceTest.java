@@ -75,7 +75,7 @@ class IngestionQualityEvidenceTest {
         String[] expected = {
                 "MALFORMED_JSON", "INVALID_SCHEMA", "MISSING_INSTRUMENT",
                 "INVALID_VALUES", "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP",
-                "BROKER_LIMIT_VIOLATION", "HASH_MISMATCH", "INTERNAL_ERROR",
+                "HASH_MISMATCH", "INTERNAL_ERROR",
                 "FINGERPRINT_FAILURE",
         };
         QuarantineWriter.Reason[] actual = QuarantineWriter.Reason.values();
@@ -92,7 +92,7 @@ class IngestionQualityEvidenceTest {
         // vocabulary directly against the writer's accepted names.
         for (String bridgeReason : new String[]{
                 "MALFORMED_JSON", "INVALID_SCHEMA", "INVALID_VALUES", "HASH_MISMATCH",
-                "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP", "BROKER_LIMIT_VIOLATION"}) {
+                "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP"}) {
             QuarantineWriter.Reason.valueOf(bridgeReason);
         }
     }

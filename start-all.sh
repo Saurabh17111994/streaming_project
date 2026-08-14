@@ -150,7 +150,6 @@ export ARROW_INSTRUMENT_MANIFEST="$MANIFEST"
 # Java loader reads INSTRUMENT_MANIFEST_PATH (not ARROW_INSTRUMENT_MANIFEST);
 # export both so the pipeline can start.
 export INSTRUMENT_MANIFEST_PATH="$MANIFEST"
-export ARROW_USE_STANDARD="${ARROW_USE_STANDARD:-false}"
 export ARROW_HFT_LATENCY_MS="${ARROW_HFT_LATENCY_MS:-50}"
 export NTP_SERVER="${NTP_SERVER:-ntp.ubuntu.com,time.google.com,in.pool.ntp.org}"
 # Timestamp-freshness evidence-gated values (plan B3; user-approved 2026-08-01:

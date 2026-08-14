@@ -1,11 +1,9 @@
-// capture-marketdata connects to the real Arrow market-data feeds (standard
-// wss://ds.arrow.trade and HFT wss://socket.arrow.trade) with credentials
-// from the environment and records raw wire frames to a JSONL file.
+// capture-marketdata connects to the real Arrow HFT market-data feed
+// (wss://socket.arrow.trade) with credentials from the environment and records
+// raw wire frames to a JSONL file.
 //
 // Purpose: BROKER-MD-001 protocol evidence. The vendored parse layouts are
-// validated against real broker bytes, and the full-mode size discrepancy is
-// resolved (docs claim 249 bytes for the standard Full tick, the SDK parses
-// 241) — the captured lengths decide which layout is correct.
+// validated against real broker bytes (HFT LTP 40 B / full 196 B, zstd).
 //
 // The tool is read-only: it only subscribes to market data and records what
 // the broker sends. It never places orders or sends anything beyond the
@@ -17,22 +15,20 @@
 //	ARROW_REQUEST_TOKEN (with ARROW_APP_SECRET) → device flow: Authenticate(requestToken)
 //	ARROW_USER_ID + ARROW_PASSWORD + ARROW_TOTP_KEY → client.AutoLogin
 //	ARROW_TOKEN (optional, overrides)     → use an existing token verbatim
-//	CAPTURE_STANDARD=1 (default)          → capture ds.arrow.trade
 //	CAPTURE_HFT=1 (default)               → capture socket.arrow.trade
-//	CAPTURE_MODES=ltp,ltpc,quote,full     → subset of standard modes (default: all four)
 //	CAPTURE_TOKENS=2885,1333,3045         → instrument ids (NSE tokens)
 //	CAPTURE_DURATION=20                   → seconds per feed
 //	CAPTURE_OUT=marketdata-capture.jsonl  → output path
 //
 // JSONL record kinds:
 //
-//	{"kind":"connect","feed":"standard","ok":true}
-//	{"kind":"subscribe","feed":"standard","mode":"ltp","ok":true}
-//	{"kind":"raw","feed":"standard","len":13,"hex":"..."}        (binary payload)
+//	{"kind":"connect","feed":"hft","ok":true}
+//	{"kind":"subscribe","feed":"hft","mode":"ltpc","ok":true}
 //	{"kind":"frame","feed":"hft","mt":2,"len":123}               (HFT frame, msg type + compressed size)
 //	{"kind":"response","feed":"hft","errorCode":"","successCount":5,...}
 //	{"kind":"error","feed":"hft","err":"..."}
-//	{"kind":"summary","standard":{"raw":{...}},"hft":{...}}
+//	{"kind":"raw","feed":"hft","len":196,"hex":"..."}            (decoded payload)
+//	{"kind":"summary","hft":{...}}
 package main
 
 import (
@@ -175,94 +171,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Login OK, token len %d\n", len(client.GetToken()))
 	}
 
-	var wg sync.WaitGroup
-	summary := struct {
-		Standard       lenCounts `json:"standard"`
-		HFT            lenCounts `json:"hft"`
-		StandardFrames int       `json:"standardFrames"`
-		HFTFrames      int       `json:"hftFrames"`
-	}{Standard: lenCounts{}, HFT: lenCounts{}}
-	var smu sync.Mutex
-
-	if envBool("CAPTURE_STANDARD", true) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			captureStandard(rec, client, tokens, duration, &summary, &smu)
-		}()
-	}
-	if envBool("CAPTURE_HFT", true) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			captureHFT(rec, client, tokens, duration, &summary, &smu)
-		}()
-	}
-	wg.Wait()
-
-	_ = rec.emit(map[string]any{"kind": "summary", "standard": summary.Standard, "hft": summary.HFT})
-	fmt.Fprintf(os.Stderr, "capture complete: standard=%v hft=%v -> %s\n", summary.Standard, summary.HFT, outPath)
-}
-
-func captureStandard(rec *recorder, client *arrow.Client, tokens []int32, dur time.Duration, summary *struct {
-	Standard       lenCounts `json:"standard"`
-	HFT            lenCounts `json:"hft"`
-	StandardFrames int       `json:"standardFrames"`
-	HFTFrames      int       `json:"hftFrames"`
-}, smu *sync.Mutex) {
-	ds, err := client.ConnectDataStream()
-	if err != nil {
-		_ = rec.emit(map[string]any{"kind": "connect", "feed": "standard", "ok": false, "err": err.Error()})
-		fmt.Fprintf(os.Stderr, "standard connect failed: %v\n", err)
+	if !envBool("CAPTURE_HFT", true) {
+		fmt.Fprintln(os.Stderr, "CAPTURE_HFT=0 — nothing to capture")
 		return
 	}
-	defer ds.Close()
-	_ = rec.emit(map[string]any{"kind": "connect", "feed": "standard", "ok": true})
 
-	modes := []arrow.StreamMode{arrow.StreamModeLTP, arrow.StreamModeLTPC, arrow.StreamModeQuote, arrow.StreamModeFull}
-	if v := os.Getenv("CAPTURE_MODES"); v != "" {
-		modes = nil
-		for _, m := range strings.Split(v, ",") {
-			switch strings.TrimSpace(m) {
-			case "ltp":
-				modes = append(modes, arrow.StreamModeLTP)
-			case "ltpc":
-				modes = append(modes, arrow.StreamModeLTPC)
-			case "quote":
-				modes = append(modes, arrow.StreamModeQuote)
-			case "full":
-				modes = append(modes, arrow.StreamModeFull)
-			}
-		}
-	}
-	for _, mode := range modes {
-		err := ds.Subscribe(mode, tokens)
-		_ = rec.emit(map[string]any{"kind": "subscribe", "feed": "standard", "mode": string(mode), "ok": err == nil, "err": errStr(err)})
-		fmt.Fprintf(os.Stderr, "standard subscribe mode=%s ok=%v err=%v\n", mode, err == nil, err)
-	}
+	summary := struct {
+		HFT       lenCounts `json:"hft"`
+		HFTFrames int       `json:"hftFrames"`
+	}{HFT: lenCounts{}}
+	var smu sync.Mutex
 
-	ctx, cancel := context.WithTimeout(context.Background(), dur)
-	defer cancel()
-	ds.ReadRawTicks(ctx, func(payload []byte) {
-		smu.Lock()
-		summary.Standard.add(len(payload))
-		summary.StandardFrames++
-		smu.Unlock()
-		_ = rec.emit(map[string]any{"kind": "raw", "feed": "standard", "len": len(payload), "hex": hex.EncodeToString(payload)})
-	}, func(err error) {
-		if ctx.Err() != nil {
-			return
-		}
-		_ = rec.emit(map[string]any{"kind": "error", "feed": "standard", "err": err.Error()})
-		fmt.Fprintf(os.Stderr, "standard read error: %v\n", err)
-	})
+	captureHFT(rec, client, tokens, duration, &summary, &smu)
+
+	_ = rec.emit(map[string]any{"kind": "summary", "hft": summary.HFT})
+	fmt.Fprintf(os.Stderr, "capture complete: hft=%v -> %s\n", summary.HFT, outPath)
 }
 
 func captureHFT(rec *recorder, client *arrow.Client, tokens []int32, dur time.Duration, summary *struct {
-	Standard       lenCounts `json:"standard"`
-	HFT            lenCounts `json:"hft"`
-	StandardFrames int       `json:"standardFrames"`
-	HFTFrames      int       `json:"hftFrames"`
+	HFT       lenCounts `json:"hft"`
+	HFTFrames int       `json:"hftFrames"`
 }, smu *sync.Mutex) {
 	hds, err := client.ConnectHFTDataStream()
 	if err != nil {

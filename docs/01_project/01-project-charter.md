@@ -11,7 +11,7 @@
 
 ## Purpose
 
-The Streaming Trading Data Platform ingests live Arrow Trade market data via a binary WebSocket (`wss://ds.arrow.trade`), computes features and signals with Apache Flink, stores live events in Apache Fluss, executes approved instructions through Arrow's native REST API (`https://edge.arrow.trade`), captures postbacks via Arrow's order-updates WebSocket (`wss://order-updates.arrow.trade`), and preserves eligible history in Apache Iceberg on S3.
+The Streaming Trading Data Platform ingests live Arrow Trade market data via the binary HFT WebSocket (`wss://socket.arrow.trade`; the Standard feed `wss://ds.arrow.trade` was removed 2026-08-14), computes features and signals with Apache Flink, stores live events in Apache Fluss, executes approved instructions through Arrow's native REST API (`https://edge.arrow.trade`), captures postbacks via Arrow's order-updates WebSocket (`wss://order-updates.arrow.trade`), and preserves eligible history in Apache Iceberg on S3.
 
 The platform separates the **data path** from the **order path**:
 

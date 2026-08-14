@@ -56,17 +56,15 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 9 | OpenObserve | VM-OPENOBS-011 | `OPS-INT-001`, `OPS-FAIL-001` | Telemetry envelope/redaction correct; OpenObserve outage leaves durable audit available — `TO_BE_VERIFIED` |
 | 10 | Base images | VM-IMAGES-012 | `LOCAL-INT-002`; `SWARM-INT-001`; `SEC-IMAGE-001` | Images referenced by digest; no mutable tag; SBOM/vulnerability policy passes |
 
-**Live evidence recorded (2026-08-13, BROKER-MD-001):** real wire frames from both
-Arrow feeds (ds.arrow.trade standard 13/17/93/249 B big-endian + socket.arrow.trade
-HFT 40/196 B zstd LE) captured raw and decoded to typed fields; full-mode byte size
-resolved — 249 B (docs) is the live wire, 241 B is the legacy layout (8 reserved
-bytes at 101:109, depth at 109); paise scaling cross-validated across feeds;
-AutoLogin (non-interactive, no device token) verified after the vendored-SDK fix
-(validate-2fa host api.arrow.trade + `appID` body field). VM-BROKER-MKT-008 flipped
-`COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`). Limitations: CAS +16 B trailer source-derived,
-not yet observed live. Live reconnect/replay/echo is not an acceptance item (DEC-037,
-2026-08-13); bridge-level ING-RES-001 soak PASS (2026-08-13) is the reconnect evidence.
-Evidence: `logs/broker-md-001/`.
+**Live evidence recorded (2026-08-13, BROKER-MD-001):** real wire frames from the HFT
+Arrow feed (socket.arrow.trade HFT 40/196 B zstd LE) captured raw and decoded to
+typed fields; paise scaling verified; AutoLogin (non-interactive, no device token)
+verified after the vendored-SDK fix (validate-2fa host api.arrow.trade + `appID` body
+field). VM-BROKER-MKT-008 flipped `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`).
+Live reconnect/replay/echo is not an acceptance item (DEC-037, 2026-08-13);
+bridge-level ING-RES-001 soak PASS (2026-08-13) is the reconnect evidence.
+Evidence: `logs/broker-md-001/`. (The Standard feed `ds.arrow.trade` evidence
+13/17/93/249 B was retired with the Standard feed removal 2026-08-14.)
 
 ## Environment tiers
 

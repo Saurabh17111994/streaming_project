@@ -213,13 +213,10 @@ class SafetyTransitionMappingTest {
                 IngestionService.qualityUnsafeReason(QuarantineWriter.Reason.FUTURE_BROKER_TIMESTAMP));
         assertEquals(SafetyHaltWriter.ReasonCode.STALE_BROKER_TIMESTAMP,
                 IngestionService.qualityUnsafeReason(QuarantineWriter.Reason.STALE_BROKER_TIMESTAMP));
-        assertEquals(SafetyHaltWriter.ReasonCode.BROKER_LIMIT_VIOLATION,
-                IngestionService.qualityUnsafeReason(QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION));
         // Every other quarantine reason carries no safety evidence.
         for (QuarantineWriter.Reason r : QuarantineWriter.Reason.values()) {
             if (r == QuarantineWriter.Reason.FUTURE_BROKER_TIMESTAMP
-                    || r == QuarantineWriter.Reason.STALE_BROKER_TIMESTAMP
-                    || r == QuarantineWriter.Reason.BROKER_LIMIT_VIOLATION) {
+                    || r == QuarantineWriter.Reason.STALE_BROKER_TIMESTAMP) {
                 continue;
             }
             assertNull(IngestionService.qualityUnsafeReason(r),

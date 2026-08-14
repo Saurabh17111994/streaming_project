@@ -299,10 +299,14 @@ services:
       ARROW_USER_ID: ${ARROW_USER_ID}
       ARROW_PASSWORD: ${ARROW_PASSWORD}
       ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
-      ARROW_USE_STANDARD: ${ARROW_USE_STANDARD:-false}
       ARROW_INSTRUMENT_TOKENS: ${ARROW_INSTRUMENT_TOKENS:-}
       ARROW_DEBUG_WS: ${ARROW_DEBUG_WS:-}
       ARROW_TICK_COUNTS: ${ARROW_TICK_COUNTS:-}
+      # ING-TCP-001: the bridge writes its final per-token tick-count report
+      # to this file (survives the parent JVM closing the pipe streams at
+      # shutdown — stderr-only reports die with SIGPIPE). Host path so the
+      # reconcile can read it after the container stops.
+      ARROW_TICK_COUNTS_FILE: ${ARROW_TICK_COUNTS_FILE:-/tmp/arrow-tick-counts.txt}
       ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
@@ -312,6 +316,10 @@ services:
       RAW_TABLE_NAME: ${RAW_TABLE_NAME:-raw_table_1}
       ARROW_MAX_EVENT_AGE_MS: ${ARROW_MAX_EVENT_AGE_MS:-5000}
       ARROW_MAX_FUTURE_EVENT_SKEW_MS: ${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}
+      # Clock offset limit in ms (default 100). The host clock here is
+      # NTP-synchronized but measured -102ms on one sample (2026-08-14); a
+      # limit of 200 leaves margin while still catching genuine drift.
+      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-200}
       READINESS_FILE_PATH: /tmp/ingestion.ready
       # R-171: persistent log volume so the JSON log survives recreate.
       LOG_DIR: /data/ingestion/logs
@@ -328,6 +336,7 @@ services:
         read_only: true
       # R-171: /data/ingestion/logs holds the JSON log (LOG_DIR default).
       - ingestion-logs:/data/ingestion/logs
+
 
   # ── Disabled services (uncomment as each phase is built) ────────────────
   #

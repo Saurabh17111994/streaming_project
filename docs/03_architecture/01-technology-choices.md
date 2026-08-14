@@ -38,7 +38,7 @@ Flink managed state and Fluss sink guarantees are exactly-once only at the teste
 
 **Confirmed version:** Flink 2.2.0 with Java 21 support (mature since 2.0). New in 2.2: VECTOR_SEARCH, Materialized Tables, Delta Joins, Balanced Tasks Scheduling. ⚠️ Flink 2.x has a significantly different DataStream API surface vs 1.x — existing 1.x code patterns must be migrated.
 
-Ingestion is one Java 21 service process from binary WebSocket decode through the supported Fluss 0.9 Java client append path. The Arrow market-data WebSocket (`wss://ds.arrow.trade`) uses a binary protocol with 4 modes (LTP 13B, LTPC 17B, Quote 93B, Full 241B), all big-endian integers, prices in **paise** (÷100 for rupees), timestamps in int32 epoch seconds. No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON `{"code":"sub","mode":"full","full":[tokens]}`. Heartbeat: client sends `PONG` text every 3s, read timeout 5s.
+Ingestion is one Java 17 service process from binary WebSocket decode through the supported Fluss 0.9 Java client append path. The Arrow HFT market-data WebSocket (`wss://socket.arrow.trade`) uses a binary protocol with 2 modes (LTPC 40B, Full 196B), little-endian integers, zstd-compressed inbound, prices in **paise** (÷100 for rupees). No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON token IDs (≤1024 per connection, ≤512 per request). Heartbeat: client sends `PONG` text every 3s, stall timeout 15s. (The Standard feed `wss://ds.arrow.trade` was removed 2026-08-14.)
 
 **No OpenAlgo.** The Executor calls Arrow's native REST API directly. (DEC-006, 2026-07-23)
 

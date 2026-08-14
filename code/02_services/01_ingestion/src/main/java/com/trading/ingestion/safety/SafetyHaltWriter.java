@@ -52,11 +52,12 @@ public final class SafetyHaltWriter implements AutoCloseable {
         BRIDGE_EXIT,
         RESOURCE_EXHAUSTED,
         // Market-data quality class (plan §Market-data quality classification):
-        // slot-unsafe evidence for records the broker itself mis-dated or
-        // mis-priced. Mirrors QuarantineWriter.Reason vocabulary.
+        // slot-unsafe evidence for records the broker itself mis-dated.
+        // Mirrors QuarantineWriter.Reason vocabulary. (BROKER_LIMIT_VIOLATION
+        // was removed 2026-08-14 with the Standard feed — the circuit-limit
+        // check relied on standard-feed lower/upper limit fields.)
         FUTURE_BROKER_TIMESTAMP,
-        STALE_BROKER_TIMESTAMP,
-        BROKER_LIMIT_VIOLATION
+        STALE_BROKER_TIMESTAMP
     }
 
     /** Safety state of a slot as seen by the Signal job. */

@@ -32,3 +32,19 @@ logs/
 *.log
 *.tsv
 logs/ingestion.log
+
+# Local agent/runtime junk — never pushed (2026-08-14):
+# Agent-behavior symlinks at repo root, tool caches, sandbox state.
+/Cu*
+.token-savior-cache.json
+.pi/
+
+# Eclipse/IDE metadata generated on this host.
+*.project
+*.classpath
+**/.settings/
+
+# Duplicate backup of 13-candle-log-kv-replay-safety.md (leftover copy).
+docs/08_implementation/14-candle-log-kv-replay-safety_2.md
+
+*.factorypath

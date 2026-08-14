@@ -47,7 +47,6 @@ services:
       ARROW_TOTP_KEY: ""
       ARROW_HFT_CONNECTIONS: "1"
       GO_ARROW_SDK_VERSION: v0.0.0-20260622-7cce1630
-      ARROW_USE_STANDARD: "false"
       # Fake-feed soaks have no live wall-clock feed to cross-check.
       CLOCK_CHECK_REQUIRED: "false"
       NTP_SERVER: ntp.ubuntu.com,time.google.com,in.pool.ntp.org

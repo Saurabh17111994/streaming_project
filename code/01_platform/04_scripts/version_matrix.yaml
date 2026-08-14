@@ -249,9 +249,10 @@ boundaries:
   - compatibility_id: VM-BROKER-MKT-008
     boundary: Broker market protocol
     proposed_version: >-
-      Arrow WebSocket market data: ds.arrow.trade (big-endian binary,
-      modes ltp/ltpc/quote/full) + socket.arrow.trade (zstd LE binary,
-      mandatory 8 Jul 2026, modes ltpc/full)
+      Arrow WebSocket market data: socket.arrow.trade (zstd LE binary,
+      mandatory 8 Jul 2026, modes ltpc/full). The Standard feed
+      ds.arrow.trade (big-endian, modes ltp/ltpc/quote/full) was removed
+      2026-08-14.
     evidence_source: >-
       docs.arrow.trade/rest-api/market-data + hft-stream; go-arrow
       streams.go + hft_stream.go (symbol/token join = Token int32);

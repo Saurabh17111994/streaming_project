@@ -5,25 +5,23 @@ import com.trading.common.identity.IdentityModel.InstrumentToken;
 import java.util.Objects;
 
 /**
- * Normalized Arrow market tick (either feed: ds.arrow.trade or socket.arrow.trade).
+ * Normalized Arrow market tick (HFT feed: socket.arrow.trade). The Standard
+ * feed (ds.arrow.trade) was removed 2026-08-14.
  *
  * The {@link InstrumentToken} is the join key to {@code 01_ticks_raw.bucket.key},
- * the order book, and the postback stream. Prices from both feeds are integer-scaled
+ * the order book, and the postback stream. Prices are integer-scaled
  * (paise, x100) and must be divided by 100 for display.
  *
- * <p>R-042: the {@link Feed} discriminator disambiguates the {@code exchangeTimestamp}
- * time unit — STANDARD feeds carry epoch <b>seconds</b>, HFT feeds carry epoch
- * <b>nanoseconds</b>. Consumers must convert using the feed, never guess.
+ * <p>R-042: the HFT feed carries {@code exchangeTimestamp} in epoch
+ * <b>nanoseconds</b>; consumers must convert to millis, never guess.
  *
  * <p>R-073: the field set now covers every declared mode — LTPC carries a
  * previous close, QUOTE carries best bid/ask, FULL carries the OHLC snapshot.
  */
 public final class ArrowMarketTick {
 
-    /** Wire feed source. Determines the exchangeTimestamp unit (R-042). */
+    /** Wire feed source (HFT only since the Standard feed removal 2026-08-14). */
     public enum Feed {
-        /** ds.arrow.trade — exchangeTimestamp in epoch seconds. */
-        STANDARD,
         /** socket.arrow.trade — exchangeTimestamp in epoch nanoseconds. */
         HFT
     }
@@ -96,9 +94,9 @@ public final class ArrowMarketTick {
     /** Price in rupees from the paise-scaled wire value. */
     public double priceInRupees() { return lastTradedPrice / 100.0; }
 
-    /** R-042: exchangeTimestamp converted to epoch milliseconds using the feed's unit. */
+    /** R-042: exchangeTimestamp converted to epoch milliseconds (HFT nanos → ms). */
     public long exchangeTimestampMillis() {
-        return feed == Feed.HFT ? exchangeTimestamp / 1_000_000L : exchangeTimestamp * 1000L;
+        return exchangeTimestamp / 1_000_000L;
     }
 
     // R-162: value semantics for sets/maps/dedup.

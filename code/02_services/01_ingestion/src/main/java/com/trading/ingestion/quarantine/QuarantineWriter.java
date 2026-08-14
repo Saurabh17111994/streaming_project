@@ -81,7 +81,6 @@ public class QuarantineWriter implements AutoCloseable {
         INVALID_VALUES,
         FUTURE_BROKER_TIMESTAMP,
         STALE_BROKER_TIMESTAMP,
-        BROKER_LIMIT_VIOLATION,
         HASH_MISMATCH,
         /** Ingestion-internal processing exception. */
         INTERNAL_ERROR,

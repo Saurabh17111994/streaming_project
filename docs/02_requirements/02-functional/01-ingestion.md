@@ -105,7 +105,7 @@ Ingestion SHALL load an explicit, versioned active-instrument manifest from CSV 
 2. Manifest version recorded.
 3. Configured minimum instrument count met.
 4. Every row validated for required routing fields (token, exchange, symbol, trading_symbol).
-5. Subscription acknowledgements received for all required instruments (via `wss://ds.arrow.trade` sub message).
+5. Subscription acknowledgements received for all required instruments (via the HFT `wss://socket.arrow.trade` sub message — the Standard feed was removed 2026-08-14).
 
 Market hours by exchange:
 

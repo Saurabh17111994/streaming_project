@@ -19,7 +19,7 @@ import (
 // Tick is the unified NDJSON output format consumed by the Java pipeline.
 // All prices in integer paise (₹1 = 100 paise). Timestamps in epoch ms.
 type Tick struct {
-	Feed   string `json:"feed"` // "standard" or "hft"
+	Feed   string `json:"feed"` // "hft" (the only feed since the Standard feed was removed 2026-08-14)
 	Mode   string `json:"mode"` // "ltp", "ltpc", "quote", "full"
 	Token  int32  `json:"token"`
 	LTP    int32  `json:"ltp_paise"`
@@ -43,11 +43,6 @@ type Tick struct {
 	AskSize [5]int32  `json:"ask_qty,omitempty"`
 	BidOrd  [5]uint16 `json:"bid_orders,omitempty"`
 	AskOrd  [5]uint16 `json:"ask_orders,omitempty"`
-	// standard-stream extras
-	ChangeFlag int8  `json:"change_flag,omitempty"`
-	AvgPrice   int32 `json:"avg_price_paise,omitempty"`
-	LowerLimit int32 `json:"lower_limit_paise,omitempty"`
-	UpperLimit int32 `json:"upper_limit_paise,omitempty"`
 }
 
 var bridgeEmitter = NewBridgeEmitter(os.Stdout)
@@ -59,12 +54,20 @@ const maxDecodeErrorsPer10s = 100
 // Process exit statuses per plan §main.go:
 //
 //	0 — requested shutdown
-//	1 — unexpected supervisor failure (standard-mode connect error, stdout broken pipe)
+//	1 — unexpected supervisor failure (HFT connect error, stdout broken pipe)
 //	2 — fatal auth/plan/config failure at startup
 const (
 	exitRequested  = 0
 	exitSupervisor = 1
 	exitFatalStart = 2
+)
+
+// HFT runtime tuning, set once from env in main() (see the policy block).
+// Package vars keep the values readable from runHFTEpoch without threading
+// them through every supervisor/slot signature.
+var (
+	heartbeatInterval = 3 * time.Second
+	stallTimeout      = 15 * time.Second
 )
 
 func main() {
@@ -146,19 +149,26 @@ func main() {
 	}
 	bridgeEmitter.SetManifestFingerprint(tokenSetHash(allTokens))
 
-	useHFT := !truthy(os.Getenv("ARROW_USE_STANDARD"))
 	latencyMs := 50
 	if v := os.Getenv("ARROW_HFT_LATENCY_MS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 50 {
 			latencyMs = n
 		}
 	}
-	responseTimeout := 10 * time.Second
-	if v := os.Getenv("ARROW_HFT_RESPONSE_TIMEOUT_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			responseTimeout = time.Duration(n) * time.Millisecond
-		}
-	}
+	// HFT policy keys — every key below is read from env and enforced here,
+	// mirroring the Java IngestionConfig exactInt/intRange checks so a wrong
+	// value fails closed in the bridge too (it also runs standalone). Pinned
+	// keys must equal the pin exactly; tunable keys must be within range.
+	_ = hftPin(logf, "ARROW_HFT_MAX_TOKENS_PER_CONNECTION", 1024)
+	_ = hftPin(logf, "ARROW_HFT_MAX_TOKENS_PER_REQUEST", 512)
+	heartbeatInterval = time.Duration(hftPin(logf, "ARROW_HFT_HEARTBEAT_SECONDS", 3)) * time.Second
+	stallTimeout = time.Duration(hftRange(logf, "ARROW_HFT_STALL_TIMEOUT_SECONDS", 15, 5, 60)) * time.Second
+	responseTimeout := time.Duration(hftRange(logf, "ARROW_HFT_SUBSCRIPTION_RESPONSE_TIMEOUT_SECONDS", 10, 1, 60)) * time.Second
+	_ = hftPin(logf, "ARROW_HFT_RECONNECT_BASE_SECONDS", 1)
+	_ = hftPin(logf, "ARROW_HFT_RECONNECT_MAX_SECONDS", 30)
+	_ = hftPin(logf, "ARROW_HFT_AUTH_REFRESH_ATTEMPTS", 3)
+	_ = hftPin(logf, "ARROW_HFT_MIN_ACTIVE_SLOTS", 1)
+	logf("HFT policy: response_timeout=%s stall_timeout=%s heartbeat=%s", responseTimeout, stallTimeout, heartbeatInterval)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -167,6 +177,16 @@ func main() {
 	// enables per-token emitted-tick counters, reported on the interval and at
 	// shutdown. Reconciliation is done against per-token row counts in Fluss.
 	if v := os.Getenv("ARROW_TICK_COUNTS"); v != "" {
+		// The parent JVM closes our pipe streams the moment its own shutdown
+		// begins. With counters on, the final report is written to a FILE
+		// first (source of truth for the reconcile); the stderr mirror would
+		// otherwise raise SIGPIPE (exit 141) and mask the clean shutdown. Ignore
+		// SIGPIPE so a closed pipe yields an EPIPE error instead of a kill —
+		// the file report is already persisted by then.
+		signal.Ignore(syscall.SIGPIPE)
+		if f := os.Getenv("ARROW_TICK_COUNTS_FILE"); f != "" {
+			tickCountsFilePath = f
+		}
 		interval := 60
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			interval = n
@@ -180,7 +200,11 @@ func main() {
 				case <-ticker.C:
 					reportTickCounts()
 				case <-ctx.Done():
-					reportTickCounts() // final counts at shutdown
+					// Final counts at shutdown — the goroutine may be killed
+					// before it writes when Go main returns, so main also calls
+					// finalTickCountReport.Do(reportTickCounts) after runHFT
+					// returns (see below). The Once makes exactly one report.
+					finalTickCountReport.Do(reportTickCounts)
 					return
 				}
 			}
@@ -188,15 +212,15 @@ func main() {
 		logf("tick counters enabled (interval=%ds)", interval)
 	}
 
-	if useHFT {
-		runHFT(ctx, cancel, client, plan, latencyMs, responseTimeout, refreshAuth, logf)
-	} else {
-		runStandard(ctx, cancel, client, tokens, logf)
-	}
+	runHFT(ctx, cancel, client, plan, latencyMs, responseTimeout, refreshAuth, logf)
 	// Drain point: all EmitTick/EmitEvent calls are synchronous and ordered
 	// under the emitter mutex, so the bridge_shutdown event below is
 	// guaranteed to be the last NDJSON line. Duplicate shutdown paths are
 	// collapsed by bridgeShutdownOnce — the event is emitted exactly once.
+	// Emit the final per-token tick count synchronously HERE (before any
+	// further work or return) so the ING-TCP-001 shutdown report cannot be
+	// lost to a goroutine/main exit race.
+	finalTickCountReport.Do(reportTickCounts)
 	emitShutdownEvent()
 }
 
@@ -441,7 +465,7 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 	// R-059: heartbeat and watchdog goroutines must stop when the epoch ends
 	// (epochStop), not just on the process context — otherwise a dead epoch's
 	// goroutines keep writing to a closed stream and emit spurious events.
-	heartbeat := time.NewTicker(3 * time.Second)
+	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	go func() {
 		for {
@@ -470,7 +494,7 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			select {
 			case <-watchdog.C:
 				last := lastFrameNanos.Load()
-				if last > 0 && time.Since(time.Unix(0, last)) > 15*time.Second {
+				if last > 0 && time.Since(time.Unix(0, last)) > stallTimeout {
 					// R-297 wedge fix: signal the epoch stop BEFORE the emit —
 					// the feed_stalled emit was blocking on a full NDJSON pipe,
 					// so the epoch never stopped and the slot never reconnected.
@@ -599,90 +623,6 @@ func classifySubscriptionResponse(errorCode string, successCount, errorCount, re
 	}
 }
 
-func runStandard(ctx context.Context, cancel context.CancelFunc, client *arrow.Client, tokens []int32, logf func(string, ...any)) {
-	ds, err := client.ConnectDataStream()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "arrow-bridge: standard connect failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer ds.Close()
-	logf("standard connected (tokens=%d)", len(tokens))
-	if err := ds.Subscribe(arrow.StreamModeFull, tokens); err != nil {
-		fmt.Fprintf(os.Stderr, "arrow-bridge: standard subscribe failed: %v\n", err)
-		os.Exit(1)
-	}
-	logf("standard subscribed %d tokens (mode=full)", len(tokens))
-
-	// Standard-mode identity. The standard stream is a single
-	// process-lifetime connection (no in-process reconnect loop): the
-	// supervisor restarts the process on disconnect, so a new process
-	// begins a new connection epoch. R-185: restart the per-slot tick
-	// sequence at the start of the epoch.
-	const (
-		slotID       = "standard-0"
-		connectionID = "ingestion-local/standard-0"
-	)
-	epoch := uint64(1)
-	bridgeEmitter.resetSeq(slotID)
-
-	go ds.ReadTicks(ctx, func(t arrow.MarketTick, payload []byte) {
-		// EmitTick (not a bare write) so standard ticks carry the full v2
-		// contract: record_type, connection/slot/epoch identity,
-		// feed_sequence_local, received_ts_ms, and raw_payload + payload_hash
-		// (SHA-256 of the exact frame bytes). Without payload_hash the Java
-		// PayloadHashValidator quarantines every standard tick HASH_MISMATCH.
-		_ = bridgeEmitter.EmitTick(fromStandardTick(t), connectionID, slotID, epoch, time.Now(), payload)
-	}, func(err error) {
-		logf("standard stream ended: %v", err)
-		cancel()
-	})
-
-	<-ctx.Done()
-	logf("standard bridge stopped")
-}
-
-func fromStandardTick(t arrow.MarketTick) Tick {
-	tsMs := int64(t.LTT) * 1000
-	if tsMs == 0 {
-		tsMs = int64(t.Time) * 1000
-	}
-	var bidPx, askPx [5]int32
-	var bidQty, askQty [5]int32
-	var bidOrd, askOrd [5]uint16
-	for i, b := range t.Bids {
-		if i >= 5 {
-			break
-		}
-		bidPx[i] = b.Price
-		bidQty[i] = int32(b.Quantity)
-		bidOrd[i] = uint16(b.Orders)
-	}
-	for i, a := range t.Asks {
-		if i >= 5 {
-			break
-		}
-		askPx[i] = a.Price
-		askQty[i] = int32(a.Quantity)
-		askOrd[i] = uint16(a.Orders)
-	}
-	oi := int64(0)
-	if t.OI > 0 {
-		oi = int64(t.OI)
-	}
-	return Tick{
-		Feed: "standard", Mode: string(t.Mode), Token: t.Token,
-		LTP: t.LTP, Close: t.Close, Open: t.Open, High: t.High, Low: t.Low,
-		LTQ: t.LTQ, Volume: t.Volume, OI: oi,
-		TBQ: int64(t.TotalBuyQuantity), TSQ: int64(t.TotalSellQuantity),
-		ChangeFlag: t.ChangeFlag, AvgPrice: t.AvgPrice,
-		LowerLimit: t.LowerLimit, UpperLimit: t.UpperLimit,
-		BidPx: bidPx, AskPx: askPx,
-		BidSize: bidQty, AskSize: askQty,
-		BidOrd: bidOrd, AskOrd: askOrd,
-		TS: tsMs,
-	}
-}
-
 func envOrFatal(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
@@ -700,6 +640,37 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// hftPin enforces a pinned HFT policy env key (mirrors Java exactInt): unset
+// returns the pin; a value other than the pin is a FATAL startup error.
+func hftPin(logf func(string, ...any), key string, pin int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return pin
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n != pin {
+		logf("FATAL: %s=%s — pinned to %d", key, v, pin)
+		os.Exit(exitFatalStart)
+	}
+	return n
+}
+
+// hftRange reads a tunable HFT policy env key (mirrors Java intRange): unset
+// returns defVal; a non-integer or out-of-range value is a FATAL startup
+// error.
+func hftRange(logf func(string, ...any), key string, defVal, min, max int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return defVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < min || n > max {
+		logf("FATAL: %s=%s — must be in range %d..%d", key, v, min, max)
+		os.Exit(exitFatalStart)
+	}
+	return n
 }
 
 func parseTokensEnv(key string) []int32 {
@@ -797,9 +768,4 @@ func loadTokensFromCSV(envKey, csvPath string) []int32 {
 
 	fmt.Fprintf(os.Stderr, "arrow-bridge: %d tokens from %s (%d lines)\n", len(tokens), csvPath, lineNum-1)
 	return tokens
-}
-
-func truthy(s string) bool {
-	s = strings.TrimSpace(strings.ToLower(s))
-	return s == "1" || s == "true" || s == "yes"
 }

@@ -24,7 +24,7 @@ There are **four record types**, discriminated by the required `record_type` fie
 
 | `record_type` | Producer | Consumer |
 | --- | --- | --- |
-| `tick` | Go bridge (each decoded HFT/standard tick) | `IngestionService.processLine` → `raw_table_1` |
+| `tick` | Go bridge (each decoded HFT tick — the Standard feed was removed 2026-08-14) | `IngestionService.processLine` → `raw_table_1` |
 | `bridge_event` | Go bridge (lifecycle transitions) | `IngestionService.processBridgeEvent` → health/metrics/evidence |
 | `bridge_metrics` | Go bridge (10s telemetry snapshot, v2.2+) | `IngestionService.processLine` → `parseMetrics` → Go-authoritative gauges |
 | `broker_quarantine` | Go bridge (undecodable/unknown broker packets) | `IngestionService` → `ingestion_quarantine` |
@@ -65,10 +65,6 @@ Contract version is integer `2` (v2.2 is an additive document revision — see V
   "ask_qty": [100, 200, 300, 400, 500],
   "bid_orders": [1, 2, 3, 4, 5],
   "ask_orders": [1, 2, 3, 4, 5],
-  "change_flag": 0,
-  "avg_price_paise": 15075,
-  "lower_limit_paise": 12000,
-  "upper_limit_paise": 18000,
   "raw_payload": "KAEAAAAAAA==",
   "payload_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 }
@@ -85,7 +81,7 @@ Contract version is integer `2` (v2.2 is an additive document revision — see V
 | `slot_id` | `string` | — | `"hft-0"` … (required) |
 | `received_ts_ms` | `int64` | epoch ms | Java-side receive time (required) |
 | `feed_sequence_local` | `int64` | — | Monotonic per-slot tick sequence starting at 1, reset per connection epoch (required). Diagnostic ordering evidence; not part of the dedup fingerprint. |
-| `feed` | `string` | — | `"hft"` or `"standard"` |
+| `feed` | `string` | — | `"hft"` (the only feed — Standard removed 2026-08-14) |
 | `mode` | `string` | — | `"ltp"`, `"ltpc"`, `"quote"`, or `"full"` |
 | `token` | `int32` | — | Arrow instrument token (bucket key for `raw_table_1`) |
 | `ltp_paise` | `int32` | paise | Last traded price (₹1 = 100 paise) |
@@ -108,10 +104,6 @@ Contract version is integer `2` (v2.2 is an additive document revision — see V
 | `ask_qty` | `int32[5]` | shares | 5-level ask quantities |
 | `bid_orders` | `uint16[5]` | count | 5-level bid order count |
 | `ask_orders` | `uint16[5]` | count | 5-level ask order count |
-| `change_flag` | `int8` | — | Price change direction: -1/0/+1 |
-| `avg_price_paise` | `int32` | paise | Average trade price |
-| `lower_limit_paise` | `int32` | paise | Circuit lower limit |
-| `upper_limit_paise` | `int32` | paise | Circuit upper limit |
 | `raw_payload` | `string` | Base64 | **Exact decompressed broker packet bytes** that produced this tick (required). Decoded JSON must NOT replace these bytes. |
 | `payload_hash` | `string` | hex | **SHA-256** hex digest of the `raw_payload` bytes (required). Java validates before append; mismatch → quarantine `HASH_MISMATCH`. |
 
@@ -250,7 +242,7 @@ Java hash-validates `raw_payload` against `payload_hash` and persists to `ingest
 2. **All timestamps in epoch milliseconds UTC.** Never seconds, never local time.
 3. **Depth arrays are 5-element.** `full` mode always provides 5 bids + 5 asks. `ltp`/`ltpc`/`quote` modes may have zero-length or null arrays.
 4. **Missing/unknown fields are omitted.** JSON `omitempty` — do NOT send `0` or `null` for absent fields. Java side defaults to zero.
-5. **feed+mode disambiguate the data.** `feed=hft, mode=full` has more fields populated than `feed=standard, mode=ltp`.
+5. **feed+mode disambiguate the data.** `feed=hft, mode=full` has more fields populated than `feed=hft, mode=ltpc` (HFT is the only feed — Standard removed 2026-08-14).
 6. **No duplicate ticks assumed to be identical.** Two ticks with the same `token`+`ltp_paise`+`ts_ms` but different `ltq` or `bid_px` are different events.
 7. **raw_payload is the exact decompressed broker packet bytes** (Base64), never the JSON line. `payload_hash` is their SHA-256.
 8. **One record per line, atomic writes.** The emitter serializes complete lines; three slot goroutines may emit concurrently.

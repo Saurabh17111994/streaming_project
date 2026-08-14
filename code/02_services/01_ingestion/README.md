@@ -31,7 +31,7 @@ The current architecture does **not** assume Arrow Trade, `seq_no`, exact sequen
 ### Go arrow-bridge
 
 - [x] Go bridge binary — `go-bridge/main.go` (~220 lines)
-- [x] Arrow Go SDK (`go-arrow`) via local replace directive — HFT + standard WebSocket
+- [x] Arrow Go SDK (`go-arrow`) via local replace directive — HFT WebSocket (Standard feed removed 2026-08-14)
 - [x] NDJSON stdout output matching `TickPacket`/`GoTick` schema
 - [x] Auth: AutoLogin (user+pass+TOTP) or static `ARROW_TOKEN`
 - [x] Subscription: configurable token set via `ARROW_INSTRUMENT_TOKENS` env

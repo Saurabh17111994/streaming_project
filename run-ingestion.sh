@@ -43,7 +43,6 @@ if [ -z "${ARROW_TOKEN:-}" ]; then
 	: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (or set ARROW_TOKEN)}"
 fi
 
-export ARROW_USE_STANDARD=false
 export ARROW_HFT_LATENCY_MS=50
 export FLUSS_BOOTSTRAP=localhost:9123
 export FLUSS_BOOTSTRAP_SERVERS=localhost:9123

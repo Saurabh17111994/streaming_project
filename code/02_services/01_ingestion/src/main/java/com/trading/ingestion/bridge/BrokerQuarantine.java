@@ -19,7 +19,7 @@ public record BrokerQuarantine(
     public static final int CONTRACT_VERSION = 2;
     private static final Set<String> REASONS = Set.of(
             "MALFORMED_JSON", "INVALID_SCHEMA", "INVALID_VALUES", "HASH_MISMATCH",
-            "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP", "BROKER_LIMIT_VIOLATION");
+            "FUTURE_BROKER_TIMESTAMP", "STALE_BROKER_TIMESTAMP");
 
     public BrokerQuarantine {
         // R-207: the record is documented Immutable — the byte[] component
