@@ -67,7 +67,7 @@ The following capabilities are explicitly NOT owned by the Interface Requirement
 - **Payload:** original packet bytes plus normalized typed fields, hash, decoder/protocol version, fingerprint/version, timestamps, and validity state
 - **Failure:** bounded retry under pinned client policy; uncertainty is counted and alerting/readiness is affected
 
-Ingestion never claims raw logical deduplication. Compute owns bounded fingerprint deduplication.
+Ingestion never claims raw logical deduplication. Compute performs bounded fingerprint deduplication; the durable dedup set is Fluss-authoritative (DEC-038).
 
 ## 5.2 Fluss → Signal Flink job
 
@@ -83,7 +83,7 @@ The job filters eligible trades, deduplicates best-effort, emits final candles, 
 
 The Signal job writes:
 
-- `feature_candles_15s` final LOG rows
+- `feature_candles_15s` final KV upsert rows (PK `(instrument_token, window_start)` — sole candle output, 2026-08-13 conversion)
 - `Signal_Candidates` immutable LOG rows
 - `Ranking_Results` immutable LOG rows
 - Immutable `Trade_Decisions` instruction records

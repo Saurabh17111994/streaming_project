@@ -96,7 +96,16 @@ Show packet/tick and byte throughput; append acknowledgements and p50/p95/p99 wr
 
 #### Compute and decision dashboard
 
-Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size + update rate, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
+Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size (entries + bytes) + update rate, dedup cache size/utilization, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
+
+#### Dedup state dashboard (DEC-038)
+
+Dedicated panels for the externalized dedup model, with bounded cardinality (per-table gauges and per-reason counters, never per-key labels):
+
+- **Fluss dedup-table state** — entry count and serialized bytes (`fingerprint_dedup`), and dedup update rate (durable writes/s, batched/async).
+- **Flink dedup cache** — cache size/utilization vs the `DEDUP_CACHE_MAX_ENTRIES`/`DEDUP_CACHE_MAX_BYTES` bounds, and cache hit ratio (hot-path lookups absorbed by the cache; a sustained drop means the hot path is leaking to per-tick Fluss lookups).
+- **Cleanup** — expired-row cleanup rate and backlog (rows past `expiry_ms` awaiting delete).
+- **Rehydration** — rehydration duration and failures on restart (failures keep the job fail-closed, SIG-STATE-002/003), plus state-compatibility preflight failures on the dedup table.
 
 #### Order safety dashboard
 
@@ -149,7 +158,7 @@ Critical categories:
 
 Order-safety alerts cover unknown broker outcomes; duplicate-order risk or request-hash conflict; missing/ambiguous mapping; active-order postback quarantine; reconciliation failure; changelog discontinuity; Executor fencing loss; failed or unauthorized approval; safe-halt latency breach; unverifiable Executor state; and security incidents. Their response is to halt the affected gate, preserve evidence, notify the owners, and begin the linked runbook.
 
-Streaming-health alerts cover Signal/Babysitter job failure; checkpoint failure, timeout, corruption, or restore failure; watermark stall/lag; sustained backpressure or memory breach; append uncertainty or acknowledged loss; broker disconnect/authentication exhaustion/partial subscription/protocol mismatch; projection backlog/freshness breach; and recovery-target breach. The affected path is not ready while correctness is uncertain.
+Streaming-health alerts cover Signal/Babysitter job failure; checkpoint failure, timeout, corruption, or restore failure; watermark stall/lag; sustained backpressure or memory breach; append uncertainty or acknowledged loss; broker disconnect/authentication exhaustion/partial subscription/protocol mismatch; projection backlog/freshness breach; and recovery-target breach. Dedup externalization alerts (DEC-038) cover the Fluss dedup-table size above its envelope (first-seen rate × TTL horizon), expired-row cleanup backlog, and cache hit-ratio degradation (hot path leaking to per-tick Fluss lookups); rehydration failures keep the job fail-closed. The affected path is not ready while correctness is uncertain.
 
 Storage and durability alerts cover Fluss replica/quorum or leader failure; disk/volume/object-store pressure; S3 checkpoint loss; EOD manifest or verification failure; retry exhaustion; insufficient expiry margin; source retention risk; failed checksum/count/range validation; and one-workload-VM recovery failure. Failed offload extends retention; no source day expires before its manifest is verified.
 

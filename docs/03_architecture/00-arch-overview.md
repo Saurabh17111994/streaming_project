@@ -79,7 +79,7 @@ There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. 
 | --- | --- | --- |
 | Ingestion | Broker connection, decode, normalization, packet preservation, fingerprinting, discontinuity evidence | Candles, strategy, broker orders |
 | Fluss | Tables, DDL, distribution, replication, retention, changelog, lake tiering | Strategy rules and broker calls |
-| Signal Flink job | Dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions | Arrow REST calls and authoritative fills |
+| Signal Flink job | Computes/operates: dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions — durable dedup/candle/signal state is Fluss-owned (DEC-038); Flink keeps only bounded working + recovery state | Arrow REST calls and authoritative fills |
 | Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine. Position projector runs in-process | Strategy and order submission |
 | Position projector | Fill-derived `Positions` aggregate (runs inside Action Capture process for MVP) | Raw order lifecycle authority |
 | Babysitter | Position observation; no-op in MVP; future structured actions | New entry signals, lifecycle authority, direct broker calls |

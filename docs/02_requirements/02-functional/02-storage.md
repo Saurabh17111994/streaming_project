@@ -81,7 +81,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | --------------------------- | ------------------------------------- | --------------------------- | -------------------------------------------- |
 | `raw_table_1`               | LOG                                   | Ingestion                   | Original bytes plus normalized market ticks  |
 | `feature_candles_15s`       | KV                                    | Signal job                  | Final MVP candles (KV upsert PK `(instrument_token, window_start)`, sole candle output — 2026-08-13 conversion; authoritative durable candle state) |
-| `feature_candles_15s_current` | KV (RETIRED 2026-08-13)            | Signal job                  | Was canonical candle projection PK `(instrument_token, window_start)`; candle output is now LOG-only, projection dropped, live-table teardown pending |
+| `feature_candles_15s_current` | KV (RETIRED 2026-08-13)            | Signal job                  | Was canonical candle projection PK `(instrument_token, window_start)`; `feature_candles_15s` is now the sole KV-only candle output (2026-08-13), projection dropped, live-table teardown pending |
 | `Signal_Candidates`         | LOG (v3; KV v2 R-084 reversed)       | Business Logic              | Immutable append-only candidate audit; one row per fired signal |
 | `Signal_Candidates_current` | KV                                    | Business Logic              | Current-state projection, PK `(instrument_token)`; latest/active candidate per instrument, supersession overwrites in place |
 | `Ranking_Results`           | LOG                                   | Signal job ranking operator | Immutable score/selection audit              |
@@ -100,7 +100,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | `Safety_Halt_Requests`      | KV (v3, R-089)                        | Authorized components        | Durable safety-control events; PK `halt_request_id` dedups re-delivery |
 | `suspected_discontinuities` | LOG                                   | Ingestion                   | Non-sequence discontinuity evidence          |
 | `ingestion_quarantine`      | LOG                                   | Ingestion                   | Invalid/undecodable broker rows quarantined by ingestion |
-| `forming_bar`               | KV                                    | Signal job (deferred consumer) | Per-ticker forming-bar projection, PK `instrument_token`; no consumer requirement yet — forming-bar state is in-process in the Signal job |
+| `forming_bar`               | KV                                    | Signal job (deferred consumer) | Per-ticker forming-bar projection, PK `instrument_token`; no consumer requirement yet — when implemented (Slice 2.2) this is the Fluss-authoritative durable forming-bar home (DEC-038), with in-process events to Business Logic (REQ-FC-007) |
 | `instruments`               | KV                                    | Operators                   | Versioned instrument manifest                |
 
 A pre-production clean break permits replacing stale table definitions. Every table SHALL have an explicit schema-version and owner matrix.

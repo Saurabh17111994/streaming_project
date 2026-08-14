@@ -87,7 +87,7 @@ An overloaded `order_id` is prohibited.
 | Table                       | Type           | Writer               | Live retention                                            | Lake/audit                             |
 | --------------------------- | -------------- | -------------------- | --------------------------------------------------------- | -------------------------------------- |
 | `raw_table_1`               | LOG            | Ingestion            | ≤7 complete trading days (ceiling); extend while offload unverified | EOD Iceberg                            |
-| `feature_candles_15s`       | LOG            | Signal job           | ≤7 complete trading days (ceiling); extend while offload unverified | EOD Iceberg                            |
+| `feature_candles_15s`       | KV (PK `(instrument_token, window_start)` — 2026-08-13 conversion; sole candle output) | Signal job           | ≤7 complete trading days (ceiling); extend while offload unverified | EOD Iceberg                            |
 | `Signal_Candidates`         | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |
 | `Signal_Candidates_current` | KV             | Signal job           | Current state plus rebuild window                         | Rebuilt from LOG audit                |
 | `Ranking_Results`           | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |

@@ -51,16 +51,134 @@ see `02-schema-storage.md` Phase C lake-state note 2026-08-13).
 > KV) are historical records of the pre-conversion build; the signal LOG + KV sinks are
 > the current dual-sink. Section content below annotates the affected rows.
 
-> **STATE OWNERSHIP (DEC-038, 2026-08-14) — large durable hot Signal state moves to Fluss; Flink keeps only small working + recovery state.**
->
-> The target model: **Fluss owns the large durable hot Signal-job state** (authoritative dedup set in a new Fluss KV state table; closed candles in `feature_candles_15s` KV; current signals in `Signal_Candidates_current` KV — the last two already Fluss-owned since DEC-001/035). **Flink keeps only the minimum state required for efficient processing and safe recovery** (source offsets, watermarks, event-time timers, in-flight window accumulators, signal ring buffers, and a bounded dedup working cache). **The Flink checkpoint is intentionally small and is not a second copy of the complete durable Signal state.** This reverses the design where ~1 GB of dedup state rode in Flink RocksDB and checkpoints (~1.74 GB measured at 53k t/s, 2026-08-12; ~986 MB dev-hashmap checkpoints 2026-08-14). Sections below that still describe the Flink-centric model — §Dedup state budget, §Checkpoint sizing, §Concrete sizing, §Restore and degradation, telemetry and test rows — are annotated with the DEC-038 target and are superseded where they conflict. **Design/DDL/code/measurement land in later stages of this dossier; this change fixes ownership only.** Ranking/reservation state is unchanged and out of scope.
->
-> State-ownership answer key (what/why/where):
-> - **Dedup set** — large, bounded by rate × TTL, must survive restart, business state → **Fluss KV state table** (authoritative) + bounded Flink working cache; rebuildable from `raw_table_1` replay within the TTL.
-> - **Candle/window state** — small, transient (15 s + lateness), final rows already Fluss KV → **Flink window accumulator + `emitted` flag**; durable copy is `feature_candles_15s` KV.
-> - **Forming-bar state** — not yet implemented (Slice 2.2); when built, current forming bar is **Fluss `forming_bar` KV** (DDL 04 exists) with in-process events for Business Logic.
-> - **Current signal state** — already **Fluss `Signal_Candidates` LOG + `Signal_Candidates_current` KV**.
-> - **Watermark/timer/source state** — small execution/recovery state → **Flink checkpoint**.
+> **DEC-038 (2026-08-14) — state ownership.** The canonical contract is [DEC-038 State Ownership and Recovery Contract](#dec-038-state-ownership-and-recovery-contract) directly below. In one line: **Fluss owns the large durable hot Signal-job state; Flink keeps only the small working state needed for active processing plus the minimal recovery/checkpoint state needed to restart safely; the Flink checkpoint is intentionally small and is not a second copy of the complete durable Signal state.** This reverses the pre-change design where ~1 GB of dedup state rode in Flink RocksDB and checkpoints (~1.74 GB measured at 53k t/s, 2026-08-12; ~986 MB dev-hashmap checkpoints 2026-08-14). Design/DDL/code/measurement land in later stages of this dossier; this change fixes ownership only. Sections below that still describe the Flink-centric model are marked HISTORICAL (pre-DEC-038) and are superseded where they conflict. Ranking/reservation state is unchanged and out of scope.
+
+### DEC-038 State Ownership and Recovery Contract
+
+**This subsection is the single canonical statement of the DEC-038 state-ownership model for this dossier.** Sections below that predate the change (Dedup state budget, Checkpoint sizing, Concrete sizing) are HISTORICAL pre-DEC-038 baselines, superseded where they conflict; their measurements are retained as evidence, not as target bounds.
+
+**Three state categories:**
+
+1. **Authoritative durable state — Fluss.** Complete durable state for domains explicitly externalized: the dedup set (new Fluss KV state table, proposed `fingerprint_dedup`), closed candles (`feature_candles_15s` KV), current signal state (`Signal_Candidates_current` KV), and the durable forming bar (`forming_bar` KV when implemented, Slice 2.2). Flink SHALL NOT retain a complete durable duplicate of any Fluss-authoritative domain.
+2. **Transient working state — Flink.** Small state for efficient active processing: the active open-candle accumulator + `emitted` flag, in-flight timer context, signal-detection ring buffers, and the bounded dedup working cache. Not authoritative; derived; SHALL have explicit cardinality and/or byte bounds independent of the total Fluss-authoritative state.
+3. **Recovery state — Flink checkpoint.** Source progress/offsets, watermarks, event-time timers, in-flight window state, and minimal working-state metadata. The checkpoint SHALL NOT be a second complete copy of Fluss-authoritative business state.
+
+**State ownership matrix:**
+
+| State | Durable authority | Flink working state | Checkpoint |
+| --- | --- | --- | --- |
+| Dedup set | Fluss KV state table (`fingerprint_dedup`) | bounded hot cache | cache metadata only |
+| Closed candles | `feature_candles_15s` KV | none/history | no full copy |
+| Open candle (active window) | Fluss final row after close; Flink while active | active accumulator | yes while active |
+| Forming bar | Fluss `forming_bar` KV (when implemented) | small active context | minimal active context |
+| Current signal | `Signal_Candidates_current` KV | small transient context | minimal context |
+| Signal audit | `Signal_Candidates` LOG | none | no |
+| Watermark | Flink | yes | yes |
+| Event-time timers | Flink | yes | yes |
+| Source progress | Flink/source | yes | yes |
+
+**Dedup protocol (authoritative rule):** incoming tick → validation → bounded Flink cache lookup → cache says definite duplicate → reject; cache miss/uncertain → consult authoritative Fluss state (point lookup or state feed) → Fluss says seen → reject; Fluss says unseen → tested durable Fluss insert/upsert → accept. Fluss wins on any cache-vs-Fluss disagreement — "cache says unseen" never accepts against Fluss authority. The hot path is cache-first (no per-tick Fluss round trip); Fluss point lookups are for cache misses, recovery, and explicit state verification.
+
+**Bounded cache rules (hard):** (1) the cache is never authoritative; (2) it has explicit maximum-entry and/or maximum-byte bounds independent of Fluss dedup cardinality, the 5-minute TTL, and instrument count; (3) cache eviction is a performance optimization and never determines logical duplicate status; (4) the cache never becomes a complete mirror of the Fluss table.
+
+**Fluss authority rule (hard):** for every domain marked Fluss-authoritative, Fluss is the authority for duplicate/correctness determination. Flink state for that domain is bounded, derived, and rehydratable.
+
+**Normal restart (routine):** restore the compact Flink checkpoint → verify Fluss authoritative-state availability and compatibility (startup preflight, extended from `preflightTableContracts` to the dedup KV table) → rehydrate only the required working state from Fluss (dedup cache; candles/signals already Fluss-owned) → resume from recovered source offsets. A normal restart SHALL NOT replay complete `raw_table_1` history to rebuild durable state that already exists in Fluss.
+
+**Exceptional rebuild (controlled, not routine):** Fluss state missing/corrupt/incompatible/unavailable → fail closed or stay degraded (never treated as an empty state) → controlled bounded `raw_table_1` replay within the dedup TTL horizon → reconstruct the Fluss authoritative state → verify state/schema compatibility before resume. This is exceptional recovery, not a normal restart path.
+
+**Open-window candle recovery:** if Flink crashes before the current 15-second window is finalized, the compact checkpoint restores the active window accumulator, timer context, and working data; the window continues and its final candle is written once at finalization. No full historical candle replay, and no historical candles are retained in Flink.
+
+**Checkpoint invariant (hard):** checkpoint size scales with bounded working/recovery state — NOT the total cardinality of Fluss-authoritative durable state. The post-externalization size is measured, not asserted; no invented number replaces the old ~1 GB evidence.
+
+**Anti-regression rule (hard):** no new Flink managed-state structure may be introduced for a Fluss-authoritative domain unless explicitly classified as bounded transient working state with an explicit entry/byte bound. "MapState is easier" is not a valid reason to re-duplicate durable state in Flink.
+
+**Scope freeze:** Ranking and Reservation architecture (`Ranking_Results`, `Portfolio_Reservations`, portfolio capacity, ranking/reservation state and recovery, portfolio repartitioning) is UNCHANGED by DEC-038 and explicitly OUT OF SCOPE for this state-ownership refinement.
+
+### Design — `fingerprint_dedup` dedup state table (DEC-038)
+
+**Status:** design draft for review — NOT implemented. This section is the design stage of DEC-038 (tracker 14 P11.0): proposed DDL, buckets, expiry/cleanup mechanism, cache bound, and write cadence. It fixes the shape so implementation can proceed; every value marked *starting point* is a measurement target (DEC-038 §9), not an asserted bound. Items that depend on exact Fluss 0.9.1 connector behavior are marked **evidence-gated**.
+
+The table is **authoritative durable state** — a Fluss state table, not an output table. The Signal job is its single writer owner. Logical semantics are pinned by the canonical contract above and by `04_contracts/02-storage.md` §Dedup state table contract; this section is the physical design.
+
+**Proposed DDL (schema draft — the file `24_fingerprint_dedup.sql`, the manifest entry, and bootstrap/pin wiring land in the implementation stage behind the `make ddl` gate):**
+
+```sql
+-- fingerprint_dedup: authoritative dedup state — one row per accepted fingerprint
+--   within its logical TTL (DEC-038)
+-- Owner: Signal job
+-- Type: KV state table (PK instrument_token, fingerprint_version, event_fingerprint)
+-- Bucket key: instrument_token (PK prefix — per-instrument colocation; the Fluss
+--   connector requires bucket.key ⊆ primary key)
+-- Retention: table.log.ttl = 2d bounds ONLY the underlying log; the logical dedup
+--   lifetime is the column-based expiry (DEDUP_TTL_MS = 300000), enforced by the
+--   writer + cleanup pass — never the log TTL
+-- Lake: none — transient state (logical life ≤ 5 min); no EOD/audit value; avoids
+--   lake churn at the write rate (datalake disabled, like forming_bar)
+-- Scope: account_scope_id
+-- Schema version: 1
+
+CREATE TABLE fingerprint_dedup (
+    instrument_token     BIGINT      NOT NULL,
+    fingerprint_version  STRING      NOT NULL,
+    event_fingerprint    STRING      NOT NULL,
+    first_seen_ms        BIGINT      NOT NULL,
+    expiry_ms            BIGINT      NOT NULL,
+    schema_version       STRING      NOT NULL,
+    PRIMARY KEY (instrument_token, fingerprint_version, event_fingerprint) NOT ENFORCED
+) WITH (
+    'bucket.num' = '16',
+    'bucket.key' = 'instrument_token',
+    'table.log.ttl' = '2d'
+);
+```
+
+Design notes (mapping to REQ-FLS-017's eight pre-DDL design items):
+
+- **Owner (item 1):** the Signal job is the single writer; provisioned only by the offline `make ddl` gate (manifest path) — a runtime bootstrap must never create it (same rule as all compute tables).
+- **Keys (item 2):** PK `(instrument_token, fingerprint_version, event_fingerprint)` with `bucket.key=instrument_token` ⊆ PK — per-instrument colocation; key holds only identity; value holds only `first_seen_ms` + `expiry_ms` (SIG-UNIT-008) — no raw bytes, decoded fields, candle/candidate values, or event objects.
+- **Update semantics (item 3):** first-seen insert/upsert; replay re-upserts the same key with identical `(first_seen_ms, expiry_ms)` — last-write-wins, no row growth, converges (same mechanism as `feature_candles_15s`).
+- **TTL/cleanup (item 4):** `expiry_ms = first_seen_ms + DEDUP_TTL_MS` exactly; entries are never logically expired early; cleanup pass below (Fluss 0.9.1 has no per-key TTL).
+- **Rebuild source (item 5):** `raw_table_1` replay within the dedup TTL horizon — **exceptional controlled rebuild only** (Fluss state missing/corrupt/incompatible), never a normal restart path.
+- **Versioning (item 6):** `schema_version=1` column + the connector's RowData serialization of the 6-column schema; a schema change is additive-only or blocks before unsafe use (STATE-COMPAT-001, VM-FLUSS-SRV-005 row 5b).
+- **Restart behavior (item 7)** and **consistency (item 8):** restart/rehydration and cache-vs-Fluss authority sections below.
+- Buckets: 16, `bucket.key=instrument_token` — the per-instrument colocation pattern of `feature_candles_15s` / `Signal_Candidates_current`; *starting point* — bucket count is workload-tested configuration (REQ-FLS-004), not a copied assumption.
+- Manifest entry (proposed): `table_kind=KV`, `primary_key="instrument_token, fingerprint_version, event_fingerprint"`, `bucket_key="instrument_token"`, `validated_matrix=VM-FLUSS-SRV-005` — regenerated by `ddl_apply.py --force`, never hand-edited.
+
+**Read/write path:**
+
+- Hot path (per tick): bounded cache lookup only — no Fluss round trip. Cache miss → Fluss point lookup by PK (evidence-gated: exact `lookupBy` semantics on the pinned connector) → seen → reject; unseen → buffered first-seen insert → accept.
+- Durable writes: batched/async — buffered first-seen entries flush on the write cadence/batch size and on the checkpoint barrier, protected by the `StallGuardedSink` watchdog precedent (bounded flush, terminal failure on stall — a hung dedup table must fail the job, not hang it). "Fluss write uncertain" never claims first-seen success until the tested durable ack semantics are satisfied (evidence-gated; SIG-STATE-001/002).
+- Fluss wins on any cache-vs-table disagreement; "cache says unseen" never accepts against the table.
+- Cleanup: periodic pass on `DEDUP_CLEANUP_INTERVAL_MS` issues bounded batched key-deletes for rows with `expiry_ms` past (idempotent and re-entrant; exact KV delete/ack semantics evidence-gated). Growth is bounded: entries = accepted rate × TTL horizon.
+
+**Cache bound and write cadence — new config keys (defined here; the config contract previously deferred them).** All are tuning keys — defaulted and validated at startup (reject missing/≤0), NOT `requirePinned` (pinned correctness keys are `DEDUP_TTL_MS` etc.). *Starting values are initial guesses to be validated by the externalization benchmark; the effective cache cap is min(entries, bytes).*
+
+| Key | Default (starting point) | Meaning / rule |
+| --- | --- | --- |
+| `DEDUP_STATE_TABLE` | `fingerprint_dedup` | Dedup KV state table name; validated at startup by the extended preflight (schema v1, PK exact, 16 buckets, `bucket.key=instrument_token`) |
+| `DEDUP_CACHE_MAX_ENTRIES` | 250000 | Hard entry bound of the working cache; independent of Fluss cardinality, the 5-min TTL, and instrument count; never a mirror of the table |
+| `DEDUP_CACHE_MAX_BYTES` | 33554432 (32 MB) | Hard byte bound; the effective cap is min of the two |
+| `DEDUP_WRITE_BATCH_MS` | 250 | Durable-write cadence: first-seen entries flush at most every N ms (and on the checkpoint barrier) |
+| `DEDUP_WRITE_BATCH_SIZE` | 5000 | Durable-write batch size: flush when N dirty entries accumulate |
+| `DEDUP_CLEANUP_INTERVAL_MS` | 60000 | Expired-row cleanup pass cadence |
+
+Rules: (1) cache eviction is a performance optimization and never determines logical duplicate status; (2) a re-arriving fingerprint inside its logical TTL dedupes even if evicted — Fluss is the authority; (3) bounds are validated so the hot-path hit ratio stays high at the envelope while the cache never approaches Fluss cardinality — proven by the SIG-PERF-001 cache-hit-ratio row, not asserted.
+
+**Expiry/cleanup mechanism (evidence-gated):** Fluss 0.9.1 has no per-key TTL, so logical expiry is writer-enforced: (1) the write path stores `expiry_ms = first_seen_ms + 300000`; (2) the read path treats a row as a duplicate iff the key exists AND `expiry_ms` is in the future — stale rows are harmless, never a false "seen" after expiry; (3) the cleanup pass deletes rows with `expiry_ms < now` in bounded batches on `DEDUP_CLEANUP_INTERVAL_MS`; (4) exact connector delete/ack semantics are evidence-gated — the mechanism is designed, implemented, and measured (cleanup rate + table-size plateau recorded in the externalization benchmark), not assumed.
+
+**Restart and rehydration:** normal restart = compact checkpoint (source offsets, watermarks, timers, in-flight windows, cache metadata) → verify `fingerprint_dedup` availability/compatibility (extended `preflightTableContracts`) → rehydrate the bounded cache from Fluss (bounded read of live entries, `expiry_ms > now`, capped by the cache bound) → resume. No full `raw_table_1` replay (SIG-STATE-002). The rehydration read semantics (log-scan vs current-state read) are evidence-gated and their duration is measured (externalization benchmark hydration rows). Fluss table unavailable/incompatible → fail closed / degraded — never an empty dedup set (SIG-STATE-003).
+
+**Sizing (starting points — DEC-038 §9: must be measured, not asserted):**
+
+| Metric | Starting point | Validated by |
+| --- | --- | --- |
+| Fluss table steady-state entries | first-seen rate × TTL (measured at envelope) | externalization benchmark |
+| Flink cache entries | ≤ `DEDUP_CACHE_MAX_ENTRIES` (250000 starting point) | externalization benchmark (hit ratio) |
+| Flink checkpoint size | bounded working/recovery state only — re-measured, no invented number | externalization benchmark |
+| Cleanup throughput | recorded (rows deleted/s) | externalization benchmark |
+
+**Scope freeze:** this design touches only the dedup state domain. Ranking/Reservation are unchanged and out of scope.
 
 **Current-phase envelope:** build and validate on the approved 1,024-instrument / single-connection configuration (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s baseline stays deferred (`PERF-PROD-60000-001`, AC-FC-007/011; `PERF-PROD-90000-001` retired with the peak campaign, DEC-036); the budgets below are 3,000-instrument production targets, not this phase's acceptance.
 
@@ -137,8 +255,8 @@ Actual chaining is performance-tested; logical boundaries remain explicit for me
 | `ALLOWED_LATENESS_MS` | Default 5000; change only through tested profile |
 | `SOURCE_IDLE_MS` | Default 15000 per source partition |
 | `DEDUP_TTL_MS` | Fixed at `300000` (5 minutes); reject startup for any other value in MVP |
-| `DEDUP_STATE_TABLE` (new, DEC-038) | Fluss KV state table name for the authoritative dedup set (proposed `fingerprint_dedup`); validated at startup by the extended table preflight — design/DDL pending |
-| `DEDUP_CACHE_*` (new, DEC-038) | Bounded working-cache bound and write cadence for the Flink side; exact keys/values defined in the DEC-038 implementation stage — none are invented here |
+| `DEDUP_STATE_TABLE` (new, DEC-038) | Fluss KV state table name for the authoritative dedup set (`fingerprint_dedup`); validated at startup by the extended table preflight — proposed DDL/manifest shape in §Design — `fingerprint_dedup` dedup state table (file + manifest entry land in the implementation stage behind `make ddl`) |
+| `DEDUP_CACHE_*` (new, DEC-038) | Bounded working-cache bound and write cadence for the Flink side — keys and *starting* values defined in §Design — `fingerprint_dedup` dedup state table (tuning keys, validated at startup, re-derived from measurement) |
 | `CANDLE_WINDOW_MS` | Fixed at `15000`; reject startup for any other value in MVP |
 | `CANDLE_TABLE` | Candle KV sink table, default `feature_candles_15s` (sole candle output — KV upsert, PK `(instrument_token, window_start)`, converted 2026-08-13) |
 | `CANDLE_CURRENT_TABLE` | **DELETED 2026-08-13** — key and `candleCurrentTable` config field removed with the candle KV projection; the fail-closed startup mode it governed (`ALLOW_FULL_REPLAY` / `STATE_RECOVERY_PATH`) is unchanged |
@@ -183,9 +301,9 @@ Identical legitimate events may be collapsed; this limitation must remain visibl
 
 **Performance rule (§7 of the DEC-038 requirement):** the hot path must not become `tick → Fluss read → Flink → Fluss write` per tick. Durable dedup writes are batched/async; lookups hit the bounded Flink cache; the design specifies cache bound, write cadence, and cleanup, and is measured.
 
-### Dedup state budget
+### Dedup state budget (HISTORICAL — pre-DEC-038, superseded)
 
-The pre-DEC-038 Flink-side budget below is **historical** — it sized the ~1.74 GB RocksDB/checkpoint footprint this change removes. Under DEC-038 the numbers split: the authoritative set lives in Fluss (its storage envelope still follows `entries = rate × TTL`, but it is no longer a Flink checkpoint term), and the Flink checkpoint carries only the bounded working cache.
+> This budget sized the ~1.74 GB RocksDB/checkpoint footprint DEC-038 removes. The target model is [DEC-038 State Ownership and Recovery Contract](#dec-038-state-ownership-and-recovery-contract); the post-externalization Fluss-side envelope and Flink cache size are **measured**, not asserted.
 
 At the 50,000 ticks/s baseline workload (3,000 instruments; ≈16.7 ticks/s/instrument average) — **pre-externalization, superseded**:
 
@@ -270,9 +388,9 @@ Normal restarts SHALL pass `STATE_RECOVERY_PATH` (a Flink checkpoint/savepoint d
 
 Completed checkpoints are externalized with `RETAIN_ON_CANCELLATION` (set in `SignalJob.buildTopology`), so a deliberate stop keeps the exact checkpoint named by the next `STATE_RECOVERY_PATH`; the default delete-on-cancel would silently invalidate the restore contract (P6.1 phase 2→3 verifies cancel preserves the `chk-N` directory and the restore resumes from it).
 
-### Checkpoint sizing (DEC-038, 2026-08-14)
+### Checkpoint sizing (HISTORICAL — pre-DEC-038, superseded)
 
-The pre-DEC-038 table below is **historical** — its ~600 MB – 1 GB estimate is exactly the duplicate-copy footprint this change removes. Under DEC-038 the dedup set is Fluss-owned, so the checkpoint is dominated by source offsets, watermarks, timers, in-flight windows (~120 KB at 3K instruments), and the bounded dedup working cache. **The post-externalization checkpoint size must be measured, not asserted** — §9 of the requirement explicitly forbids replacing "1 GB" with a made-up smaller number. The measurement target rows: checkpoint size/duration at the current 1,024-instrument envelope and the deferred 50k baseline.
+> This ~600 MB – 1 GB estimate is exactly the duplicate-copy footprint DEC-038 removes; the target model is [DEC-038 State Ownership and Recovery Contract](#dec-038-state-ownership-and-recovery-contract). The post-externalization checkpoint size is **measured, not asserted** — §9 of the requirement forbids replacing "1 GB" with an invented number. Measurement target rows: checkpoint size/duration at the current 1,024-instrument envelope and the deferred 50k baseline.
 
 Estimated checkpoint metrics at the 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) — **pre-externalization, superseded**:
 
@@ -349,7 +467,7 @@ Rule of thumb: when you change a producer format (Go packet, DDL file, `RawTable
 
 ### Concrete sizing (48 GB VM) — pre-DEC-038, superseded
 
-The pre-DEC-038 table below sized a Flink TaskManager around ~1.3-1.74 GB of RocksDB dedup state — exactly the large Flink-side footprint DEC-038 removes. **Do not reuse these numbers as the target.** After dedup externalization the Flink-side state is small (windows, timers, working cache), so the RocksDB/direct-memory dominance disappears and the split between the generic 65%/35% formula and a RocksDB-heavy split must be **re-derived from measurement** (post-externalization memory profile), not asserted. The 48 GB VM allocation and the 8 GB / 30 GB split are retained only as the pre-change baseline.
+> This table sized a Flink TaskManager around ~1.3-1.74 GB of RocksDB dedup state — exactly the large Flink-side footprint DEC-038 removes. Do not reuse these numbers as the target; the post-externalization Flink-side memory split is **re-derived from measurement** (see [DEC-038 State Ownership and Recovery Contract](#dec-038-state-ownership-and-recovery-contract)). The 48 GB VM allocation and the 8 GB / 30 GB split are retained only as the pre-change baseline.
 
 Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points, not measured — superseded by `PERF-PROD-60000-001` and, for the Flink-side split, by post-DEC-038 measurement.
 
@@ -463,7 +581,11 @@ Each pending item below is a tracked work item with its solving method, prerequi
 | Pending item | How to solve | Prerequisite | Gate |
 | --- | --- | --- | --- |
 | Dedup unit tests — **DONE 2026-08-10** (`FingerprintDedupFunctionTest`, 6 green): harness-driven state-key/value/expiry assertions above. Remaining half: `CandleEmitFunction` direct-operator test — assert the `emitted` window-state flag makes a re-trigger a no-op and no correction row is emitted (needs `CandleEmitFunction` to expose its window-state access for the harness, or `OneInputStreamOperatorTestHarness` around the emit path). **DEC-038 re-scope pending:** the dedup half re-targets to the Fluss-backed store + bounded cache (cache dedupes a re-sent fingerprint inside its staleness window; Fluss table holds the accepted set; checkpoint excludes it) | Harness infra **landed** in compute pom (test scope, no cluster); Fluss-side dedup tests follow the `SignalCurrentKvIdempotencyTest` scratch-table pattern | Expired fingerprint absent after its expiry cleanup runs — **proven on the old store**; Fluss-side expiry + cache-consistency — pending the DEC-038 implementation |
-| **DEC-038 state-boundary tests (new, 2026-08-14)** — prove: (1) large durable dedup state observable in Fluss; (2) Flink checkpoint bounded and not duplicating it; (3) restart restores compact Flink state + rehydrates dedup from Fluss without full raw replay; (4) deterministic continuation preserved; (5) Fluss unavailability/incompatibility → safe degradation; (6) checkpoint failures remain safe; (7) no per-tick Fluss round trip (cache absorbs hot-path lookups) | Fluss-backed dedup store implemented first; scratch-table integration pattern; no cluster for unit cache tests, env-gated live tests for rehydration | All six boundary proofs green at the module/IT level, then re-measured in the perf campaign |
+| **DEC-038 dedup cache — hit/miss semantics (unit, no cluster)** — cache definite-duplicate → reject; cache miss/uncertain → consult the Fluss-backed store → seen → reject / unseen → durable first-seen insert → accept; Fluss wins on any cache-vs-store disagreement ("cache says unseen" never accepts against the store); eviction never determines duplicate status; cache never mirrors the table | Operator-harness test (Flink 2.2.1 harness already landed) around the bounded cache + Fluss-backed store (mock store for unit; scratch-table IT for the store half) | Fluss-backed dedup store implemented first | Decision table matches the canonical DEC-038 protocol; cache bounds independent of TTL/cardinality/instrument count |
+| **DEC-038 duplicate race/retry (unit/IT)** — same fingerprint re-delivered concurrently or re-sent after restart → exactly one accepted first-seen, every later candidate counted as a duplicate (no double-accept, including after rehydration); the first-seen upsert is idempotent under retry | Re-delivery fixtures + a restart between deliveries (scratch-table pattern); assert accepted-count == 1 per fingerprint | Fluss-backed dedup store implemented first | Accepted exactly once; duplicates counted; state converges |
+| **DEC-038 Fluss dedup unavailable / incompatible (fail-closed)** — dedup table missing or schema-incompatible → job fails closed / stays degraded and never treats the set as empty (no silent replay with an empty dedup set); startup preflight rejects before unsafe use | Preflight failure injection on the dedup table (extend the `TableContractValidator` fail-closed pattern; scratch tables) | Fluss-backed dedup store implemented first | SIG-STATE-003: fail closed / degraded, no silent replay |
+| **DEC-038 rehydration (env-gated live)** — restart restores the compact checkpoint → verifies Fluss dedup-table availability/compatibility → rehydrates the dedup working cache from Fluss → a re-sent fingerprint inside the TTL still dedupes after rehydration; hydration failures counted and keep the job fail-closed | Scratch-table live test on the dev Fluss cluster (pattern: `SignalCurrentKvIdempotencyTest` + `SignalJobSavepointRestoreIntegrationTest`); record hydration latency | Fluss-backed dedup store implemented first; dev cluster exists | SIG-STATE-002: resumes without full raw-history replay; re-sent fingerprint inside TTL dedupes; hydration failure → fail closed |
+| **DEC-038 compact-checkpoint restore (no full replay, bounded size)** — checkpoint carries source offsets/watermarks/timers/in-flight windows + bounded cache metadata only (never the full dedup set); restore resumes from the compact checkpoint without offset-0 replay; checkpoint size does not grow with Fluss dedup cardinality | MiniCluster restore with the dedup table present (assert no full replay + bounded checkpoint); size/duration re-measured in the externalization benchmark (SIG-PERF-001 detail) | Fluss-backed dedup store implemented first; externalization benchmark rows landed | SIG-STATE-001: checkpoint bounded and not duplicating the durable set; restore within the 30 s budget |
 | `SIG-HARNESS-001/002/004/005` — `SIG-HARNESS-003` **COVERED 2026-08-13** (checkpoint-restore replay via `SignalJobSavepointRestoreIntegrationTest`, env-gated `COMPUTE_INT_TEST_SAVEPOINT`, green in-container: stop-with-savepoint → strict restore at 2× parallelism, dedup MapState continuity; re-feeding the same fingerprints emits nothing = deterministic replay equality). Remaining: 001 (out-of-order/watermark/idleness — watermark half done, idleness not), 002 (late-before vs after-final), 004 (duplicate-vs-identical limitation), 005 (reservation/ranking recovery, lands with Slice 3) | Same harness infra (Flink 2.2.1 API: `ProcessFunctionTestHarnesses.forKeyedProcessFunction` → `KeyedOneInputStreamOperatorTestHarness`): inject watermarks and processing time; assert correct event-time outcome; `snapshot`/`initializeState` for deterministic replay equality; SIG-HARNESS-004 asserts the fingerprint-limitation metric/audit is emitted; SIG-HARNESS-005 lands with Slice 3 (reservation/ranking state) | Harness infra **landed**; **no cluster** (005 additionally needs Slice 3) | Correct event-time outcome; late-before-final updates vs after-final discard; restored output equals expected deterministic output |
 | `STATE-COMPAT-001` (serializer-change half — savepoint half **COVERED 2026-08-13** by `SignalJobSavepointRestoreIntegrationTest`), `COMPAT-FLINK-001` (source/sink checkpoint-restore-rescale on pinned versions) | `MiniClusterWithClientResource` (`flink-test-utils`, **already in compute pom test scope**) with pinned Flink 2.2.1 + `fluss-flink-2.2:0.9.1-incubating`; run topology, checkpoint, restore, assert state continuity; serializer-change compatibility blocks startup before unsafe use | Harness infra **landed**; **no cluster** | Restore succeeds through the approved path, or startup blocks before unsafe use |
 | `SIG-INT-001/002` — **DONE 2026-08-13** (covered by `CandleGraphReplayIntegrationTest`, env-gated `COMPUTE_INT_TEST_P6`, green in-container 3/3, 134.9 s): real `SignalJob.buildTopology` against live dev Fluss with scratch tables — source/sink boundary on approved versions (001) + dual-sink partial-visibility reconciliation, signal LOG grows while `Signal_Candidates_current` KV key count stays frozen (002). The planned dedicated `COMPUTE_INT_TEST_SIGNAL` gate test was superseded — the P6 replay covers both | Env-gated live test on the dev Fluss cluster, same pattern as `SafetyHaltLiveIntegrationTest` (`COMPUTE_INT_TEST_SAFETY` → new `COMPUTE_INT_TEST_SIGNAL=true` gate): run the real `SignalJob` topology (or its source→sink shell) against live Fluss, assert candles land in `feature_candles_15s`; SIG-INT-002 uses two sinks + reconciliation to prove partial-visibility handling (as-built sinks were the candle LOG/KV pair — 2026-08-13: candle sink is the KV upsert, reconciliation targets the signal LOG/KV pair) | Live dev Fluss cluster (exists); Slice 2 sinks for the reconciliation half | Source/sink semantics work with approved versions; reconciliation identifies and handles partial visibility |

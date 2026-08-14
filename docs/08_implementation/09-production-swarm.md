@@ -250,9 +250,9 @@ Any phase estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of t
 ## 5. Phase 1 — table preflight + dual-sink from copied checkpoint (P10.1 boxes 1-4, 6-7)
 
 0. **Smoke (§4.1):** `probe-r2.sh` PASS + the archived-checkpoint restore probe (Phase 0 step 1) re-run immediately before this phase — the checkpoint-restore machinery is what this phase exercises.
-1. Run the re-targeted preflight validator against the rehearsal tables: `feature_candles_15s` LOG (no PK), `Signal_Candidates` LOG (no PK), `Signal_Candidates_current` KV PK exactly `[instrument_token]`, 22 columns/type/nullability, bucket.key `instrument_token` + 16 buckets. Negative legs: wrong-kind and wrong-schema tables fail before environment creation (SIGNAL-SCHEMA-001).
+1. Run the re-targeted preflight validator against the rehearsal tables: `feature_candles_15s` KV PK exactly `(instrument_token, window_start)` (sole candle output — 2026-08-13 conversion), `Signal_Candidates` LOG (no PK), `Signal_Candidates_current` KV PK exactly `[instrument_token]`, 22 columns/type/nullability, bucket.key `instrument_token` + 16 buckets. Negative legs: wrong-kind and wrong-schema tables fail before environment creation (SIGNAL-SCHEMA-001).
 2. Submit the SignalJob (application mode, rehearsal env, PARALLELISM from P7) in RESTORE mode from the ARCHIVED checkpoint copy; `allowNonRestoredState=false` (never set — STARTUP-GATE-001 contract).
-3. Verify: table preflight passes; startup mode = RESTORE (no FULL_REPLAY); source/dedup/window/detection state restored (CHECKPOINT-RESTORE-002 recipe: offsets, dedup map, window state); signal LOG sink appends and `Signal_Candidates_current` sink starts cleanly (first upserts from the restored detection state).
+3. Verify: table preflight passes (incl. the Fluss dedup state table under DEC-038); startup mode = RESTORE (no FULL_REPLAY); source/window/detection state restored (CHECKPOINT-RESTORE-002 recipe: offsets, window state) and the dedup working cache rehydrated from the Fluss dedup table (DEC-038 — no dedup restore from checkpoint); signal LOG sink appends and `Signal_Candidates_current` sink starts cleanly (first upserts from the restored detection state).
 4. Verify first checkpoint meets target (30 s interval; duration recorded; R2 pins active).
 
 ## 6. Phase 2 — bounded replay twice (P10.1 boxes 8-9)

@@ -49,6 +49,36 @@ The default tested profile is five seconds bounded out-of-orderness, five second
 
 For each non-empty 15-second event-time window, the Signal job emits one final candle after the watermark passes `window_end + allowed_lateness`. Later events are discarded and measured in MVP. Open/close event-time ties use the versioned fingerprint ordering specification, never an assumed broker `seq_no`.
 
+## Restart vs state rebuild (DEC-038)
+
+The two paths below are distinct and must never be conflated. A normal Flink restart is the routine recovery path; a Fluss-state rebuild is an exceptional controlled procedure.
+
+**Normal Flink restart (routine):**
+
+```text
+Flink failure
+  → restore compact Flink checkpoint (source offsets, watermarks,
+    window/lateness timers, in-flight accumulators, working-cache metadata)
+  → verify Fluss authoritative-state availability and compatibility (startup preflight)
+  → rehydrate only the required working state from Fluss (dedup cache from the dedup
+    state table; candles/signals already Fluss-owned)
+  → resume from the recovered source position
+```
+
+A normal restart SHALL NOT replay complete `raw_table_1` history to rebuild durable state that already exists in Fluss.
+
+**Exceptional Fluss-state rebuild (controlled, not routine):**
+
+```text
+Fluss state missing / corrupt / incompatible / unavailable
+  → fail closed or stay degraded — never treated as an empty state
+  → controlled bounded replay of `raw_table_1` within the dedup TTL horizon
+  → reconstruct the authoritative Fluss state
+  → verify state/schema compatibility before resume
+```
+
+The rebuild is exceptional recovery, not a normal restart path; it is governed by the approved replay plan (`../05_deployment/03-rollback.md`), not by routine job-restart automation.
+
 ## Candidate, ranking, and instruction flow
 
 Business Logic appends an immutable `Signal_Candidates` event for every detected candidate. Ranking writes an immutable result for every evaluated active candidate, including score inputs, normalization, weights, rank, selection, rejection reason, reservation snapshot, and configuration version.

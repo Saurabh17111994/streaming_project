@@ -150,7 +150,7 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | `COMPAT-FLINK-001` | Source/sink checkpoint, restore, and rescale on the pinned Flink/connector versions | Restored processing and state remain within the approved consistency boundary. |
 | `SIG-INT-002` | Partial visibility across outputs | Reconciliation identifies and handles partial visibility. |
 | `SIG-FAIL-001` | Checkpoint or continuity failure | New decisions are suppressed and a safe halt is requested. |
-| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits (DEC-038: re-measured after dedup externalization — checkpoint size/duration, Fluss dedup-table size, cache hit ratio, rehydration latency). |
+| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits (DEC-038: re-measured after dedup externalization — checkpoint size/duration, Fluss dedup-table size, cache hit ratio, rehydration latency; detail: [Externalization benchmark](#externalization-benchmark-sig-perf-001-dec-038)). |
 
 Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoint reference, state-size report, and performance report.
 
@@ -467,6 +467,27 @@ Each benchmark produces a versioned JSON record in `code/benchmarks/results/` an
 | Cool-down | Drain backlog, wait for checkpoints, and verify no acknowledged loss. |
 
 The baseline must meet the documented decision p99 target. Backlog must stay bounded, checkpoints must restore, safe halt must remain below five seconds, accepted data recovery below thirty seconds, and EOD verification below thirty minutes at full volume. Performance alone never proves protocol correctness, duplicate safety, or live-money readiness.
+
+### Externalization benchmark (SIG-PERF-001, DEC-038)
+
+Re-measures the Signal job after dedup externalization to prove the DEC-038 checkpoint invariant: **checkpoint size scales with bounded working/recovery state, not with Fluss-authoritative dedup cardinality; normal restart rehydrates from Fluss without full raw-history replay; the hot path does not become a per-tick Fluss round trip.** All numbers below are measurement targets — no value may be asserted (DEC-038 §9: replacing the old ~1 GB evidence with an invented number is prohibited). The pre-externalization references are historical baselines for the *why*, not target bounds.
+
+Run on the current 1,024-instrument / 20,480 ticks/s envelope first (Phase 6 acceptance), then re-run at the deferred 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average; every instrument ≤30 ticks/s). The two runs use the same procedure, envelope tooling, and versioned evidence record as the performance benchmark procedure above; they differ only in envelope/acceptance profile (DEC-036/037).
+
+| Metric | Pre-externalization reference (historical) | Post-externalization measurement target | Pass gate |
+| --- | --- | --- | --- |
+| Flink checkpoint size | 986 MB dev-hashmap / 22 s (2026-08-14 E2E); ~1.74 GB RocksDB total state at 53k t/s (2026-08-12 bench) | Measured after externalization | Scales with bounded working/recovery state, NOT Fluss dedup cardinality (SIG-STATE-001) |
+| Checkpoint duration | 22 s at 986 MB (blew the 30 s budget — CP9 expired) | Measured | Within the pinned 30 s `CHECKPOINT_TIMEOUT_MS` budget with headroom |
+| Restore duration | ~5-15 s estimate (pre-externalization, superseded) | Measured | ≤ 30 s data-path recovery (REQ-FC-008) |
+| State hydration duration | n/a (no Fluss rehydration path) | Measured: rehydrate the dedup working cache from Fluss after compact-checkpoint restore | Reported; included in the restart-to-ready timeline |
+| State hydration failures | n/a | Count | 0 — failures keep the job fail closed / degraded (SIG-STATE-003) |
+| Dedup cache hit ratio | n/a | Measured: hot-path lookups served by the bounded cache | Reported (proves the hot path does not hit Fluss per tick) |
+| Fluss dedup-table size | n/a (dedup state was Flink-side) | Entry count + bytes | Bounded = accepted rate × TTL horizon |
+| Fluss dedup update rate | n/a | Writes/s (batched/async) | Reported |
+| Throughput | 49,242-49,578 tps ingestion hot-path gate (synthetic) | Job sustains the envelope with no checkpoint growth | No per-tick Fluss round trip; decision p99 within limit (REQ-RNK-006) |
+| Decision p99 | Pre-externalization bench (Phase 0/1 records) | Re-measured | Within the documented p99 target |
+
+Evidence record: versioned JSON in `code/benchmarks/results/` (same convention as the performance benchmark procedure), capturing versions/digests, configuration hash, envelope, duration, UTC + monotonic clock sources, all rows above, and whether a restart/failure occurred. The benchmark additionally demonstrates: restart restores the compact checkpoint and rehydrates without full `raw_table_1` replay (SIG-STATE-002); the rehydrated cache still dedupes a re-sent fingerprint inside its staleness window; Fluss unavailability/incompatibility keeps the job fail-closed (SIG-STATE-003).
 
 ### One-VM-loss procedure
 
@@ -802,7 +823,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 - TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 50k with RocksDB + managed memory; that IS the memory gate).
 - JobManager: `jobmanager.memory.process.size=1600m` (pinned).
 - Checkpoint: 30 s interval (production config; 47/47 completed in the 2026-08-11 live run), `allowNonRestoredState` never set, RocksDB incremental.
-- Both candle sinks enabled (LOG `feature_candles_15s` + KV `feature_candles_15s_current`), canonical filter + stall guard active.
+- Candle sink: `feature_candles_15s` KV upsert only (sole candle output — 2026-08-13 conversion; the LOG/KV dual-sink and `feature_candles_15s_current` are RETIRED). Signal sinks: `Signal_Candidates` LOG + `Signal_Candidates_current` KV, canonical signal filter + stall guard active.
 - All R2 S3A timeout pins effective (`iceberg.iceberg.hadoop.fs.s3a.connection.timeout` + `connection.establish.timeout` = 30000).
 - Gate runs: R2 checkpoint dir + `latencyTrackingInterval` enabled (the single documented config delta).
 - Debug runs: `file://` checkpoint dir, latency tracking optional, dedup expiry swept.

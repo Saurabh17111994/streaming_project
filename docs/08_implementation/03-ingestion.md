@@ -125,7 +125,7 @@ receive NDJSON line from stdin
 → record acknowledgement timestamp or uncertainty
 ```
 
-Ingestion appends an accepted raw packet even if its fingerprint was seen before. Compute owns bounded logical deduplication. No time-based or record-count-based application batching is permitted: each accepted tick is submitted individually. The Fluss client may coalesce rows into transport batches, bounded at 20 ms linger (`client.writer.batch-timeout`).
+Ingestion appends an accepted raw packet even if its fingerprint was seen before. Compute performs bounded logical deduplication (the durable dedup set is Fluss-authoritative under DEC-038). No time-based or record-count-based application batching is permitted: each accepted tick is submitted individually. The Fluss client may coalesce rows into transport batches, bounded at 20 ms linger (`client.writer.batch-timeout`).
 
 ### Fingerprint contract
 

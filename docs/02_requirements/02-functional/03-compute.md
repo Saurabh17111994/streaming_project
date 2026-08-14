@@ -8,7 +8,7 @@ The Signal Flink job consumes `raw_table_1`, performs bounded best-effort dedupl
 
 ## Constraints
 
-- Compute SHALL NOT read `feature_candles_15s` or any other feature table back from Fluss for signal generation. All feature state flows in-process within the Signal job.
+- Compute SHALL NOT read `feature_candles_15s` or any other feature table back from Fluss for signal generation — normal feature computation stays in-process within the Signal job. This prohibition does not cover the explicitly designated Fluss-authoritative state tables (dedup state table, `feature_candles_15s` KV, `Signal_Candidates_current` KV — DEC-038), which SHALL be read/written only for externalized state management, hydration, recovery, and authoritative state access; temporary Flink → Fluss → Flink round trips merely to compute a feature remain prohibited.
 - Deduplication SHALL NOT use `seq_no` as a required key, ordering field, or completeness assertion. Fingerprint-based dedup is best-effort only.
 - The deployed `DEDUP_TTL_MS` SHALL be exactly `300000` (5 minutes). Deployment SHALL reject any other value.
 - `CANDLE_WINDOW_MS` SHALL be exactly `15000` (15 seconds). Deployment SHALL reject any other value.
@@ -58,7 +58,7 @@ The following capabilities are explicitly NOT owned by Compute:
 - **Broker order submission, execution, and Arrow REST integration:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
-- **Reading feature tables or strategy tables back from Fluss:** All feature and strategy state flows in-process within the Signal job.
+- **Reading feature tables or strategy tables back from Fluss for computation:** All feature and strategy computation stays in-process within the Signal job. The designated Fluss-authoritative state tables (dedup KV, `feature_candles_15s` KV, `Signal_Candidates_current` KV — DEC-038) are read/written only for externalized state management, hydration, recovery, and authoritative state access — never to compute a feature that could stay in-process.
 
 ## REQ-FC-001: MVP scope
 

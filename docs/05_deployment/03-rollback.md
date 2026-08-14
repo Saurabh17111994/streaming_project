@@ -68,6 +68,30 @@ If a call times out, disconnects, returns malformed/ambiguous data, or the Execu
 6. Record immutable reconciliation evidence.
 7. Require two distinct authenticated approvals for the same gate epoch/evidence hash.
 
+### Normal Flink restart vs exceptional Fluss-state rebuild (DEC-038)
+
+Normal Flink recovery is **not** a restore of the full Signal business state from the Flink checkpoint — the checkpoint never holds a second complete copy of Fluss-owned durable state:
+
+```text
+normal restart:
+  compact Flink checkpoint (source offsets, watermarks, timers, in-flight windows,
+                            working-cache metadata)
+    → verify Fluss authoritative-state availability and compatibility
+    → rehydrate only the required working state from Fluss
+    → continue from the recovered source position
+```
+
+No full `raw_table_1` replay is performed on a normal restart.
+
+**Exceptional Fluss-state rebuild** is a separate controlled procedure for when the authoritative Fluss state is missing, corrupt, incompatible, or otherwise untrustworthy:
+
+1. Fail closed / stay degraded — never assume the Fluss state is empty.
+2. Obtain approval for the controlled bounded replay plan (within the dedup TTL horizon).
+3. Reconstruct the Fluss authoritative state from `raw_table_1`.
+4. Verify state/schema compatibility before any resume.
+
+This path is exceptional recovery, not automatic rollback, and never resumes money-moving calls without reconciliation and two-person approval (safety rule above).
+
 ### Flink checkpoint or job failure
 
 - Keep the order gate halted if order correctness or changelog continuity is uncertain.
