@@ -28,7 +28,7 @@ Requires immutable image digest, exact dependency/version matrix, unit/integrati
 
 ### Flink job update
 
-Verify serializer/state compatibility, checkpoint/savepoint restore, source offsets, dedup/window/forming-bar/ranking state, sink behavior, and instruction duplication risk. Any uncertainty keeps the affected path not ready and the gate halted.
+Verify serializer/state compatibility, checkpoint/savepoint restore, source offsets, dedup/window/forming-bar/ranking state, sink behavior, and instruction duplication risk. Under DEC-038 also verify the Fluss dedup state-table schema/serialization compatibility and the rehydration path (restart must rehydrate the dedup working cache from Fluss; Fluss unavailability/incompatibility keeps the job fail-closed). Any uncertainty keeps the affected path not ready and the gate halted.
 
 ### Fluss schema or DDL change
 

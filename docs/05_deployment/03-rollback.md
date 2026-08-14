@@ -71,9 +71,9 @@ If a call times out, disconnects, returns malformed/ambiguous data, or the Execu
 ### Flink checkpoint or job failure
 
 - Keep the order gate halted if order correctness or changelog continuity is uncertain.
-- Restore dedup, window, forming-bar, ranking, and source state from the tested checkpoint/savepoint.
+- Restore the **compact Flink checkpoint** (source offsets, watermarks, timers, in-flight windows, working-cache metadata), then **verify Fluss authoritative-state availability and compatibility** and **rehydrate the required working state from Fluss** (dedup working cache from the dedup state table; current signals/candles already Fluss-owned) — DEC-038 (2026-08-14). Flink checkpoints are not a second complete copy of the durable Signal business state.
 - Verify no duplicate instruction or incomplete sink effect was introduced.
-- If restore is not proven, keep the job/deployment not ready and rebuild/reconcile from immutable data according to the approved replay plan.
+- If restore or Fluss-state verification is not proven, keep the job/deployment not ready and fail closed; rebuild/reconcile from immutable data according to the approved replay plan.
 
 ### Fluss quorum or workload VM loss
 

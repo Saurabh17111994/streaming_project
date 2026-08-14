@@ -83,7 +83,7 @@ Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert Zo
 - Loss of any one workload VM is tested at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average).
 - RPO/RTO is recorded per failure scenario; no untested global claim is made.
 - Flink JobManager HA: `high-availability.type: zookeeper` with `high-availability.zookeeper.quorum` = the 3-node ensemble, `high-availability.storageDir` = encrypted S3, `high-availability.zookeeper.path.root: /flink`, per-cluster `high-availability.cluster-id`. Multiple standby JobManagers run across workload VMs; ZooKeeper elects the leader, and a standby takes over JobManager failure without a full job re-submission.
-- Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`, estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time.]
+- Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`. The pre-DEC-038 headroom note ("estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time") is **superseded 2026-08-14** — under DEC-038 the dedup set moves to Fluss and the checkpoint is small; the headroom statement is re-derived from measured post-externalization checkpoint size, not asserted.]
 
 ### Security and networking
 
@@ -139,20 +139,20 @@ Every Java container (Ingestion, Flink TaskManager, Flink JobManager) SHALL enfo
 - Verify at startup that the container memory limit minus maximum heap is at least 35% of the container memory limit.
 - Refuse production readiness when total container memory reaches or exceeds 85% for 60 consecutive seconds.
 
-### Concrete sizing (48 GB VM)
+### Concrete sizing (48 GB VM) — pre-DEC-038, superseded
 
-Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points — superseded by `PERF-PROD-60000-001`.
+Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points — superseded by `PERF-PROD-60000-001` **and by the DEC-038 state-ownership change (2026-08-14)**. This table sized RocksDB around the ~1 GB dedup state budget; under DEC-038 the dedup set moves to Fluss and the Flink-side state is small (windows, timers, bounded working cache), so the RocksDB/direct-memory dominance and the split between the generic 65%/35% formula and a RocksDB-heavy split must be **re-derived from measured post-externalization memory**, not asserted. The rows below are the pre-change baseline.
 
 | Resource | Value | Notes |
 | --- | --- | --- |
 | Container memory limit | 48 GB | Explicit Swarm limit |
-| Java max heap (`-Xmx`) | **8 GB** | Modest — working state lives in RocksDB (direct memory) |
-| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers |
+| Java max heap (`-Xmx`) | **8 GB** | Modest — working state lives in RocksDB (direct memory); pre-DEC-038 rationale — re-derive after externalization |
+| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers; pre-DEC-038 rationale — re-derive after externalization |
 | OS reserve | **~10 GB** | OS page cache, off-heap, Fluss client |
 | GC | `-XX:+UseG1GC -XX:MaxGCPauseMillis=20` | Protect p99 <100 ms decision SLO |
 | Container memory alert at 85% | ~40.8 GB | Critical alert when hit for 60 consecutive seconds |
 
-For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source: dedup state budget ~1 GB, window + candidate + ranking state <10 MB, leaving substantial headroom for RocksDB block cache, write buffers, and network memory.
+For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source (pre-DEC-038): dedup state budget ~1 GB, window + candidate + ranking state <10 MB, leaving substantial headroom for RocksDB block cache, write buffers, and network memory — the dedup term moves to Fluss under DEC-038 and this rationale is re-derived.
 
 ### Acceptance checklist
 

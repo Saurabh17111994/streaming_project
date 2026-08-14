@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | **Slice 1 (raw source → validation → fingerprint dedup → 15 s event-time candles → `feature_candles_15s`) implemented; 25 signal-job tests green; live smoke verified 2026-08-09** (see Slice 1 evidence below). **Slice 2.1 (MVP signal detection → `Signal_Candidates`, DEC-034) implemented; 34 signal-job tests green; live smoke verified 2026-08-10** (see Slice 2.1 section below). Slot-scoped safety consumer (plan Amendment) implemented and live-verified — SAFETY-INT-001 passed 2026-08-09, see Safety consumer section below. **CANDLE-KV-REPLAY-001 (2026-08-10): candle dual-sink (`feature_candles_15s_current` KV projection) + fail-closed startup gate + offline migration tool implemented; unit/integration tests green; historical load and live cutover blocked pending data-ops decision on 25 replay-conflict keys — see `13-candle-log-kv-replay-safety.md`.** **Candle conversion (2026-08-13): `feature_candles_15s` converted to KV-only (PK `(instrument_token, window_start)`), candle-KV machinery deleted, signal tables remain LOG + KV — see banner; compute suite 183 tests green + 7-test gated battery.** Slices 2.2+ (forming-bar handoff, Business Logic internals) and 3 (Ranking/Reservations/Decisions) not started.  **2026-08-13 (DEC-035): candle tables KV-only; signal LOG+KV dual-sink implemented (Stages 3–6 executed, live DDL applied).**|
+| Status | **Slice 1 (raw source → validation → fingerprint dedup → 15 s event-time candles → `feature_candles_15s`) implemented; 25 signal-job tests green; live smoke verified 2026-08-09** (see Slice 1 evidence below). **Slice 2.1 (MVP signal detection → `Signal_Candidates`, DEC-034) implemented; 34 signal-job tests green; live smoke verified 2026-08-10** (see Slice 2.1 section below). Slot-scoped safety consumer (plan Amendment) implemented and live-verified — SAFETY-INT-001 passed 2026-08-09, see Safety consumer section below. **CANDLE-KV-REPLAY-001 (2026-08-10): candle dual-sink (`feature_candles_15s_current` KV projection) + fail-closed startup gate + offline migration tool implemented; unit/integration tests green; historical load and live cutover blocked pending data-ops decision on 25 replay-conflict keys — see `13-candle-log-kv-replay-safety.md`.** **Candle conversion (2026-08-13): `feature_candles_15s` converted to KV-only (PK `(instrument_token, window_start)`), candle-KV machinery deleted, signal tables remain LOG + KV — see banner; compute suite 183 tests green + 7-test gated battery.** Slices 2.2+ (forming-bar handoff, Business Logic internals) and 3 (Ranking/Reservations/Decisions) not started.  **2026-08-13 (DEC-035): candle tables KV-only; signal LOG+KV dual-sink implemented (Stages 3–6 executed, live DDL applied).** **2026-08-14 (DEC-038): state-ownership requirement — large durable hot Signal state (the dedup set) moves to a Fluss KV state table; Flink keeps small working + recovery state; checkpoint is not a second copy. Design/DDL/code/measurement pending — see the DEC-038 banner. Ranking/reservation out of scope.**|
 | Owner | Compute and Strategy Teams |
 | Requirements | `REQ-FC-*`, `REQ-SS-*`, `REQ-RNK-*` |
 | Contracts | `docs/04_contracts/03-compute.md`, `04-business-logic.md`, `10-ranking.md` |
@@ -50,6 +50,17 @@ see `02-schema-storage.md` Phase C lake-state note 2026-08-13).
 > The dual-sink descriptions and test rows below (marked CANDLE-KV-REPLAY-001 / candle
 > KV) are historical records of the pre-conversion build; the signal LOG + KV sinks are
 > the current dual-sink. Section content below annotates the affected rows.
+
+> **STATE OWNERSHIP (DEC-038, 2026-08-14) — large durable hot Signal state moves to Fluss; Flink keeps only small working + recovery state.**
+>
+> The target model: **Fluss owns the large durable hot Signal-job state** (authoritative dedup set in a new Fluss KV state table; closed candles in `feature_candles_15s` KV; current signals in `Signal_Candidates_current` KV — the last two already Fluss-owned since DEC-001/035). **Flink keeps only the minimum state required for efficient processing and safe recovery** (source offsets, watermarks, event-time timers, in-flight window accumulators, signal ring buffers, and a bounded dedup working cache). **The Flink checkpoint is intentionally small and is not a second copy of the complete durable Signal state.** This reverses the design where ~1 GB of dedup state rode in Flink RocksDB and checkpoints (~1.74 GB measured at 53k t/s, 2026-08-12; ~986 MB dev-hashmap checkpoints 2026-08-14). Sections below that still describe the Flink-centric model — §Dedup state budget, §Checkpoint sizing, §Concrete sizing, §Restore and degradation, telemetry and test rows — are annotated with the DEC-038 target and are superseded where they conflict. **Design/DDL/code/measurement land in later stages of this dossier; this change fixes ownership only.** Ranking/reservation state is unchanged and out of scope.
+>
+> State-ownership answer key (what/why/where):
+> - **Dedup set** — large, bounded by rate × TTL, must survive restart, business state → **Fluss KV state table** (authoritative) + bounded Flink working cache; rebuildable from `raw_table_1` replay within the TTL.
+> - **Candle/window state** — small, transient (15 s + lateness), final rows already Fluss KV → **Flink window accumulator + `emitted` flag**; durable copy is `feature_candles_15s` KV.
+> - **Forming-bar state** — not yet implemented (Slice 2.2); when built, current forming bar is **Fluss `forming_bar` KV** (DDL 04 exists) with in-process events for Business Logic.
+> - **Current signal state** — already **Fluss `Signal_Candidates` LOG + `Signal_Candidates_current` KV**.
+> - **Watermark/timer/source state** — small execution/recovery state → **Flink checkpoint**.
 
 **Current-phase envelope:** build and validate on the approved 1,024-instrument / single-connection configuration (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s baseline stays deferred (`PERF-PROD-60000-001`, AC-FC-007/011; `PERF-PROD-90000-001` retired with the peak campaign, DEC-036); the budgets below are 3,000-instrument production targets, not this phase's acceptance.
 
@@ -91,7 +102,7 @@ Approximate per-tick processing cost at 50,000 ticks/s baseline. Used to diagnos
 | Fluss source read | ~0.1-0.5 ms | Deserialization + network from tablet server |
 | Changelog filter | ~0.01 ms | Simple row-kind check (INSERT/UPDATE_AFTER only) |
 | Row → typed mapping | ~0.05 ms | Field extraction + metric emission |
-| Dedup RocksDB lookup | ~0.01-0.05 ms | Point lookup; L1 block cache hit when state is RAM-resident |
+| Dedup lookup | ~0.01-0.05 ms | Flink working-cache hit (pre-DEC-038 row: "Dedup RocksDB lookup", L1 block cache — superseded; under DEC-038 the hot path hits the bounded in-Flink cache, not RocksDB or a Fluss round trip) |
 | Window accumulator update | ~0.005 ms | In-memory hash map OHLCV update |
 | Forming-bar detection | ~0.01 ms | Boundary check + typed event construction |
 | Strategy evaluation | TBD (keep simple) | Instrument-keyed; fires per forming-bar update |
@@ -126,6 +137,8 @@ Actual chaining is performance-tested; logical boundaries remain explicit for me
 | `ALLOWED_LATENESS_MS` | Default 5000; change only through tested profile |
 | `SOURCE_IDLE_MS` | Default 15000 per source partition |
 | `DEDUP_TTL_MS` | Fixed at `300000` (5 minutes); reject startup for any other value in MVP |
+| `DEDUP_STATE_TABLE` (new, DEC-038) | Fluss KV state table name for the authoritative dedup set (proposed `fingerprint_dedup`); validated at startup by the extended table preflight — design/DDL pending |
+| `DEDUP_CACHE_*` (new, DEC-038) | Bounded working-cache bound and write cadence for the Flink side; exact keys/values defined in the DEC-038 implementation stage — none are invented here |
 | `CANDLE_WINDOW_MS` | Fixed at `15000`; reject startup for any other value in MVP |
 | `CANDLE_TABLE` | Candle KV sink table, default `feature_candles_15s` (sole candle output — KV upsert, PK `(instrument_token, window_start)`, converted 2026-08-13) |
 | `CANDLE_CURRENT_TABLE` | **DELETED 2026-08-13** — key and `candleCurrentTable` config field removed with the candle KV projection; the fail-closed startup mode it governed (`ALLOW_FULL_REPLAY` / `STATE_RECOVERY_PATH`) is unchanged |
@@ -158,17 +171,23 @@ Deployment SHALL reject unbounded or too-short `DEDUP_TTL`, missing production c
 
 ### Dedup state
 
-State key contains only fingerprint version, scope, and event fingerprint. State value contains only first-seen timestamp and expiry timestamp. Dedup state SHALL NOT contain raw bytes, decoded raw fields, candle values, candidate values, or an event object. State is deleted when the event-time watermark reaches its `300000` ms expiry (implementation detail below).
+Dedup set contents: key contains only fingerprint version, scope (instrument token), and event fingerprint; value contains only first-seen timestamp and expiry timestamp. Dedup state SHALL NOT contain raw bytes, decoded raw fields, candle values, candidate values, or an event object. The logical expiry instant is `first_seen + TTL` (`300000` ms) exactly; entries are never deleted early.
 
-**Expiry implementation (Flink 2.2.1 constraint):** event-time state TTL was removed in Flink 2.2.1 (only `ProcessingTime` remains in `StateTtlConfig.TtlTimeCharacteristic`), so expiry is enforced with explicit event-time timers: one timer per fingerprint entry registered at `first_seen + TTL`, plus a compact expiry index (`expiry → state keys`, `fingerprint-dedup-expiry` map) so the timer callback knows which fingerprints to delete. Deletion timing is watermark-driven — the timer fires when the watermark reaches the expiry instant, which with the bounded out-of-orderness watermark (max seen event time − 5 s) is at most `WATERMARK_OUT_OF_ORDER_MS` behind nominal expiry. Entries are never deleted early; the logical expiry instant is `first_seen + TTL` exactly. The index adds one list entry per live fingerprint — bounded with the dedup state itself (see budget below; it roughly doubles the raw per-entry estimate).
+**Ownership (DEC-038, 2026-08-14):** the authoritative dedup set is a **Fluss KV state table** — key `(instrument_token, fingerprint_version, event_fingerprint)`, value `(first_seen_ms, expiry_ms)`, `bucket.key = instrument_token` — owned by the Signal job and rebuildable from `raw_table_1` replay within the TTL. Flink keeps only a **bounded working cache** for hot-path lookups (no Fluss round trip per tick — performance rule below). This supersedes the pre-DEC-038 Flink `MapState` layout described in the historical Slice-1 rows.
+
+**Expiry (superseded Flink-2.2.1 mechanism, kept as history):** event-time state TTL was removed in Flink 2.2.1 (only `ProcessingTime` remains in `StateTtlConfig.TtlTimeCharacteristic`), so the old Flink-side design enforced expiry with explicit event-time timers (one per fingerprint) plus an expiry index (`expiry → state keys`). Under DEC-038 the dedup lifecycle moves to the Fluss table (expiry column + a tested cleanup path — Fluss 0.9.1 has no per-key TTL, so the mechanism must be designed and measured, not assumed). The Flink cache's own entries expire so a re-arriving fingerprint inside the TTL still dedupes (pinned by test).
 
 First event proceeds; later candidate within TTL increments duplicate metrics and does not affect candle/business state.
 
 Identical legitimate events may be collapsed; this limitation must remain visible in metrics and documentation.
 
+**Performance rule (§7 of the DEC-038 requirement):** the hot path must not become `tick → Fluss read → Flink → Fluss write` per tick. Durable dedup writes are batched/async; lookups hit the bounded Flink cache; the design specifies cache bound, write cadence, and cleanup, and is measured.
+
 ### Dedup state budget
 
-At the 50,000 ticks/s baseline workload (3,000 instruments; ≈16.7 ticks/s/instrument average):
+The pre-DEC-038 Flink-side budget below is **historical** — it sized the ~1.74 GB RocksDB/checkpoint footprint this change removes. Under DEC-038 the numbers split: the authoritative set lives in Fluss (its storage envelope still follows `entries = rate × TTL`, but it is no longer a Flink checkpoint term), and the Flink checkpoint carries only the bounded working cache.
+
+At the 50,000 ticks/s baseline workload (3,000 instruments; ≈16.7 ticks/s/instrument average) — **pre-externalization, superseded**:
 
 | Metric | Value | Derivation |
 | --- | --- | --- |
@@ -178,7 +197,7 @@ At the 50,000 ticks/s baseline workload (3,000 instruments; ≈16.7 ticks/s/inst
 | RocksDB overhead (LSM amplification) | ~1.7-2× | Block index, bloom filter, SST metadata |
 | Estimated total state | **~1.3 GB** | Plateaus after warmup; does not grow unbounded |
 
-These are derived from the workload envelope and RocksDB state model, not from `PERF-PROD-60000-001`. The benchmark run is the authority. The estimate confirms that 48 GB VMs are over-provisioned for dedup state.
+Measured reference points (pre-externalization): RocksDB total state **1.74 GB** at 53k t/s on the 1,024-token bench (2026-08-12, 11-testing-and-release.md §14.1); dedup ballooned to **1.1 GB** during the 2026-08-10 full-replay incident; dev-hashmap checkpoints **986 MB / 22 s** (2026-08-14 E2E, blew the 30 s budget). These are the duplication this change eliminates — they are evidence for *why*, not a bound on the target. The post-externalization Fluss-side envelope and the Flink cache size **must be measured**, not asserted (DEC-038, §9 rule).
 
 ### Candle accumulator
 
@@ -234,12 +253,16 @@ One Flink checkpoint covers job state and sinks, but cross-table atomic visibili
 
 ### Restore and degradation
 
-Restore must recover source offsets, dedup state, windows, forming bars, active candidates, ranking, and reservation state consistently. If state compatibility or continuity cannot be proven:
+**Restore (DEC-038):** the job restores its **compact Flink checkpoint** (source offsets, watermarks, event-time timers, in-flight windows, dedup working-cache metadata), then **verifies Fluss authoritative-state availability and compatibility** (extend the existing `preflightTableContracts` pattern to the dedup KV table), then **rehydrates only the working state it needs** (dedup cache from the Fluss dedup table; signal ring buffers from `feature_candles_15s` if not checkpointed). No full raw-history replay is required merely to reconstruct durable hot state.
+
+Restore must recover source offsets, windows, forming bars, active candidates, ranking, and reservation state consistently **and rehydrate the dedup cache from Fluss**. If state compatibility or continuity cannot be proven:
 
 1. Job reports not ready/degraded.
 2. New decisions are suppressed.
 3. Executor is signalled to halt.
 4. Operator reconciliation/savepoint policy is invoked.
+
+If the Fluss dedup table is unavailable or incompatible, the job **fails closed** (or stays degraded) rather than silently replaying with an empty dedup set — the existing `STATE_RECOVERY_PATH`/`ALLOW_FULL_REPLAY` startup gate is preserved and extended to cover Fluss state verification.
 
 ### Startup mode gate (CANDLE-KV-REPLAY-001 — shared machinery, unchanged by the 2026-08-13 re-scope; the gate protects the signal LOG + KV sinks too)
 
@@ -247,9 +270,11 @@ Normal restarts SHALL pass `STATE_RECOVERY_PATH` (a Flink checkpoint/savepoint d
 
 Completed checkpoints are externalized with `RETAIN_ON_CANCELLATION` (set in `SignalJob.buildTopology`), so a deliberate stop keeps the exact checkpoint named by the next `STATE_RECOVERY_PATH`; the default delete-on-cancel would silently invalidate the restore contract (P6.1 phase 2→3 verifies cancel preserves the `chk-N` directory and the restore resumes from it).
 
-### Checkpoint sizing
+### Checkpoint sizing (DEC-038, 2026-08-14)
 
-Estimated checkpoint metrics at the 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average):
+The pre-DEC-038 table below is **historical** — its ~600 MB – 1 GB estimate is exactly the duplicate-copy footprint this change removes. Under DEC-038 the dedup set is Fluss-owned, so the checkpoint is dominated by source offsets, watermarks, timers, in-flight windows (~120 KB at 3K instruments), and the bounded dedup working cache. **The post-externalization checkpoint size must be measured, not asserted** — §9 of the requirement explicitly forbids replacing "1 GB" with a made-up smaller number. The measurement target rows: checkpoint size/duration at the current 1,024-instrument envelope and the deferred 50k baseline.
+
+Estimated checkpoint metrics at the 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) — **pre-externalization, superseded**:
 
 | Metric | Estimate | Derivation |
 | --- | --- | --- |
@@ -257,7 +282,7 @@ Estimated checkpoint metrics at the 50,000 ticks/s baseline (3,000 instruments; 
 | Checkpoint write time | ~2-5 seconds | SSD write at ~500 MB/s; incremental checkpoints write only changed SST files |
 | Restore time | ~5-15 seconds | Read back RocksDB state from S3/local checkpoint; well within 30s data-path recovery target (REQ-FC-008) |
 
-These estimates confirm that the configured 10s checkpoint interval and 30s timeout are conservative even at the theoretical cap ceiling (90,000 ticks/s; sustained gate 50,000 per DEC-036). All figures are derived from the RocksDB state model, not measured — superseded by `PERF-PROD-60000-001`.
+Measured pre-externalization reference: dev-hashmap checkpoints 986 MB / 22 s at the 20,480 t/s envelope (2026-08-14 E2E) — the concrete failure (CP9 expired, 30 s budget) that motivated DEC-038. The configured 10s interval / 30s timeout contract is unchanged; its headroom after externalization is re-derived from measurement.
 
 ### Job submission contract
 
@@ -277,6 +302,8 @@ Source throughput/lag, invalid events, dedup candidates/hits/state size, late ev
 
 **Pending (Slice 2+ telemetry):** source throughput/lag, dedup state size, beyond-lateness discard counter (REQ-FC-006 discard metric with instrument/window/lateness/reason), watermark lag, forming-update/candidate/ranking/decision rates, reservation states/conflicts, sink latency, restore count, state compatibility failures.
 
+**DEC-038 state-ownership telemetry (2026-08-14):** prove the architecture behaves as intended — Flink checkpoint size/duration/failure (existing), **Fluss dedup-table state size** (row/entry count + bytes), **Fluss dedup update rate**, **dedup cache hit ratio**, **rehydration latency**, **rehydration failures**, **state compatibility failures** (preflight on the dedup table), and **state continuity failures**. Bounded cardinality: per-table gauges and per-reason counters, no per-key labels.
+
 **CANDLE-KV-REPLAY-001 observability (deferred through existing telemetry):** dedicated per-sink counters (LOG rows written vs KV upserts, KV duplicate/conflict count, replay-vs-live output_ts gap) are **deferred** — they are not implemented as new metrics. Existing telemetry covers the operational need: `compute.startup.mode` gauge (RESTORE/FULL_REPLAY), `compute.candles.emitted` / `compute.candles.late.updates` counters, Flink built-in checkpoint duration/size/failure metrics, and offline `CandleMigrationTool` audits for LOG-vs-KV convergence checks. A dedicated KV-replay metric can be added later without contract change. (2026-08-13 conversions: the candle table is now KV-only — its LOG-vs-KV convergence surface is gone; convergence/upsert observability for the signal tables — `Signal_Candidates` LOG appends vs `Signal_Candidates_current` KV unique keys, signal-sink `numRecordsIn` + LOG:KV ratio; `CandleMigrationTool` audits retire with the candle KV projection. Dashboard update tracked in tracker 14 P8.4.)
 
 ### Required tests
@@ -288,7 +315,7 @@ Source throughput/lag, invalid events, dedup candidates/hits/state size, late ev
 - `SIG-UNIT-005` deterministic ranking/tie-break.
 - `SIG-UNIT-006` reservation capacity transitions.
 - `SIG-UNIT-007` no `flink-cep` dependency or `org.apache.flink.cep` import.
-- `SIG-UNIT-008` dedup state contains only fingerprint + timestamps; no raw bytes or event objects.
+- `SIG-UNIT-008` dedup state contains only fingerprint + timestamps; no raw bytes or event objects (DEC-038: applies to the Fluss table AND the Flink working cache; the Flink checkpoint does not duplicate the set).
 - `SIG-UNIT-009` active candle state contains only OHLCV fields; no tick list/collection.
 - `SIG-HARNESS-001` out-of-order/watermark/idleness.
 - `SIG-HARNESS-002` late-before-final versus late-after-final.
@@ -320,46 +347,51 @@ Rule of thumb: when you change a producer format (Go packet, DDL file, `RawTable
 - Critical alert at or above 85% total container memory (`CONTAINER_MEMORY_ALERT_PERCENT=85`).
 - Verify at startup that the container memory limit minus maximum heap is at least 35% of the container memory limit.
 
-### Concrete sizing (48 GB VM)
+### Concrete sizing (48 GB VM) — pre-DEC-038, superseded
 
-Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points, not measured — superseded by `PERF-PROD-60000-001`.
+The pre-DEC-038 table below sized a Flink TaskManager around ~1.3-1.74 GB of RocksDB dedup state — exactly the large Flink-side footprint DEC-038 removes. **Do not reuse these numbers as the target.** After dedup externalization the Flink-side state is small (windows, timers, working cache), so the RocksDB/direct-memory dominance disappears and the split between the generic 65%/35% formula and a RocksDB-heavy split must be **re-derived from measurement** (post-externalization memory profile), not asserted. The 48 GB VM allocation and the 8 GB / 30 GB split are retained only as the pre-change baseline.
+
+Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points, not measured — superseded by `PERF-PROD-60000-001` and, for the Flink-side split, by post-DEC-038 measurement.
 
 For a 48 GB container memory limit:
 
 | Resource | Value | Notes |
 | --- | --- | --- |
 | Container memory limit | 48 GB | Explicit Swarm/Compose limit |
-| Java max heap (`-Xmx`) | **8 GB** | Modest because working state lives in RocksDB (direct memory), not heap |
-| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers + Fluss client buffers |
+| Java max heap (`-Xmx`) | **8 GB** | Modest because working state lives in RocksDB (direct memory), not heap — pre-DEC-038 rationale; re-derive after externalization |
+| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers + Fluss client buffers — pre-DEC-038 rationale; re-derive after externalization |
 | OS reserve | **~10 GB** | OS page cache, off-heap allocations, Fluss client overhead |
-| JVM heap percent of container | ~17% | Intentionally lower than the generic 65% rule — RocksDB dominates |
+| JVM heap percent of container | ~17% | Intentionally lower than the generic 65% rule — RocksDB dominates; pre-DEC-038 rationale |
 | GC | `-XX:+UseG1GC -XX:MaxGCPauseMillis=20` | Low pause target to protect p99 latency |
 | Container memory alert at 85% | ~40.8 GB | `CONTAINER_MEMORY_ALERT_PERCENT` emits critical at this threshold |
 
-For non-Flink Java containers (Ingestion, Action Capture, Executor), use the generic formula (`JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT=65`). The Flink TaskManager split is different because RocksDB uses direct/native memory for its block cache and SST file buffers, not heap.
+For non-Flink Java containers (Ingestion, Action Capture, Executor), use the generic formula (`JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT=65`). The Flink TaskManager split is different because RocksDB uses direct/native memory for its block cache and SST file buffers, not heap — that reasoning's weight depends on how much RocksDB state remains after externalization.
 
-### Implementation checklist — State compactness (from [`01_plan.md`](./01-foundation.md) Task 3)
+### Implementation checklist — State compactness (from [`01_plan.md`](./01-foundation.md) Task 3) — DEC-038 re-scope
 
-Before code is accepted, verify each item:
+Before code is accepted, verify each item (items 2-5 are re-scoped by DEC-038: the duplicate state is Fluss-owned; the Flink side holds a bounded working cache):
 
 1. Raw ticks keyed by `instrument_token` before duplicate checking and candle calculation.
-2. Duplicate-state key contains only fingerprint version, fingerprint scope, and event fingerprint.
-3. Duplicate-state value contains only first-seen timestamp and expiry timestamp.
-4. Duplicate state does not contain raw bytes, decoded raw fields, candle values, candidate values, or an event object.
-5. Duplicate state deleted exactly when its 300000 ms expiry is reached.
+2. Duplicate-state **Fluss table** key contains only fingerprint version, fingerprint scope (instrument token), and event fingerprint; the Flink working cache holds only the same key material.
+3. Duplicate-state **Fluss table** value contains only first-seen timestamp and expiry timestamp; the Flink cache holds the same compact value.
+4. Duplicate state does not contain raw bytes, decoded raw fields, candle values, candidate values, or an event object — in Fluss and in the Flink cache.
+5. Duplicate state is removed when its 300000 ms expiry is reached (tested cleanup path; Fluss has no per-key TTL, so the mechanism is explicit and measured).
 6. Active candle state contains only open, high, low, close, volume, tick count, first order key, last order key, window start, and window end.
 7. Active candle state does not contain a list, collection, array, or map of individual ticks.
 8. One final 15-second candle written only after configured watermark/finality rule passes.
 9. Active candle state deleted by window cleanup after watermark passes `window_end + allowed_lateness` (final row written at first fire; no correction after finalization).
-10. Forming-bar data passed directly to business logic in the same Signal job; not written and re-read through Fluss.
+10. Forming-bar data passed directly to business logic in the same Signal job; not written and re-read through Fluss for ranking (REQ-FC-007 preserved; the durable forming-bar KV projection, when implemented, is Fluss-owned).
 11. `flink-cep` dependency removed from `code/02_services/02_compute/pom.xml`.
 12. No CEP API usage, CEP operator, CEP table, or CEP job in MVP.
+
+**DEC-038 additions:** the Flink checkpoint is small and is not a second complete copy of Fluss-owned Signal business state; on restart the job rehydrates the dedup working cache from Fluss; Fluss state unavailability/incompatibility fails closed.
 
 #### Task 3 acceptance checks
 
 - 15-minute tests at the variable 50,000 ticks/s average baseline (3,000 instruments; every instrument ≤30 ticks/s; 90,000 ticks/s peak retired, DEC-036) report no state object containing raw packet bytes or a list of ticks.
-- Duplicate state for expired tick fingerprint is absent after its expiry timer runs.
+- Duplicate state for expired tick fingerprint is absent after its expiry cleanup runs (Fluss-side and cache-side).
 - One final candle per non-empty instrument/window and no correction candle after finalization.
+- The Fluss dedup table holds the accepted dedup set; the Flink checkpoint does not duplicate it.
 - Compute module has no `flink-cep` dependency and no `org.apache.flink.cep` import.
 
 ### Implementation checklist — Candidate bounding and in-job ranking (from [`01_plan.md`](./01-foundation.md) Task 4)
@@ -385,7 +417,7 @@ The implementation is complete when exactly one Signal job performs the full pat
 
 ## Verification mapping
 
-The required behavior above is verified by the canonical [Signal job test design](./11-testing-and-release.md#signal-job): `SIG-UNIT-001` to `SIG-UNIT-009`, `SIG-HARNESS-001` to `SIG-HARNESS-005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, and `SIG-PERF-001`. Implemented-test coverage of the SIG-* IDs is mapped in [Slice 1 evidence](#slice-1-evidence-implemented-2026-08-09) below.
+The required behavior above is verified by the canonical [Signal job test design](./11-testing-and-release.md#signal-job): `SIG-UNIT-001` to `SIG-UNIT-009`, `SIG-HARNESS-001` to `SIG-HARNESS-005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, and `SIG-PERF-001`, plus the DEC-038 state-boundary set `SIG-STATE-001` to `SIG-STATE-003` (2026-08-14: large dedup state observable in Fluss, bounded checkpoint, compact-restore + Fluss rehydration, fail-closed on Fluss unavailability). Implemented-test coverage of the SIG-* IDs is mapped in [Slice 1 evidence](#slice-1-evidence-implemented-2026-08-09) below.
 
 ## Slice 1 evidence (implemented 2026-08-09)
 
@@ -430,7 +462,8 @@ Each pending item below is a tracked work item with its solving method, prerequi
 
 | Pending item | How to solve | Prerequisite | Gate |
 | --- | --- | --- | --- |
-| Dedup unit tests — **DONE 2026-08-10** (`FingerprintDedupFunctionTest`, 6 green): harness-driven state-key/value/expiry assertions above. Remaining half: `CandleEmitFunction` direct-operator test — assert the `emitted` window-state flag makes a re-trigger a no-op and no correction row is emitted (needs `CandleEmitFunction` to expose its window-state access for the harness, or `OneInputStreamOperatorTestHarness` around the emit path) | Harness infra **landed** in compute pom (test scope, no cluster) | Expired fingerprint absent after its expiry timer runs — **proven**; emit no-op on re-trigger — pending |
+| Dedup unit tests — **DONE 2026-08-10** (`FingerprintDedupFunctionTest`, 6 green): harness-driven state-key/value/expiry assertions above. Remaining half: `CandleEmitFunction` direct-operator test — assert the `emitted` window-state flag makes a re-trigger a no-op and no correction row is emitted (needs `CandleEmitFunction` to expose its window-state access for the harness, or `OneInputStreamOperatorTestHarness` around the emit path). **DEC-038 re-scope pending:** the dedup half re-targets to the Fluss-backed store + bounded cache (cache dedupes a re-sent fingerprint inside its staleness window; Fluss table holds the accepted set; checkpoint excludes it) | Harness infra **landed** in compute pom (test scope, no cluster); Fluss-side dedup tests follow the `SignalCurrentKvIdempotencyTest` scratch-table pattern | Expired fingerprint absent after its expiry cleanup runs — **proven on the old store**; Fluss-side expiry + cache-consistency — pending the DEC-038 implementation |
+| **DEC-038 state-boundary tests (new, 2026-08-14)** — prove: (1) large durable dedup state observable in Fluss; (2) Flink checkpoint bounded and not duplicating it; (3) restart restores compact Flink state + rehydrates dedup from Fluss without full raw replay; (4) deterministic continuation preserved; (5) Fluss unavailability/incompatibility → safe degradation; (6) checkpoint failures remain safe; (7) no per-tick Fluss round trip (cache absorbs hot-path lookups) | Fluss-backed dedup store implemented first; scratch-table integration pattern; no cluster for unit cache tests, env-gated live tests for rehydration | All six boundary proofs green at the module/IT level, then re-measured in the perf campaign |
 | `SIG-HARNESS-001/002/004/005` — `SIG-HARNESS-003` **COVERED 2026-08-13** (checkpoint-restore replay via `SignalJobSavepointRestoreIntegrationTest`, env-gated `COMPUTE_INT_TEST_SAVEPOINT`, green in-container: stop-with-savepoint → strict restore at 2× parallelism, dedup MapState continuity; re-feeding the same fingerprints emits nothing = deterministic replay equality). Remaining: 001 (out-of-order/watermark/idleness — watermark half done, idleness not), 002 (late-before vs after-final), 004 (duplicate-vs-identical limitation), 005 (reservation/ranking recovery, lands with Slice 3) | Same harness infra (Flink 2.2.1 API: `ProcessFunctionTestHarnesses.forKeyedProcessFunction` → `KeyedOneInputStreamOperatorTestHarness`): inject watermarks and processing time; assert correct event-time outcome; `snapshot`/`initializeState` for deterministic replay equality; SIG-HARNESS-004 asserts the fingerprint-limitation metric/audit is emitted; SIG-HARNESS-005 lands with Slice 3 (reservation/ranking state) | Harness infra **landed**; **no cluster** (005 additionally needs Slice 3) | Correct event-time outcome; late-before-final updates vs after-final discard; restored output equals expected deterministic output |
 | `STATE-COMPAT-001` (serializer-change half — savepoint half **COVERED 2026-08-13** by `SignalJobSavepointRestoreIntegrationTest`), `COMPAT-FLINK-001` (source/sink checkpoint-restore-rescale on pinned versions) | `MiniClusterWithClientResource` (`flink-test-utils`, **already in compute pom test scope**) with pinned Flink 2.2.1 + `fluss-flink-2.2:0.9.1-incubating`; run topology, checkpoint, restore, assert state continuity; serializer-change compatibility blocks startup before unsafe use | Harness infra **landed**; **no cluster** | Restore succeeds through the approved path, or startup blocks before unsafe use |
 | `SIG-INT-001/002` — **DONE 2026-08-13** (covered by `CandleGraphReplayIntegrationTest`, env-gated `COMPUTE_INT_TEST_P6`, green in-container 3/3, 134.9 s): real `SignalJob.buildTopology` against live dev Fluss with scratch tables — source/sink boundary on approved versions (001) + dual-sink partial-visibility reconciliation, signal LOG grows while `Signal_Candidates_current` KV key count stays frozen (002). The planned dedicated `COMPUTE_INT_TEST_SIGNAL` gate test was superseded — the P6 replay covers both | Env-gated live test on the dev Fluss cluster, same pattern as `SafetyHaltLiveIntegrationTest` (`COMPUTE_INT_TEST_SAFETY` → new `COMPUTE_INT_TEST_SIGNAL=true` gate): run the real `SignalJob` topology (or its source→sink shell) against live Fluss, assert candles land in `feature_candles_15s`; SIG-INT-002 uses two sinks + reconciliation to prove partial-visibility handling (as-built sinks were the candle LOG/KV pair — 2026-08-13: candle sink is the KV upsert, reconciliation targets the signal LOG/KV pair) | Live dev Fluss cluster (exists); Slice 2 sinks for the reconciliation half | Source/sink semantics work with approved versions; reconciliation identifies and handles partial visibility |

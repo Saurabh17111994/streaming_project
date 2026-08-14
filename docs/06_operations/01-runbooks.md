@@ -87,11 +87,12 @@ Automatic resume and approval reuse across epochs are prohibited.
 
 1. Identify the affected job, checkpoint, source offsets, watermark, state size, failure, and sink status.
 2. Halt the order path if state continuity or instruction correctness is uncertain.
-3. Restore from the tested encrypted S3 checkpoint/savepoint.
-4. Verify dedup, window, forming-bar, ranking, and source state consistency.
-5. Verify no duplicate immutable instruction and no unaccounted partial sink visibility.
-6. If restoration cannot be proven, remain not ready and execute the approved reset/replay procedure.
-7. Reconcile before any gate resume.
+3. Restore the compact checkpoint from the tested encrypted S3 checkpoint/savepoint (DEC-038: the checkpoint holds source offsets, watermarks, timers, in-flight windows, and working-cache metadata — not the full dedup set).
+4. Verify Fluss authoritative-state availability and compatibility (dedup state table, candle/signal tables); rehydrate the dedup working cache from Fluss.
+5. Verify window, forming-bar, ranking, and source state consistency; verify the Fluss dedup table holds the accepted set (checkpoint did not duplicate it).
+6. Verify no duplicate immutable instruction and no unaccounted partial sink visibility.
+7. If restoration or Fluss-state verification cannot be proven, remain not ready and execute the approved reset/replay procedure.
+8. Reconcile before any gate resume.
 
 ## Fluss quorum, tablet, or workload VM loss
 
@@ -178,6 +179,13 @@ Set `STATE_RECOVERY_PATH` to the PREVIOUS RUN's last checkpoint directory
 (`file:///tmp/p8-checkpoints/<previous-jobid>/chk-N`). Scope any log grep to
 new log lines after restart. Verify `Restoring job` appears, then completed
 checkpoints advance.
+
+Under DEC-038 (2026-08-14) the checkpoint is compact: it restores source
+offsets, watermarks, timers, in-flight windows, and dedup working-cache
+metadata. After restore, verify the Fluss authoritative state (dedup state
+table, candle/signal tables) is reachable and compatible, and that the dedup
+working cache rehydrates from Fluss — the checkpoint is not a second complete
+copy of the durable Signal business state.
 
 **JM/TM container recreate destroys container-local `/tmp` checkpoints** (not on a
 named volume; 2026-08-11 incident: a `docker cp` preserve raced live checkpointing,

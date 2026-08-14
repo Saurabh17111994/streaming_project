@@ -12,9 +12,11 @@ Three Fluss replicas/quorum are placed across the three workload VMs with anti-c
 
 ## Required schemas
 
-Market: `raw_table_1`, `feature_candles_15s`, `feature_candles_15s_current` (KV projection of the candle stream — RETIRED 2026-08-13 re-scope: candle output is LOG-only, KV dropped, live-table teardown pending), `suspected_discontinuities`, `instruments`.
+Market: `raw_table_1`, `feature_candles_15s` (KV upsert, PK `(instrument_token, window_start)` — sole candle output, 2026-08-13 conversion; authoritative durable candle state under DEC-038), `suspected_discontinuities`, `instruments`. (The pre-conversion `feature_candles_15s_current` KV projection is RETIRED 2026-08-13.)
 
 Strategy: `Signal_Candidates` (immutable append-only LOG — RE-SCOPED 2026-08-13, pending implementation; one row per fired signal), `Signal_Candidates_current` (candidate current-state KV, PK `(instrument_token)`, supersession overwrites — NEW 2026-08-13, pending implementation), `Ranking_Results`, immutable `Trade_Decisions`. `Trade_Decisions` SHALL be an immutable Signal-owned LOG feed with no Executor-assigned fields, execution status, or KV partial-update behavior.
+
+Signal state ownership (DEC-038): `feature_candles_15s`, `Signal_Candidates`, and `Signal_Candidates_current` are **Fluss-owned authoritative state**; Flink checkpoints never carry a second full copy of them. A **fingerprint-dedup KV state table** (proposed name `fingerprint_dedup`) is the authoritative dedup set: key `(instrument_token, fingerprint_version, event_fingerprint)`, value `(first_seen_ms, expiry_ms)`, `bucket.key = instrument_token`, owner Signal job, rebuild source `raw_table_1` replay within the dedup TTL, bounded growth via a tested expiry/cleanup mechanism (no per-key TTL in Fluss 0.9.1), and restart behavior = rehydrate the Flink working cache after a compact checkpoint restore. Design/DDL/tests land in a later stage; the contract fixes ownership, keys, and semantics.
 
 Order/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Projection_Ledger`, `Postback_Quarantine`.
 

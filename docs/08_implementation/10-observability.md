@@ -72,6 +72,8 @@ Packet/byte rate, append acknowledgement latency, pending bytes, reconnects, con
 
 Source lag/rate, watermark lag, idleness, invalid/late/discarded events, dedup hits/state size, candles/forming updates, candidates/rankings/decisions, reservations/conflicts, operator busy/idle/backpressure, sink latency, checkpoints, restores, state compatibility.
 
+**DEC-038 state-ownership telemetry (2026-08-14):** prove the Fluss-owns-large-state model is behaving as intended — Flink checkpoint size/duration/failure (existing Flink built-ins); **Fluss dedup-table state size** (entry count + bytes) and **dedup update rate**; **dedup working-cache hit ratio** and cache size; **rehydration latency** and **rehydration failures**; **state compatibility failures** (dedup-table preflight) and **state continuity failures**. Bounded cardinality: per-table gauges and per-reason counters only, never per-key labels.
+
 #### Action Capture and positions
 
 Postback rate/bytes, decode failures, correlation/quarantine, stale/regressive/conflicting transitions, projection backlog/lag/retry, positions by state, incomplete writes, rebuild/recovery, readiness.
@@ -94,7 +96,7 @@ Show packet/tick and byte throughput; append acknowledgements and p50/p95/p99 wr
 
 #### Compute and decision dashboard
 
-Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency.
+Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size + update rate, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
 
 #### Order safety dashboard
 

@@ -10,12 +10,13 @@ Arrow market-data stream
       ├─ normalized typed fields
       ├─ versioned event fingerprint
       └─ suspected-discontinuity evidence
-  → raw_table_1 LOG (at-least-once raw append)
+  → raw_table_1 LOG (at-least-once raw append; rebuild source for Fluss-owned state)
   → Signal Flink job
       ├─ eligible-trade filtering
       ├─ bounded best-effort fingerprint deduplication
+      │    └─ dedup set: Fluss KV state table (authoritative, DEC-038) + Flink working cache
       ├─ 15-second event-time candle state (keyed by instrument_token)
-      ├─ final feature_candles_15s LOG
+      │    └─ durable rows: feature_candles_15s KV (authoritative)
       ├─ forming-bar typed in-process handoff
       ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
@@ -34,11 +35,15 @@ Arrow market-data stream
   → broker
 ```
 
+**State boundary (DEC-038, 2026-08-14):** the Signal Flink job computes; Fluss owns the authoritative durable hot state. Fluss: fingerprint-dedup KV state table (new, when implemented), `feature_candles_15s` KV (durable candles), `Signal_Candidates` LOG + `Signal_Candidates_current` KV (durable signals). Flink: source offsets, watermarks, window/lateness timers, in-flight accumulators, dedup working cache, signal ring buffers. Flink checkpoints are small and are not a second copy of the Fluss-owned business state.
+
 Ranking consumes typed in-process candidate/state snapshots. It does not read `Signal_Candidates` from Fluss, create a second evaluation window, or run as a separate job.
 
 ## Event-time and deduplication
 
 Ingestion preserves every accepted raw packet and does not claim exact deduplication. Compute deduplicates within bounded state using the versioned `event_fingerprint` and scope. The TTL covers the declared ingestion retry/replay horizon plus watermark delay and cannot be unbounded or shorter than that horizon.
+
+Under DEC-038 the dedup set is Fluss-owned: the authoritative first-seen/expiry set lives in a Fluss KV state table, and Flink keeps a bounded working cache so the hot path does not perform a Fluss round trip per tick. The design must specify the cache bound, the write cadence for first-seen entries, and the cleanup path (Fluss 0.9.1 has no per-key TTL — an expiry column plus a tested cleanup mechanism). On restart Flink rehydrates the cache from the Fluss table; if the table is unavailable or incompatible the job fails closed rather than silently replaying.
 
 The default tested profile is five seconds bounded out-of-orderness, five seconds allowed lateness, and fifteen seconds source idleness. These are configuration values, not broker guarantees. A source without a verified event timestamp cannot advance the watermark.
 
@@ -100,7 +105,7 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | Table | Type | Writer | Primary consumers | Retention/lake role |
 | --- | --- | --- | --- | --- |
 | `raw_table_1` | LOG | Ingestion | Signal job | ≥3 trading days; EOD Iceberg |
-| `feature_candles_15s` | LOG | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
+| `feature_candles_15s` | KV (upsert, PK `(instrument_token, window_start)` — sole candle output, 2026-08-13) | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Signal_Candidates_current` | KV | Signal job | Current-state readers/reconciliation | Current state; rebuildable from LOG |
 | `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |

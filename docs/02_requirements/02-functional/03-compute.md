@@ -42,7 +42,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Late events are discarded:** Events arriving after finalization are counted and measured but do not produce a new or updated row. This limitation remains visible in metrics and documentation.
 - **Empty windows produce no row:** A 15-second window with zero eligible trades emits no candle. Downstream consumers must not assume a row exists for every window.
 - **Deterministic replay is input-bound:** Replay determinism is relative to an identical ordered input snapshot, fingerprint algorithm/version, and configuration version. Different arrival order, fingerprint collisions, missing external state, or changed configuration may produce different results.
-- **Checkpoint restore is state-consistent or safe-degraded:** On restore, dedup, window, forming-bar, and ranking state are restored consistently or the job enters a safe degraded state that prevents new instructions.
+- **Checkpoint restore is compact + rehydrated or safe-degraded (DEC-038):** Flink restores only its small checkpoint (source offsets, watermarks, window/lateness timers, in-flight accumulators, working-cache metadata); large durable Signal business state is verified against and rehydrated from Fluss. If Fluss state is unavailable or incompatible, the job enters a safe degraded state (or fails closed at startup) and prevents new instructions. Ranking/reservation restore semantics are unchanged and out of scope here.
 
 ## Out of Scope
 
@@ -125,13 +125,15 @@ Within the same Signal Flink job, Compute SHALL expose a typed in-job event to B
 
 Business Logic SHALL consume this state directly. It SHALL NOT wait for `feature_candles_15s` or perform a Fluss round trip for ranking.
 
-## REQ-FC-008: Checkpoint boundary
+## REQ-FC-008: Checkpoint boundary and state ownership (DEC-038)
 
-The Signal job SHALL use RocksDB or the version-pinned equivalent managed state and durable S3 checkpoint storage in production. Checkpoint interval, timeout, concurrent checkpoint count, state backend, and restart strategy SHALL be exact-version configuration, not undocumented defaults.
+**State ownership:** large durable Signal business state lives in Fluss; Flink retains only the small working state needed for active processing plus the minimal recovery state needed to restart. The current Signal path's large state is the fingerprint dedup set; candle output and signal current-state already live in Fluss KV. The Signal job SHALL use RocksDB or the version-pinned equivalent managed state and durable S3 checkpoint storage in production. Checkpoint interval, timeout, concurrent checkpoint count, state backend, and restart strategy SHALL be exact-version configuration, not undocumented defaults.
 
 Exactly-once may be claimed only for the state/sink boundary proven by the version-specific integration suite. The requirement does not make independent table visibility or broker REST calls exactly-once.
 
-On restore, the job SHALL restore dedup, window, forming-bar, and ranking state consistently or enter a safe degraded state that prevents new instructions.
+**Checkpoint role:** the Flink checkpoint SHALL contain source progress, watermarks, timers, in-flight window accumulators, and minimal working/recovery context — it SHALL NOT be a second complete copy of Fluss-owned Signal business state.
+
+**Restore:** the job SHALL restore its compact checkpoint, SHALL verify Fluss authoritative-state availability and compatibility, and SHALL rehydrate only the working state it needs before resuming. If Fluss state is unavailable, incompatible, or cannot be verified, the job SHALL fail closed / enter a safe degraded state that prevents new instructions. Restore SHALL NOT require a full raw-history replay merely to reconstruct durable hot state.
 
 ## REQ-FC-009: Backpressure
 

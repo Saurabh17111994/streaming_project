@@ -67,7 +67,7 @@ The following mappings identify the detailed sections in this catalog.
 | `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at 3,000 instruments and 90,000 ticks/s peak; no peak-capacity evidence row remains |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
-| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
+| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained (DEC-038: the accepted dedup set is observable in the Fluss dedup table; the Flink checkpoint does not duplicate it) |
 | `STATE-CANDLE-001` | 15 min | Variable baseline input | One final candle per non-empty 15-second window; no tick collection exists in active state |
 | `BABYSITTER-001` | 5 min | Repeated position updates | Latest state only; zero actions; startup rejects action enablement |
 
@@ -136,7 +136,10 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | --- | --- | --- |
 | `SIG-UNIT-001` to `SIG-UNIT-006` | Tie ordering, candles, 300000 ms dedup TTL, candidate identity, ranking, and reservations | Output is deterministic for fixed input and clock. |
 | `SIG-UNIT-007` | Dependency scan | No `flink-cep` dependency or CEP import exists. |
-| `SIG-UNIT-008` to `SIG-UNIT-009` | Dedup and candle state contents | State stays compact; no raw packet/event collection or tick list is stored. |
+| `SIG-UNIT-008` to `SIG-UNIT-009` | Dedup and candle state contents | State stays compact; no raw packet/event collection or tick list is stored (DEC-038: the dedup set lives in the Fluss dedup table; the Flink side holds only the bounded working cache). |
+| `SIG-STATE-001` | DEC-038: large durable dedup state is observable in Fluss and the Flink checkpoint is bounded | The Fluss dedup table holds the accepted set; checkpoint size stays bounded and does not duplicate the full durable state. |
+| `SIG-STATE-002` | DEC-038: restart restores compact Flink state and rehydrates the dedup working cache from Fluss | Restart resumes from the compact checkpoint without full raw-history replay; a re-sent fingerprint inside the TTL still dedupes after rehydration. |
+| `SIG-STATE-003` | DEC-038: Fluss dedup-table unavailability or incompatibility | The job fails closed / stays degraded (no silent replay with an empty dedup set). |
 | `SIG-HARNESS-001` | Out-of-order events, watermark, and idleness | Correct event-time outcome is emitted. |
 | `SIG-HARNESS-002` | Late before-final versus after-final event | Only the permitted update/discard behavior occurs. |
 | `SIG-HARNESS-003` | Checkpoint then restore and replay | Recovered output equals the expected deterministic output. |
@@ -147,7 +150,7 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | `COMPAT-FLINK-001` | Source/sink checkpoint, restore, and rescale on the pinned Flink/connector versions | Restored processing and state remain within the approved consistency boundary. |
 | `SIG-INT-002` | Partial visibility across outputs | Reconciliation identifies and handles partial visibility. |
 | `SIG-FAIL-001` | Checkpoint or continuity failure | New decisions are suppressed and a safe halt is requested. |
-| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits. |
+| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits (DEC-038: re-measured after dedup externalization — checkpoint size/duration, Fluss dedup-table size, cache hit ratio, rehydration latency). |
 
 Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoint reference, state-size report, and performance report.
 
@@ -490,7 +493,7 @@ Pass requires zero acknowledged loss, safe halt below five seconds, data-path re
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
 | `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at variable 90,000 ticks/s peak; no peak-capacity evidence row remains | No acknowledged loss; bounded memory/backlog; checkpoint and recovery evidence; no cap violation |
-| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
+| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained (DEC-038: the accepted dedup set is observable in the Fluss dedup table; the Flink checkpoint does not duplicate it) |
 | `STATE-CANDLE-001` | 15 min | Variable baseline input | One final candle per non-empty 15-second window; no tick collection exists in active state |
 | `BABYSITTER-001` | 5 min | Repeated position updates | Latest state only; zero actions; startup rejects action enablement |
 
@@ -913,6 +916,8 @@ If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P
 - Deployment: `docs/08_implementation/09-production-swarm.md` (future production target; not used by this bench).
 
 ## 14. Execution results
+
+> **DEC-038 note (2026-08-14):** the Phase 0/1 bench records below are the **pre-externalization baseline** — their RocksDB total state (~1.74 GB) and checkpoint rows are the duplication the state-ownership change removes, not a bound on the target. Post-DEC-038 the same measurements are re-taken with the dedup set in Fluss (SIG-PERF-001 re-measurement row).
 
 ### 14.1 Phase 0 — dev baseline (2026-08-12, 14:23:40 → 14:34:30 UTC, DONE)
 

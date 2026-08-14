@@ -80,7 +80,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | Table                       | Type                                  | Owner                       | Purpose                                      |
 | --------------------------- | ------------------------------------- | --------------------------- | -------------------------------------------- |
 | `raw_table_1`               | LOG                                   | Ingestion                   | Original bytes plus normalized market ticks  |
-| `feature_candles_15s`       | LOG                                   | Signal job                  | Final MVP candles (immutable evidence trail) |
+| `feature_candles_15s`       | KV                                    | Signal job                  | Final MVP candles (KV upsert PK `(instrument_token, window_start)`, sole candle output — 2026-08-13 conversion; authoritative durable candle state) |
 | `feature_candles_15s_current` | KV (RETIRED 2026-08-13)            | Signal job                  | Was canonical candle projection PK `(instrument_token, window_start)`; candle output is now LOG-only, projection dropped, live-table teardown pending |
 | `Signal_Candidates`         | LOG (v3; KV v2 R-084 reversed)       | Business Logic              | Immutable append-only candidate audit; one row per fired signal |
 | `Signal_Candidates_current` | KV                                    | Business Logic              | Current-state projection, PK `(instrument_token)`; latest/active candidate per instrument, supersession overwrites in place |
@@ -123,11 +123,11 @@ Event/audit tables SHALL use the identities applicable to their domain:
 
 Distribution SHALL preserve per-instrument affinity using tested Fluss bucketing. Retention is at least three complete trading days and is extended automatically while the relevant EOD manifest is unverified or retryable.
 
-## REQ-FLS-006: Candle log
+## REQ-FLS-006: Candle state
 
-`feature_candles_15s` is append-only final MVP candle output. It contains instrument, UTC window boundaries, OHLCV, tick count, source/algorithm version, and output timestamp. Late corrections are not written in MVP. Retention is at least three complete trading days plus offload safety extension.
+`feature_candles_15s` is **KV** current-state candle output (PK `(instrument_token, window_start)`, upsert last-write-wins — 2026-08-13 user requirement; the older LOG-only wording is superseded). It contains instrument, UTC window boundaries, OHLCV, tick count, source/algorithm version, and output timestamp. Late corrections are not written in MVP. Upsert makes replay converge (re-upserting the same key replaces the row; no row growth). Retention is at least three complete trading days plus offload safety extension.
 
-The `feature_candles_15s_current` KV projection, its dual sink, and the offline `CandleMigrationTool` historical load are RETIRED (2026-08-13 re-scope): candle output is LOG-only, and replay/duplicate handling is derived from the LOG alone. The current-state projection requirement moves to `Signal_Candidates_current` under REQ-FLS-007. The candle-KV replay-safety line (CANDLE-KV-REPLAY-001) is decommissioned — see tracker `14-candle-log-kv-replay-safety_2.md` for the measured close-out.
+As the durable candle state, `feature_candles_15s` is an **authoritative Fluss state table under DEC-038**: Flink computes each final row from its small in-flight window accumulator and writes the row to Fluss; the Flink checkpoint never carries a second full copy of candle history. The `feature_candles_15s_current` KV projection, its dual sink, and the offline `CandleMigrationTool` historical load are RETIRED (2026-08-13 re-scope); replay/duplicate handling is derived from the KV upsert itself. The current-state projection requirement for signals moves to `Signal_Candidates_current` under REQ-FLS-007. The candle-KV replay-safety line (CANDLE-KV-REPLAY-001) is decommissioned — see tracker `14-candle-log-kv-replay-safety_2.md` for the measured close-out.
 
 ## REQ-FLS-007: Strategy and ranking audit
 
@@ -195,6 +195,23 @@ Executor SHALL verify that every consumed `Trade_Decisions` row carries no Execu
 ## REQ-FLS-016: Position and reservation scope
 
 `Positions`, `Portfolio_Reservations`, `Order_Lifecycle`, `Execution_Gate`, and `Execution_Attempts` SHALL carry `account_scope_id` and the applicable `portfolio_id` or `execution_partition_id`. Cross-scope reads/writes are prohibited unless an explicit reconciliation contract authorizes them.
+
+## REQ-FLS-017: Authoritative Signal hot state (DEC-038)
+
+Fluss is the authoritative durable hot-state layer for the applicable current Signal-job business state. Large durable state that must survive a Flink restart SHALL be owned and persisted by Fluss; Flink SHALL retain only (a) the small working state needed for active processing and (b) the minimal recovery state needed to restart safely. This requirement applies to the current simple Signal path only — dedup state, candle state, forming-bar state (when implemented), and current signal state. Ranking and reservation state are explicitly OUT OF SCOPE and unchanged.
+
+For each Fluss-owned Signal state table/domain, the design SHALL define, before DDL generation:
+
+1. **Owner** — the single writing component (the Signal job).
+2. **Keys** — logical key and routing (`bucket.key`) with per-instrument colocation.
+3. **Update semantics** — upsert vs append; how replay converges.
+4. **TTL / cleanup** — bounded growth and the exact cleanup mechanism (Fluss 0.9.1 has no per-key TTL; an expiry column plus a cleanup path must be designed and tested, not assumed).
+5. **Rebuild source** — the immutable LOG/audit that can reconstruct the state (e.g. `raw_table_1` replay within the dedup TTL window).
+6. **Versioning** — schema version and serialization contract.
+7. **Restart behavior** — how Flink restores its compact checkpoint, verifies Fluss state availability/compatibility, and rehydrates only the working state it needs.
+8. **Consistency requirements** — what a bounded Flink working cache may hold vs the Fluss authoritative copy, and the fail-closed rule when Fluss state is unavailable or incompatible.
+
+Flink checkpoints SHALL NOT become a duplicate full copy of Fluss-owned Signal business state. This requirement does not create ranking/reservation tables or requirements.
 
 ## REQ-FLS-013: Acceptance
 
