@@ -2,6 +2,7 @@ package com.trading.compute.signaljob;
 
 import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.function.LongSupplier;
+import org.apache.flink.api.common.eventtime.Watermark;
 import org.apache.flink.api.common.eventtime.WatermarkGenerator;
 import org.apache.flink.api.common.eventtime.WatermarkOutput;
 import org.apache.flink.table.data.RowData;
@@ -95,7 +96,11 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
 
     @Override
     public void onEvent(RowData event, long eventTimestamp, WatermarkOutput output) {
-        delegate.onEvent(event, eventTimestamp, output);
+        // REQ-FC-010 source throughput: one counter increment per source
+        // record (the generator's onEvent fires once per record in the
+        // FLIP-27 source operator). Never blocking — nanosecond static.
+        ComputeOtlpEmitter.recordSourceRecord();
+        delegate.onEvent(event, eventTimestamp, lagRecordingOutput(output));
         long now = clock.getAsLong();
         if (EPISODE_REPORTED.getAndSet(false)) {
             LOG.info("signal-job: source resumed after {} ms idle at the tail — records flowing "
@@ -106,7 +111,7 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
 
     @Override
     public void onPeriodicEmit(WatermarkOutput output) {
-        delegate.onPeriodicEmit(output);
+        delegate.onPeriodicEmit(lagRecordingOutput(output));
         long now = clock.getAsLong();
         long idleMs = now - lastEventWallClockMs;
         // Edge-triggered: report once per idle episode (compareAndSet wins for
@@ -120,6 +125,35 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
                     idleMs, sourceIdleAlertMs);
             ComputeOtlpEmitter.recordSourceIdleAtTail();
         }
+    }
+
+    /**
+     * Wraps the watermark output so every emitted watermark's processing-time
+     * staleness is recorded as the REQ-FC-010 watermark-lag gauge
+     * ({@code now - watermark}, ms) — zero graph nodes, the same decorator
+     * discipline as the rest of this class. A live feed emits watermarks
+     * close to the wall clock; a frozen/stalled tail stops emitting, so the
+     * gauge holds the last value while the idle-episode counter fires.
+     */
+    private WatermarkOutput lagRecordingOutput(WatermarkOutput delegateOutput) {
+        return new WatermarkOutput() {
+            @Override
+            public void emitWatermark(Watermark watermark) {
+                long lag = Math.max(0L, clock.getAsLong() - watermark.getTimestamp());
+                ComputeOtlpEmitter.recordWatermarkLagMs(lag);
+                delegateOutput.emitWatermark(watermark);
+            }
+
+            @Override
+            public void markIdle() {
+                delegateOutput.markIdle();
+            }
+
+            @Override
+            public void markActive() {
+                delegateOutput.markActive();
+            }
+        };
     }
 
     /** TEST-ONLY: resets the job-wide episode latch (keeps tests independent). */

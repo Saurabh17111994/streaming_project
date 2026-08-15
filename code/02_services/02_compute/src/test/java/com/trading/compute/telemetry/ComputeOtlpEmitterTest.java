@@ -216,6 +216,34 @@ class ComputeOtlpEmitterTest {
     }
 
     @Test
+    @DisplayName("REQ-FC-010: source throughput ships as a DELTA sum, watermark lag as a gauge")
+    void reqFc010SourceAndWatermarkMetrics() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        // Source-record counter: drains as a DELTA (records per flush window).
+        ComputeOtlpEmitter.recordSourceRecord();
+        ComputeOtlpEmitter.recordSourceRecord();
+        ComputeOtlpEmitter.recordSourceRecord();
+        assertThat(emitter.drainSourceRecordsDelta()).isEqualTo(3); // drained by the flush thread
+        assertThat(emitter.drainSourceRecordsDelta()).isZero();     // drained, never re-fires
+        ComputeOtlpEmitter.recordSourceRecord();
+        String json = emitter.buildMetricsJson(0, 0, 1, 0, 0, 0, 0, 0);
+        assertThat(json).contains("\"name\":\"compute.source.records\"");
+        assertThat(json).contains("\"asInt\":1");
+        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
+
+        // Watermark-lag gauge appears only once recorded (never an invented 0).
+        assertThat(new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0))
+                .doesNotContain("compute.watermark.lag.ms");
+        ComputeOtlpEmitter.recordWatermarkLagMs(1_234L);
+        String withLag = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0);
+        assertThat(withLag).contains("\"name\":\"compute.watermark.lag.ms\"");
+        assertThat(withLag).contains("\"asInt\":1234");
+        assertThat(withLag).contains("\"unit\":\"ms\"");
+        assertThat(withLag).contains("\"gauge\":{\"dataPoints\"");
+    }
+
+    @Test
     @DisplayName("dedup telemetry counters drain independently and never re-fire")
     void dedupTelemetryCountersDrainAsDeltas() {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");

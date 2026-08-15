@@ -130,6 +130,28 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
             "compute.dedup.rehydration.latency.ms";
 
     /**
+     * Source throughput (REQ-FC-010): raw records consumed from the Fluss
+     * source per flush window (DELTA sum, like the other counters). Counted by
+     * the {@code SourceIdleWatchdogGenerator} watermark-level watchdog INSIDE
+     * the source operator (zero graph nodes — the generator decorates the
+     * watermark strategy, so operator IDs stay bit-identical). The
+     * 10-second-flush delta IS the per-window throughput; OpenObserve derives
+     * the rate. OpenObserve stream: {@code compute_source_records}.
+     */
+    public static final String SOURCE_RECORDS_METRIC = "compute.source.records";
+
+    /**
+     * Watermark lag (REQ-FC-010): the processing-time staleness of the last
+     * emitted event-time watermark ({@code now - emittedWatermark}, ms). Last-
+     * value gauge recorded by the source-level watchdog each time a watermark
+     * is emitted: a live feed holds it near zero (out-of-orderness bound), a
+     * stalled/frozen tail lets it grow with wall-clock time — the continuous
+     * companion to the edge-triggered {@code compute.source.idle.at.tail}
+     * episode counter. OpenObserve stream: {@code compute_watermark_lag_ms}.
+     */
+    public static final String WATERMARK_LAG_MS_METRIC = "compute.watermark.lag.ms";
+
+    /**
      * Incremented by CanonicalSignalFilterFunction (once per non-canonical
      * signal row); drained (delta) by the flush thread.
      */
@@ -143,6 +165,18 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      * drained (delta) by the flush thread.
      */
     private static final AtomicLong SOURCE_IDLE_AT_TAIL = new AtomicLong();
+
+    /**
+     * Incremented by SourceIdleWatchdogGenerator (once per source record);
+     * drained (delta) by the flush thread — REQ-FC-010 source throughput.
+     */
+    private static final AtomicLong SOURCE_RECORDS = new AtomicLong();
+
+    /**
+     * Last emitted watermark's processing-time lag (ms), recorded by the
+     * source-level watchdog on each watermark emission; -1 = never emitted.
+     */
+    private static final AtomicLong WATERMARK_LAG_MS = new AtomicLong(-1L);
 
     /** Startup mode; -1 = never recorded (not yet started). */
     private static final AtomicLong STARTUP_MODE = new AtomicLong(-1L);
@@ -224,6 +258,8 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         DEDUP_CACHE_MISSES.set(0L);
         DEDUP_REHYDRATION_FAILURES.set(0L);
         DEDUP_REHYDRATION_LATENCY_MS.set(-1L);
+        SOURCE_RECORDS.set(0L);
+        WATERMARK_LAG_MS.set(-1L);
     }
 
     /** TEST-ONLY: returns the startup mode to its unrecorded (-1) state. */
@@ -413,6 +449,36 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     }
 
     /**
+     * Called by {@code SourceIdleWatchdogGenerator} once per source record
+     * (REQ-FC-010 source throughput). NEVER called from the source task's hot
+     * path in a blocking way — this is a nanosecond static increment, safe on
+     * {@code onEvent} (per record). Drained (delta) by the 10 s flush thread.
+     */
+    public static void recordSourceRecord() {
+        SOURCE_RECORDS.incrementAndGet();
+    }
+
+    /** Deltas the source-record counter (public: cross-package watchdog tests read it). */
+    public long drainSourceRecordsDelta() {
+        return SOURCE_RECORDS.getAndSet(0);
+    }
+
+    /**
+     * Called by {@code SourceIdleWatchdogGenerator} whenever a watermark is
+     * emitted: records the processing-time staleness of that watermark
+     * ({@code now - watermark}, ms) as a last-value gauge — REQ-FC-010
+     * watermark lag. NEVER blocking (nanosecond static set).
+     */
+    public static void recordWatermarkLagMs(long ms) {
+        WATERMARK_LAG_MS.set(ms);
+    }
+
+    /** TEST-ONLY getter: last recorded watermark lag, -1 = never emitted. */
+    public static long watermarkLagMsForTest() {
+        return WATERMARK_LAG_MS.get();
+    }
+
+    /**
      * Called by {@code CanonicalSignalFilterFunction} once per signal row
      * dropped from the KV current-state projection. NEVER called from the
      * filter's hot path in a blocking way — this is a nanosecond static
@@ -461,12 +527,13 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public int flushOnce() throws java.io.IOException {
         long delta = drainDelta();
         long sourceIdleAtTail = drainSourceIdleAtTailDelta();
+        long sourceRecords = drainSourceRecordsDelta();
         long signalKvFiltered = drainSignalKvFilteredNonCanonicalDelta();
         long candleLateDropped = drainCandleLateDropDelta();
         long dedupCacheHits = drainDedupCacheHitsDelta();
         long dedupCacheMisses = drainDedupCacheMissesDelta();
         long dedupRehydrationFailures = drainDedupRehydrationFailuresDelta();
-        String json = buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered,
+        String json = buildMetricsJson(delta, sourceIdleAtTail, sourceRecords, signalKvFiltered,
                 candleLateDropped, dedupCacheHits, dedupCacheMisses, dedupRehydrationFailures);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -590,13 +657,20 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered) {
-        return buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered,
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L, signalKvFiltered,
                 0L, 0L, 0L, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered,
             long candleLateDropped, long dedupCacheHits, long dedupCacheMisses,
             long dedupRehydrationFailures) {
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L, signalKvFiltered,
+                candleLateDropped, dedupCacheHits, dedupCacheMisses, dedupRehydrationFailures);
+    }
+
+    String buildMetricsJson(long delta, long sourceIdleAtTail, long sourceRecords,
+            long signalKvFiltered, long candleLateDropped, long dedupCacheHits,
+            long dedupCacheMisses, long dedupRehydrationFailures) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -620,6 +694,13 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
           .append("\"isMonotonic\":false,")
           .append("\"dataPoints\":[{\"asInt\":").append(sourceIdleAtTail).append(",")
+          .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
+        // REQ-FC-010 source throughput: records consumed in this flush window.
+        sb.append(",{\"name\":\"").append(SOURCE_RECORDS_METRIC).append("\",")
+          .append("\"unit\":\"records\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
+          .append("\"isMonotonic\":false,")
+          .append("\"dataPoints\":[{\"asInt\":").append(sourceRecords).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
         sb.append(",{\"name\":\"").append(SIGNAL_KV_FILTERED_NON_CANONICAL_METRIC).append("\",")
           .append("\"unit\":\"signals\",")
@@ -655,6 +736,11 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         long lookups = dedupCacheHits + dedupCacheMisses;
         long ratioBp = lookups == 0 ? 0L : Math.round(10000.0 * dedupCacheHits / lookups);
         appendGauge(sb, DEDUP_CACHE_HIT_RATIO_METRIC, ratioBp, "bp", now);
+        // REQ-FC-010 watermark lag: last emitted watermark's staleness (ms).
+        long watermarkLag = WATERMARK_LAG_MS.get();
+        if (watermarkLag >= 0L) {
+            appendGauge(sb, WATERMARK_LAG_MS_METRIC, watermarkLag, "ms", now);
+        }
         sb.append("]}]}]}");
         return sb.toString();
     }
