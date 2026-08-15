@@ -4,6 +4,9 @@ import com.trading.common.model.FormingBar;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 
 /**
  * Bidirectional mapper between the in-process {@link FormingBar} record and
@@ -46,6 +49,49 @@ public final class FormingBarRowMapper {
         row.setField(FormingBarTableColumns.SCHEMA_VERSION,
                 StringData.fromString(FormingBarTableColumns.SCHEMA_VERSION_V1));
         return row;
+    }
+
+    /** In-process record -> raw-client fluss row (the rehydration store's
+     *  write shape — same 11-column v1 layout, same field mapping as
+     *  {@link #toRow(FormingBar)}; single source of mapping truth). */
+    public static GenericRow toFlussRow(FormingBar bar) {
+        return GenericRow.of(
+                bar.instrumentToken(),
+                bar.windowStart(),
+                bar.openPaise(),
+                bar.highPaise(),
+                bar.lowPaise(),
+                bar.closePaise(),
+                bar.volume(),
+                (int) bar.tickCount(),
+                bar.lastEventTime(),
+                bar.lastFingerprint() == null ? null
+                        : BinaryString.fromString(bar.lastFingerprint()),
+                BinaryString.fromString(FormingBarTableColumns.SCHEMA_VERSION_V1));
+    }
+
+    /** Raw-client fluss row -> in-process record (rehydration read — the
+     *  {@link FlussFormingBarStateStore} read path). Same semantics as
+     *  {@link #fromRow(RowData)}: {@code windowEnd = 0} and
+     *  {@code exchange/symbol = null} until the caller restores them. */
+    public static FormingBar fromFlussRow(InternalRow row) {
+        BinaryString fp = row.isNullAt(FormingBarTableColumns.LAST_EVENT_FINGERPRINT)
+                ? null
+                : row.getString(FormingBarTableColumns.LAST_EVENT_FINGERPRINT);
+        return new FormingBar(
+                row.getLong(FormingBarTableColumns.INSTRUMENT_TOKEN),
+                row.getLong(FormingBarTableColumns.WINDOW_START),
+                0L, // windowEnd is not persisted (v1) — caller restores it
+                row.getLong(FormingBarTableColumns.OPEN_PAISE),
+                row.getLong(FormingBarTableColumns.HIGH_PAISE),
+                row.getLong(FormingBarTableColumns.LOW_PAISE),
+                row.getLong(FormingBarTableColumns.CLOSE_PAISE),
+                row.getLong(FormingBarTableColumns.VOLUME),
+                row.getInt(FormingBarTableColumns.TICK_COUNT),
+                row.getLong(FormingBarTableColumns.LAST_EVENT_TIME),
+                fp == null ? null : fp.toString(),
+                null, // exchange is not persisted (v1) — caller restores it
+                null); // symbol is not persisted (v1) — caller restores it
     }
 
     /** KV row -> in-process record (rehydration read). */

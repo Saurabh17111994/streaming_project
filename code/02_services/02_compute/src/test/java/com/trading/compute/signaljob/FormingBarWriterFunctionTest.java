@@ -7,6 +7,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
+import org.apache.flink.streaming.api.operators.KeyedProcessOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
@@ -39,7 +41,7 @@ class FormingBarWriterFunctionTest {
         }
     }
 
-    private void openHarness(long batchMs) throws Exception {
+    private static Map<String, String> envFor(long batchMs) {
         Map<String, String> env = new HashMap<>();
         env.put("DEDUP_TTL_MS", "300000");
         env.put("CANDLE_WINDOW_MS", "15000");
@@ -48,8 +50,12 @@ class FormingBarWriterFunctionTest {
         env.put("MAX_CONCURRENT_CHECKPOINTS", "1");
         env.put("ALLOW_FULL_REPLAY", "true");
         env.put("FORMING_BAR_WRITE_BATCH_MS", Long.toString(batchMs));
+        return env;
+    }
+
+    private void openHarness(long batchMs) throws Exception {
         harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
-                new FormingBarWriterFunction(SignalJobConfig.from(env)),
+                new FormingBarWriterFunction(SignalJobConfig.from(envFor(batchMs))),
                 bar -> bar.instrumentToken(),
                 Types.LONG);
         harness.open();
@@ -165,6 +171,46 @@ class FormingBarWriterFunctionTest {
         assertEquals("1", row.getString(FormingBarTableColumns.SCHEMA_VERSION).toString());
         // windowEnd / exchange / symbol are in-process only — never persisted
         // (the 11-column v1 layout has no such columns).
+    }
+
+    @Test
+    void checkpointRestoreResumesBufferedStateAndTimer() throws Exception {
+        SignalJobConfig config = SignalJobConfig.from(envFor(250));
+        KeyedOneInputStreamOperatorTestHarness<Long, FormingBar, RowData> h1 =
+                ProcessFunctionTestHarnesses.forKeyedProcessFunction(
+                        new FormingBarWriterFunction(config),
+                        bar -> bar.instrumentToken(),
+                        Types.LONG);
+        h1.open();
+        h1.setProcessingTime(1_000L);
+        h1.processElement(bar(7L, T0, 100, 5, 1), T0 + 1_000L);
+        // Buffered bar + timer at 1250 are now in the operator state.
+        OperatorSubtaskState snapshot = h1.snapshot(1L, 1_000L);
+        h1.close();
+
+        // Simulated Flink restart: a FRESH operator instance restored from
+        // the compact checkpoint (DEC-038: small active context — the
+        // buffered latest bar + the pending flush timer). The restore harness
+        // must be constructed DIRECTLY — ProcessFunctionTestHarnesses already
+        // calls harness.open(), and initializeState() after that fails
+        // (verified against flink-runtime 2.2.1 bytecode).
+        KeyedOneInputStreamOperatorTestHarness<Long, FormingBar, RowData> h2 =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        new KeyedProcessOperator<>(new FormingBarWriterFunction(config)),
+                        bar -> bar.instrumentToken(),
+                        Types.LONG,
+                        1, 1, 0);
+        h2.initializeState(snapshot);
+        h2.open();
+        assertEquals(0, emittedRows(h2).size(),
+                "restored operator emits nothing before the restored timer fires");
+        h2.setProcessingTime(1_250L);
+        List<RowData> rows = emittedRows(h2);
+        assertEquals(1, rows.size(),
+                "the restored buffer flushes on the restored timer — coalescing resumes exactly");
+        assertEquals(7L, rows.get(0).getLong(FormingBarTableColumns.INSTRUMENT_TOKEN));
+        assertEquals(100, rows.get(0).getLong(FormingBarTableColumns.CLOSE_PAISE));
+        h2.close();
     }
 
     @Test
