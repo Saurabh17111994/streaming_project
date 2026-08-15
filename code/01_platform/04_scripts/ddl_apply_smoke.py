@@ -409,7 +409,7 @@ def main():
                    expect_rc=0,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS exit=0",
-                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=21 MANIFEST="],
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=24 MANIFEST="],
                    expect_absent=["PASS_WITH_LIMITATION", "LIMITATION"],
                    check_evidence={"status": "PASS",
                                    "acknowledged_limitations": [],
@@ -422,7 +422,7 @@ def main():
     ok &= scenario(2, {},
                    expect_rc=1,
                    expect_parts=[
-                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=1 TABLES=21",
+                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=1 TABLES=24",
                        "REFUSED to mark the apply fully PASS",
                        "Order_Lifecycle, Order_Correlation",
                        "Pass --ack-limitations auto"],
@@ -439,7 +439,7 @@ def main():
                    expect_rc=6,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS_WITH_LIMITATION exit=6",
-                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=6 TABLES=21",
+                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=6 TABLES=24",
                        "acknowledged the documented composite-PK raw-client "
                        "limitation on Order_Lifecycle, Order_Correlation"],
                    check_evidence={"status": "PASS_WITH_LIMITATION",
