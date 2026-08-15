@@ -157,7 +157,7 @@ Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/sch
 | `ING-SAFE-001` | Slot-scoped safety halt requests | halt_request_id is slot-scoped and tuple-deterministic; assigned-token-set hash is deterministic and order-independent. |
 | `ING-SAFE-002` | Partial ack → unsafe, full ack never unsafe | Bridge-event safety mapping exact per plan. |
 | `ING-SAFE-003` | RECOVERED only on ACTIVE + full-ack subscription | No other combination recovers a slot. |
-| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. |
+| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. Verified by `FullStackE2ETest` (env-gated on `INGESTION_INT_TEST_E2E=true`). **Harness hardened 2026-08-15 (CHG-011):** `LOG_DIR` points at a writable JUnit temp dir (log4j's `JSON_FILE` appender otherwise swallows the service's logs and the assertions go blind) and startup/disconnect markers (`Fluss connected`, `arrow-bridge started`, `event=disconnect`) are polled with bounded deadlines instead of a fixed 8 s sleep. Passed 2026-08-15 on the dev cluster at manifest 24 (schema verified 24/0/0). |
 | `THR-PROBE-001` | Client capacity probe without per-row blocking | 20,480 rows submitted non-blocking; rows/s and avg/p50/p99 reported; no ack-wait bottleneck. |
 
 Evidence: approved packet corpus, manifest snapshot, deterministic clock, workload seed, append-outcome log, metrics report, and quarantine records. Real broker credentials are never used in unit tests.
