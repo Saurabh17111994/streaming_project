@@ -875,8 +875,15 @@ uncertainty into a blocked state before a future broker adapter exists.
 
 - [ ] Implement the exact decision validation rules, including reservation
   lookup, expiry, schema version, scope, exchange, quantity, and price.
-- [ ] Implement `AttemptStore.prepare()` with instruction/content-hash replay
+- [x] Implement `AttemptStore.prepare()` with instruction/content-hash replay
   behavior and deterministic `execution_attempt_id` supplied by the caller.
+  _(core IMPLEMENTED 2026-08-15 in common —
+  `com.trading.common.schema.execution.InMemoryAttemptStore`, wired to the
+  SCH-15 column-ownership guard (`ExecutionAttemptsColumnOwnership.checkWrite`):
+  duplicate returns the existing PREPARED attempt untouched, modified decision
+  under an existing instruction_id raises a contract violation + halt, identity
+  never rewritten; the Fluss-backed store + transitions land when the module
+  joins the reactor)_
 - [ ] Implement exact legal phase transitions, monotonic `phase_epoch`, stale
   update rejection, terminal protection, and UNKNOWN resolution only through
   explicit reconciliation result.
