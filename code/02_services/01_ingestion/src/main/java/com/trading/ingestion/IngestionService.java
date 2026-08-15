@@ -10,7 +10,9 @@ import com.trading.ingestion.bridge.BridgeEventParser;
 import com.trading.ingestion.bridge.BridgeMetrics;
 import com.trading.ingestion.bridge.BrokerQuarantine;
 import com.trading.ingestion.bridge.PayloadHashValidator;
+import com.trading.ingestion.discontinuity.DiscontinuitySink;
 import com.trading.ingestion.discontinuity.DiscontinuityWriter;
+import com.trading.ingestion.discontinuity.TimeJumpMonitor;
 import com.trading.ingestion.fingerprint.FingerprintBuilder;
 import com.trading.ingestion.health.HealthProbe;
 import com.trading.ingestion.health.NtpClockChecker;
@@ -19,7 +21,9 @@ import com.trading.ingestion.model.Instrument;
 import com.trading.ingestion.model.RawTick;
 import com.trading.ingestion.model.TickPacket;
 import com.trading.ingestion.model.ValidityClassification;
+import com.trading.ingestion.quarantine.QuarantineSink;
 import com.trading.ingestion.quarantine.QuarantineWriter;
+import com.trading.ingestion.safety.SafetySink;
 import com.trading.ingestion.shutdown.UncertaintyJournal;
 import com.trading.ingestion.telemetry.OtlpMetricsEmitter;
 import com.trading.ingestion.write.AppendTracker;
@@ -79,12 +83,22 @@ public final class IngestionService {
 
     private static final long FRAME_STALE_MS = 15_000L;
     private static final long SUBSCRIPTION_COMPLETENESS_TIMEOUT_MS = 30_000L;
+    /** Clock re-measurement cadence (ING-FAIL-007). NTP queries are cheap but
+     *  not free; 60 s keeps the readiness clock dimension fresh without
+     *  hammering the time servers. */
+    private static final long CLOCK_MONITOR_INITIAL_DELAY_MS = 60_000L;
+    private static final long CLOCK_MONITOR_INTERVAL_MS = 60_000L;
     private static final double SLOW_FLUSS_PAUSE_PERCENT = 0.90;
     private static final double SLOW_FLUSS_RESUME_PERCENT = 0.50;
     /** Bridge restarts after an unexpected process exit (plan: restart exactly once). */
     private static final int MAX_BRIDGE_RESTARTS = 1;
     /** Wait before restarting a crashed bridge (plan: wait 1 second). */
     private static final long BRIDGE_RESTART_WAIT_MS = 1_000L;
+    /** Bounded join on the main thread from the shutdown hook: the JVM halts as
+     *  soon as every hook returns and does not wait for the main thread, so the
+     *  final {@code bridge loop ended} report (logged by main as it unwinds)
+     *  could race the halt. Join long enough for the unwind to flush it. */
+    private static final long SHUTDOWN_MAIN_JOIN_MS = 10_000L;
 
     private final String instanceId;
     private final AppendTracker tracker;
@@ -107,13 +121,19 @@ public final class IngestionService {
                 return t;
             });
 
+    /** ING-FAIL-007: one TIME_JUMP discontinuity per clock-violation episode. */
+    private final TimeJumpMonitor timeJumpMonitor;
+    /** Re-measures the NTP offset; a violation crossing CLOCK_OFFSET_LIMIT_MS
+     *  emits TIME_JUMP evidence and refreshes the readiness clock dimension. */
+    private final java.util.concurrent.ScheduledExecutorService clockMonitorScheduler;
+
     private final IngestionConfig config;
     private final NtpClockChecker clock;
     private final UncertaintyJournal journal;
     private final OtlpMetricsEmitter metrics;
-    private final QuarantineWriter quarantineWriter;
-    private final DiscontinuityWriter discontinuityWriter;
-    private final com.trading.ingestion.safety.SafetyHaltWriter safetyHaltWriter;
+    private final QuarantineSink quarantineWriter;
+    private final DiscontinuitySink discontinuityWriter;
+    private final SafetySink safetyHaltWriter;
     private final String manifestFingerprint;
     private final String assignedTokenSetHash;
     private final java.util.Set<String> safetyEmitted = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -127,12 +147,32 @@ public final class IngestionService {
     /** stderr drain thread for the current bridge, joined at shutdown so the
      *  final tick-count report is flushed into the log before JVM halt. */
     private volatile Thread currentBridgeStderrThread;
+    /** The process's main thread (set by {@link #main}); the shutdown hook
+     *  joins it (bounded) so the final bridge-loop report flushes before the
+     *  JVM halts. Null outside main (unit tests) — the join is skipped. */
+    private volatile Thread mainThread;
 
     public IngestionService(String instanceId,
                              List<Instrument> instruments,
                              FlussRowConverter flussWriter,
                              IngestionConfig config,
                              NtpClockChecker clock) {
+        this(instanceId, instruments, flussWriter, config, clock, null, null, null);
+    }
+
+    /**
+     * Test seam: accepts substitute evidence sinks so the service can be
+     * constructed and driven without a reachable Fluss (ING-DQ-010). A
+     * {@code null} sink falls back to the production Fluss-backed writer.
+     */
+    IngestionService(String instanceId,
+                     List<Instrument> instruments,
+                     FlussRowConverter flussWriter,
+                     IngestionConfig config,
+                     NtpClockChecker clock,
+                     QuarantineSink quarantineSink,
+                     DiscontinuitySink discontinuitySink,
+                     SafetySink safetySink) {
         this.config = config;
         this.clock = clock;
         if (config.uncertaintyJournalPath != null && !config.uncertaintyJournalPath.isBlank()) {
@@ -148,9 +188,15 @@ public final class IngestionService {
         this.tracker = new AppendTracker(config.maxPendingRecords, config.maxPendingBytes,
                 config.pendingWarningPercent);
         this.health = new HealthProbe(tracker, clock);
+        this.timeJumpMonitor = new TimeJumpMonitor(config.clockOffsetLimitMs);
+        this.clockMonitorScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ingestion-clock-monitor");
+            t.setDaemon(true);
+            return t;
+        });
         this.writer = new RawTickWriter(flussWriter, tracker, config.rawTableName,
                 config.appendTimeout,
-                java.time.Duration.ofSeconds(30)); // drain deadline
+                config.drainDeadline); // drain deadline (DRAIN_DEADLINE_SECONDS)
         // Async append completions (throughput plan Phase 2): metrics, error
         // counters, and discontinuity evidence are driven by the writer's
         // completion callback — write() no longer blocks on the Fluss ack.
@@ -169,10 +215,13 @@ public final class IngestionService {
                 .max().orElse(0L);
         metrics.setManifestVersion(manifestVersion);
 
-        // Quarantine + discontinuity writers (Phase 2b)
-        this.quarantineWriter = new QuarantineWriter(config.flussBootstrap, instanceId);
-        this.discontinuityWriter = new DiscontinuityWriter(
-                config.flussBootstrap, instanceId, "arrow-bridge", connectionEpoch);
+        // Quarantine + discontinuity writers (Phase 2b). Test seam: substitute
+        // sinks (ING-DQ-010) bypass the Fluss-connection requirement.
+        this.quarantineWriter = quarantineSink != null
+                ? quarantineSink : new QuarantineWriter(config.flussBootstrap, instanceId);
+        this.discontinuityWriter = discontinuitySink != null
+                ? discontinuitySink : new DiscontinuityWriter(
+                        config.flussBootstrap, instanceId, "arrow-bridge", connectionEpoch);
 
         // Safety writer (Phase 6A — slot-scoped safety propagation).
         this.manifestFingerprint = InstrumentManifestLoader.computeFingerprint(instruments);
@@ -180,8 +229,9 @@ public final class IngestionService {
                 .computeAssignedTokenHash(instruments.stream()
                         .map(Instrument::instrumentToken).toList());
         String accountScope = System.getenv().getOrDefault("ACCOUNT_SCOPE_ID", "QP3796");
-        this.safetyHaltWriter = new com.trading.ingestion.safety.SafetyHaltWriter(
-                config.flussBootstrap, instanceId, manifestFingerprint, accountScope);
+        this.safetyHaltWriter = safetySink != null
+                ? safetySink : new com.trading.ingestion.safety.SafetyHaltWriter(
+                        config.flussBootstrap, instanceId, manifestFingerprint, accountScope);
         String readinessPath = System.getenv("READINESS_FILE_PATH");
         this.readinessFile = readinessPath == null || readinessPath.isBlank()
                 ? null : new ReadinessFile(java.nio.file.Paths.get(readinessPath));
@@ -279,6 +329,11 @@ public final class IngestionService {
             System.exit(1);
         }
 
+        // Capture the main thread so the shutdown hook can join it (bounded) —
+        // without the join, the JVM halts the moment the hook returns and the
+        // main thread's final "bridge loop ended" report races the halt.
+        service.mainThread = Thread.currentThread();
+
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("ingestion: shutdown requested");
             service.shutdown();
@@ -353,6 +408,11 @@ public final class IngestionService {
         // ---- Subscription completeness tracking (ING-2) ----
         java.util.Set<Long> seenTokens = java.util.concurrent.ConcurrentHashMap.newKeySet();
         long lastSubscriptionWarningNanos = System.nanoTime();
+
+        // ING-FAIL-007: periodic clock-offset re-measurement — a violation
+        // crossing CLOCK_OFFSET_LIMIT_MS emits a TIME_JUMP discontinuity
+        // (once per episode) and keeps the readiness clock dimension fresh.
+        startClockMonitor();
 
         // Start with broker not connected — set to true on first frame
         health.setBrokerConnected(false);
@@ -482,11 +542,15 @@ public final class IngestionService {
                 }
 
                 int exitCode = bridgeProcess.waitFor();
-                boolean requested = exitCode == 0 || !running;
+                // A shutdown-begun exit is a requested exit: the hook is
+                // tearing the bridge down, so a non-zero code (e.g. the
+                // forced-kill fallback, exit 137) must not be logged as a
+                // crash nor trigger a restart.
+                boolean requested = exitCode == 0 || !running || shutdownStarted.get();
                 recordBridgeExit(exitCode, requested, restartCount);
                 stderrThread.join(5_000);
 
-                switch (bridgeRestartDecision(running, exitCode, restartCount)) {
+                switch (bridgeRestartDecision(running, shutdownStarted.get(), exitCode, restartCount)) {
                 case RESTART:
                     restartCount++;
                     LOG.warn("ingestion: restarting bridge after unexpected exit (attempt {} of {})",
@@ -549,8 +613,9 @@ public final class IngestionService {
      * restarted once; a second unexpected exit in the same process is terminal;
      * a requested exit (code 0 or shutdown begun) is never restarted.
      */
-    static BridgeRestartDecision bridgeRestartDecision(boolean running, int exitCode, int restartCount) {
-        if (!running || exitCode == 0) return BridgeRestartDecision.NO_RESTART;
+    static BridgeRestartDecision bridgeRestartDecision(boolean running, boolean shutdownInProgress,
+                                                       int exitCode, int restartCount) {
+        if (!running || shutdownInProgress || exitCode == 0) return BridgeRestartDecision.NO_RESTART;
         return restartCount >= MAX_BRIDGE_RESTARTS
                 ? BridgeRestartDecision.TERMINAL
                 : BridgeRestartDecision.RESTART;
@@ -577,8 +642,58 @@ public final class IngestionService {
                     LOG.info("arrow-bridge: {}", safe);
                 }
             }
+        } catch (java.io.IOException e) {
+            // "Stream closed" is the JDK's Process.destroy() artifact: the
+            // parent-side process pipes are closed the moment the bridge is
+            // destroyed (destroy() itself, or the forced-kill fallback at
+            // shutdown), while the child may still be running. There is
+            // nothing left to read — the graceful path signals the bridge
+            // without closing the pipes (see signalBridge), so this only
+            // happens on the forced path. Not a drain failure; log at INFO.
+            if ("Stream closed".equals(e.getMessage())) {
+                LOG.info("arrow-bridge: stderr drain ended (stream closed — bridge being torn down)");
+            } else {
+                LOG.warn("arrow-bridge: stderr drain error: {}", sanitizeLog(e.getMessage()));
+            }
         } catch (Exception e) {
-            LOG.warn("arrow-bridge: stderr drain error: {}", e.getMessage());
+            LOG.warn("arrow-bridge: stderr drain error: {}", sanitizeLog(e.getMessage()));
+        }
+    }
+
+    /**
+     * Signal the bridge process (SIGTERM) WITHOUT closing the parent-side
+     * process pipes. {@link Process#destroy()} sends SIGTERM but on this JDK
+     * also closes the parent's input streams for the child with
+     * {@code IOException("Stream closed")} while the child is still running
+     * its shutdown work — the bridge-stderr drain thread would die before the
+     * bridge's final ARROW_TICK_COUNTS report arrives, the main loop would
+     * take the exception path instead of reading the final {@code
+     * bridge_shutdown} NDJSON event, and the authoritative per-token count for
+     * ING-TCP-001 would be lost from the logs (only the report FILE survives).
+     * Sending the signal via {@code kill -TERM <pid>} (POSIX) leaves the pipes
+     * open: the bridge writes its final report to stderr, drains, EOFs, and
+     * exits 0. Falls back to {@link Process#destroy()} if the signal cannot
+     * be delivered (kill missing or non-zero exit).
+     */
+    private void signalBridge(Process bridgeProcess) {
+        try {
+            Process kill = new ProcessBuilder("kill", "-TERM", String.valueOf(bridgeProcess.pid()))
+                    .redirectErrorStream(true).start();
+            if (!kill.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                kill.destroyForcibly();
+            }
+            if (kill.exitValue() != 0) {
+                LOG.warn("ingestion: kill -TERM failed (exit={}); falling back to Process.destroy()",
+                        kill.exitValue());
+                bridgeProcess.destroy();
+            }
+        } catch (java.io.IOException e) {
+            LOG.warn("ingestion: cannot signal bridge via kill ({}); falling back to Process.destroy()",
+                    sanitizeLog(e.getMessage()));
+            bridgeProcess.destroy();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            bridgeProcess.destroy();
         }
     }
 
@@ -1172,6 +1287,47 @@ public final class IngestionService {
         }
     }
 
+    // ---- ING-FAIL-007: clock-jump monitoring ----
+
+    /**
+     * Start the periodic NTP clock re-measurement. Runs on its own daemon
+     * scheduler so a slow NTP query can never delay the broker-staleness
+     * watchdog or the read loop.
+     */
+    private void startClockMonitor() {
+        clockMonitorScheduler.scheduleAtFixedRate(() -> {
+            if (!running || clock == null) return;
+            try {
+                long offset = clock.measureOffsetMs();
+                handleClockMeasurement(offset);
+            } catch (NtpClockChecker.NtpException e) {
+                LOG.warn("ingestion: clock monitor check failed: {}", sanitizeLog(e.getMessage()));
+            }
+        }, CLOCK_MONITOR_INITIAL_DELAY_MS, CLOCK_MONITOR_INTERVAL_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Process one fresh clock-offset measurement. Emits exactly one
+     * {@code TIME_JUMP} discontinuity row per violation episode (ING-FAIL-007)
+     * and refreshes the readiness marker so the clock dimension tracks the
+     * latest measurement, not just the startup check.
+     */
+    void handleClockMeasurement(long offsetMs) {
+        if (timeJumpMonitor.onOffsetMeasured(offsetMs)) {
+            LOG.error("ingestion: TIME_JUMP — clock offset {}ms exceeds limit {}ms; "
+                            + "writing discontinuity evidence",
+                    offsetMs, config.clockOffsetLimitMs);
+            discontinuityWriter.write(
+                    DiscontinuityWriter.Reason.TIME_JUMP,
+                    "clock offset " + offsetMs + "ms exceeds limit "
+                            + config.clockOffsetLimitMs + "ms",
+                    lastTickSnapshot
+            );
+        }
+        updateReadinessFile();
+    }
+
     // ---- shutdown ----
 
     private void shutdown() {
@@ -1179,6 +1335,11 @@ public final class IngestionService {
             LOG.debug("ingestion: duplicate shutdown ignored");
             return;
         }
+        // Capture whether the bridge loop is live BEFORE flipping running below
+        // — only that case needs the main-thread join (a FATAL-startup System.exit
+        // also runs this hook, and main is blocked in System.exit there, so the
+        // join must be skipped or startup failures would stall the full bound).
+        boolean bridgeLoopLive = running;
         // Signal the bridge (SIGTERM) so its ctx.Done handler runs the final
         // ARROW_TICK_COUNTS report before the pipe closes. Without this the
         // bridge dies of SIGPIPE (exit 141) on JVM halt and the shutdown report
@@ -1193,7 +1354,12 @@ public final class IngestionService {
         Process bp = currentBridgeProcess;
         if (bp != null && bp.isAlive()) {
             LOG.info("ingestion: signaling arrow-bridge (SIGTERM) for final tick-count report");
-            bp.destroy();
+            // Signal via kill -TERM, NOT Process.destroy(): destroy() closes
+            // the parent-side pipes immediately (IOException "Stream closed")
+            // so the bridge's final report and bridge_shutdown event are lost
+            // from the logs. kill leaves the pipes open for the bridge's clean
+            // exit (see signalBridge).
+            signalBridge(bp);
             try {
                 if (!bp.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
                     bp.destroyForcibly();
@@ -1214,15 +1380,19 @@ public final class IngestionService {
             }
         }
         running = false;
-        // Stop the staleness watchdog (R-108).
+        // Stop the staleness watchdog (R-108) and the clock monitor (ING-FAIL-007).
         stalenessWatchdog.shutdownNow();
+        clockMonitorScheduler.shutdownNow();
         if (readinessFile != null) {
             try { readinessFile.clear(); }
             catch (java.io.IOException e) { LOG.warn("ingestion: readiness marker clear failed: {}", sanitizeLog(e.getMessage())); }
         }
         health.markNotAlive();
 
-        // J3, I10: Persist uncertainty counters before drain
+        // J3, I10: Persist uncertainty counters before drain. R-260: the
+        // entry pins the EXACT bytes/records still pending at shutdown — the
+        // drain (writer.close below) may time out on an un-acking Fluss, so
+        // the journal must record what the drain was unable to flush.
         journal.write(new UncertaintyJournal.Entry(
                 instanceId,
                 Instant.now(),
@@ -1231,6 +1401,8 @@ public final class IngestionService {
                 tracker.totalFailed(),
                 tracker.totalRejected(),
                 tracker.totalBytesAccepted(),
+                tracker.pendingRecords(),
+                tracker.pendingBytes(),
                 "shutdown"
         ));
 
@@ -1244,6 +1416,39 @@ public final class IngestionService {
 
         // J2: Drain pending writes with deadline
         if (writer != null) writer.close();
+        // Join the main thread (bounded) when this is the shutdown hook and the
+        // bridge loop was live: the loop logs the final "bridge loop ended
+        // (ticks=…)" report after `running` flips false, and the JVM halts as
+        // soon as this hook returns without waiting for main. (Skipped when the
+        // bridge never launched — FATAL startup — or on a normal in-thread
+        // shutdown, where main IS this thread or already finished.)
+        if (bridgeLoopLive && mainThread != null
+                && Thread.currentThread() != mainThread && mainThread.isAlive()) {
+            try {
+                mainThread.join(SHUTDOWN_MAIN_JOIN_MS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // Final orphan sweep (CHG-016): a bridge the main loop restarted
+        // between the signal step above (whose `bp` may already be dead or
+        // null) and `running=false` was never signaled — re-read the current
+        // process and take it down (graceful, then forced) so nothing survives
+        // the JVM halt. Without this, a late-restart bridge would keep running
+        // after the JVM exits, emitting into a dead pipe forever.
+        Process latest = currentBridgeProcess;
+        if (latest != null && latest != bp && latest.isAlive()) {
+            LOG.warn("ingestion: reaping late bridge (pid={}) spawned during shutdown", latest.pid());
+            signalBridge(latest);
+            try {
+                if (!latest.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                    latest.destroyForcibly();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                latest.destroyForcibly();
+            }
+        }
         LOG.info("ingestion: drained (totalTicks={}, errors={})",
                 frameCount.get(), errorCount.get());
     }

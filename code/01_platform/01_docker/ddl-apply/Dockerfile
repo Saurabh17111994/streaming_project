@@ -1,0 +1,110 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# ddl-apply — the DDL application contract engine as a runnable image.
+#
+# Packages everything the 9-step contract needs so it runs INSIDE the compose
+# network (one-shot `docker compose run --rm ddl-apply ...`): the Java engine
+# (com.trading.common.schema.ddl.DdlApplyTool + CompositeKeyMatrixVerifier +
+# DdlText + SchemaManifest), the Python orchestrator (ddl_apply.py), the
+# exit-code smoke (ddl_apply_smoke.py), the pinned DDL corpus + manifest, and
+# the exact 5 runtime jars in the ~/.m2 layout ddl_apply.py's
+# build_tool_classpath expects. FLUSS_BOOTSTRAP resolves via compose DNS
+# (fluss-coordinator:9123) — no host /etc/hosts aliases.
+#
+# The image mirrors the repo-relative layout ddl_apply.py derives its paths
+# from (REPO_ROOT = script dir/../../.. -> /app), so the scripts run
+# UNCHANGED: no code edits, only packaging.
+#
+# Build:   make ddl-image
+# Run:     docker compose -f code/01_platform/01_docker/docker-compose.yml \
+#            run --rm ddl-apply {validate|apply|smoke|self-test} [args...]
+# =============================================================================
+
+# ── Stage 1: build the Java engine (online maven — pinned versions in
+#    code/pom.xml; matches the repo's R-143 online default) ──────────────────
+FROM maven:3.9-eclipse-temurin-17 AS builder
+WORKDIR /src
+# Parent POM + module POMs first so dependency resolution is layer-cached.
+# The ingestion pom must be present too: the parent declares it as a reactor
+# module, and Maven builds the full reactor model even for `-pl common`.
+COPY code/pom.xml /src/code/pom.xml
+COPY code/common/pom.xml /src/code/common/pom.xml
+COPY code/02_services/01_ingestion/pom.xml /src/code/02_services/01_ingestion/pom.xml
+# Best-effort dependency pre-fetch (layer cache). go-offline also resolves
+# test-scoped transitives of fluss-client's pom, which flaky networks can
+# truncate — tolerate that; `package` below fetches exactly what common needs.
+RUN cd code && (mvn -q -pl common dependency:go-offline -DskipTests || true)
+# Engine sources.
+COPY code/common /src/code/common
+RUN cd code && mvn -q -pl common package -DskipTests
+
+# ── Stage 2: runtime — JRE 17 (engine is precompiled) + python3 (stdlib only)
+#    for the orchestrator/smoke; nothing else. The ENGINE runs as the non-root
+#    ddlapply user (uid/gid 10001): the entrypoint wrapper repairs the evidence
+#    bind-mount ownership as root, then setpriv-drops before any engine work. ─
+FROM eclipse-temurin:17-jre
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10001 ddlapply \
+    && useradd -u 10001 -g 10001 -d /nonexistent -s /usr/sbin/nologin ddlapply
+
+# Compiled engine classes (target/classes — the classpath ddl_apply.py builds).
+COPY --from=builder /src/code/common/target/classes /app/code/common/target/classes
+
+# The exact runtime jars, in a fixed non-home Maven layout (DDL_APPLY_M2_REPO
+# points build_tool_classpath at it — the non-root engine has no root home):
+# fluss-client is the shaded 0.9.1 artifact; jackson-databind pulls core +
+# annotations; slf4j-api is the 5th entry.
+COPY --from=builder /root/.m2/repository/org/apache/fluss/fluss-client/0.9.1-incubating \
+    /opt/ddl-apply/m2/repository/org/apache/fluss/fluss-client/0.9.1-incubating
+COPY --from=builder /root/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.16.1 \
+    /opt/ddl-apply/m2/repository/com/fasterxml/jackson/core/jackson-databind/2.16.1
+COPY --from=builder /root/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.16.1 \
+    /opt/ddl-apply/m2/repository/com/fasterxml/jackson/core/jackson-core/2.16.1
+COPY --from=builder /root/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.16.1 \
+    /opt/ddl-apply/m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.16.1
+COPY --from=builder /root/.m2/repository/org/slf4j/slf4j-api/2.0.9 \
+    /opt/ddl-apply/m2/repository/org/slf4j/slf4j-api/2.0.9
+
+# Orchestrator + smoke + the non-root evidence-ownership gate + version pins.
+COPY code/01_platform/04_scripts/ddl_apply.py \
+     code/01_platform/04_scripts/ddl_apply_smoke.py \
+     code/01_platform/04_scripts/evidence_ownership_check.py \
+     code/01_platform/04_scripts/eod_controller.py \
+     code/01_platform/04_scripts/versions.pin \
+     /app/code/01_platform/04_scripts/
+# The engine's own python unit tests only (self-test runs the whole shipped
+# dir) — sibling host tooling tests (audit_r2, implementation_gate,
+# change_control) are deliberately NOT packaged.
+COPY code/01_platform/04_scripts/tests/test_ddl_apply.py \
+     code/01_platform/04_scripts/tests/test_evidence_ownership_check.py \
+     /app/code/01_platform/04_scripts/tests/
+
+# The contract inputs: the pinned DDL corpus + the committed manifest.
+COPY code/01_platform/02_sql/ddl /app/code/01_platform/02_sql/ddl
+
+# COMPAT-FLUSS-005 capability evidence — the default --matrix-evidence for the
+# apply (the smoke falls back to a placeholder if it is ever absent).
+COPY logs/schema-compat/composite-pk-raw-client-20260815.md /app/logs/schema-compat/
+
+# Evidence output (host bind-mounts over this in compose): owned by the
+# non-root engine user, setgid 2775 so records land group-writable (umask 002
+# in the wrapper).
+RUN mkdir -p /app/logs/ddl-apply \
+    && chown 10001:10001 /app/logs/ddl-apply \
+    && chmod 2775 /app/logs/ddl-apply
+
+# Entrypoint: root wrapper (mount repair + setpriv drop) -> non-root runner
+# (validate | apply | smoke | self-test).
+COPY code/01_platform/01_docker/ddl-apply/ddl-apply-entrypoint.sh /usr/local/bin/ddl-apply
+COPY code/01_platform/01_docker/ddl-apply/ddl-apply-run.sh /usr/local/bin/ddl-apply-run
+RUN chmod +x /usr/local/bin/ddl-apply /usr/local/bin/ddl-apply-run
+
+WORKDIR /app
+ENV FLUSS_BOOTSTRAP=fluss-coordinator:9123 \
+    DDL_APPLY_M2_REPO=/opt/ddl-apply/m2/repository \
+    HOME=/app \
+    PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT ["/usr/local/bin/ddl-apply"]
+CMD ["validate"]

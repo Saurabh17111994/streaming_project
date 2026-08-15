@@ -4,9 +4,9 @@
 
 Technology choices are architectural targets. The following versions are now **confirmed** (DEC-021, 2026-07-23):
 
-- **Fluss:** 0.9.0 (incubating)
-- **Flink:** 2.2.0
-- **Java:** 21
+- **Fluss:** 0.9.1-incubating
+- **Flink:** 2.2.1
+- **Java:** 17.0.19
 - **Flink-Fluss connector:** `fluss-flink-2.2-0.9.1-incubating.jar`
 
 Arrow protocol evidence is available from the Go SDK (`github.com/arrow-trade/go-arrow`) and REST API docs (`docs.arrow.trade`). Exact container image digests remain deferred until build.
@@ -21,9 +21,9 @@ Fluss is the live streaming bus and operational storage layer.
 - `partial_update` is permitted only with tested column ownership, stale-update rejection, and merge semantics.
 - No cross-table atomicity is assumed without a version-specific connector test.
 
-Required logical tables include `raw_table_1`, `feature_candles_15s`, `Signal_Candidates`, `Signal_Candidates_current`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills`, `Portfolio_Reservations`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`, `Postback_Quarantine`, `suspected_discontinuities`, and `instruments`. `Position_Actions` is future phase only.
+Required logical tables include `raw_table_1`, `feature_candles_15s`, `forming_bar`, `Signal_Candidates`, `Signal_Candidates_current`, `Ranking_Results`, `Trade_Decisions`, `Order_Lifecycle`, `Positions`, `Fills`, `Portfolio_Reservations`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`, `Postback_Quarantine`, `suspected_discontinuities`, `ingestion_quarantine`, and `instruments`. `Position_Actions` is future phase only.
 
-**Confirmed version:** Fluss 0.9.0 (incubating). Features: `BYTES` column type, KV tables with `partial_update` and FULL changelog images, `$changelog` virtual tables for CDC/audit, Aggregation Merge Engine, Auto-Increment columns for dictionary tables, ARRAY/MAP/ROW/nested complex types, ALTER TABLE schema evolution (zero-copy append), Snapshot Leases for consumer-safe snapshots, Cluster Rebalance, Compacted LogFormat, Iceberg/Parquet/Lance lake formats, Azure Blob + ADLS Gen2 support, POJO Java client API. See [Fluss 0.9 release blog](https://fluss.apache.org/blog/releases/0.9/).
+**Confirmed version:** Fluss 0.9.1-incubating. Features: `BYTES` column type, KV tables with `partial_update` and FULL changelog images, `$changelog` virtual tables for CDC/audit, Aggregation Merge Engine, Auto-Increment columns for dictionary tables, ARRAY/MAP/ROW/nested complex types, ALTER TABLE schema evolution (zero-copy append), Snapshot Leases for consumer-safe snapshots, Cluster Rebalance, Compacted LogFormat, Iceberg/Parquet/Lance lake formats, Azure Blob + ADLS Gen2 support, POJO Java client API. See [Fluss 0.9 release blog](https://fluss.apache.org/blog/releases/0.9/).
 
 The exact server/client release is now pinned rather than evidence-gated.
 
@@ -36,9 +36,9 @@ MVP has exactly two jobs:
 
 Flink managed state and Fluss sink guarantees are exactly-once only at the tested, version-pinned boundary. They do not make broker REST calls or independent projections exactly-once.
 
-**Confirmed version:** Flink 2.2.0 with Java 21 support (mature since 2.0). New in 2.2: VECTOR_SEARCH, Materialized Tables, Delta Joins, Balanced Tasks Scheduling. ⚠️ Flink 2.x has a significantly different DataStream API surface vs 1.x — existing 1.x code patterns must be migrated.
+**Confirmed version:** Flink 2.2.1 with Java 17 support (Java 17.0.19 is the pinned runtime). New in 2.2: VECTOR_SEARCH, Materialized Tables, Delta Joins, Balanced Tasks Scheduling. ⚠️ Flink 2.x has a significantly different DataStream API surface vs 1.x — existing 1.x code patterns must be migrated.
 
-Ingestion is one Java 17 service process from binary WebSocket decode through the supported Fluss 0.9 Java client append path. The Arrow HFT market-data WebSocket (`wss://socket.arrow.trade`) uses a binary protocol with 2 modes (LTPC 40B, Full 196B), little-endian integers, zstd-compressed inbound, prices in **paise** (÷100 for rupees). No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON token IDs (≤1024 per connection, ≤512 per request). Heartbeat: client sends `PONG` text every 3s, stall timeout 15s. (The Standard feed `wss://ds.arrow.trade` was removed 2026-08-14.)
+Ingestion is one Java 17 service process from binary WebSocket decode through the supported Fluss 0.9.1-incubating Java client append path. The Arrow HFT market-data WebSocket (`wss://socket.arrow.trade`) uses a binary protocol with 2 modes (LTPC 40B, Full 196B), little-endian integers, zstd-compressed inbound, prices in **paise** (÷100 for rupees). No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON token IDs (≤1024 per connection, ≤512 per request). Heartbeat: client sends `PONG` text every 3s, stall timeout 15s. (The Standard feed `wss://ds.arrow.trade` was removed 2026-08-14.)
 
 **No OpenAlgo.** The Executor calls Arrow's native REST API directly. (DEC-006, 2026-07-23)
 
@@ -87,7 +87,7 @@ Source retention is at least three complete trading days and extends while the r
 - Production network traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - MVP requires four mandatory alert groups with owner, threshold, routing, and acknowledgement: order safety, streaming health, storage safety, and security. Critical alerts have defined escalation, remediation, and closure evidence.
 - Every managed or durable state category must have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, and restore size/time for production readiness.
-- Seven-year audit retention requires WORM/Object Lock immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval SLA under 15 minutes from cold storage, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated.
+- Seven-year audit retention requires WORM/Object Lock immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval SLA under 15 minutes from cold storage, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; an indefinite rule on the audit prefix is the WORM-equivalent (the S3 Object Lock API is not implemented on R2).**
 
 Compose is deliberately simpler, but it cannot prove production HA or live-money safety.
 

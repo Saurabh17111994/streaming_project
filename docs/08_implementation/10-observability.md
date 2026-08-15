@@ -14,6 +14,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Owner | Platform/Operations; component owners emit telemetry |
 | Backend | OpenObserve target plus immutable local execution audit |
 | Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |
+| Acceptance criteria | `AC-OBS-001`–`AC-OBS-010` (proving families: `OPS-UNIT-*`, `OPS-INT-*`, `OPS-FAIL-*`, `OPS-RUNBOOK-001`, `OPS-REL-001`) |
 
 ### Common telemetry envelope
 
@@ -72,6 +73,8 @@ Packet/byte rate, append acknowledgement latency, pending bytes, reconnects, con
 
 Source lag/rate, watermark lag, idleness, invalid/late/discarded events, dedup hits/state size, candles/forming updates, candidates/rankings/decisions, reservations/conflicts, operator busy/idle/backpressure, sink latency, checkpoints, restores, state compatibility.
 
+**DEC-038 state-ownership telemetry (2026-08-14):** prove the Fluss-owns-large-state model is behaving as intended — Flink checkpoint size/duration/failure (existing Flink built-ins); **Fluss dedup-table state size** (entry count + bytes) and **dedup update rate**; **dedup working-cache hit ratio** and cache size; **rehydration latency** and **rehydration failures**; **state compatibility failures** (dedup-table preflight) and **state continuity failures**. Bounded cardinality: per-table gauges and per-reason counters only, never per-key labels.
+
 #### Action Capture and positions
 
 Postback rate/bytes, decode failures, correlation/quarantine, stale/regressive/conflicting transitions, projection backlog/lag/retry, positions by state, incomplete writes, rebuild/recovery, readiness.
@@ -94,7 +97,16 @@ Show packet/tick and byte throughput; append acknowledgements and p50/p95/p99 wr
 
 #### Compute and decision dashboard
 
-Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency.
+Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size (entries + bytes) + update rate, dedup cache size/utilization, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
+
+#### Dedup state dashboard (DEC-038)
+
+Dedicated panels for the externalized dedup model, with bounded cardinality (per-table gauges and per-reason counters, never per-key labels):
+
+- **Fluss dedup-table state** — entry count and serialized bytes (`fingerprint_dedup` — DEC-038; DDL `24_fingerprint_dedup.sql` on file, applied to dev with the DEC-038 implementation stage), and dedup update rate (durable writes/s, batched/async).
+- **Flink dedup cache** — cache size/utilization vs the `DEDUP_CACHE_MAX_ENTRIES`/`DEDUP_CACHE_MAX_BYTES` bounds, and cache hit ratio (hot-path lookups absorbed by the cache; a sustained drop means the hot path is leaking to per-tick Fluss lookups).
+- **Cleanup** — expired-row cleanup rate and backlog (rows past `expiry_ms` awaiting delete).
+- **Rehydration** — rehydration duration and failures on restart (failures keep the job fail-closed, SIG-STATE-002/003), plus state-compatibility preflight failures on the dedup table.
 
 #### Order safety dashboard
 
@@ -147,7 +159,7 @@ Critical categories:
 
 Order-safety alerts cover unknown broker outcomes; duplicate-order risk or request-hash conflict; missing/ambiguous mapping; active-order postback quarantine; reconciliation failure; changelog discontinuity; Executor fencing loss; failed or unauthorized approval; safe-halt latency breach; unverifiable Executor state; and security incidents. Their response is to halt the affected gate, preserve evidence, notify the owners, and begin the linked runbook.
 
-Streaming-health alerts cover Signal/Babysitter job failure; checkpoint failure, timeout, corruption, or restore failure; watermark stall/lag; sustained backpressure or memory breach; append uncertainty or acknowledged loss; broker disconnect/authentication exhaustion/partial subscription/protocol mismatch; projection backlog/freshness breach; and recovery-target breach. The affected path is not ready while correctness is uncertain.
+Streaming-health alerts cover Signal/Babysitter job failure; checkpoint failure, timeout, corruption, or restore failure; watermark stall/lag; sustained backpressure or memory breach; append uncertainty or acknowledged loss; broker disconnect/authentication exhaustion/partial subscription/protocol mismatch; projection backlog/freshness breach; and recovery-target breach. Dedup externalization alerts (DEC-038) cover the Fluss dedup-table size above its envelope (first-seen rate × TTL horizon), expired-row cleanup backlog, and cache hit-ratio degradation (hot path leaking to per-tick Fluss lookups); rehydration failures keep the job fail-closed. The affected path is not ready while correctness is uncertain.
 
 Storage and durability alerts cover Fluss replica/quorum or leader failure; disk/volume/object-store pressure; S3 checkpoint loss; EOD manifest or verification failure; retry exhaustion; insufficient expiry margin; source retention risk; failed checksum/count/range validation; and one-workload-VM recovery failure. Failed offload extends retention; no source day expires before its manifest is verified.
 

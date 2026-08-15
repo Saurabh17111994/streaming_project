@@ -134,6 +134,9 @@ class SchemaAgreementTest {
     void lakeHeadersCarryDatalakeOptions() throws IOException {
         for (Path p : ddlFiles()) {
             String ddl = Files.readString(p, StandardCharsets.UTF_8);
+            if (ddl.contains("Lake: none")) {
+                continue;
+            }
             if (ddl.contains("Lake:")) {
                 assertTrue(ddl.contains("table.datalake.enabled"),
                         p.getFileName() + " header claims lake storage but the WITH clause drops datalake options");

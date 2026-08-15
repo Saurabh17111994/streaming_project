@@ -170,6 +170,7 @@ P0 baseline audit -> P1 metadata contract -> P2 canonical writer policy
 -> P3 migration safety -> P4 state/checkpoint configuration
 -> P5 hot-path memory -> P6 correctness/failure harness
 -> P7 performance harness -> P8 observability -> P9 deployment readiness
+-> P11 DEC-038 dedup externalization
 ```
 
 ### Operator-only phase
@@ -633,8 +634,10 @@ Use the repository’s pinned Flink 2.2.1-compatible embedded RocksDB state back
   PASS; lifecycle = ONLY the 7-day multipart-abort rule (no retention/expiration — dev has no 7y
   audit requirement); versioning UNSET (disabled — R2 S3 API `PutBucketVersioning` returns
   NotImplemented; dashboard-only toggle → dev gap recorded); bucket policy N/A (R2 has no
-  GetBucketPolicy/PutBucketPolicy API — access control = scoped R2 API tokens); object lock not
-  configured (WORM only if the 7y control requires immutability — paid plan); lake tier active
+  GetBucketPolicy/PutBucketPolicy API — access control = scoped R2 API tokens); the S3 Object
+  Lock API is not implemented on R2 — the WORM control = bucket locks (indefinite prefix rule
+  via the Cloudflare dashboard/Wrangler/API, 2026-08-14, superseding the earlier "paid plan"
+  framing); lake tier active
   (`lake/default/raw_table_1/data/instrument_token_bucket=0..15/*.parquet`). PRODUCTION bucket
   evidence template (versioning ENABLED / SSE / 7y lifecycle / token scoping / WORM decision)
   documented in logs/tracker-14/p4-2-bucket-policy-2026-08-11.md §2 — box stays open until the
@@ -1090,13 +1093,13 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] schema-version rejection ratio exceeds threshold.
   (SIGNAL-warn-schema-rejected-rate, compute_invalid_byreason_schema_version > 10; fired via fixture, recovered on benign point. Existing SIGNAL-crit-schema-version-rejected covers any > 0.)
 - [x] dedup state count grows beyond capacity envelope.
-  (SIGNAL-warn-dedup-state (flink_taskmanager_job_task_operator_compute_dedup_state_count > 250000) + SIGNAL-warn-dedup-expiry (flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count > 250000); both fixture-fired + recovered 2026-08-11 on the old emitter-stream series. RETARGETED 2026-08-12 to the live Flink FingerprintDedupFunction gauge series — the ComputeOtlpEmitter streams were dead in the distributed job (client-side emitter dies with the submitting JVM): rules deleted + recreated via o2-provision.py, new alert_ids 3HnOGJxmmUHe9a3J9HOSm8YpevM / 3HnOGF8O5geZOh0LOCXQIU19a05, live-series proof value=2989 each. Evidence: logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt.)
+  (SIGNAL-warn-dedup-state (flink_taskmanager_job_task_operator_compute_dedup_state_count > 250000) + SIGNAL-warn-dedup-expiry (flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count > 250000); both fixture-fired + recovered 2026-08-11 on the old emitter-stream series. RETARGETED 2026-08-12 to the live Flink FingerprintDedupFunction gauge series — the ComputeOtlpEmitter streams were dead in the distributed job (client-side emitter dies with the submitting JVM): rules deleted + recreated via o2-provision.py, new alert_ids 3HnOGJxmmUHe9a3J9HOSm8YpevM / 3HnOGF8O5geZOh0LOCXQIU19a05, live-series proof value=2989 each. **DEC-038 re-target (2026-08-14, pending P11):** the Flink dedup gauge series is replaced by the Fluss dedup-table size series (`fingerprint_dedup`) + cache size/hit-ratio series when the dedup store lands — alert re-provisioned in the P8.4 re-target. Evidence: logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt.)
 - [x] watermark stalls.
   (NOT directly expressible — O2 v2 conditions compare columns to constants; time-relative "watermark unchanged" cannot be encoded. Coverage: SIGNAL-error-source-stalled + checkpoint liveness; documented in proposal + evidence §5.)
 - [x] source lag exceeds threshold.
   (CLOSED 2026-08-11: SIGNAL-warn-source-lag provisioned — `flink_taskmanager_job_task_operator_currentfetcheventtimelag >= 600000` (10 min, period 2), the 15th approved rule (was documented not-expressible at P8.3 time; the operator-metric discovery made it expressible). Fired live: webhook POST /noop `{"alert":{"name":"SIGNAL-warn-source-lag"}}` at 15:52Z with the post-storm quiesced feed at 3.5M ms; eval cadence 15 s, re-fire ~30-75 s while held. Caveat: dev feed baseline ~244 s (historical-timestamp replay) — threshold 600 s sits above it; fires continuously while the dev feed is stopped (feed-state-driven, same class as source-stalled).)
 - [x] checkpoint duration approaches timeout.
-  (SIGNAL-error-checkpoint-slow, lastcheckpointduration >= 240000 ms = 80% of pinned CHECKPOINT_TIMEOUT_MS=300000; fixture-fired + recovered. Live: 181-262 ms.)
+  (SIGNAL-error-checkpoint-slow, lastcheckpointduration >= 24000 ms = 80% of pinned CHECKPOINT_TIMEOUT_MS=30000 (corrected 2026-08-14 — the provisioned 240000/300000 basis contradicted the pinned 30000 ms value; runbook documents 24000 ms); fixture-fired + recovered. Live: 181-262 ms.)
 - [x] checkpoint failure/timeout occurs.
   (SIGNAL-crit-checkpoint-failed, numberoffailedcheckpoints > 0; fixture-fired + recovered. Live: 0 failed across 304 + 29 checkpoints.)
 - [x] KV write failure occurs.
@@ -1259,6 +1262,47 @@ Do not execute until P1–P9 code/evidence gates are complete.
 
 ---
 
+## P11 — DEC-038 state ownership: dedup externalization
+
+**Status (2026-08-14):** NOT STARTED — design/DDL/code/measurement land in this phase; DEC-038 fixes ownership only. Canonical contract: [`04-signal-job.md`](04-signal-job.md) §DEC-038 State Ownership and Recovery Contract; storage-side contract: [`04_contracts/02-storage.md`](../04_contracts/02-storage.md) §Dedup state table contract. **Ranking/Reservation are explicitly OUT OF SCOPE and unchanged.**
+
+Goal: move the large durable dedup set into a Fluss KV state table (proposed `fingerprint_dedup`), keep only a bounded working cache in Flink, and prove: (1) the checkpoint stays bounded and is not a second copy of Fluss-owned state; (2) restart rehydrates from Fluss without full raw-history replay; (3) Fluss unavailability/incompatibility fails closed (never an empty-set replay).
+
+> **Sequencing:** the P7 bench re-runs and the P10 rehearsal re-run (signal dual-sink) execute on the **post-externalization** topology once P11 lands; the pre-externalization Phase 0/1 records and the P7 ceiling findings remain valid as topology-independent evidence (DEC-036/037/038).
+
+### P11.0 Dedup state table DDL + schema contract
+
+- [ ] Design the `fingerprint_dedup` DDL (proposed: KV, PK `(instrument_token, fingerprint_version, event_fingerprint)`, value columns `(first_seen_ms, expiry_ms)`, `bucket.key=instrument_token`, 16 buckets) + `schema_manifest.json` entry — **design draft: [`04-signal-job.md`](04-signal-job.md) §Design — `fingerprint_dedup` dedup state table (DEC-038)** (proposed `24_fingerprint_dedup.sql`, buckets, expiry/cleanup, cache bound + write cadence keys).
+- [ ] Design the expiry/cleanup mechanism — Fluss 0.9.1 has no per-key TTL, so an expiry column + tested cleanup path is required (evidence-gated, measured, not assumed).
+- [ ] Cross-boundary pin: DDL ↔ code column layout ↔ `TableContractValidator` preflight (extended to the dedup table) — one-sided edits fail the gate.
+
+### P11.1 Fluss-backed dedup store + bounded cache
+
+- [ ] Implement the Fluss-backed dedup store: first-seen insert/upsert, point lookup on miss, batched/async durable writes (no per-tick Fluss round trip).
+- [ ] Implement the bounded Flink working cache: explicit entry/byte bounds independent of Fluss dedup cardinality, the 5-minute TTL, and instrument count; never authoritative; never a mirror of the table.
+- [ ] Config keys (`DEDUP_STATE_TABLE`, `DEDUP_CACHE_*`) validated at startup by the extended preflight.
+
+### P11.2 Dedup externalized-state test battery
+
+| Test row | Proves | Gate |
+| --- | --- | --- |
+| Cache hit/miss semantics (unit, no cluster) | Cache definite-duplicate → reject; miss → consult Fluss-backed store → seen/unseen decision; Fluss wins on any cache-vs-store disagreement; eviction never determines duplicate status | Decision table matches the canonical DEC-038 protocol; cache bounds independent of TTL/cardinality/instrument count |
+| Duplicate race/retry (unit/IT) | Same fingerprint re-delivered concurrently or post-restart → exactly one accepted first-seen, later candidates counted; idempotent upsert; no double-accept after rehydration | Accepted exactly once; duplicates counted; state converges |
+| Fluss dedup unavailable / incompatible (fail-closed) | Missing or schema-incompatible dedup table → job fails closed / stays degraded, never treats the set as empty; startup preflight rejects before unsafe use | SIG-STATE-003 |
+| Rehydration (env-gated live) | Compact-checkpoint restore → verify Fluss → rehydrate dedup cache → a re-sent fingerprint inside the TTL still dedupes; hydration failures counted and fail-closed; latency recorded | SIG-STATE-002 |
+| Compact-checkpoint restore (no full replay, bounded size) | Checkpoint = source offsets/watermarks/timers/in-flight windows + cache metadata only; no offset-0 replay; size does not grow with Fluss dedup cardinality; re-measured in the externalization benchmark | SIG-STATE-001; restore within the 30 s budget |
+
+Execution classes: unit rows are pure-JVM (compute-pom harness already landed); rehydration/restore rows are env-gated live (scratch-table pattern — `SignalCurrentKvIdempotencyTest`, `SignalJobSavepointRestoreIntegrationTest`); any row estimated >10 min is preceded by the ≤2-min smoke (long-run gate).
+
+### P11.3 Measurement (externalization benchmark)
+
+- [ ] Re-run the externalization benchmark (SIG-PERF-001 detail, `11-testing-and-release.md`): checkpoint size/duration before-vs-after, restore duration, hydration latency/failures, cache hit ratio, Fluss dedup-table size/update rate — no invented numbers (DEC-038 §9).
+- [ ] Confirm the checkpoint invariant at the current 1,024-instrument envelope; the 50k baseline re-run stays deferred.
+
+**Pass gate:** `DEDUP-STATE-001` to `DEDUP-FAILCLOSED-001` green at module/IT level + externalization benchmark recorded; P7/P10 re-runs scheduled on the post-externalization topology.
+
+---
+
 ## 4. Required evidence register
 
 > **Register status 2026-08-13 (requirement change):** rows marked HISTORICAL record the
@@ -1269,6 +1313,11 @@ Do not execute until P1–P9 code/evidence gates are complete.
 > shared machinery rows (STATE-BACKEND-001, CHECKPOINT-DURABILITY-001, STARTUP-GATE-001,
 > DEDUP-MEMORY-001, PERF-*, FAILOVER-FLUSS-001, OBSERVABILITY-002) stay valid, with
 > FAILOVER-FLUSS-001 and OBSERVABILITY-002 re-targeted to the signal sinks.
+>
+> Register status 2026-08-14 (DEC-038): `DEDUP-STATE-001` / `DEDUP-REHYDRATE-001` /
+> `DEDUP-FAILCLOSED-001` added for the dedup externalization phase (P11);
+> `DEDUP-MEMORY-001` re-targets to the post-externalization envelope (Fluss dedup-table
+> size + bounded cache size), measured in the externalization benchmark.
 
 | ID | Evidence | Required status |
 | --- | --- | --- |
@@ -1281,12 +1330,15 @@ Do not execute until P1–P9 code/evidence gates are complete.
 | `STARTUP-GATE-001` | No accidental full replay — startup gate fail-closed | `[x]` 2026-08-12 — unchanged (gate protects the signal LOG too) |
 | `SIGNAL-DUAL-SINK-001` | Signal LOG+KV dual-sink topology: LOG appends one row per signal, KV current-state per instrument | `[x]` 2026-08-13 — topology implemented (Stage 4) + contract verification green (Stage 5): graph replay re-scope proved signal LOG grows while `Signal_Candidates_current` key count stays frozen across two replays (gated 3/3 in-container); KV idempotency convergence live-proved (gated 1/1: same-instrument upserts → one row, last-write-wins); scratch tables dropped (ZK table list clean); 9 operators UID-pinned (`SignalJobOperatorUidTest`, gated green). Stage 6 (live DDL) executed 2026-08-13: legacy `Signal_Candidates` KV v2 dropped, LOG v3 created (id 607, `bucket.key=instrument_token`), KV companion created (id 608, `kv.format-version=2`, PK `instrument_token`); production fail-closed gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
 | `SIGNAL-SCHEMA-001` | Exact live preflight for `feature_candles_15s` (LOG) + `Signal_Candidates` (LOG) + `Signal_Candidates_current` (KV, PK `instrument_token`) | `[x]` 2026-08-13 — `TableContractValidator` 22 unit cases green; DDL contract pinned from both sides (common `SignalCurrentDdlContractTest` 3/3, ingestion `SchemaAgreementTest`); live positive-path proof on scratch tables (gated); strict validator proven fail-closed against the legacy `Signal_Candidates` KV v2 (PK `candidate_id`). Stage 6 removed the legacy drift: live ZK metadata now matches the contracts exactly — `Signal_Candidates` id 607 LOG (no `kv.format-version`, `bucket_key=["instrument_token"]`, 16 buckets, 7d ttl, lake keys = live `raw_table_1` ground truth), `Signal_Candidates_current` id 608 KV v2 (same routing, PK `instrument_token`), `feature_candles_15s` id 90 LOG unchanged. Platform-table preflight PASS via the job's own gate (same-package probe `PreflightSignalTables`, no test scaffolding). Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
-| `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` NOT RUN — config-pinned `DEDUP_TTL_MS=300000` (`SignalJobConfig` L229-241 throws on any other value); sweep (30/60/120 s) needs deliberate unpin decision. Phase 0 evidence recorded instead: RocksDB total state 1.74 GB / block_cache 377.5 MB at 1024 tokens under 53k/s load, no unbounded growth observed. Plan §14.5. |
+| `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` NOT RUN — config-pinned `DEDUP_TTL_MS=300000` (`SignalJobConfig` L229-241 throws on any other value); sweep (30/60/120 s) needs deliberate unpin decision. Phase 0 evidence recorded instead: RocksDB total state 1.74 GB / block_cache 377.5 MB at 1024 tokens under 53k/s load, no unbounded growth observed. Plan §14.5. DEC-038 re-target (2026-08-14): post-externalization envelope = Fluss dedup-table size + bounded cache size, measured in the externalization benchmark (SIG-PERF-001 detail). |
 | `PERF-THROUGHPUT-001` | 50k sustained / 90k peak benchmark | `[ ]` NOT ACHIEVED (2026-08-13) — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s (CountRows 58,889/s + Phase 0 59.7k appends, two independent methods); 50k gate feed-limited by design, 90k unreachable (1.5× ceiling). Bottleneck recorded, no config inflation (plan §12). Phase 0 achieved source rate 53,052/s mean. RE-SCOPE: re-run against the signal dual-sink topology after implementation; the ceiling finding itself stands. Evidence: plan §14 + `logs/tracker-14/p7-bench-evidence-20260812-phase0.md`, `p7-r298-verification-20260813.md`. |
 | `PERF-LATENCY-001` | p99 latency evidence | `[ ]` NOT MEASURABLE (2026-08-13) — flink-metrics-prometheus exporter drops histogram buckets (count+sum only), p99 not derivable; operator latency mean 152.6 ms recorded (n=4,614). Fix = O2-side histogram ingestion or flink prometheus bucket config (out of bench scope). Evidence: plan §14.5 + Phase 0 evidence file. |
 | `FAILOVER-FLUSS-001` | Fluss/sink/checkpoint failure injection | `[x]` all legs proven 2026-08-11 + terminal-failure upgrade 2026-08-12 — checkpoint-failure → configured restart → FAILED + KV-write shared-fate now reaches terminal FAILED via the `StallGuardedSink` watchdog (`CandleFailureInjectionIntegrationTest` 3/3, gate `COMPUTE_INT_TEST_P6=true`; kv-drop leg `seen=[RUNNING, FAILED, FAILING]`, `cause=… sink write-path stall: flush exceeded 15000 ms`, LOG frozen, no hang — evidence `logs/tracker-14/p6-2-stall-guard-terminal-failed-2026-08-12.txt`, `gated-run-20260812-nonroot-fullsuite.log`); live timeout (checkpoint 506 expired at 30 s → global restart → restore from chk-505, no data loss), live tablet leader change, live coordinator restart (dev bench job `a05c101f`; evidence `logs/tracker-14/p6-3-failover-injection-2026-08-11.md`) | **HISTORICAL (candle sinks; annotated 2026-08-13): RE-RUN required against the signal dual-sink — shared-fate legs (LOG frozen + KV write-path stall → terminal FAILED) re-verified on the `Signal_Candidates` / `Signal_Candidates_current` sinks.** |
 | `OBSERVABILITY-002` | OpenObserve metrics, logs, traces, alerts, dashboards, retention, and runbooks | `[x]` 2026-08-11 — P8.0/P8.2 delivery proofs complete (unit payload/auth 9/9; live OTLP/HTTP delivery + O2 PromQL verification incl. labels/units; collector-outage non-blocking integration test; two O2 outages: in-window retry with zero loss (1000-point burst, accepted==sent==1106) and terminal failure (send_failed=38) with ING-crit-telemetry-delivery-failed alert → webhook HTTP 200; flink_logs live from the distributed job; **P8.3 alerts DONE**: 14 SIGNAL rules provisioned idempotently via o2-provision.py (label-condition support, 23 total), 14/14 fired via OTLP fixtures + 12/14 recovered, storm test PASS (204,800-tick full replay + collector outage → zero unintended fires; evidence `logs/tracker-14/p8-3-alerts-2026-08-11.txt`); **P8.4 dashboards/runbooks + retention pending**; emitver enabled for ingestion JSON logs, queryable in `platform_logs`; traces negative; image digests recorded). Evidence: `logs/tracker-14/p8-2-otel-live-2026-08-11.txt`. Pending: distributed TaskManager metrics (P8.2 box 830) — DONE 2026-08-11 (distributed Flink metrics live: PrometheusReporter JM :9249/TM :9250 → collector scrape → remote-write → O2 PromQL battery, accepted==sent==48,569; `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`); `flink_logs` live structured logs — DONE 2026-08-11 (docs 463→1,924 from the distributed SignalJob, checkpoint lines queryable; `logs/tracker-14/p8-2-flink-logs-live-2026-08-11.txt`); **P8.3 alerts DONE**: 15 SIGNAL rules + 8 ING rules provisioned idempotently via o2-provision.py (24 total; SIGNAL-warn-source-lag added 2026-08-11 on the now-live operator event-time-lag metric, fired live via webhook); **P8.4 DONE**: 5 COMPUTE dashboards provisioned + panel queries validated live; retention contract applied per-stream (logs 30 / metrics 90 / traces 14 via provision_retention(), idempotent, 335 metric streams verified) with alerts-180d mapped to the metadata.sqlite meta store; operator-metric discovery closed P8.1 854/882 + P8.3 931 (Fluss client + operator metrics live: 78 streams); runbooks (SignalJob ops, replay, checkpoint, Fluss failure, schema-preflight, migration conflict, rollback with exact chk registry + cutoff chk-1539, alert catalogue, retention lifecycle) in docs/06_operations/01-runbooks.md; evidence: p8-1-flink-distributed-metrics (correction §7), p8-2-flink-logs-live, p8-3-alert-proposal, p8-3-alerts, p8-4-retention (all logs/tracker-14/, 2026-08-11) | **HISTORICAL (annotated 2026-08-13): delivery proofs are topology-independent and stand; RE-SCOPE — LOG:KV panels/dashboard labels and runbook entries re-targeted from candle to signal tables.** |
 | `MIGRATION-CONFLICT-002` | 25 historical conflicts reconciled with hashes/approvals | `[x]` 2026-08-11 — HISTORICAL, RETIRED (no candle conflict reconciliation per requirement change) |
+| `DEDUP-STATE-001` | DEC-038: Fluss dedup table holds the accepted set; Flink checkpoint bounded and not duplicating it (SIG-STATE-001) | `[ ]` pending — P11.2 compact-checkpoint-restore row; size re-measured in the externalization benchmark |
+| `DEDUP-REHYDRATE-001` | DEC-038: restart restores the compact checkpoint and rehydrates the dedup cache from Fluss; a re-sent fingerprint inside the TTL still dedupes (SIG-STATE-002) | `[ ]` pending — P11.2 rehydration row (env-gated live) |
+| `DEDUP-FAILCLOSED-001` | DEC-038: Fluss dedup-table unavailability/incompatibility fails the job closed / degraded — no silent replay with an empty set (SIG-STATE-003) | `[ ]` pending — P11.2 fail-closed row |
 
 Delivered pieces (evidence rows must still gain the full register fields below before P10):
 
@@ -1327,6 +1379,7 @@ Every evidence row must include:
 | Durable checkpoints | P4 | S3 write/read/restore | CHECKPOINT-DURABILITY-001 |
 | Graph restore | P6/P10 | copied checkpoint strict restore (re-run on signal dual-sink) | CHECKPOINT-RESTORE-002 |
 | Bounded memory | P5/P7 | target-load time series | DEDUP-MEMORY-001 |
+| Dedup state externalized to Fluss (DEC-038) | P11 | dedup KV state table + bounded cache test battery (cache hit/miss, duplicate race/retry, fail-closed, rehydration, compact-checkpoint restore) | DEDUP-STATE-001 / DEDUP-REHYDRATE-001 / DEDUP-FAILCLOSED-001 |
 | Throughput/latency | P7 | benchmark report (re-run on signal dual-sink topology) | PERF-* |
 | Failure safety | P6/P10 | injection and recovery report (re-run on signal sinks) | FAILOVER-FLUSS-001 |
 | OpenObserve observability | P8/P9 | collector delivery queries, payload tests, dashboards, alerts, retention, outage/recovery evidence | OBSERVABILITY-002 |

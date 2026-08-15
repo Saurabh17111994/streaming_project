@@ -44,6 +44,8 @@ class RuntimeOptionsTest {
     void rocksdbBackendApplied() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("STATE_BACKEND", "rocksdb");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         env.put("SAVEPOINT_DIR", "s3://signal-savepoints/prod");
@@ -132,6 +134,8 @@ class RuntimeOptionsTest {
         env.remove("ALLOW_FULL_REPLAY");
         env.put("STATE_RECOVERY_PATH", "file:///tmp/signaljob-checkpoints/job/chk-1");
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         env.put("S3_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");
         env.put("AWS_ACCESS_KEY_ID", "r2accesskey000000000000");
@@ -162,6 +166,8 @@ class RuntimeOptionsTest {
     void logLineHasNoCredentials() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://access:secret@signal-checkpoints/prod");
         env.put("SAVEPOINT_DIR", "s3://signal-savepoints/prod");
         env.put("S3_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");

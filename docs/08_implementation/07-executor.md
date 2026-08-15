@@ -12,7 +12,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready, broker/API/fencing evidence blocked |
 | Owner | Execution Team |
-| Requirements | `REQ-EXE-001`–`REQ-EXE-013` |
+| Requirements | `REQ-EXE-001`–`REQ-EXE-013` → `AC-EXE-001`–`AC-EXE-016` |
 | Contract | `docs/04_contracts/07-executor.md` |
 | Default | `HALTED`; broker calls disabled |
 | Sole side effect | Money-moving Arrow REST call, only after all gates |
@@ -875,11 +875,24 @@ uncertainty into a blocked state before a future broker adapter exists.
 
 - [ ] Implement the exact decision validation rules, including reservation
   lookup, expiry, schema version, scope, exchange, quantity, and price.
-- [ ] Implement `AttemptStore.prepare()` with instruction/content-hash replay
+- [x] Implement `AttemptStore.prepare()` with instruction/content-hash replay
   behavior and deterministic `execution_attempt_id` supplied by the caller.
-- [ ] Implement exact legal phase transitions, monotonic `phase_epoch`, stale
+  _(core IMPLEMENTED 2026-08-15 in common —
+  `com.trading.common.schema.execution.InMemoryAttemptStore`, wired to the
+  SCH-15 column-ownership guard (`ExecutionAttemptsColumnOwnership.checkWrite`):
+  duplicate returns the existing PREPARED attempt untouched, modified decision
+  under an existing instruction_id raises a contract violation + halt, identity
+  never rewritten; the Fluss-backed store + transitions land when the module
+  joins the reactor)_
+- [x] Implement exact legal phase transitions, monotonic `phase_epoch`, stale
   update rejection, terminal protection, and UNKNOWN resolution only through
   explicit reconciliation result.
+  _(core IMPLEMENTED 2026-08-15 in common —
+  `InMemoryAttemptStore.transition`/`resolveUnknown` over
+  `SUBMIT_TRANSITIONS`/`RESOLVE_TRANSITIONS`: phase_epoch +1 per applied move,
+  stale-epoch rejection, terminal protection, UNKNOWN exits only via explicit
+  `resolveUnknown`; the SCH-15 `checkWrite` guard runs on every mutation — a
+  drifted matrix fails the store closed, proven by test)_
 - [ ] Ensure a modified decision under an existing instruction ID raises a
   contract violation and requests a halt through a callback.
 - [ ] Test `EXE-UNIT-002`, `EXE-UNIT-006`, duplicate replay, modified replay,

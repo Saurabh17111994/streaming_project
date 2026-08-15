@@ -1,10 +1,14 @@
 package com.trading.compute.signaljob;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -240,6 +244,7 @@ class FingerprintDedupFunctionTest {
     void resetGaugeMirrors() {
         // JVM-wide statics — every test starts from a clean mirror.
         ComputeOtlpEmitter.resetDedupGaugesForTest();
+        ComputeOtlpEmitter.resetDedupTelemetryForTest();
     }
 
     @Test
@@ -316,5 +321,157 @@ class FingerprintDedupFunctionTest {
             KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> h, GenericRowData row)
             throws Exception {
         h.processElement(row, row.getLong(RawTableColumns.EVENT_TIME));
+    }
+
+    // ── DEC-038 bounded-checkpoint invariant: eviction deletes the timer ──
+
+    @Test
+    void evictionKeepsTimerStateBoundedByCacheCap() throws Exception {
+        // Small entry cap so eviction is the steady state; bytes cap stays
+        // high so the entry bound governs (min semantics).
+        Map<String, String> env = env();
+        env.put("DEDUP_CACHE_MAX_ENTRIES", "8");
+        InMemoryFingerprintDedupStateStore store = new InMemoryFingerprintDedupStateStore();
+        SignalJobConfig config = SignalJobConfig.from(env);
+        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
+                new FingerprintDedupFunction(config, () -> store),
+                row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
+                Types.LONG);
+        harness.open();
+
+        // 100 distinct fingerprints with distinct event times → 100 distinct
+        // expiry instants → 100 event-time timers WOULD accumulate without the
+        // eviction timer-deletion fix (SIG-STATE-001, DEC-038 hard invariant:
+        // checkpoint must not grow with Fluss dedup cardinality). With the fix,
+        // evicting a bucket deletes its timer, so the live timer count stays ≤
+        // the cache cap.
+        for (int i = 0; i < 100; i++) {
+            process(TestRawRows.row(1L, T0 + i * 1_000L, "fp-evict-" + i, "TRADE", 100 + i, i));
+        }
+
+        assertTrue(harness.numEventTimeTimers() <= 8,
+                "evicted buckets' timers must be deleted (bounded checkpoint): timers="
+                        + harness.numEventTimeTimers() + " cap=8");
+        assertTrue(ComputeOtlpEmitter.dedupStateCount() <= 8,
+                "cache entry count bounded by the cap");
+        assertTrue(ComputeOtlpEmitter.dedupExpiryIndexCount() <= 8,
+                "expiry-index bucket count bounded by the cap");
+
+        // Model the real writer→sink path: the dedup function only EMITS
+        // first-seen rows on its side output; the FingerprintDedupWriterFunction
+        // + fingerprint_dedup sink perform the durable putFirstSeen. Push the
+        // side-output rows into the store so the authoritative set holds all
+        // 100 accepted fingerprints.
+        ConcurrentLinkedQueue<StreamRecord<RowData>> writeOut = harness.getSideOutput(
+                FingerprintDedupFunction.DEDUP_WRITE_OUTPUT);
+        for (StreamRecord<RowData> r : writeOut) {
+            RowData row = r.getValue();
+            store.putFirstSeen(
+                    row.getLong(FingerprintDedupTableColumns.INSTRUMENT_TOKEN),
+                    row.getString(FingerprintDedupTableColumns.FINGERPRINT_VERSION).toString(),
+                    row.getString(FingerprintDedupTableColumns.EVENT_FINGERPRINT).toString(),
+                    row.getLong(FingerprintDedupTableColumns.FIRST_SEEN_MS),
+                    row.getLong(FingerprintDedupTableColumns.EXPIRY_MS));
+        }
+        assertEquals(100, store.rowCount(),
+                "all 100 first-seen rows are durable in the store (the writer path); "
+                        + "the bounded cache is only the working state");
+
+        // An EVICTED fingerprint re-arrives inside its TTL: cache miss →
+        // authoritative store SEEN_LIVE → still deduped (correctness intact,
+        // eviction never widens the dedup window).
+        long emittedBefore = emittedCount(harness);
+        process(TestRawRows.row(1L, T0, "fp-evict-0", "TRADE", 200, 1000));
+        assertEquals(emittedBefore, emittedCount(harness),
+                "re-delivery of an evicted in-TTL fingerprint must still be dropped");
+    }
+
+    // ── DEC-038 telemetry: cache hit/miss + rehydration latency/failures ──
+
+    @Test
+    void dedupCacheTelemetryTracksHotPathDecisions() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        openHarness();
+        // First occurrence: cache miss (store consulted) → accept. Re-delivery:
+        // cache hit (definite duplicate) → drop. No further store round trip.
+        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
+
+        assertEquals(1, emitter.drainDedupCacheMissesDelta(),
+                "first occurrence is a cache miss (query-on-miss rehydration)");
+        assertEquals(1, emitter.drainDedupCacheHitsDelta(),
+                "in-TTL re-delivery is a cache-only definite duplicate");
+        assertTrue(ComputeOtlpEmitter.rehydrationLatencyMsForTest() >= 0L,
+                "the store lookup is timed (rehydration latency gauge)");
+        assertEquals(0, emitter.drainDedupRehydrationFailuresDelta(),
+                "no store failures on the healthy path");
+    }
+
+    // ── SIG-HARNESS-004: identical-looking events vs broker duplicates ─────
+
+    @Test
+    void identicalLookingEventsCollapseAndEmitLimitationEvidence() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        openHarness();
+        // The documented fingerprint limitation (dossier §Dedup state): an
+        // identical legitimate event and a broker duplicate are INDISTINGUISHABLE
+        // by fingerprint — both carry the same content hash. The dedup applies
+        // the limitation consistently: the first occurrence passes, every
+        // identical-looking re-arrival inside the TTL is collapsed to a
+        // duplicate, and the metric/audit evidence is emitted (the cache-hit
+        // OTLP mirror — the same emission path a broker duplicate triggers).
+        process(TestRawRows.row(1L, T0, "fp-identical", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "fp-identical", "TRADE", 100, 1));
+
+        assertEquals(1, emittedCount(harness),
+                "the identical legitimate event is collapsed, never double-accepted");
+        assertEquals(1, emitter.drainDedupCacheHitsDelta(),
+                "the collapse is observable — duplicate/limitation audit evidence is emitted");
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+                "one accepted fingerprint in state, not two");
+    }
+
+    @Test
+    void rehydrationFailureFailsClosedAndIsCounted() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        // Store whose lookup throws — the authoritative read must fail the
+        // task (SIG-STATE-003, never an empty dedup set) AFTER counting the
+        // failure so it is observable.
+        FingerprintDedupStateStore failingStore = new FingerprintDedupStateStore() {
+            @Override
+            public Lookup lookup(long token, String version, String fingerprint, long nowMs) {
+                throw new IllegalStateException("fingerprint_dedup unavailable");
+            }
+
+            @Override
+            public void putFirstSeen(long token, String version, String fingerprint,
+                    long firstSeenMs, long expiryMs) {}
+
+            @Override
+            public List<DedupExpiry.CleanupCandidate> scanExpired(
+                    long token, long nowMs, int maxBatchSize) {
+                return List.of();
+            }
+
+            @Override
+            public void delete(List<DedupExpiry.CleanupCandidate> batch) {}
+
+            @Override
+            public void close() {}
+        };
+        SignalJobConfig config = SignalJobConfig.from(env());
+        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
+                new FingerprintDedupFunction(config, () -> failingStore),
+                row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
+                Types.LONG);
+        harness.open();
+
+        assertThrows(IllegalStateException.class,
+                () -> process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1)),
+                "a store failure must fail the task, never silently accept");
+        assertEquals(1, emitter.drainDedupRehydrationFailuresDelta(),
+                "the failure is counted before the task fails closed");
+        assertTrue(ComputeOtlpEmitter.rehydrationLatencyMsForTest() >= 0L,
+                "the failed lookup is still timed");
     }
 }

@@ -39,6 +39,20 @@ class TableContractValidatorTest {
     private static final List<String> CANDLE_TYPES = CandleTableSchema.COLUMN_TYPE_ROOTS;
     private static final List<String> SIGNAL_NAMES = Arrays.asList(SignalCandidatesTableColumns.NAMES);
     private static final List<String> SIGNAL_TYPES = SignalCandidatesTableColumns.TYPE_ROOTS;
+    private static final List<String> TRADE_NAMES = Arrays.asList(TradeDecisionsTableColumns.NAMES);
+    private static final List<String> TRADE_TYPES = TradeDecisionsTableColumns.TYPE_ROOTS;
+    private static final List<String> INSTRUCTION_NAMES = Arrays.asList(TradeInstructionStateColumns.NAMES);
+    private static final List<String> INSTRUCTION_TYPES = TradeInstructionStateColumns.TYPE_ROOTS;
+    private static final List<String> DEDUP_NAMES = Arrays.asList(FingerprintDedupTableColumns.NAMES);
+    private static final List<String> DEDUP_TYPES = FingerprintDedupTableColumns.TYPE_ROOTS;
+    private static final List<String> FORMING_BAR_NAMES = Arrays.asList(FormingBarTableColumns.NAMES);
+    private static final List<String> FORMING_BAR_TYPES = FormingBarTableColumns.TYPE_ROOTS;
+
+    private static final String TRADE_LOG = "Trade_Decisions";
+    private static final String TRADE_INDEX = "trade_instruction_state";
+    private static final String DEDUP_TABLE = "fingerprint_dedup";
+    private static final String FORMING_BAR_TABLE = "forming_bar";
+    private static final String INSTRUCTION_ID = "instruction_id";
 
     // ── candle KV (CANDLE-SCHEMA-002) ──
 
@@ -280,6 +294,205 @@ class TableContractValidatorTest {
                 "report must surface the DDL-vs-live nullability divergence, got: " + report);
     }
 
+    // ── trade decisions LOG (SCH-19, TRADE-SCHEMA-001) ──
+
+    @Test
+    @DisplayName("Trade_Decisions LOG without primary key and with instruction_id routing passes")
+    void tradeDecisionsLogTableWithoutPkPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateTradeDecisionsLogTable(
+                tradeDecisions(TRADE_LOG, null, List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("Trade_Decisions LOG that gained a primary key is rejected (append-only contract)")
+    void tradeDecisionsLogTableWithPkIsRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, List.of(INSTRUCTION_ID), List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("Trade_Decisions LOG with a non-instruction_id bucket key is rejected")
+    void tradeDecisionsLogWrongBucketKeyRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, null, List.of("candidate_id"), 8)));
+    }
+
+    @Test
+    @DisplayName("Trade_Decisions LOG with a bucket count other than 8 is rejected")
+    void tradeDecisionsLogWrongBucketCountRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, null, List.of(INSTRUCTION_ID), 9)));
+    }
+
+    @Test
+    @DisplayName("Trade_Decisions wrong column count is rejected (24 or 26 columns)")
+    void tradeDecisionsWrongColumnCountRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(TRADE_TYPES);
+        shortTypes.remove(24); // drop schema_version -> 24 columns
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, null, List.of(INSTRUCTION_ID), 8,
+                                shortTypes, false)));
+        List<String> longTypes = new java.util.ArrayList<>(TRADE_TYPES);
+        longTypes.add("STRING"); // extra column -> 26
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, null, List.of(INSTRUCTION_ID), 8,
+                                longTypes, false)));
+    }
+
+    @Test
+    @DisplayName("Trade_Decisions wrong type root per column is rejected (composite_score STRING vs DOUBLE)")
+    void tradeDecisionsWrongTypeRootRejected() {
+        List<String> types = new java.util.ArrayList<>(TRADE_TYPES);
+        types.set(17, "STRING"); // composite_score must be DOUBLE
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeDecisionsLogTable(
+                        tradeDecisions(TRADE_LOG, null, List.of(INSTRUCTION_ID), 8,
+                                types, false)));
+    }
+
+    // ── trade_instruction_state KV index (SCH-19, TRADE-SCHEMA-001) ──
+
+    @Test
+    @DisplayName("instruction-state KV with PK exactly [instruction_id] and matching routing passes")
+    void instructionStateKvExactPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateTradeInstructionStateKvTable(
+                instructionState(TRADE_INDEX, List.of(INSTRUCTION_ID),
+                        List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("instruction-state KV without a primary key is rejected (durable index contract)")
+    void instructionStateKvNoPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeInstructionStateKvTable(
+                        instructionState(TRADE_INDEX, null, List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("instruction-state KV with a wider primary key is rejected (exact [instruction_id])")
+    void instructionStateKvWrongPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeInstructionStateKvTable(
+                        instructionState(TRADE_INDEX, List.of(INSTRUCTION_ID, "canonical_hash"),
+                                List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("instruction-state KV with a bucket key outside the primary key is rejected")
+    void instructionStateKvWrongBucketKeyRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeInstructionStateKvTable(
+                        instructionState(TRADE_INDEX, List.of(INSTRUCTION_ID),
+                                List.of("canonical_hash"), 8)));
+    }
+
+    @Test
+    @DisplayName("instruction-state KV with schema drift is rejected (3 columns)")
+    void instructionStateKvSchemaDriftRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(INSTRUCTION_TYPES);
+        shortTypes.remove(3);
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateTradeInstructionStateKvTable(
+                        instructionState(TRADE_INDEX, List.of(INSTRUCTION_ID),
+                                List.of(INSTRUCTION_ID), 8, shortTypes, false)));
+    }
+
+    // ── fingerprint_dedup KV (DEC-038, DEDUP-SCHEMA-001) ──
+
+    private static final List<String> DEDUP_PK = List.of("instrument_token", "fingerprint_version",
+            "event_fingerprint");
+
+    @Test
+    @DisplayName("dedup KV with PK exactly [instrument_token, fingerprint_version, event_fingerprint] passes")
+    void dedupKvExactPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateFingerprintDedupTable(
+                dedup(DEDUP_TABLE, DEDUP_PK, List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("dedup KV without a primary key is rejected (composite identity contract)")
+    void dedupKvNoPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFingerprintDedupTable(
+                        dedup(DEDUP_TABLE, null, List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("dedup KV with a narrower primary key is rejected (exact composite PK)")
+    void dedupKvNarrowerPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFingerprintDedupTable(
+                        dedup(DEDUP_TABLE, List.of(TOKEN), List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("dedup KV with a bucket key outside the primary key is rejected")
+    void dedupKvWrongBucketKeyRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFingerprintDedupTable(
+                        dedup(DEDUP_TABLE, DEDUP_PK, List.of("event_fingerprint"), 16)));
+    }
+
+    @Test
+    @DisplayName("dedup KV with schema drift is rejected (5 columns)")
+    void dedupKvSchemaDriftRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(DEDUP_TYPES);
+        shortTypes.remove(5);
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFingerprintDedupTable(
+                        dedup(DEDUP_TABLE, DEDUP_PK, List.of(TOKEN), 16, shortTypes, false)));
+    }
+
+    @Test
+    @DisplayName("dedup KV with wrong bucket count is rejected")
+    void dedupKvWrongBucketCountRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFingerprintDedupTable(
+                        dedup(DEDUP_TABLE, DEDUP_PK, List.of(TOKEN), 17)));
+    }
+
+    // ── forming_bar KV current-state home (DEC-038, FORMING-BAR-SCHEMA-001) ──
+
+    @Test
+    @DisplayName("forming-bar KV with PK exactly [instrument_token] and matching routing passes")
+    void formingBarKvExactPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateFormingBarKvTable(
+                formingBar(FORMING_BAR_TABLE, List.of(TOKEN), List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV without a primary key is rejected (current-state contract)")
+    void formingBarKvNoPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, null, List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV with a wider primary key is rejected (exact per-ticker current state)")
+    void formingBarKvWiderPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, List.of(TOKEN, "window_start"),
+                                List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV with schema drift is rejected (10 columns)")
+    void formingBarKvSchemaDriftRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(FORMING_BAR_TYPES);
+        shortTypes.remove(10); // drop schema_version -> 10 columns
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, List.of(TOKEN), List.of(TOKEN), 16,
+                                shortTypes, false)));
+    }
+
     // ── fixtures ──
 
     /**
@@ -317,6 +530,54 @@ class TableContractValidatorTest {
                 columnTypes, pkNonNullable);
     }
 
+    private static TableInfo tradeDecisions(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, TRADE_NAMES, TRADE_TYPES, null, true);
+    }
+
+    private static TableInfo tradeDecisions(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets, List<String> columnTypes,
+            boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, TRADE_NAMES, TRADE_TYPES,
+                columnTypes, pkNonNullable);
+    }
+
+    private static TableInfo instructionState(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, INSTRUCTION_NAMES, INSTRUCTION_TYPES,
+                null, true);
+    }
+
+    private static TableInfo instructionState(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets, List<String> columnTypes,
+            boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, INSTRUCTION_NAMES, INSTRUCTION_TYPES,
+                columnTypes, pkNonNullable);
+    }
+
+    private static TableInfo dedup(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, DEDUP_NAMES, DEDUP_TYPES, null, true);
+    }
+
+    private static TableInfo dedup(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets, List<String> columnTypes, boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, DEDUP_NAMES, DEDUP_TYPES,
+                columnTypes, pkNonNullable);
+    }
+
+    private static TableInfo formingBar(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, FORMING_BAR_NAMES,
+                FORMING_BAR_TYPES, null, true);
+    }
+
+    private static TableInfo formingBar(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets, List<String> columnTypes, boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, FORMING_BAR_NAMES,
+                FORMING_BAR_TYPES, columnTypes, pkNonNullable);
+    }
+
     private static TableInfo table(String name, List<String> schemaPk, List<String> bucketKeys,
             int numBuckets, List<String> names, List<String> typeRoots, List<String> columnTypes,
             boolean pkNonNullable) {
@@ -350,6 +611,9 @@ class TableContractValidatorTest {
                 break;
             case "INTEGER":
                 t = DataTypes.INT();
+                break;
+            case "DOUBLE":
+                t = DataTypes.DOUBLE();
                 break;
             default:
                 throw new IllegalArgumentException("unexpected type root " + typeRoot);

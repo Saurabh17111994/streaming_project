@@ -122,16 +122,10 @@ func main() {
 		os.Exit(exitFatalStart)
 	}
 	logf("%d instruments", len(tokens))
-	slotCount := 1
-	if v := os.Getenv("ARROW_HFT_CONNECTIONS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			slotCount = n
-		}
-	}
-	if slotCount != 1 {
-		logf("FATAL: production policy permits exactly one Arrow HFT socket; ARROW_HFT_CONNECTIONS=%d", slotCount)
-		os.Exit(exitFatalStart)
-	}
+	// ARROW_HFT_CONNECTIONS is pinned to 1 (production policy permits exactly
+	// one Arrow HFT socket); hftPin exits FATAL on any other value, including
+	// a non-integer that the old inline parse silently ignored.
+	slotCount := hftPin(logf, "ARROW_HFT_CONNECTIONS", 1)
 	plan, err := BuildSubscriptionPlan(tokens, slotCount, MaxHFTTokensPerConnection, MaxHFTTokensPerRequest)
 	if err != nil {
 		logf("FATAL: invalid subscription plan: %v", err)
@@ -149,16 +143,15 @@ func main() {
 	}
 	bridgeEmitter.SetManifestFingerprint(tokenSetHash(allTokens))
 
-	latencyMs := 50
-	if v := os.Getenv("ARROW_HFT_LATENCY_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 50 {
-			latencyMs = n
-		}
-	}
 	// HFT policy keys — every key below is read from env and enforced here,
 	// mirroring the Java IngestionConfig exactInt/intRange checks so a wrong
 	// value fails closed in the bridge too (it also runs standalone). Pinned
 	// keys must equal the pin exactly; tunable keys must be within range.
+	// (ING-UNIT-018 parity: the Go side previously read ARROW_HFT_LATENCY_MS
+	// inline with fail-open semantics — a non-integer was silently ignored and
+	// there was no upper bound — while Java's intRange(50,50,60000) rejects
+	// both. It now flows through hftRange like every other tunable.)
+	latencyMs := hftRange(logf, "ARROW_HFT_LATENCY_MS", 50, 50, 60_000)
 	_ = hftPin(logf, "ARROW_HFT_MAX_TOKENS_PER_CONNECTION", 1024)
 	_ = hftPin(logf, "ARROW_HFT_MAX_TOKENS_PER_REQUEST", 512)
 	heartbeatInterval = time.Duration(hftPin(logf, "ARROW_HFT_HEARTBEAT_SECONDS", 3)) * time.Second

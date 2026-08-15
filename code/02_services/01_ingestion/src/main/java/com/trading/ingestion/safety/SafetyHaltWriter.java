@@ -28,7 +28,7 @@ import org.slf4j.LoggerFactory;
  * state transition. The request never contains credentials, raw payload bytes,
  * token lists, symbol lists, or free-form SDK exceptions.
  */
-public final class SafetyHaltWriter implements AutoCloseable {
+public final class SafetyHaltWriter implements SafetySink {
 
     private static final Logger LOG = LoggerFactory.getLogger(SafetyHaltWriter.class);
 

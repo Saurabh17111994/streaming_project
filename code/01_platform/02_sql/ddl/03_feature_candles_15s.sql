@@ -3,7 +3,11 @@
 -- Owner: Signal job
 -- Type: KV (primary key on instrument_token, window_start)
 -- Bucket key: instrument_token (strict subset of the PK — per-ticker
---   colocation, and the Fluss connector requires bucket.key ⊆ primary key)
+--   colocation, and the Fluss connector requires bucket.key ⊆ primary key).
+--   Bucket key ≠ PK + kv.format-version=2 lets the raw Fluss client encode the
+--   composite PK with Fluss's default encoder (COMPAT evidence 2026-08-15) —
+--   without v2 the iceberg datalake encoder requires exactly one key field and
+--   raw-client upserts fail (Flink connector unaffected).
 -- Retention: 2 calendar days via table.log.ttl (R-055 — Fluss TTL is
 -- calendar-based; the previous '7 trading days' header was unverifiable and
 -- table.retention.days is not a Fluss option). Extend once EOD offload is
@@ -38,5 +42,6 @@ CREATE TABLE feature_candles_15s (
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',
-    'table.datalake.auto-compaction' = 'true'
+    'table.datalake.auto-compaction' = 'true',
+    'table.kv.format-version' = '2'
 );

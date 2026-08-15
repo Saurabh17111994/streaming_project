@@ -8,7 +8,7 @@ The Signal Flink job consumes `raw_table_1`, performs bounded best-effort dedupl
 
 ## Constraints
 
-- Compute SHALL NOT read `feature_candles_15s` or any other feature table back from Fluss for signal generation. All feature state flows in-process within the Signal job.
+- Compute SHALL NOT read `feature_candles_15s` or any other feature table back from Fluss for signal generation — normal feature computation stays in-process within the Signal job. This prohibition does not cover the explicitly designated Fluss-authoritative state tables (dedup state table, `feature_candles_15s` KV, `Signal_Candidates_current` KV — DEC-038), which SHALL be read/written only for externalized state management, hydration, recovery, and authoritative state access; temporary Flink → Fluss → Flink round trips merely to compute a feature remain prohibited.
 - Deduplication SHALL NOT use `seq_no` as a required key, ordering field, or completeness assertion. Fingerprint-based dedup is best-effort only.
 - The deployed `DEDUP_TTL_MS` SHALL be exactly `300000` (5 minutes). Deployment SHALL reject any other value.
 - `CANDLE_WINDOW_MS` SHALL be exactly `15000` (15 seconds). Deployment SHALL reject any other value.
@@ -42,7 +42,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Late events are discarded:** Events arriving after finalization are counted and measured but do not produce a new or updated row. This limitation remains visible in metrics and documentation.
 - **Empty windows produce no row:** A 15-second window with zero eligible trades emits no candle. Downstream consumers must not assume a row exists for every window.
 - **Deterministic replay is input-bound:** Replay determinism is relative to an identical ordered input snapshot, fingerprint algorithm/version, and configuration version. Different arrival order, fingerprint collisions, missing external state, or changed configuration may produce different results.
-- **Checkpoint restore is state-consistent or safe-degraded:** On restore, dedup, window, forming-bar, and ranking state are restored consistently or the job enters a safe degraded state that prevents new instructions.
+- **Checkpoint restore is compact + rehydrated or safe-degraded (DEC-038):** Flink restores only its small checkpoint (source offsets, watermarks, window/lateness timers, in-flight accumulators, working-cache metadata); large durable Signal business state is verified against and rehydrated from Fluss. If Fluss state is unavailable or incompatible, the job enters a safe degraded state (or fails closed at startup) and prevents new instructions. Ranking/reservation restore semantics are unchanged and out of scope here.
 
 ## Out of Scope
 
@@ -58,7 +58,7 @@ The following capabilities are explicitly NOT owned by Compute:
 - **Broker order submission, execution, and Arrow REST integration:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
-- **Reading feature tables or strategy tables back from Fluss:** All feature and strategy state flows in-process within the Signal job.
+- **Reading feature tables or strategy tables back from Fluss for computation:** All feature and strategy computation stays in-process within the Signal job. The designated Fluss-authoritative state tables (dedup KV, `feature_candles_15s` KV, `Signal_Candidates_current` KV — DEC-038) are read/written only for externalized state management, hydration, recovery, and authoritative state access — never to compute a feature that could stay in-process.
 
 ## REQ-FC-001: MVP scope
 
@@ -125,13 +125,15 @@ Within the same Signal Flink job, Compute SHALL expose a typed in-job event to B
 
 Business Logic SHALL consume this state directly. It SHALL NOT wait for `feature_candles_15s` or perform a Fluss round trip for ranking.
 
-## REQ-FC-008: Checkpoint boundary
+## REQ-FC-008: Checkpoint boundary and state ownership (DEC-038)
 
-The Signal job SHALL use RocksDB or the version-pinned equivalent managed state and durable S3 checkpoint storage in production. Checkpoint interval, timeout, concurrent checkpoint count, state backend, and restart strategy SHALL be exact-version configuration, not undocumented defaults.
+**State ownership:** large durable Signal business state lives in Fluss; Flink retains only the small working state needed for active processing plus the minimal recovery state needed to restart. The current Signal path's large state is the fingerprint dedup set; candle output and signal current-state already live in Fluss KV. The Signal job SHALL use RocksDB or the version-pinned equivalent managed state and durable S3 checkpoint storage in production. Checkpoint interval, timeout, concurrent checkpoint count, state backend, and restart strategy SHALL be exact-version configuration, not undocumented defaults.
 
 Exactly-once may be claimed only for the state/sink boundary proven by the version-specific integration suite. The requirement does not make independent table visibility or broker REST calls exactly-once.
 
-On restore, the job SHALL restore dedup, window, forming-bar, and ranking state consistently or enter a safe degraded state that prevents new instructions.
+**Checkpoint role:** the Flink checkpoint SHALL contain source progress, watermarks, timers, in-flight window accumulators, and minimal working/recovery context — it SHALL NOT be a second complete copy of Fluss-owned Signal business state.
+
+**Restore:** the job SHALL restore its compact checkpoint, SHALL verify Fluss authoritative-state availability and compatibility, and SHALL rehydrate only the working state it needs before resuming. If Fluss state is unavailable, incompatible, or cannot be verified, the job SHALL fail closed / enter a safe degraded state that prevents new instructions. Restore SHALL NOT require a full raw-history replay merely to reconstruct durable hot state.
 
 ## REQ-FC-009: Backpressure
 

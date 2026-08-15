@@ -45,9 +45,10 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 1 | Java 17.0.19 | VM-JAVA-001 | `LOCAL-INT-002`; build smoke on Java 17 | `common` + services compile/run on the pinned JVM; effective config reports `17.0.19`; no module fails to start |
 | 2 | Python 3.11.9 | VM-PYTHON-002 | run `ddl_apply.py` + `version_matrix_verify.py` on 3.11 | Both scripts execute; matrix parses; verifier passes |
 | 3 | Flink 2.2.1 | VM-FLINK-SRV-003, VM-FLINK-API-004 | `COMPAT-FLINK-001`; `SIG-HARNESS-003`, `SIG-HARNESS-005`; `STATE-COMPAT-001` | Source/sink checkpoint, restore, rescale correct on 2.2.1; savepoint restores through the approved compatibility path |
-| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`004`; `SCHEMA-UNIT-001`/`002`/`003` | All 21 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited |
+| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`006`; `SCHEMA-UNIT-001`/`002`/`003` | All 21 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited; distinct bucket keys spread evenly across buckets (constant key collapses) |
 | 5 | Fluss connector (fluss-flink-2.2:0.9.1) | VM-FLUSS-CONN-007 | `COMPAT-FLINK-001`; `SIG-INT-001` | Pinned connector checkpoint/restore on the 2.2.1 boundary works with the Fluss source/sink |
 | 5a | ZooKeeper ensemble (3.9.2) | VM-ZK-013 | `SWARM-INT-002`; `SWARM-FAIL-001`; `PERF-NODELOSS-001` | 3-node ensemble starts; quorum 2-of-3 survives one node loss; Fluss coordinator/tablet register via `zookeeper.address`; Flink JobManager HA leader election + failover works |
+| 5b | Fluss state-table schema + rehydration (DEC-038, 2026-08-14) | VM-FLUSS-SRV-005 | `SIG-STATE-001` to `SIG-STATE-003`; `STATE-COMPAT-001` (Fluss-state-table half); rehydration integration test | Dedup state-table schema/serialization reads and writes match on the pinned connector; restart rehydrates the Flink working cache from the Fluss table; schema change is additive or blocks before unsafe use; Fluss unavailability/incompatibility fails closed |
 
 **Partial evidence recorded (2026-08-09, SAFETY-INT-001):** `fluss-flink-2.2:0.9.1-incubating` resolves from Maven Central; `FlussSource.build()` performs a live `Admin.getTableInfo` (fail-fast); live KV upsert → primary-key lookup → `RowDataDeserializationSchema` read worked against Fluss 0.9.1-incubating. This covers the connector boundary partially (VM-FLUSS-CONN-007 remains `UNKNOWN` — full checkpoint/restore `COMPAT-FLINK-001` / `SIG-INT-001` still pending). Evidence: `docs/08_implementation/04-signal-job.md` §Connector and compile evidence, `logs/safety-int-001/`.
 | 6 | Broker market feed | VM-BROKER-MKT-008 | `BROKER-MD-001` | Live corpus (2026-08-13) decodes to typed fields on both feeds; full-mode 249 B confirmed; unknown protocol version quarantined; behavior recorded as evidence — `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE`) |
@@ -83,9 +84,11 @@ Run the evidence in this order (matches the mandatory build order):
 3. Run `COMPAT-FLUSS-001`..`004` and `COMPAT-FLINK-001` against the running stack.
 4. Record each result into `version_matrix.yaml` (flip `compatibility_class` to
    `COMPATIBLE` on pass).
-5. Confirm `00_RECONCILIATION_BLOCKER.md` exit criteria are met.
-6. Run `make ddl` again — it now applies the tables (or reports the remaining
-   blocker explicitly).
+5. Run `make ddl APPLY=1 EVIDENCE=<file>` (capability evidence file, e.g. the
+   COMPAT-FLUSS-* / COMPAT-FLINK-* record) — this executes the full 9-step
+   application contract (empty-catalog precondition, deterministic apply,
+   effective-schema parity, write/read smoke, evidence record) and reports
+   PASS or the failing step explicitly.
 
 ## The gate (when DDL application unblocks)
 
@@ -93,8 +96,13 @@ Run the evidence in this order (matches the mandatory build order):
 
 - `VM-JAVA-001`, `VM-PYTHON-002`, `VM-FLINK-SRV-003`, `VM-FLINK-API-004`,
   `VM-FLUSS-SRV-005`, `VM-FLUSS-CONN-007` are `COMPATIBLE`.
-- `COMPAT-FLUSS-001`..`004` and `COMPAT-FLINK-001` pass.
-- The reconciliation blocker exit criteria (`00_RECONCILIATION_BLOCKER.md`) are met.
+- `COMPAT-FLUSS-001`..`004` and `COMPAT-FLINK-001` pass (passed to `make ddl`
+  as the `--matrix-evidence` capability evidence).
+- `make ddl APPLY=1 EVIDENCE=<file>` completes the 9-step contract with exit 0.
+  (The historical reconciliation blocker, superseded 2026-08-10, was removed
+  2026-08-15 — its exit criteria are now enforced by the 9-step contract
+  itself: pinned versions, parse/apply on the pinned Fluss, schema parity,
+  clean create, smoke, and evidence.)
 
 External rows (`VM-BROKER-MKT-008`, `VM-BROKER-PBK-009`, `VM-ARROW-010`,
 `VM-OPENOBS-011`) may remain `TO_BE_VERIFIED`. They gate the **release**

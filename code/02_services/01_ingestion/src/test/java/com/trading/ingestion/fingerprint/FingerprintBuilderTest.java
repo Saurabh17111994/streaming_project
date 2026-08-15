@@ -109,4 +109,49 @@ class FingerprintBuilderTest {
         assertEquals(r.hash(), r.hash().toLowerCase(), "Hash must be lowercase");
         assertTrue(r.hash().matches("^[0-9a-f]{64}$"), "Must be 64 lowercase hex chars");
     }
+
+    // ---- ING-UNIT-016: canonical-form golden pin ----
+
+    @Test
+    @DisplayName("ING-UNIT-016: the v1 canonical form is frozen — golden-hash snapshot across commits")
+    void goldenHashFrozen() {
+        // v1 canonical bytes: epoch(8 BE) | token(8 BE) | event_ms(8 BE) |
+        // tickType(UTF-8) | ltp(8 BE) | qty(8 BE) | bid(8 BE) | ask(8 BE),
+        // pipe-delimited, no trailing delimiter. Any silent change to field
+        // order, encoding, null representation, or the version constant fails
+        // this cross-commit pin. (Golden value computed 2026-08-15.)
+        FingerprintBuilder.Result r = FingerprintBuilder.build(
+                0L, 3045L, 1719000000000L, "TRADE",
+                234500L, 50L, 234400L, 234600L);
+
+        assertEquals("aec03d3dc1c556134a8dcdee1d5d94796e9e24d42aed5a1018b57c4e93bc5e31",
+                r.hash(), "canonical v1 hash must never change");
+        assertEquals(1, r.version(), "version must stay 1 while the form is frozen");
+        assertEquals("SHA-256", r.algorithm());
+    }
+
+    // ---- ING-UNIT-017: DEC-012 dedup semantics ----
+
+    @Test
+    @DisplayName("ING-UNIT-017: same tick, same epoch → identical; next epoch → different (DEC-012 best-effort identity)")
+    void dedupSemanticsPinned() {
+        // DEC-012: the fingerprint is best-effort identity within an epoch —
+        // duplicates within the SAME epoch are expected (Compute owns logical
+        // dedup), and a reconnect bumps the epoch which RESETS identity.
+        long epoch = 7L;
+        FingerprintBuilder.Result first = FingerprintBuilder.build(
+                epoch, 3045L, 1719000000000L, "TRADE",
+                234500L, 50L, 234400L, 234600L);
+        FingerprintBuilder.Result duplicate = FingerprintBuilder.build(
+                epoch, 3045L, 1719000000000L, "TRADE",
+                234500L, 50L, 234400L, 234600L);
+        FingerprintBuilder.Result nextEpoch = FingerprintBuilder.build(
+                epoch + 1, 3045L, 1719000000000L, "TRADE",
+                234500L, 50L, 234400L, 234600L);
+
+        assertEquals(first.hash(), duplicate.hash(),
+                "a duplicate within an epoch is expected — Compute dedups (DEC-012)");
+        assertNotEquals(first.hash(), nextEpoch.hash(),
+                "a reconnect bumps the epoch and must reset identity (DEC-012)");
+    }
 }

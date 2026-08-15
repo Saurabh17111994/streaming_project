@@ -1,12 +1,16 @@
 package com.trading.ingestion.telemetry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -219,6 +223,174 @@ class OtlpMetricsEmitterTest {
                     "p50 must reflect the latest wrapped window, not the first 1024 samples (R-179)");
         } finally {
             emitter.close();
+        }
+    }
+
+    // ---- ING-UNIT-021: metrics-side secret scrubbing (G6) ----
+
+    /**
+     * ING-UNIT-021: the OTLP export body is never scanned for leaked
+     * credentials or raw payloads — log scrubbing (ING-SEC-RED-001) is tested,
+     * the metrics side is not. Drive every recording path with secret-shaped
+     * values (the only caller-supplied strings that reach the payload are the
+     * decode-error reason labels and the slot labels), serialize the full
+     * export body, and assert no secret class survives: ARROW_* env values,
+     * Bearer tokens, raw_payload markers, token/appID values, or the secret
+     * literals themselves (mirrors ING-SEC-RED-001 for logs).
+     */
+    @Test
+    @DisplayName("ING-UNIT-021: OTLP export body carries no credentials or raw payloads")
+    void exportBodyScrubsSecrets() throws Exception {
+        OtlpMetricsEmitter emitter = new OtlpMetricsEmitter("127.0.0.1:1", "test-instance");
+        try {
+            // Exercise EVERY recording path (sums, histogram, gauges, slots,
+            // reasons, resources) while seeding the only user-controlled
+            // strings with secret-shaped values.
+            emitter.recordTick(100);
+            emitter.recordAppendLatencyMs(5);
+            emitter.recordAppendLatencyMs(7);
+            emitter.setPendingRecords(3);
+            emitter.setPendingBytes(1500);
+            emitter.incrementBridgeReconnects();
+            emitter.setBridgeConnected(true);
+            emitter.setManifestVersion(24);
+            emitter.incrementDecodeError("ARROW_TOKEN=eyJhbGciOiJIUzI1NiJ9.secret");
+            emitter.incrementDecodeError("Authorization=Bearer secretBearerToken123");
+            emitter.incrementDecodeError("raw_payload contains appID=b3b40c832fcd token=secretQueryToken");
+            emitter.incrementFingerprint();
+            emitter.setClockOffsetMs(12);
+            emitter.setIngestionReady(true);
+            emitter.incrementAcknowledgedLoss();
+            emitter.incrementHeartbeatFailure();
+            emitter.incrementFeedStall();
+            emitter.incrementSubscriptionRetry();
+            emitter.incrementPartialSubscription();
+            emitter.incrementAuthRefresh();
+            emitter.incrementAuthFailure();
+            emitter.setConnectionEpoch(1);
+            emitter.setSlotState("hft-0", true, 1024, 1024, 0, System.nanoTime());
+            emitter.setSlotCapacityUsedPercent("hft-0", 87.5);
+            emitter.setSlotSafetyState("hft-0", 1, System.nanoTime());
+            emitter.setSlotCapacityRemaining("hft-0", 256);
+            emitter.setReconnectConsecutive(2);
+            emitter.setActiveSockets(1);
+            emitter.setChildProcessAlive(true);
+            emitter.setProcessOpenFds(12);
+            emitter.setProcessFdLimit(1024);
+            emitter.setProcessFdUsagePercent(1.17);
+            emitter.setProcessRssBytes(123456L);
+            emitter.setGoGoroutines(7);
+            emitter.setJvmThreadsLive(42);
+
+            String payload = emitter.buildMetricsJson();
+            assertTrue(new ObjectMapper().readTree(payload).isObject(),
+                    "payload must remain valid JSON after scrubbing");
+
+            // The secret-shaped strings fed as decode-error reasons must never
+            // reach the wire. The only legal occurrence of any of these words
+            // is nothing — the payload must not contain them at all.
+            assertFalse(payload.contains("eyJhbGciOiJIUzI1NiJ9"),
+                    "JWT/ARROW_TOKEN value leaked into the OTLP export body");
+            assertFalse(payload.contains("secretBearerToken123"),
+                    "Bearer token leaked into the OTLP export body");
+            assertFalse(payload.contains("b3b40c832fcd"),
+                    "appID value leaked into the OTLP export body");
+            assertFalse(payload.contains("secretQueryToken"),
+                    "query-token value leaked into the OTLP export body");
+            assertFalse(payload.contains("ARROW_TOKEN"),
+                    "ARROW_* env name leaked into the OTLP export body");
+            assertFalse(payload.contains("Bearer"),
+                    "Authorization bearer marker leaked into the OTLP export body");
+            assertFalse(payload.contains("raw_payload"),
+                    "raw_payload marker leaked into the OTLP export body (R-036 invariant)");
+            assertFalse(payload.contains("appID"),
+                    "appID key leaked into the OTLP export body");
+            assertFalse(payload.contains("password") || payload.contains("secret"),
+                    "credential-class words leaked into the OTLP export body");
+        } finally {
+            emitter.close();
+        }
+    }
+
+    // ---- ING-UNIT-022: bounded metric-label cardinality ----
+
+    /**
+     * ING-UNIT-022: every attribute key in the serialized OTLP payload must
+     * come from a fixed set — no token/symbol/high-cardinality label keys
+     * (dossier §Telemetry: "bounded-cardinality metrics"). Enumerate the
+     * label keys the way a collector would (resource attributes, data-point
+     * attributes) and assert the exact set.
+     */
+    @Test
+    @DisplayName("ING-UNIT-022: emitted label keys come from the fixed bounded set")
+    void labelCardinalityBounded() throws Exception {
+        OtlpMetricsEmitter emitter = new OtlpMetricsEmitter("127.0.0.1:1", "test-instance");
+        try {
+            emitter.incrementDecodeError("MALFORMED_JSON");
+            emitter.incrementDecodeError("UNKNOWN_FEED");
+            emitter.setSlotCapacityUsedPercent("hft-0", 50.0);
+            emitter.setSlotCapacityUsedPercent("hft-1", 25.0);
+            emitter.recordAppendLatencyMs(3);
+            emitter.recordAppendLatencyMs(9);
+            String payload = emitter.buildMetricsJson();
+
+            JsonNode root = new ObjectMapper().readTree(payload);
+            Set<String> keys = new HashSet<>();
+            collectAttributeKeys(root, keys);
+
+            // The complete fixed set: 2 resource attributes, slot + reason on
+            // labeled data points, and the 3 histogram percentile attributes.
+            Set<String> allowed = Set.of(
+                    "service.name",
+                    "service.instance.id",
+                    "slot",
+                    "reason",
+                    "p50",
+                    "p90",
+                    "p99");
+            assertEquals(allowed, keys,
+                    "label keys must come from the fixed set exactly — no token/symbol/high-cardinality keys");
+
+            // The label VALUES must stay bounded too: slot ids are hft-<n>,
+            // reasons are from the fixed quarantine vocabulary — never token
+            // numbers or symbols.
+            for (JsonNode attr : root.findValues("attributes")) {
+                for (JsonNode pair : attr) {
+                    String k = pair.path("key").asText();
+                    String v = pair.path("value").path("stringValue").asText("");
+                    if (k.equals("slot")) {
+                        assertTrue(v.matches("hft-\\d+"),
+                                "slot label must be a bounded slot id, got: " + v);
+                    }
+                }
+            }
+        } finally {
+            emitter.close();
+        }
+    }
+
+    /** Recursively collect every "key" under any "attributes" array, plus resource attributes. */
+    private static void collectAttributeKeys(JsonNode node, Set<String> out) {
+        if (node == null) return;
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                collectAttributeKeys(child, out);
+            }
+            return;
+        }
+        if (node.isObject()) {
+            Iterator<String> names = node.fieldNames();
+            while (names.hasNext()) {
+                String n = names.next();
+                JsonNode child = node.get(n);
+                if (n.equals("attributes") && child.isArray()) {
+                    for (JsonNode pair : child) {
+                        out.add(pair.path("key").asText());
+                    }
+                } else {
+                    collectAttributeKeys(child, out);
+                }
+            }
         }
     }
 }

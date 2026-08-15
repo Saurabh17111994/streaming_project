@@ -35,7 +35,12 @@ class ComputeOtlpEmitterTest {
         emitter.drainDelta();
         emitter.drainSourceIdleAtTailDelta();
         emitter.drainSignalKvFilteredNonCanonicalDelta();
+        emitter.drainCandleLateDropDelta();
+        emitter.drainDedupCacheHitsDelta();
+        emitter.drainDedupCacheMissesDelta();
+        emitter.drainDedupRehydrationFailuresDelta();
         ComputeOtlpEmitter.resetStartupModeForTest();
+        ComputeOtlpEmitter.resetDedupTelemetryForTest();
     }
 
     @Test
@@ -161,6 +166,101 @@ class ComputeOtlpEmitterTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ComputeOtlpEmitter.recordStartupMode(-1))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ── REQ-FC-006 + DEC-038: beyond-lateness drops + dedup telemetry ──────
+
+    @Test
+    @DisplayName("beyond-lateness drops ship as a DELTA sum carrying the latest drop's attributes")
+    void candleLateDroppedShipsAsDeltaSumWithLatestAttributes() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        ComputeOtlpEmitter.recordCandleLateDrop(42L, 1_700_015_000L, 12_345L, "beyond-allowed-lateness");
+        String json = emitter.buildMetricsJson(0, 0, 0, 2, 0, 0, 0);
+        assertThat(json).contains("\"name\":\"compute.candles.late.dropped\"");
+        assertThat(json).contains("\"asInt\":2");
+        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
+        assertThat(json).contains("\"isMonotonic\":false");
+        // The single bounded attribute set (latest drop) — never per-key labels.
+        assertThat(json).contains("\"key\":\"instrument_token\"");
+        assertThat(json).contains("\"key\":\"window_end_ms\"");
+        assertThat(json).contains("\"key\":\"lateness_ms\"");
+        assertThat(json).contains("\"key\":\"reason\"");
+        assertThat(json).contains("\"stringValue\":\"42\"");
+        assertThat(json).contains("\"stringValue\":\"beyond-allowed-lateness\"");
+    }
+
+    @Test
+    @DisplayName("dedup cache hits/misses + rehydration failures drain as deltas, ratio + latency as gauges")
+    void dedupTelemetryShipsDeltasAndGauges() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        ComputeOtlpEmitter.recordDedupCacheHit();
+        ComputeOtlpEmitter.recordDedupCacheHit();
+        ComputeOtlpEmitter.recordDedupCacheHit();
+        ComputeOtlpEmitter.recordDedupCacheMiss();
+        ComputeOtlpEmitter.recordDedupRehydrationLatencyMs(42L);
+        String json = emitter.buildMetricsJson(0, 0, 0, 0, 3, 1, 0);
+        assertThat(json).contains("\"name\":\"compute.dedup.cache.hits\"");
+        assertThat(json).contains("\"asInt\":3");
+        assertThat(json).contains("\"name\":\"compute.dedup.cache.misses\"");
+        assertThat(json).contains("\"asInt\":1");
+        assertThat(json).contains("\"name\":\"compute.dedup.rehydration.failures\"");
+        assertThat(json).contains("\"asInt\":0");
+        // Drain-window ratio 3/(3+1) = 0.75 as integer basis points (7500);
+        // last lookup 42 ms.
+        assertThat(json).contains("\"name\":\"compute.dedup.cache.hit.ratio\"");
+        assertThat(json).contains("\"asInt\":7500");
+        assertThat(json).contains("\"name\":\"compute.dedup.rehydration.latency.ms\"");
+        assertThat(json).contains("\"asInt\":42");
+    }
+
+    @Test
+    @DisplayName("REQ-FC-010: source throughput ships as a DELTA sum, watermark lag as a gauge")
+    void reqFc010SourceAndWatermarkMetrics() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        // Source-record counter: drains as a DELTA (records per flush window).
+        ComputeOtlpEmitter.recordSourceRecord();
+        ComputeOtlpEmitter.recordSourceRecord();
+        ComputeOtlpEmitter.recordSourceRecord();
+        assertThat(emitter.drainSourceRecordsDelta()).isEqualTo(3); // drained by the flush thread
+        assertThat(emitter.drainSourceRecordsDelta()).isZero();     // drained, never re-fires
+        ComputeOtlpEmitter.recordSourceRecord();
+        String json = emitter.buildMetricsJson(0, 0, 1, 0, 0, 0, 0, 0);
+        assertThat(json).contains("\"name\":\"compute.source.records\"");
+        assertThat(json).contains("\"asInt\":1");
+        assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
+
+        // Watermark-lag gauge appears only once recorded (never an invented 0).
+        assertThat(new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0))
+                .doesNotContain("compute.watermark.lag.ms");
+        ComputeOtlpEmitter.recordWatermarkLagMs(1_234L);
+        String withLag = new ComputeOtlpEmitter("localhost:4318").buildMetricsJson(0);
+        assertThat(withLag).contains("\"name\":\"compute.watermark.lag.ms\"");
+        assertThat(withLag).contains("\"asInt\":1234");
+        assertThat(withLag).contains("\"unit\":\"ms\"");
+        assertThat(withLag).contains("\"gauge\":{\"dataPoints\"");
+    }
+
+    @Test
+    @DisplayName("dedup telemetry counters drain independently and never re-fire")
+    void dedupTelemetryCountersDrainAsDeltas() {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+
+        assertThat(emitter.drainDedupCacheHitsDelta()).isZero();
+        assertThat(emitter.drainDedupCacheMissesDelta()).isZero();
+        assertThat(emitter.drainDedupRehydrationFailuresDelta()).isZero();
+
+        ComputeOtlpEmitter.recordDedupCacheHit();
+        ComputeOtlpEmitter.recordDedupCacheMiss();
+        ComputeOtlpEmitter.recordDedupCacheMiss();
+        ComputeOtlpEmitter.recordDedupRehydrationFailure();
+        assertThat(emitter.drainDedupCacheHitsDelta()).isEqualTo(1);
+        assertThat(emitter.drainDedupCacheMissesDelta()).isEqualTo(2);
+        assertThat(emitter.drainDedupRehydrationFailuresDelta()).isEqualTo(1);
+        // A drained increment never re-fires.
+        assertThat(emitter.drainDedupCacheHitsDelta()).isZero();
     }
 
     // ── tracker 14 P8.2: payload contract + delivery/outage semantics ─────

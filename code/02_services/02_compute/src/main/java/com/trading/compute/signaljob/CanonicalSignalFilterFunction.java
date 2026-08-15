@@ -44,7 +44,12 @@ public class CanonicalSignalFilterFunction implements FilterFunction<RowData> {
                 SignalCandidatesTableColumns.SCHEMA_VERSION_V2,
                 SignalCandidatesTableColumns.CANONICAL_STRATEGY_ID,
                 SignalCandidatesTableColumns.CANONICAL_STRATEGY_VERSION,
-                SignalCandidatesTableColumns.CANONICAL_RULE_ID);
+                SignalCandidatesTableColumns.CANONICAL_RULE_ID,
+                // Slice 2.2 (Phase C): the forming-bar placeholder rule is
+                // the second pinned canonical rule id — its candidates reach
+                // the KV current-state like candle candidates (REQ-SS-003 +
+                // DEC-035 dual-sink). Everything else stays filtered.
+                SignalCandidatesTableColumns.CANONICAL_FORMING_RULE_ID);
         if (!canonical) {
             ComputeOtlpEmitter.recordSignalKvFilteredNonCanonical();
             LOG.warn("signal-canonical-filter: dropping non-canonical signal from the KV "

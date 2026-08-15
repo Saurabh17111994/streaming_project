@@ -43,10 +43,17 @@ class SourceIdleWatchdogGeneratorTest {
     @AfterEach
     void tearDown() {
         SourceIdleWatchdogGenerator.resetEpisodeForTest();
+        // JVM-wide statics — drain the source-record + watermark-lag counters
+        // too so independent tests do not leak into each other.
+        ComputeOtlpEmitter.resetDedupTelemetryForTest();
     }
 
     private static long drainSourceIdleAtTail() {
         return new ComputeOtlpEmitter("collector:4318").drainSourceIdleAtTailDelta();
+    }
+
+    private static long drainSourceRecords() {
+        return new ComputeOtlpEmitter("collector:4318").drainSourceRecordsDelta();
     }
 
     @Test
@@ -129,6 +136,27 @@ class SourceIdleWatchdogGeneratorTest {
         generator.onPeriodicEmit(new RecordingOutput());
         assertEquals(1L, drainSourceIdleAtTail(),
                 "idle measured from source-open (no records ever) must alert");
+    }
+
+    @Test
+    void recordsThroughputAndWatermarkLagMetrics() {
+        // REQ-FC-010: every source record counts toward the source-throughput
+        // delta, and every emitted watermark records its processing-time lag.
+        RecordingOutput output = new RecordingOutput();
+        generator.onEvent(null, 10_000L, output);
+        generator.onEvent(null, 11_000L, output);
+        generator.onPeriodicEmit(output);
+
+        assertEquals(2L, drainSourceRecords(),
+                "source-throughput delta must count exactly the consumed records");
+        // clock started at 1_000_000; after two onEvents the clock is still
+        // 1_000_000 (onEvent does not advance it), so the last emitted
+        // watermark (6_001, the second event's bounded watermark) lags by
+        // ~1_000_000 - 6_001 ms. The exact value is clock-driven, not
+        // assertion-critical — what matters is a finite, non-negative gauge
+        // was recorded for an emitted watermark.
+        assertTrue(ComputeOtlpEmitter.watermarkLagMsForTest() >= 0L,
+                "watermark-lag gauge must be recorded once a watermark is emitted");
     }
 
     private static final class RecordingOutput implements WatermarkOutput {

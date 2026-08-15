@@ -44,7 +44,8 @@ logs/ingestion.log
 *.classpath
 **/.settings/
 
-# Duplicate backup of 13-candle-log-kv-replay-safety.md (leftover copy).
+# Actively maintained signal-replay tracker (git-tracked; kept out of new-file scans).
 docs/08_implementation/14-candle-log-kv-replay-safety_2.md
 
 *.factorypath
+.freebuff/

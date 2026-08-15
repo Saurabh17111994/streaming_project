@@ -19,7 +19,7 @@ class BridgeRestartDecisionTest {
     @DisplayName("unexpected exit restarts once")
     void unexpectedExitRestartsOnce() {
         assertEquals(BridgeRestartDecision.RESTART,
-                IngestionService.bridgeRestartDecision(true, 1, 0),
+                IngestionService.bridgeRestartDecision(true, false, 1, 0),
                 "first unexpected exit (restartCount=0) must restart");
     }
 
@@ -27,7 +27,7 @@ class BridgeRestartDecisionTest {
     @DisplayName("second unexpected exit is terminal")
     void secondUnexpectedExitIsTerminal() {
         assertEquals(BridgeRestartDecision.TERMINAL,
-                IngestionService.bridgeRestartDecision(true, 1, 1),
+                IngestionService.bridgeRestartDecision(true, false, 1, 1),
                 "second unexpected exit (restartCount=1) must be terminal");
     }
 
@@ -35,7 +35,7 @@ class BridgeRestartDecisionTest {
     @DisplayName("clean exit code 0 is never restarted")
     void cleanExitNeverRestarts() {
         assertEquals(BridgeRestartDecision.NO_RESTART,
-                IngestionService.bridgeRestartDecision(true, 0, 0),
+                IngestionService.bridgeRestartDecision(true, false, 0, 0),
                 "requested/clean exit must not restart");
     }
 
@@ -43,7 +43,15 @@ class BridgeRestartDecisionTest {
     @DisplayName("shutdown in progress never restarts")
     void shutdownNeverRestarts() {
         assertEquals(BridgeRestartDecision.NO_RESTART,
-                IngestionService.bridgeRestartDecision(false, 1, 0),
+                IngestionService.bridgeRestartDecision(false, false, 1, 0),
                 "not running must never restart");
+        // CHG-015: the hook tears the bridge down while `running` is still
+        // true (it stays true until the bridge exits), so a non-zero exit in
+        // that window — e.g. the forced-kill fallback (137) — must also never
+        // restart, or a fresh bridge would be spawned mid-shutdown and
+        // orphaned when the JVM halts.
+        assertEquals(BridgeRestartDecision.NO_RESTART,
+                IngestionService.bridgeRestartDecision(true, true, 137, 0),
+                "shutdown in progress must never restart even while running");
     }
 }

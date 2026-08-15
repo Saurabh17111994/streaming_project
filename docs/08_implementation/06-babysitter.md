@@ -13,7 +13,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready MVP no-op; future action contract deferred |
 | Owner | Babysitter Team |
-| Requirements | `REQ-BB-*` |
+| Requirements | `REQ-BB-001`–`REQ-BB-008` → `AC-BB-001`–`AC-BB-009` |
 | Contract | `docs/04_contracts/05-babysitter.md` |
 | MVP output | No actions |
 | Safety rule | Babysitter never calls broker/Arrow REST directly |
@@ -111,12 +111,12 @@ Consumed position events, latest offset, state freshness, stale/conflicting posi
 
 ### Required tests
 
-- `BAB-UNIT-001` no-op output for every valid position state.
-- `BAB-UNIT-002` action feature flag fails closed in MVP.
-- `BAB-INT-001` Positions changelog schema/offset handling.
-- `BAB-FAIL-001` checkpoint restore and changelog gap.
-- `BAB-FAIL-002` stale/conflicting position suppression.
-- `BAB-OPS-001` readiness never implies trading readiness.
+- `BAB-UNIT-001` no-op output for every valid position state. **IMPLEMENTED 2026-08-15** — `BabysitterJobTest` (StreamGraph inspection of `BabysitterJob.buildTopology()`: the submitted topology contains zero `Position_Actions` operators; marker → discard only).
+- `BAB-UNIT-002` action feature flag fails closed in MVP. **IMPLEMENTED 2026-08-15** — `BabysitterJobTest` (every non-`false` `POSITION_ACTIONS_ENABLED` value — trimmed, case-insensitive — fails closed at startup with `IllegalStateException`; unset/`false` accepted).
+- `BAB-INT-001` Positions changelog schema/offset handling. **PENDING** — needs the Positions-changelog source (future phase).
+- `BAB-FAIL-001` checkpoint restore and changelog gap. **PENDING** — needs checkpointed observation state.
+- `BAB-FAIL-002` stale/conflicting position suppression. **PENDING** — needs observation state.
+- `BAB-OPS-001` readiness never implies trading readiness. **PENDING** — needs readiness telemetry/metrics.
 
 ### Definition of done
 

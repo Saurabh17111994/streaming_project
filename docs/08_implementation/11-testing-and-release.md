@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill) — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/268); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus, CHG-008/009/010; +4 M2 hardening 2026-08-15 — ING-UNIT-018 Java↔Go config parity, CHG-012; +13 M3 hardening 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 READY gating matrix, CHG-017; +7 M4 hardening 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003, CHG-018; +3 M5 hardening 2026-08-15 — ING-UNIT-021/022 telemetry scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint bash harness, CHG-019), 0 failures, 8 env-gated skips (ingestion; common 340/0/1-skip; the 11 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker, SCH-20 Positions-store drill — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..006`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -67,7 +67,7 @@ The following mappings identify the detailed sections in this catalog.
 | `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at 3,000 instruments and 90,000 ticks/s peak; no peak-capacity evidence row remains |
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
-| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
+| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained (DEC-038: the accepted dedup set is observable in the Fluss dedup table; the Flink checkpoint does not duplicate it) |
 | `STATE-CANDLE-001` | 15 min | Variable baseline input | One final candle per non-empty 15-second window; no tick collection exists in active state |
 | `BABYSITTER-001` | 5 min | Repeated position updates | Latest state only; zero actions; startup rejects action enablement |
 
@@ -89,11 +89,36 @@ The following mappings identify the detailed sections in this catalog.
 | `COMPAT-FLUSS-002` | Raw `BYTES` write/read round trip | Original bytes and hash are unchanged. |
 | `COMPAT-FLUSS-003` | LOG, KV, and changelog behavior | Observed behavior matches the table contract. |
 | `COMPAT-FLUSS-004` | Stale, regressive, and conflicting KV updates | Invalid transition is rejected, quarantined, and audited. |
+| `COMPAT-FLUSS-005` | Raw-client composite-PK upsert matrix (kv.format-version × bucket key) | A composite-PK KV table is writable by the raw client exactly when `table.kv.format-version=2` AND the bucket key is a single-field subset of the PK; all other cells fail with the documented `IcebergKeyEncoder` signature. |
+| `COMPAT-FLUSS-006` | Bucket-distribution skew probe (SCH-07 evidence) | Distinct bucket-key values spread evenly across `bucket.num` buckets (no empty/hot bucket); a constant bucket key collapses to exactly one bucket. |
 | `SCHEMA-REC-001` | Clean-break reset, replay, and rollback readability | Rebuilt state matches expected state without silent data loss. |
 | `SCHEMA-EOD-001` | Offload retry and retention-expiry protection | Source data cannot expire before verified offload. |
-| `SCHEMA-AUDIT-001` | Seven-year audit reconstruction simulation | A selected order path can be reconstructed from immutable evidence. |
 
 Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, effective-schema output, fixture checksum, and test report for every run.
+
+**Implemented as of 2026-08-15** — executable tests do not yet carry all COMPAT-* IDs in code; the mapping is:
+
+| Implementing test class | Tests | Covers |
+| --- | --- | --- |
+| `CompatFlussDdlParityIntegrationTest` | 1 | `COMPAT-FLUSS-001` (SCH-12/13 — every approved DDL applies as an admin-API descriptor on the pinned Fluss and inspects with manifest parity, including the **full WITH-option set** (every declared option honored, `bucket.num`/`bucket.key` + the `table.datalake.enabled` dev deviation carved out); 21/21 tables green on the live dev cluster 2026-08-15; env-gated on `FLUSS_BOOTSTRAP`) |
+| `CompatFlussIntegrationTest` | 8 | `COMPAT-FLUSS-002` (BYTES round trip), `COMPAT-FLUSS-003` (LOG append-only + KV upsert/lookup + partial-update merge + **KV changelog records are FULL row images** — SCH-14), `COMPAT-FLUSS-004` (KV last-write-wins observed; stale-write rejection belongs to `KvStateUpdateProtocol`), `COMPAT-FLUSS-006` (bucket-distribution skew probe — 400 distinct keys over an 8-bucket LOG table spread across every bucket within mean+3σ, plus the constant-key control collapsing all rows into exactly one bucket; the live half of the "non-null routing and bucket-skew tests" requirement, SCH-07), `COMPAT-FLINK-002` (SCH-16 — cross-table writes visible per-table, no atomic commit; evidence `logs/schema-compat/compat-flink-002-20260815.md`), `SCHEMA-REC-001` (clean-break rebuild converges), `SCHEMA-AUDIT-001` (tiered-storage half — documented skip; the chain/reconstruction half lives in `AuditReconstructionSimulationTest`) |
+| `KvStaleWriteRejectionTest` | 7 | `COMPAT-FLUSS-004` (the rejected/quarantined/audited half — a projector-layer store driven through `KvStateUpdateProtocol`: stale/regressive/conflict/unknown writes are rejected without mutating state, raise the halt signal, and are quarantined; duplicates are no-ops; a mixed sequence never regresses and every attempt is audited) |
+| `ColumnOwnershipTest` | 18 | `COMPAT-FLUSS-004` / SCH-15 (pure-JVM fail-closed invariants of the `ColumnOwnership` matrix: in-range + unique indexes, one declared writer per column group (DEC-005), identity columns never partial-updated, no unowned column; `checkWrite` enforcement) |
+| `ColumnOwnershipAgreementTest` | 21 | SCH-15 cross-boundary pin — each ownership matrix mirrors its DDL: full column coverage, PK + `schema_version` columns identity, schema-version header match, writers only ever touch their own group |
+| `OrderLifecycleColumnsAgreementTest` | 5 | SCH-15 DDL pin (`09_order_lifecycle.sql` v2 — 15 columns, composite PK `(account_scope_id, broker_order_id)` R-013, `bucket.key`, types/nullability) |
+| `ExecutionAttemptsColumnsAgreementTest` | 5 | SCH-15 DDL pin (`12_execution_attempts.sql` v2 — 19 columns, PK `execution_attempt_id`, monotonic `phase_epoch` R-234, types/nullability) |
+| `InMemoryAttemptStoreTest` | 20 | SCH-15 guard first consumer / EXE-UNIT-006 core — `InMemoryAttemptStore` runs the attempt-store matrix guard (`checkWrite`) on every mutation: prepare replay never rewrites the PREPARED attempt's identity (duplicate untouched; modified decision = violation + halt), legal transitions with monotonic `phase_epoch`, stale-epoch rejection, terminal protection, UNKNOWN exits only via explicit `resolveUnknown`, and a drifted matrix fails the transition closed |
+| `FillEventMapperTest` | 6 | SCH-20 operator-wiring core — Fills LOG row (23 cols, 08 v2) → `FillEvent` by pinned index with caller-resolved `FillContext`: `sourceVersion`=receive_time, `eventTimeMs` fallback, non-fill/price-less rows filtered, context validation |
+| `PositionProjectorDriverTest` | 11 | SCH-20 operator-wiring core — per-position version-gated projection: deterministic `position_id` minting (account/instrument/side), scale-in → REDUCING → CLOSED, re-entry mints a new id, stale/duplicate/oversell handling, weighted-average entry, NOT_A_FILL rows, end-to-end row path |
+| `FlussPositionsStateStoreIntegrationTest` | 2 | SCH-20 live drill (env-gated on `FLUSS_BOOTSTRAP`, tagged integration) — `FlussPositionsStateStore` upsert+lookup round-trip and last-write-wins re-upsert through a real Positions-shaped scratch KV table on the dev cluster (PASSED 2026-08-15) |
+| `CompatFlussCompositeKeyIntegrationTest` | 1 | `COMPAT-FLUSS-005` (raw-client composite-PK matrix re-verified on every live run — v1/v2 × default vs single-field-subset bucket key, 4 cells; runs the SHARED `CompositeKeyMatrixVerifier`, which also gates every DDL apply IN-BAND — `DdlApplyTool` re-derives the matrix against the live cluster before creating anything and refuses on deviation, never merely referencing capability evidence; the working cell is what `feature_candles_15s`/`instruments` carry; `Order_Lifecycle`/`Order_Correlation` stay Flink-connector-only — the DDL apply contract now refuses to mark an apply PASS while limited tables exist unless `--ack-limitations` names exactly them (`DDL_APPLY_ACK_LIMITATIONS`; `DdlApplyToolStatusTest`); evidence `logs/schema-compat/composite-pk-raw-client-20260815.md`; env-gated on `FLUSS_BOOTSTRAP`) |
+| `CompositeKeyMatrixVerifierTest` | 4 | Pure-JVM pin of the COMPAT-FLUSS-005 matrix: the documented 4-cell spec (configs + expected outcomes) and the expected-outcome matching both the integration test and the in-band apply gate rely on — cell drift fails before any cluster is needed |
+| `DdlApplyToolStatusTest` | 10 | Apply-status decision (step 8 — PASS only when every smoke passes; composite-PK limitation → `PASS_WITH_LIMITATION` with dedicated exit 6 on exact acknowledgment, exit 1 otherwise; `--ack-limitations auto` predicts the limited tables from the manifest — composite PK with bucket key = PK — so operators confirm, never guess; failures (incl. matrix deviations) dominate; `RESULT=` sentinel) |
+| `CleanBreakSimulationTest` | 4 | `SCHEMA-REC-001` clean-break drill (full replay reconverges; partial/mutated source diverges and fails closed) |
+| `InstrumentManifestWriterTest` | 4 | `ING-SCHEMA-002` (DDL-order row mapping, entry validation R-115/R-116/R-193, empty/duplicate-composite-key refusal) |
+| `InstrumentManifestWriterIntegrationTest` | 1 | `ING-INT-004` (first production composite-PK raw-client writer — live upserts into an `instruments`-shaped scratch table, version retention, idempotent re-load; env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`) |
+
+Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15 — **superseded**: that run predates the SCH-15/SCH-20/SCH-24 additions, and the current default-run totals are 340 common / 0 failures / 1 skip (CHG-003/005/006/007; docs-audit C6 line 340/211/268); the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
 
 ### Ingestion
 
@@ -109,26 +134,84 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-INT-001` | Load manifest and subscribe | Every required instrument is subscribed or readiness is false. |
 | `ING-INT-002` | Append accepted packets to Fluss | Every outcome has receive, start, acknowledgement/uncertainty timestamps. |
 | `ING-INT-003` | Send multiple accepted ticks | Exactly one append submission is made per tick; no application batch exceeds one record. |
+| `ING-INT-004` | Instrument manifest writer — composite-PK raw-client upserts into the `instruments` KV table | Every manifest row upserts by `(instrument_token, manifest_version)`; prior versions are retained (R-090); re-loading the same manifest is idempotent (no new rows). Live proof 2026-08-15 (`InstrumentManifestWriterIntegrationTest`, env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`). |
+| `ING-INT-005` | READY gating matrix — exhaustive no-false-positive walk of every `HealthProbe.isReady()` dimension (liveness, Fluss, tracker, broker, subscription, data, frame recency, clock) | Ready only when all eight are true; false when ANY single dimension is false (incl. partial ack, no tracked slot, stale frame, fail-closed unverified clock). Verified by `ReadinessGatingMatrixTest` (10 cases, M3 2026-08-15 — closes plan gap G8). |
+| `ING-INT-006` | `docker-entrypoint.sh` FATAL exit codes + messages | Missing `FLUSS_BOOTSTRAP` → exit 2 + `FLUSS_BOOTSTRAP is required`; missing/unreadable manifest → exit 2 + `readable instrument manifest is required`; missing/non-executable bridge binary → exit 1 + `arrow-bridge binary not found or not executable`. Verified by `code/01_platform/04_scripts/tests/test_docker_entrypoint.sh` (bash harness, shellcheck-clean; wired into `run-monday-gates.sh`) (M5, 2026-08-15). |
 | `BROKER-MD-001` | Market-data packet corpus, endpoint behavior, protocol fields, limits, and unknown-version handling | Live wire frames from the HFT feed captured 2026-08-13 (`socket.arrow.trade` 40/196 B zstd LE) decode to typed fields; AutoLogin verified as a non-interactive auth path; observed behavior recorded as protocol evidence (`logs/broker-md-001/`); unsupported or unknown behavior blocks readiness rather than being guessed. (The Standard feed `ds.arrow.trade` evidence was retired with the Standard feed removal 2026-08-14.) |
 | `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. Unit: `ReconnectEpochSequenceTest` (epoch strictly increases across disconnect→reconnect; full ack = no row, partial ack = FEED_HEALTH) + `ReadinessRecoveryTest`/`SlotHealthTest` (completeness recheck) + `BridgeRestartDecisionTest` (ING-UNIT-012); live: `ING-E2E-001` forced disconnect. |
 | `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. Verified by `AppendTrackerTest` (record/byte 80% warning → readiness false; 100% records → `tryAccept` false; warning + critical listeners fire; halted stays halted; pending counters reconcile on success and failure). |
 | `ING-FAIL-003` | Force shutdown with pending writes | Uncertainty/loss evidence is persisted. Verified by `UncertaintyJournalTest` (entry write + read-back, multi-entry append, full JSON field set, R-194 control-character escaping, R-117 bare-filename NPE guard). |
+| `ING-FAIL-004` | Concurrent accept/release against a small limit (16 threads, halt path exercised) | Pending counters reconcile to zero; `totalAccepted + totalRejected == attempts`; `appended + failed == accepted`; accepted bytes equal the sum of record sizes; counters never go negative. Verified by `AppendTrackerTest.concurrentAcceptReleaseKeepsInvariants` (M1, 2026-08-15). |
+| `ING-FAIL-005` | Halt latch after 100% limit, then drain | Pinned lifecycle: halted stays latched until process restart — draining pending to zero (success or failure) never unhalts; accepts stay rejected and readiness stays false. Verified by `AppendTrackerTest.haltLatchPersistsAfterDrain` (M1, 2026-08-15). |
+| `ING-FAIL-006` | 30 s warning-window throttle | The ≥80% warning listener fires at most once per 30 s window: first crossing fires; re-crossings within the window never re-fire; a 10 s-old marker still throttles; a 31 s-old marker unlocks exactly one re-fire and opens a fresh window. Verified by `AppendTrackerTest.warningThrottledToOncePer30sWindow` — the clock marker is advanced by reflection, no 30 s sleep (M5, 2026-08-15). |
+| `ING-FAIL-007` | Clock offset crossing `CLOCK_OFFSET_LIMIT_MS` on the periodic re-measurement | Exactly one TIME_JUMP discontinuity per violation episode; recovery resets the episode; `abs(offset) == limit` is not a violation. Verified by `TimeJumpMonitorTest` + the `IngestionService` clock monitor (M1, 2026-08-15). |
+| `ING-FAIL-008` | Bridge crash-loop with a scripted fake bridge binary that exits non-zero repeatedly | Each unexpected exit logs `BRIDGE_CRASH` and writes a DROP discontinuity; the bridge restarts exactly once, then a second crash is TERMINAL — the service unwinds to a clean shutdown (the "then exits 0" path) with the readiness marker cleared and a single uncertainty-journal entry. Verified by `BridgeCrashLoopE2ETest` — default-run via the ING-DQ-010 no-op-sink seam, no live Fluss required (M3, 2026-08-15). |
+| `ING-FAIL-009` | Auth failure (bad `ARROW_TOKEN` / revoked creds): bridge exits 2 on pipe close | Java logs the authentication failure, writes `auth_failure` discontinuity evidence (DROP-class, reason preserved), appends zero ticks, and does NOT restart the bridge (a revoked credential is terminal). Verified by `BridgeAuthFailureE2ETest` — the scripted bridge mirrors the real drain sequence (`auth_failure` → `bridge_shutdown` → exit 2), default-run (M3, 2026-08-15). |
+| `ING-FAIL-010` | Shutdown with a Fluss ack that never completes; `shutdown()` called twice | Returns within the drain deadline (no hang); the uncertainty journal pins the exact remaining pending bytes (R-260 — new `pending_records`/`pending_bytes` entry fields); the second `shutdown()` is a no-op (single journal entry, single drain). The drain deadline is a new `DRAIN_DEADLINE_SECONDS` config key (default 30, range 1-300) so the deadline is provable in-test. Verified by `ShutdownDeadlockTest` (M3, 2026-08-15). |
+| `ING-DQ-010` | Mixed NDJSON corpus through the real pipeline (valid, malformed, unknown feed, missing instrument, invalid values, stale, future, 1 MB, NUL) | `appends + quarantines == lines fed`; `frameCount == lines fed`; zero uncaught exceptions; quarantine classes fire their decode-error metrics exactly once each. Verified by `IngestionNoSilentDropTest` — default-run via the no-op-sink test seam (`QuarantineSink`/`DiscontinuitySink`/`SafetySink` in the `IngestionService` constructor), no reachable Fluss required (M1, 2026-08-15; seam added 2026-08-15). |
+| `ING-DQ-011` | Seeded property-based fuzz: random NDJSON lines (mutated ticks, schema violations, malformed JSON, garbage, 1 MB, control chars) through the real pipeline, 3 pinned seeds | No uncaught exception; `appends + quarantines == lines fed` (no silent drop); `INTERNAL_ERROR` evidence == error counter (untyped crash path fails the test); corpus regenerates identically from the fixed seed; guaranteed-valid ticks always append. Verified by `FuzzIngestionTest` — default-run via the no-op-sink seam, JDK `java.util.Random`, no external property library (landed 2026-08-15, CHG-010). |
+| `ING-TCP-002` | Losslessness comparator (`reconcile-compare.py`): synthetic tick-count fixtures with known lost / extra / vanished mutations; missing or truncated counter file | Each mutation class detected (exact-equality mode fails on any delta); a missing/truncated bridge or post-probe file **fails closed** (exit 1), never passes; chunked 20-token reports parse; Fluss `-1` sentinel tolerated. Verified by `code/01_platform/04_scripts/tests/test_reconcile_compare.py` (20 unittest cases; landed 2026-08-15, CHG-012). |
+| `ING-TCP-003` | Counter-report persistence: 1,024-token report emitted as bounded chunks (20/line) | File + stderr mirror are byte-identical; the file is written FIRST so a dead stderr (SIGPIPE path) cannot lose the reconcile evidence; `ARROW_TICK_COUNTS_FILE` feeds the report path. Verified by `TestIngTcp003TickCountReportChunkedFileAndStderrMirror` (52 bounded lines, total=524800, each < 603 B truncation bound) + `TestIngTcp003ReportFilePersistsWhenStderrDies` (dead stderr via /dev/full — report survives) (landed 2026-08-15, CHG-018). |
+| `ING-UNIT-018` | Java↔Go `ARROW_HFT_*` config parity: every key's default, accepted, and rejected values fed to Java `exactInt`/`intRange` and Go `hftPin`/`hftRange` | Both sides agree on every default, accepted value, and rejected value (Java throws `IllegalStateException`; Go exits FATAL status 2). Verified by `ConfigParityTest` (Java) + the mirror table in `hft_policy_test.go` (Go); the Go bridge now reads `ARROW_HFT_LATENCY_MS` and `ARROW_HFT_CONNECTIONS` through the mirrored helpers too (they were inline with fail-open semantics — non-integers silently ignored) (landed 2026-08-15, CHG-012). |
+| `ING-UNIT-019` | Env-key doc drift: every key in the 03-ingestion.md Configuration contract table must be read by ingestion code | docs-audit **C16** PASS — every documented key is referenced by `IngestionConfig`, the Go bridge, or another ingestion source (landed 2026-08-15, CHG-012). |
+| `ING-UNIT-020` | Process-level FATAL exits — missing `ARROW_APP_ID` + documented FATAL message text | Exit code 2 + the exact documented message: missing `ARROW_APP_ID` → `missing required env: ARROW_APP_ID`; `ARROW_HFT_CONNECTIONS=2` → `FATAL: … pinned to 1`; `ARROW_HFT_LATENCY_MS=49` → `FATAL: … must be in range 50..60000`. Verified by `TestIngUnit020MissingAppIdAndFatalMessages` (exec-self subprocess; helper env stripped of policy keys so a polluted test environment cannot mask the FATAL; closes G5) (M5, 2026-08-15). |
+| `ING-UNIT-021` | Metrics-side secret scrubbing (G6): serialize a full OTLP export body after exercising every metric path | No `ARROW_*` values, Bearer tokens, `raw_payload`, appID/token values, or credential words in the payload (mirrors ING-SEC-RED-001 for logs). Verified by `OtlpMetricsEmitterTest.exportBodyScrubsSecrets` — drove out a real leak (decode-error reason labels carried raw `ARROW_TOKEN=`/Bearer strings to the collector); the emitter now scrubs reason labels and fails closed to `REDACTED` on any surviving marker (M5, 2026-08-15). |
+| `ING-UNIT-022` | Bounded metric-label cardinality | Enumerated label keys come from exactly the fixed set {`service.name`, `service.instance.id`, `slot`, `reason`, `p50`, `p90`, `p99`}; slot label values are bounded (`hft-\d+`) — no token/symbol/high-cardinality labels. Verified by `OtlpMetricsEmitterTest.labelCardinalityBounded` (M5, 2026-08-15). |
+| `ING-RES-002` | Subscription-plan boundary N (1/511/512/513/1023/1024/1025) | Every token appears exactly once in the request union; each request ≤ `MaxHFTTokensPerRequest` (≤512); request count = ceil(n/512); 1025 on one connection is over-capacity and rejected; `validateRequestUnion` fails closed on cross/within-request duplicates, tokens outside the assignment, missing tokens, empty and over-size requests. Verified by `TestIngRes002PlanBoundaries` + `TestIngRes002ValidateRequestUnionRejects` (6 sub-cases, M4 2026-08-15). |
+| `ING-RES-003` | Backoff(attempt) golden sequence | Exactly 1,2,4,8,16,30,30… s with NO jitter (deterministic for ING-RES-001 soak accounting); negative attempts clamp to 1 s. Verified by `TestBackoffGoldenSequence` (M4 2026-08-15). |
+| `ING-RES-004` | NDJSON contract version on every emit path | `tick`, `bridge_event`, and `bridge_metrics` records all carry `contract_version=2` (schema conformance across the contract). Verified by `TestIngRes004AllEmitPathsCarryContractVersion2` (M4 2026-08-15). |
 | `ING-PERF-001` | Variable 50,000 ticks/s average baseline, 3,000 instruments | Append p99 is under 50 ms and memory/backlog remain bounded. 1,024-envelope probe 58,951 ticks/s recorded 2026-08-09; gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append 49,578 tps / 0 failures / p99 &lt; 5 ms); the 3,000/50k production-envelope run is removed from acceptance (DEC-037, 2026-08-13 — not to be tested). |
 | `ING-PERF-002` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | Was: 90,000 ticks/s peak; every instrument at or below 30 ticks/s. Superseded by `ING-PERF-001` (50,000 gate). |
 | `ING-UNIT-010` | raw_payload hash validation (SHA-256 + base64) | Hash mismatch, malformed hash, invalid base64, and empty payload are rejected with a typed result. |
 | `ING-UNIT-010b` | Golden-corpus payload hash validation | Every golden packet validates and decodes to the exact frame bytes; tampered frames are rejected. |
 | `ING-UNIT-011` | Bridge event → discontinuity reason mapping | Disconnect/auth/shutdown → DROP; heartbeat/stall → HEARTBEAT_GAP; reconnect → RECONNECT; partial subscription_ack → FEED_HEALTH; non-evidence events produce no row. |
 | `ING-UNIT-012` | Bridge restart policy | Unexpected exit restarts once; a second unexpected exit is terminal; clean exit 0 and shutdown never restart. |
+| `ING-UNIT-014` | Freshness-gate exact boundary matrix | `ts_ms` at receive, exactly at `maxEventAge`/`maxFutureSkew`, ±1 ms over/under: both exact boundaries are inclusive-FRESH, one ms beyond flips STALE/FUTURE. Verified by `StaleDataTradeGuardTest.exactBoundaryMatrix` (7 cases, M4 2026-08-15). |
+| `ING-UNIT-015` | Payload-hash base64 form edge cases | Unpadded base64 accepted (basic decoder padding-lenient); URL-safe base64 rejected as MALFORMED_PAYLOAD (never silently dropped); 64 KB multi-frame payload validates and round-trips byte-exactly; sha256("") pinned to its real digest with the empty payload still a typed rejection (R-186). Verified by `PayloadHashValidatorTest` +4 (M4 2026-08-15). |
+| `ING-UNIT-016` | Canonical fingerprint form frozen cross-commit | v1 fixture golden-hash snapshot — any silent change to field order, encoding, null representation, or version fails the pin. Verified by `FingerprintBuilderTest.goldenHashFrozen` (`aec03d3d…bc5e31`, M4 2026-08-15). |
+| `ING-UNIT-017` | DEC-012 fingerprint dedup semantics | Same tick + same epoch → identical fingerprint (duplicates within an epoch expected — Compute dedups); same tick + next epoch → different (reconnect resets identity). Verified by `FingerprintBuilderTest.dedupSemanticsPinned` (M4 2026-08-15). |
 | `ING-SCHEMA-001` | Writer schema ↔ DDL agreement | Written columns match source DDL order; raw_table_1 v2 = 20 columns; ack_ts nullable; no `retention.days` option; lake-claiming DDLs carry datalake options. |
+| `ING-SCHEMA-002` | Instrument manifest writer row mapping + fail-closed validation | `toRow` builds the 14-column DDL-order row; entry validation rejects non-positive identity/keys and blank routing fields (R-115/R-116/R-193); an empty manifest or duplicate `(instrument_token, manifest_version)` is refused before any write. |
 | `ING-DQ-001` | Malformed-line quality classification | MALFORMED_JSON with raw bytes preserved; static detail bounded and line-safe; quarantine reason vocabulary exact per plan. |
 | `ING-DQ-002` | Stale classification precedence | Stale/future timestamps (5 s max age, 2 s future skew) are quarantined before any trade path. |
 | `ING-SAFE-001` | Slot-scoped safety halt requests | halt_request_id is slot-scoped and tuple-deterministic; assigned-token-set hash is deterministic and order-independent. |
 | `ING-SAFE-002` | Partial ack → unsafe, full ack never unsafe | Bridge-event safety mapping exact per plan. |
 | `ING-SAFE-003` | RECOVERED only on ACTIVE + full-ack subscription | No other combination recovers a slot. |
-| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. |
+| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. Verified by `FullStackE2ETest` (env-gated on `INGESTION_INT_TEST_E2E=true`). **Harness hardened 2026-08-15 (CHG-011):** `LOG_DIR` points at a writable JUnit temp dir (log4j's `JSON_FILE` appender otherwise swallows the service's logs and the assertions go blind) and startup/disconnect markers (`Fluss connected`, `arrow-bridge started`, `event=disconnect`) are polled with bounded deadlines instead of a fixed 8 s sleep. **Cluster pre-flight 2026-08-15 (CHG-013):** before launch the test verifies TCP 9123 (coordinator) and 9124 (tablet) accept; a crash-looping tablet (truncated log segments from an unclean shutdown) fails fast with a pointer to the surgical repair (`code/01_platform/04_scripts/fluss-repair/repair-tablet.sh`) instead of burning the 90 s startup window. **Append-success proof + file-based stderr capture 2026-08-15 (CHG-014):** with `ARROW_TICK_COUNTS=1` the bridge reports its cumulative emitted-tick total every second; after the forced disconnect the test asserts a second ACTIVE `subscription_ack` (in-process reconnect), tick-total growth past the reconnect-time baseline, and a final `bridge loop ended` report exceeding that baseline with zero errors/restarts. stderr/stdout are redirected to files (polled for appended bytes) instead of pipes — the root cause of the earlier post-SIGTERM freeze was that `Process.destroy()` on this JDK closes the parent-side process input streams (`IOException: Stream closed`) while the child is still running its shutdown hooks, so a pipe reader died at SIGTERM and the final report was written into a pipe with no reader and lost (the JSON log always had the full shutdown — separate fd). **No-orphan guard 2026-08-15 (CHG-016):** the shutdown hook ends with a final reaping sweep (a bridge restarted mid-shutdown is taken down — graceful signal, then SIGKILL — so nothing survives the JVM halt), and the test asserts the bridge pid (parsed from `arrow-bridge started (pid=N)`) is dead after the service exits and force-reaps the fake broker. Passed 2026-08-15 on the dev cluster at manifest 24 (schema verified 24/0/0; 15.4 s, baseline=4 → finalTicks=25, errors=0, restarts=0). |
 | `THR-PROBE-001` | Client capacity probe without per-row blocking | 20,480 rows submitted non-blocking; rows/s and avg/p50/p99 reported; no ack-wait bottleneck. |
 
 Evidence: approved packet corpus, manifest snapshot, deterministic clock, workload seed, append-outcome log, metrics report, and quarantine records. Real broker credentials are never used in unit tests.
+
+#### ING-E2E-001 runbook: cluster-health pre-flight and the truncated-segment repair
+
+**Pre-flight (CHG-013).** Before launching the service, `FullStackE2ETest` verifies the dev Fluss stack serves data — TCP 9123 (coordinator) and TCP 9124 (tablet) must accept. The tablet only binds after *every* log segment recovers, so a missing tablet listener while its container crash-loops means truncated segments from an unclean shutdown; the failure message names the repair tool below. A stopped stack (both ports down) reports "start the dev stack" instead. `docker ps --filter name=fluss-tablet` distinguishes the two, so the message is targeted.
+
+**Symptom.** After the tablet is killed mid-write, it crash-loops on startup with:
+
+```
+Failed to load record batch at position N from FileRecords(...)
+Caused by: java.io.EOFException: Failed to read `record batch header` ...
+Expected to read 48 bytes, but reached end of file after reading M bytes.
+```
+
+and the service reports `Alive tablet server is empty` / schema verification fails. The tablet's data volume contains segments whose tail is a preallocated/zeroed region left past the last complete batch. **Fluss's reported error position is NOT the true boundary** — a zeroed batch header misparses as valid and the reader jumps through the garbage region (observed 2026-08-15: reported 670,347,188, real boundary 670,345,400; the first "40-byte" truncation just exposed the next misread).
+
+**Repair (surgical — removes only the zeroed/never-written tail bytes, never complete records):**
+
+```bash
+# Report only (no changes):
+DRY_RUN=1 code/01_platform/04_scripts/fluss-repair/repair-tablet.sh
+# Scan + repair the live raw_table_1 table (auto-detected):
+code/01_platform/04_scripts/fluss-repair/repair-tablet.sh
+# A specific table dir (from the tablet's error message):
+code/01_platform/04_scripts/fluss-repair/repair-tablet.sh raw_table_1-696
+```
+
+The tool discovers the tablet container + data volume, scans every segment with the server's own batch arithmetic (`LogScan.py`: `batchSize = 12 + int32_le(header[8:12])`; an all-zero 48-byte header marks the preallocated tail), truncates each affected segment to the exact end of the last complete batch, restarts the tablet, and verifies recovery completed. It refuses to act while the tablet is Up (a healthy active segment is mid-append — the scanner may catch an in-progress write).
+
+**Verify.** After repair, the service startup log must show `ddl-bootstrap: verified 24 tables ok, 0 missing, 0 schema-mismatch` (manifest 24), then `Fluss connected` — then re-run ING-E2E-001.
+
+**History.** 2026-08-15 the dev cluster hit this on 12 of raw_table_1's 16 buckets (zero-tail deltas 160–3,040 bytes each, all from today's E2E runs); all were repaired with the tool and the schema re-verified 24/0/0. Backup of the original corrupt bucket-6 segment: host `/tmp/fluss-repair/raw_table_1-696-log-6/`.
 
 ### Signal job
 
@@ -136,7 +219,10 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | --- | --- | --- |
 | `SIG-UNIT-001` to `SIG-UNIT-006` | Tie ordering, candles, 300000 ms dedup TTL, candidate identity, ranking, and reservations | Output is deterministic for fixed input and clock. |
 | `SIG-UNIT-007` | Dependency scan | No `flink-cep` dependency or CEP import exists. |
-| `SIG-UNIT-008` to `SIG-UNIT-009` | Dedup and candle state contents | State stays compact; no raw packet/event collection or tick list is stored. |
+| `SIG-UNIT-008` to `SIG-UNIT-009` | Dedup and candle state contents | State stays compact; no raw packet/event collection or tick list is stored (DEC-038: the dedup set lives in the Fluss dedup table; the Flink side holds only the bounded working cache). |
+| `SIG-STATE-001` | DEC-038: large durable dedup state is observable in Fluss and the Flink checkpoint is bounded | The Fluss dedup table holds the accepted set; checkpoint size stays bounded and does not duplicate the full durable state. |
+| `SIG-STATE-002` | DEC-038: restart restores compact Flink state and rehydrates the dedup working cache from Fluss | Restart resumes from the compact checkpoint without full raw-history replay; a re-sent fingerprint inside the TTL still dedupes after rehydration. |
+| `SIG-STATE-003` | DEC-038: Fluss dedup-table unavailability or incompatibility | The job fails closed / stays degraded (no silent replay with an empty dedup set). |
 | `SIG-HARNESS-001` | Out-of-order events, watermark, and idleness | Correct event-time outcome is emitted. |
 | `SIG-HARNESS-002` | Late before-final versus after-final event | Only the permitted update/discard behavior occurs. |
 | `SIG-HARNESS-003` | Checkpoint then restore and replay | Recovered output equals the expected deterministic output. |
@@ -147,7 +233,7 @@ Evidence: approved packet corpus, manifest snapshot, deterministic clock, worklo
 | `COMPAT-FLINK-001` | Source/sink checkpoint, restore, and rescale on the pinned Flink/connector versions | Restored processing and state remain within the approved consistency boundary. |
 | `SIG-INT-002` | Partial visibility across outputs | Reconciliation identifies and handles partial visibility. |
 | `SIG-FAIL-001` | Checkpoint or continuity failure | New decisions are suppressed and a safe halt is requested. |
-| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits. |
+| `SIG-PERF-001` | Variable baseline and peak workload | Decision p99, state, checkpoint, and memory stay within the defined limits (DEC-038: re-measured after dedup externalization — checkpoint size/duration, Fluss dedup-table size, cache hit ratio, rehydration latency; detail: [Externalization benchmark](#externalization-benchmark-sig-perf-001-dec-038)). |
 
 Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoint reference, state-size report, and performance report.
 
@@ -194,6 +280,12 @@ Evidence: versioned postback fixtures, projection-ledger snapshots, crash-point 
 | `BAB-OPS-001` | Job readiness state | Babysitter health never claims Executor trading readiness. |
 
 Evidence: input fixture, output capture proving zero actions, checkpoint/restore report, changelog-gap record, and readiness metrics.
+
+**Implemented 2026-08-15** — executable tests do not yet carry BAB-* IDs in code; the mapping is:
+
+| Implementing test class | Tests | Covers BAB-* |
+| --- | --- | --- |
+| `BabysitterJobTest` | 3 | `BAB-UNIT-001` (MVP topology emits zero `Position_Actions` — cluster-free StreamGraph inspection of `BabysitterJob.buildTopology()`: no operator produces `Position_Actions`, only the pinned marker → discard topology, every node UID-pinned per CHECKPOINT-RESTORE-001/DEC-035) and `BAB-UNIT-002` (action-enable fails closed: any `POSITION_ACTIONS_ENABLED` value other than `false` — trimmed, case-insensitive — is rejected at startup with `IllegalStateException` naming the flag; unset/`false` accepted). `BAB-INT-001`, `BAB-HARNESS-001`, `BAB-FAIL-001`, `BAB-FAIL-002`, `BAB-OPS-001` pending until the Positions-changelog source and observation state land (06-babysitter.md) |
 
 ### Executor
 
@@ -357,6 +449,8 @@ Deterministic tests use fixed clocks, versioned fixtures, stable IDs/seeds, and 
 - `COMPAT-FLUSS-002`: BYTES round trip.
 - `COMPAT-FLUSS-003`: LOG/KV/changelog semantics.
 - `COMPAT-FLUSS-004`: partial update and stale-write application protocol.
+- `COMPAT-FLUSS-005`: raw-client composite-PK matrix (kv.format-version × bucket key).
+- `COMPAT-FLUSS-006`: bucket-distribution skew probe (distinct keys spread evenly; constant key collapses).
 - `COMPAT-FLINK-001`: source/sink checkpoint and restore.
 - `COMPAT-FLINK-002`: cross-table partial visibility behavior.
 - `BROKER-MD-001`: market packet corpus/protocol compatibility.
@@ -465,6 +559,27 @@ Each benchmark produces a versioned JSON record in `code/benchmarks/results/` an
 
 The baseline must meet the documented decision p99 target. Backlog must stay bounded, checkpoints must restore, safe halt must remain below five seconds, accepted data recovery below thirty seconds, and EOD verification below thirty minutes at full volume. Performance alone never proves protocol correctness, duplicate safety, or live-money readiness.
 
+### Externalization benchmark (SIG-PERF-001, DEC-038)
+
+Re-measures the Signal job after dedup externalization to prove the DEC-038 checkpoint invariant: **checkpoint size scales with bounded working/recovery state, not with Fluss-authoritative dedup cardinality; normal restart rehydrates from Fluss without full raw-history replay; the hot path does not become a per-tick Fluss round trip.** All numbers below are measurement targets — no value may be asserted (DEC-038 §9: replacing the old ~1 GB evidence with an invented number is prohibited). The pre-externalization references are historical baselines for the *why*, not target bounds.
+
+Run on the current 1,024-instrument / 20,480 ticks/s envelope first (Phase 6 acceptance), then re-run at the deferred 50,000 ticks/s baseline (3,000 instruments; ≈16.7 ticks/s/instrument average; every instrument ≤30 ticks/s). The two runs use the same procedure, envelope tooling, and versioned evidence record as the performance benchmark procedure above; they differ only in envelope/acceptance profile (DEC-036/037).
+
+| Metric | Pre-externalization reference (historical) | Post-externalization measurement target | Pass gate |
+| --- | --- | --- | --- |
+| Flink checkpoint size | 986 MB dev-hashmap / 22 s (2026-08-14 E2E); ~1.74 GB RocksDB total state at 53k t/s (2026-08-12 bench) | Measured after externalization | Scales with bounded working/recovery state, NOT Fluss dedup cardinality (SIG-STATE-001) |
+| Checkpoint duration | 22 s at 986 MB (blew the 30 s budget — CP9 expired) | Measured | Within the pinned 30 s `CHECKPOINT_TIMEOUT_MS` budget with headroom |
+| Restore duration | ~5-15 s estimate (pre-externalization, superseded) | Measured | ≤ 30 s data-path recovery (REQ-FC-008) |
+| State hydration duration | n/a (no Fluss rehydration path) | Measured: rehydrate the dedup working cache from Fluss after compact-checkpoint restore | Reported; included in the restart-to-ready timeline |
+| State hydration failures | n/a | Count | 0 — failures keep the job fail closed / degraded (SIG-STATE-003) |
+| Dedup cache hit ratio | n/a | Measured: hot-path lookups served by the bounded cache | Reported (proves the hot path does not hit Fluss per tick) |
+| Fluss dedup-table size | n/a (dedup state was Flink-side) | Entry count + bytes | Bounded = accepted rate × TTL horizon |
+| Fluss dedup update rate | n/a | Writes/s (batched/async) | Reported |
+| Throughput | 49,242-49,578 tps ingestion hot-path gate (synthetic) | Job sustains the envelope with no checkpoint growth | No per-tick Fluss round trip; decision p99 within limit (REQ-RNK-006) |
+| Decision p99 | Pre-externalization bench (Phase 0/1 records) | Re-measured | Within the documented p99 target |
+
+Evidence record: versioned JSON in `code/benchmarks/results/` (same convention as the performance benchmark procedure), capturing versions/digests, configuration hash, envelope, duration, UTC + monotonic clock sources, all rows above, and whether a restart/failure occurred. The benchmark additionally demonstrates: restart restores the compact checkpoint and rehydrates without full `raw_table_1` replay (SIG-STATE-002); the rehydrated cache still dedupes a re-sent fingerprint inside its staleness window; Fluss unavailability/incompatibility keeps the job fail-closed (SIG-STATE-003).
+
 ### One-VM-loss procedure
 
 Run this at the variable baseline profile (the 90,000 ticks/s peak is retired, DEC-036). All three Fluss workload VMs and encrypted-S3 checkpoints must be healthy first. The Executor may be enabled only against a sandbox broker.
@@ -490,7 +605,7 @@ Pass requires zero acknowledged loss, safe halt below five seconds, data-path re
 | `FAIL-PENDING-001` | Until queue limit | Fluss append artificially stalled | Warning at 80%; readiness false; critical at 100%; no unrecorded loss |
 | `FAIL-CHECKPOINT-001` | 5 min | Force checkpoint failure | Signal job suppresses decisions; one idempotent safety halt published; no Arrow REST call from Flink |
 | `PERF-PER-INSTRUMENT-003` | RETIRED with the peak campaign (DEC-036, 2026-08-13) | — | Was: declared campaign at variable 90,000 ticks/s peak; no peak-capacity evidence row remains | No acknowledged loss; bounded memory/backlog; checkpoint and recovery evidence; no cap violation |
-| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained |
+| `STATE-DEDUP-001` | 15 min | Variable baseline plus duplicates | Duplicate state contains compact identity/timestamps only; expired entries removed; no raw payload retained (DEC-038: the accepted dedup set is observable in the Fluss dedup table; the Flink checkpoint does not duplicate it) |
 | `STATE-CANDLE-001` | 15 min | Variable baseline input | One final candle per non-empty 15-second window; no tick collection exists in active state |
 | `BABYSITTER-001` | 5 min | Repeated position updates | Latest state only; zero actions; startup rejects action enablement |
 
@@ -514,6 +629,8 @@ CI must fail for:
 - Requirement/contract/DDL/schema mismatch.
 - Failing/skipped/flaky mandatory test.
 - Missing evidence metadata.
+- DDL apply exit-code contract drift: `make ddl-apply-smoke` (env-gated on `FLUSS_BOOTSTRAP`; in the Monday gate) must pass — the orchestrator is run three times against scratch-prefixed catalogs and the terminal contract (0 full PASS / 6 acknowledged `PASS_WITH_LIMITATION` / 1 refused limitation) plus the `RESULT=`/`DDL-APPLY-RESULT:` sentinels and evidence record are asserted; when docker + the ddl-apply image are present a fourth containerized drill mounts a pre-seeded engine-uid 644 evidence record and asserts the apply exits 1 with `EVIDENCE OWNERSHIP CHECK FAILED` naming the seed (`ddl_apply_smoke.py`; see `02-schema-storage.md`).
+- Non-root evidence ownership contract drift: `make evidence-ownership-check` (in the Monday gate DDL step and `docs-audit` C15) must pass — the evidence root dir must carry setgid + group-write (2775), and every evidence record the ddl-apply container wrote (owner == the engine uid) must be group-writable AND carry the engine GID; no record or root dir may be root-owned (`evidence_ownership_check.py`; host-side `make ddl` records are out of scope).
 
 `CI-PERF-001`: the variable baseline and peak benchmark profiles use a recorded seed, the production instrument count, no fixed 50 ms schedule, no per-instrument rate above 30 ticks/s, and zero acknowledged loss.
 
@@ -602,6 +719,24 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 | `REQ-EXE-*` | Executor |
 | `REQ-OBS-*` | Observability/operations |
 | `REQ-PF-*` | Local/production deployment and version compatibility |
+
+### Acceptance criteria coverage
+
+Every acceptance-test row in the [acceptance matrix](../02_requirements/09-acceptance-matrix.md) is owned by an implementation dossier and proven by that dossier's test families from the master test catalog. Matrix AC ids are contiguous per domain; the counts below reconcile to 152 rows (15 ING + 17 FLS + 16 FC + 12 SS + 9 RNK + 17 AC + 9 BB + 16 EXE + 10 OBS + 19 PF + 12 NFR).
+
+| AC domain | AC ids | Owning dossier(s) | Dossier test families (master catalog) |
+| --- | --- | --- | --- |
+| `AC-ING-*` | `AC-ING-001`–`AC-ING-015` | [`03-ingestion.md`](./03-ingestion.md) | `ING-*`, `BROKER-MD-001`, `STATE-DEDUP-001`, `FAIL-PENDING-001`, `THR-PROBE-001`, `MOCK-*` |
+| `AC-FLS-*` | `AC-FLS-001`–`AC-FLS-017` | [`02-schema-storage.md`](./02-schema-storage.md) | `SCHEMA-*`, `COMPAT-FLUSS-*`, `COMPAT-FLINK-001`, `DDL-*` |
+| `AC-FC-*` | `AC-FC-001`–`AC-FC-016` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*`, `STATE-CANDLE-001`, `STATE-COMPAT-001`, `SAFETY-INT-001` |
+| `AC-SS-*` | `AC-SS-001`–`AC-SS-012` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (slot-scoped safety consumer), `SAFETY-INT-001` |
+| `AC-RNK-*` | `AC-RNK-001`–`AC-RNK-009` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (in-operator ranking) |
+| `AC-AC-*` | `AC-AC-001`–`AC-AC-017` | [`05-action-capture.md`](./05-action-capture.md) | `AC-UNIT-*`, `AC-INT-001`, `AC-FAIL-*`, `AC-REC-001`, `BROKER-PB-001` |
+| `AC-BB-*` | `AC-BB-001`–`AC-BB-009` | [`06-babysitter.md`](./06-babysitter.md) | `BAB-*`, `BABYSITTER-001` |
+| `AC-EXE-*` | `AC-EXE-001`–`AC-EXE-016` | [`07-executor.md`](./07-executor.md) | `EXE-*`, `ARROW-REST-*` |
+| `AC-OBS-*` | `AC-OBS-001`–`AC-OBS-010` | [`10-observability.md`](./10-observability.md) | `OPS-*` |
+| `AC-PF-*` | `AC-PF-001`–`AC-PF-019` | [`08-local-compose.md`](./08-local-compose.md) (local subset, e.g. Compose isolation), [`09-production-swarm.md`](./09-production-swarm.md) | `LOCAL-*`, `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001` |
+| `AC-NFR-*` | `AC-NFR-001`–`AC-NFR-012` | Cross-cutting: [`01-foundation.md`](./01-foundation.md) + this catalog (performance campaigns, security tests, ops acceptance) | `PERF-*`, `SEC-*`, `OPS-*`, `CI-PERF-001` |
 
 ### Documentation completion statement
 
@@ -729,7 +864,7 @@ This dossier is complete only when the evidence package can be independently rev
 
 **Status:** `EXECUTED (partial) — Phase 0 baseline DONE; Phases 1-3 + dedup sweep recorded as BLOCKED with evidence` (updated 2026-08-13) — **TOPOLOGY RE-SCOPED 2026-08-13, see banner below**
 \*\*Location:\*\* `docs/08_implementation/11-testing-and-release.md`
-**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L819+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1207-1209).
+**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L870+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1331-1333).
 **Dependency:** R2 lake-read stall fix (`§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`) — the bench uses R2 checkpoints for gate runs; the S3A timeout pins (30000/30000) and the outer-deadline containment apply.
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13) — bench topology re-scope.**
@@ -799,7 +934,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 - TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 50k with RocksDB + managed memory; that IS the memory gate).
 - JobManager: `jobmanager.memory.process.size=1600m` (pinned).
 - Checkpoint: 30 s interval (production config; 47/47 completed in the 2026-08-11 live run), `allowNonRestoredState` never set, RocksDB incremental.
-- Both candle sinks enabled (LOG `feature_candles_15s` + KV `feature_candles_15s_current`), canonical filter + stall guard active.
+- Candle sink: `feature_candles_15s` KV upsert only (sole candle output — 2026-08-13 conversion; the LOG/KV dual-sink and `feature_candles_15s_current` are RETIRED). Signal sinks: `Signal_Candidates` LOG + `Signal_Candidates_current` KV, canonical signal filter + stall guard active.
 - All R2 S3A timeout pins effective (`iceberg.iceberg.hadoop.fs.s3a.connection.timeout` + `connection.establish.timeout` = 30000).
 - Gate runs: R2 checkpoint dir + `latencyTrackingInterval` enabled (the single documented config delta).
 - Debug runs: `file://` checkpoint dir, latency tracking optional, dedup expiry swept.
@@ -905,7 +1040,7 @@ If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P
 
 ## 13. Cross-references
 
-- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L819+), §4 register (L1207-1209), §6 acceptance, P8.1 metrics battery (L896-943).
+- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L870+), §4 register (L1331-1333), §6 acceptance (L1387+), P8.1 metrics battery (L1007-1059).
 - Metrics recipe: `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`.
 - R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
 - Audit efficiency follow-up: tracker P3.6 (batch-audit engine parallelism/metadata-count; not exercised by this bench).
@@ -913,6 +1048,8 @@ If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P
 - Deployment: `docs/08_implementation/09-production-swarm.md` (future production target; not used by this bench).
 
 ## 14. Execution results
+
+> **DEC-038 note (2026-08-14):** the Phase 0/1 bench records below are the **pre-externalization baseline** — their RocksDB total state (~1.74 GB) and checkpoint rows are the duplication the state-ownership change removes, not a bound on the target. Post-DEC-038 the same measurements are re-taken with the dedup set in Fluss (SIG-PERF-001 re-measurement row).
 
 ### 14.1 Phase 0 — dev baseline (2026-08-12, 14:23:40 → 14:34:30 UTC, DONE)
 

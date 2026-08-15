@@ -15,6 +15,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Topology | Four VMs: three workload/HA, one observability |
 | EOD controller | Named service or scheduled job owning manifest lifecycle |
 | Live-money | Disabled until Phase 12 evidence passes |
+| Acceptance criteria | `REQ-PF-001`–`REQ-PF-012` → `AC-PF-001`–`AC-PF-019` (proving families: `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001`; local subset in `08-local-compose.md`) |
 
 ### Placement model
 
@@ -75,7 +76,7 @@ Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert Zo
 
 ### Storage and recovery
 
-- Fluss data uses durable per-node volumes and tested replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Flink checkpoints + Fluss remote storage + rebuild from audit).
+- Fluss data uses durable per-node volumes and tested replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Fluss remote storage + rebuild from audit (Flink checkpoints hold only small working/recovery state — DEC-038)).
 - ZooKeeper ensemble members use durable per-node volumes; loss of one member is tolerated while quorum (2-of-3) holds.
 - Flink checkpoints/savepoints use encrypted versioned S3; Flink JobManager HA metadata (`high-availability.storageDir`) uses the same encrypted S3 store, with leadership in ZooKeeper.
 - Iceberg/audit storage uses encryption, versioning, and approved retention/lifecycle policy.
@@ -83,7 +84,7 @@ Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert Zo
 - Loss of any one workload VM is tested at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average).
 - RPO/RTO is recorded per failure scenario; no untested global claim is made.
 - Flink JobManager HA: `high-availability.type: zookeeper` with `high-availability.zookeeper.quorum` = the 3-node ensemble, `high-availability.storageDir` = encrypted S3, `high-availability.zookeeper.path.root: /flink`, per-cluster `high-availability.cluster-id`. Multiple standby JobManagers run across workload VMs; ZooKeeper elects the leader, and a standby takes over JobManager failure without a full job re-submission.
-- Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`, estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time.]
+- Checkpoint restart strategy: max 3 retries at 30s pause between attempts. After 3 consecutive checkpoint failures, the job fails. Swarm restarts it from the last successful checkpoint. If no valid checkpoint exists, the job stays down → critical alert → manual savepoint restore. Deployment SHALL reject unbounded retry. [Source: `REQ-FC-008`. The pre-DEC-038 headroom note ("estimated checkpoint size ~600 MB – 1 GB; 30s timeout provides 2-5× headroom over estimated write time") is **superseded 2026-08-14** — under DEC-038 the dedup set moves to Fluss and the checkpoint is small; the headroom statement is re-derived from measured post-externalization checkpoint size, not asserted.]
 
 ### Security and networking
 
@@ -139,20 +140,20 @@ Every Java container (Ingestion, Flink TaskManager, Flink JobManager) SHALL enfo
 - Verify at startup that the container memory limit minus maximum heap is at least 35% of the container memory limit.
 - Refuse production readiness when total container memory reaches or exceeds 85% for 60 consecutive seconds.
 
-### Concrete sizing (48 GB VM)
+### Concrete sizing (48 GB VM) — pre-DEC-038, superseded
 
-Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points — superseded by `PERF-PROD-60000-001`.
+Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points — superseded by `PERF-PROD-60000-001` **and by the DEC-038 state-ownership change (2026-08-14)**. This table sized RocksDB around the ~1 GB dedup state budget; under DEC-038 the dedup set moves to Fluss and the Flink-side state is small (windows, timers, bounded working cache), so the RocksDB/direct-memory dominance and the split between the generic 65%/35% formula and a RocksDB-heavy split must be **re-derived from measured post-externalization memory**, not asserted. The rows below are the pre-change baseline.
 
 | Resource | Value | Notes |
 | --- | --- | --- |
 | Container memory limit | 48 GB | Explicit Swarm limit |
-| Java max heap (`-Xmx`) | **8 GB** | Modest — working state lives in RocksDB (direct memory) |
-| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers |
+| Java max heap (`-Xmx`) | **8 GB** | Modest — working state lives in RocksDB (direct memory); pre-DEC-038 rationale — re-derive after externalization |
+| Direct memory (`-XX:MaxDirectMemorySize`) | **30 GB** | RocksDB block cache + Flink network buffers; pre-DEC-038 rationale — re-derive after externalization |
 | OS reserve | **~10 GB** | OS page cache, off-heap, Fluss client |
 | GC | `-XX:+UseG1GC -XX:MaxGCPauseMillis=20` | Protect p99 <100 ms decision SLO |
 | Container memory alert at 85% | ~40.8 GB | Critical alert when hit for 60 consecutive seconds |
 
-For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source: dedup state budget ~1 GB, window + candidate + ranking state <10 MB, leaving substantial headroom for RocksDB block cache, write buffers, and network memory.
+For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source (pre-DEC-038): dedup state budget ~1 GB, window + candidate + ranking state <10 MB, leaving substantial headroom for RocksDB block cache, write buffers, and network memory — the dedup term moves to Fluss under DEC-038 and this rationale is re-derived.
 
 ### Acceptance checklist
 
@@ -250,9 +251,9 @@ Any phase estimated > 10 min MUST be preceded by a ≤ 2-min smoke exercise of t
 ## 5. Phase 1 — table preflight + dual-sink from copied checkpoint (P10.1 boxes 1-4, 6-7)
 
 0. **Smoke (§4.1):** `probe-r2.sh` PASS + the archived-checkpoint restore probe (Phase 0 step 1) re-run immediately before this phase — the checkpoint-restore machinery is what this phase exercises.
-1. Run the re-targeted preflight validator against the rehearsal tables: `feature_candles_15s` LOG (no PK), `Signal_Candidates` LOG (no PK), `Signal_Candidates_current` KV PK exactly `[instrument_token]`, 22 columns/type/nullability, bucket.key `instrument_token` + 16 buckets. Negative legs: wrong-kind and wrong-schema tables fail before environment creation (SIGNAL-SCHEMA-001).
+1. Run the re-targeted preflight validator against the rehearsal tables: `feature_candles_15s` KV PK exactly `(instrument_token, window_start)` (sole candle output — 2026-08-13 conversion), `Signal_Candidates` LOG (no PK), `Signal_Candidates_current` KV PK exactly `[instrument_token]`, 22 columns/type/nullability, bucket.key `instrument_token` + 16 buckets. Negative legs: wrong-kind and wrong-schema tables fail before environment creation (SIGNAL-SCHEMA-001).
 2. Submit the SignalJob (application mode, rehearsal env, PARALLELISM from P7) in RESTORE mode from the ARCHIVED checkpoint copy; `allowNonRestoredState=false` (never set — STARTUP-GATE-001 contract).
-3. Verify: table preflight passes; startup mode = RESTORE (no FULL_REPLAY); source/dedup/window/detection state restored (CHECKPOINT-RESTORE-002 recipe: offsets, dedup map, window state); signal LOG sink appends and `Signal_Candidates_current` sink starts cleanly (first upserts from the restored detection state).
+3. Verify: table preflight passes (incl. the Fluss dedup state table under DEC-038); startup mode = RESTORE (no FULL_REPLAY); source/window/detection state restored (CHECKPOINT-RESTORE-002 recipe: offsets, window state) and the dedup working cache rehydrated from the Fluss dedup table (DEC-038 — no dedup restore from checkpoint); signal LOG sink appends and `Signal_Candidates_current` sink starts cleanly (first upserts from the restored detection state).
 4. Verify first checkpoint meets target (30 s interval; duration recorded; R2 pins active).
 
 ## 6. Phase 2 — bounded replay twice (P10.1 boxes 8-9)

@@ -63,8 +63,11 @@ public final class SyntheticWorkload {
 
     private long nextIntervalMs() {
         if (config.profile() == Profile.PEAK) {
-            // 33/34 ms gives <=30 ticks/s per instrument and a variable stream.
-            return 33L + random.nextLong(2L);
+            // 34/35 ms gives <=29.5 ticks/s per instrument (MOCK-UNIT-002: no
+            // instrument exceeds 30/s) and a variable stream. 33 ms would be
+            // 1000/33 = 30.3/s and violates the cap; 34 ms is the smallest
+            // interval that stays under it.
+            return 34L + random.nextLong(2L);
         }
         // 40..60 ms has a 50 ms mean: 20 ticks/s/instrument baseline average.
         return 40L + random.nextLong(21L);

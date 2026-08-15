@@ -66,13 +66,6 @@ fi
 		exit 1
 	}
 
-INGESTION_CP="$(cd "$CODE_ROOT" && mvn -q -o dependency:build-classpath \
-	-pl 02_services/01_ingestion -Dmdep.outputAbsoluteArtifactFilename=true)" ||
-	{
-		echo "ingestion classpath failed" >&2
-		exit 1
-	}
-
 echo "=== chain-e2e: run (E2E_BROKER=$E2E_BROKER, ${E2E_RUN_MINUTES} min, Fluss $FLUSS_BOOTSTRAP)"
 export SIGNAL_CHAIN_E2E=true
 export E2E_BROKER E2E_RUN_MINUTES FLUSS_BOOTSTRAP E2E_CHECKPOINT_DIR

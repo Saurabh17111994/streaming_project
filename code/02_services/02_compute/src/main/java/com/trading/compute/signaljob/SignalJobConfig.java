@@ -17,6 +17,14 @@ import java.util.Map;
  * (PlatformConfig.requirePresent). All other keys are tuning parameters with
  * documented defaults from the Signal-job dossier.
  *
+ * <p>The fixed-delay restart strategy
+ * ({@code RESTART_MAX_ATTEMPTS=3}, {@code RESTART_DELAY_MS=30000}) is
+ * production-pinned: in {@code DEPLOYMENT_ENV=production} the two keys must be
+ * present and exactly equal the PlatformConfig pins or startup fails — a
+ * deployment cannot silently raise the retry budget. Dev keeps them as
+ * overridable tuning defaults (failure-injection integration tests rely on
+ * low attempts).
+ *
  * <p>Build via {@link #fromEnv()} in production; {@link #from(Map)} is exposed
  * so the rejection rules are unit-testable without touching {@code System.getenv}.
  *
@@ -71,6 +79,10 @@ public record SignalJobConfig(
         String signalRuleId,
         int signalLookbackCandles,
         long signalQuantity,
+        String formingRuleId,
+        int formingLookbackCandles,
+        String formingBarTable,
+        long formingBarWriteBatchMs,
         String otelCollectorHost,
         String stateRecoveryPath,
         boolean allowFullReplay,
@@ -85,7 +97,16 @@ public record SignalJobConfig(
         String s3SecretKey,
         String s3Region,
         boolean s3PathStyle,
-        long sinkWriteStallTimeoutMs) implements Serializable {
+        long sinkWriteStallTimeoutMs,
+        String tradeDecisionsTable,
+        String tradeInstructionStateTable,
+        boolean tradeDecisionsEnabled,
+        String dedupStateTable,
+        long dedupCacheMaxEntries,
+        long dedupCacheMaxBytes,
+        long dedupWriteBatchMs,
+        long dedupWriteBatchSize,
+        long dedupCleanupIntervalMs) implements Serializable {
 
     public static SignalJobConfig fromEnv() {
         return from(System.getenv());
@@ -114,8 +135,8 @@ public record SignalJobConfig(
                 requirePinnedLong(env, "CHECKPOINT_INTERVAL_MS", PlatformConfig.CHECKPOINT_INTERVAL_MS),
                 requirePinnedLong(env, "CHECKPOINT_TIMEOUT_MS", PlatformConfig.CHECKPOINT_TIMEOUT_MS),
                 requirePinnedInt(env, "MAX_CONCURRENT_CHECKPOINTS", PlatformConfig.MAX_CONCURRENT_CHECKPOINTS),
-                intValue(env, "RESTART_MAX_ATTEMPTS", 3),
-                longValue(env, "RESTART_DELAY_MS", 30_000L),
+                restartMaxAttempts(env),
+                restartDelayMs(env),
                 checkpointDir(env),
                 env.getOrDefault("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates"),
                 env.getOrDefault("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current"),
@@ -127,6 +148,11 @@ public record SignalJobConfig(
                         SignalCandidatesTableColumns.CANONICAL_RULE_ID),
                 signalLookbackCandles(env),
                 signalQuantity(env),
+                env.getOrDefault("FORMING_RULE_ID",
+                        SignalCandidatesTableColumns.CANONICAL_FORMING_RULE_ID),
+                formingLookbackCandles(env),
+                env.getOrDefault("FORMING_BAR_TABLE", "forming_bar"),
+                positiveLong(env, "FORMING_BAR_WRITE_BATCH_MS", 250L),
                 env.getOrDefault("OTEL_COLLECTOR_HOST", "otel-collector:4318"),
                 stateRecoveryPath(env),
                 mode == StartupMode.FULL_REPLAY,
@@ -141,7 +167,16 @@ public record SignalJobConfig(
                 s3SecretKey(env),
                 s3Region(env),
                 s3PathStyle(env),
-                sinkWriteStallTimeoutMs(env));
+                sinkWriteStallTimeoutMs(env),
+                env.getOrDefault("TRADE_DECISIONS_TABLE", "Trade_Decisions"),
+                env.getOrDefault("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state"),
+                booleanValue(env, "TRADE_DECISIONS_ENABLED", false),
+                env.getOrDefault("DEDUP_STATE_TABLE", "fingerprint_dedup"),
+                positiveLong(env, "DEDUP_CACHE_MAX_ENTRIES", 250_000L),
+                positiveLong(env, "DEDUP_CACHE_MAX_BYTES", 33_554_432L),
+                positiveLong(env, "DEDUP_WRITE_BATCH_MS", 250L),
+                positiveLong(env, "DEDUP_WRITE_BATCH_SIZE", 5_000L),
+                positiveLong(env, "DEDUP_CLEANUP_INTERVAL_MS", 60_000L));
     }
 
     /**
@@ -240,6 +275,54 @@ public record SignalJobConfig(
             throw new IllegalStateException("Config SIGNAL_QUANTITY must be > 0, got " + value);
         }
         return value;
+    }
+
+    /**
+     * Forming-bar placeholder detector lookback (Slice 2.2, Phase C). The
+     * mirrored breakout rule compares the live forming bar against the
+     * {@code high}s/{@code close}s of the previous completed candles; the
+     * lookback must be &ge; 2 (a one-candle lookback would compare against
+     * the candle still forming's predecessor only, and the warm-up gate needs
+     * at least one completed candle before any comparison). Default 5 = 75 s
+     * of completed history. PLACEHOLDER tuning key — the real strategy
+     * replaces the rule without changing the pipeline.
+     */
+    private static int formingLookbackCandles(Map<String, String> env) {
+        int value = intValue(env, "FORMING_LOOKBACK_CANDLES", 5);
+        if (value < 2) {
+            throw new IllegalStateException("Config FORMING_LOOKBACK_CANDLES must be >= 2 "
+                    + "(the rule compares against the previous completed candles), got " + value);
+        }
+        return value;
+    }
+
+    /**
+     * Fixed-delay restart strategy (CHECKPOINT_RESTART_STRATEGY, dossier
+     * config contract). Dev defaults {@code RESTART_MAX_ATTEMPTS} to
+     * {@link PlatformConfig#RESTART_MAX_ATTEMPTS} and allows overrides
+     * (failure-injection integration tests use low attempts to fail fast);
+     * {@code DEPLOYMENT_ENV=production} pins the exact value and requires it
+     * explicit — a deployment cannot silently raise the retry budget or widen
+     * the delay (bounded retry only, never unbounded).
+     */
+    private static int restartMaxAttempts(Map<String, String> env) {
+        if ("production".equals(deploymentEnv(env))) {
+            return requirePinnedInt(env, "RESTART_MAX_ATTEMPTS",
+                    PlatformConfig.RESTART_MAX_ATTEMPTS);
+        }
+        return intValue(env, "RESTART_MAX_ATTEMPTS", PlatformConfig.RESTART_MAX_ATTEMPTS);
+    }
+
+    /**
+     * Fixed-delay restart delay (see {@link #restartMaxAttempts(Map)}): dev
+     * tuning default 30 s, production-pinned to
+     * {@link PlatformConfig#RESTART_DELAY_MS} and required explicit.
+     */
+    private static long restartDelayMs(Map<String, String> env) {
+        if ("production".equals(deploymentEnv(env))) {
+            return requirePinnedLong(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
+        }
+        return longValue(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
     }
 
     private static long requirePinnedLong(Map<String, String> env, String key, long pinned) {
@@ -537,6 +620,43 @@ public record SignalJobConfig(
             throw new IllegalStateException("Config SOURCE_IDLE_ALERT_MS must be > 0 "
                     + "(pinned default " + PlatformConfig.SOURCE_IDLE_ALERT_MS
                     + "), got " + value);
+        }
+        return value;
+    }
+
+    /**
+     * Strict boolean (no unsafe default substitution when the key is present
+     * but unparsable) — the pattern of {@link #stateBackendManagedMemory}.
+     * Used for the SCH-19 decision-sink gate {@code TRADE_DECISIONS_ENABLED}
+     * (default {@code false}: the ranking feed does not exist yet; the
+     * machinery stays off until wired).
+     */
+    private static boolean booleanValue(Map<String, String> env, String key,
+            boolean defaultValue) {
+        String raw = env.get(key);
+        if (raw == null) {
+            return defaultValue;
+        }
+        String trimmed = raw.trim();
+        if (!trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false")) {
+            throw new IllegalStateException("Config " + key + " must be 'true' or 'false' "
+                    + "(case-insensitive), got '" + trimmed + "'");
+        }
+        return Boolean.parseBoolean(trimmed);
+    }
+
+    /**
+     * DEC-038 dedup tuning keys (DEDUP_CACHE_* / DEDUP_WRITE_* /
+     * DEDUP_CLEANUP_*): defaulted and validated at startup — a missing key
+     * falls back to the documented starting value, a present non-positive
+     * value is fatal (a zero cache bound or write cadence would break the
+     * bounded-cache contract; see 04-signal-job.md §Design — fingerprint_dedup).
+     */
+    private static long positiveLong(Map<String, String> env, String key, long defaultValue) {
+        long value = longValue(env, key, defaultValue);
+        if (value <= 0) {
+            throw new IllegalStateException("Config " + key + " must be > 0 "
+                    + "(default " + defaultValue + "), got " + value);
         }
         return value;
     }

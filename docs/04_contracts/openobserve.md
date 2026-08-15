@@ -53,7 +53,7 @@ already emits all required fields plus optional `symbol/strategy/exception`.
 - **Metrics:** collect Flink (job health, checkpoints, backpressure, throughput, latency), Fluss (r/w throughput, tablet health, storage), Python (request/latency/queue/error), infra (CPU/mem/disk/net/Docker/VM).
 - **Tracing:** OTel standard; every request propagates `trace_id` + `span_id`; traced logs include them.
 - **Alerts:** sources = trading/risk/scheduler/executor/Flink/Fluss/infra; destination = `trading_alerts`; categories = Critical/Error/Warning/Information.
-- SignalJob-specific metrics include source throughput/lag, validation rejection reasons, deduplication state, watermarks, candle LOG/KV writes, sink failures, checkpoints, backpressure, memory, restarts, and full-replay startup mode.
+- SignalJob-specific metrics include source throughput/lag, validation rejection reasons, deduplication state, watermarks, candle KV writes (sole candle output — 2026-08-13), signal LOG/KV sink counts, sink failures, checkpoints, backpressure, memory, restarts, and full-replay startup mode.
 - Distributed TaskManager metrics must use a distributed-safe Flink metrics/reporter path. A single-JVM static counter is diagnostic-only and is not production evidence.
 
 ### Metric naming and label conventions (verified live 2026-08-11)

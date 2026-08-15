@@ -42,10 +42,10 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-ING-008` | REQ-ING-012, REQ-PF-009 | Full | — | variable 50,000 ticks/s average baseline for full session (≈16.7 ticks/s/instrument average; 90,000 ticks/s peak retired, DEC-036) | Saturation behavior defined; checkpoint stable; recovery bounded | `test/capacity/stress-per-instrument/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-009` | REQ-ING-013, REQ-ING-014 | Full | — | Credential rotation, exhaustion, shutdown, clock-skew, observability failure | Readiness transitions correctly; graceful shutdown completes; no silent drop | `test/ingestion/operational/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-010` | REQ-ING-003 | Full | — | Connection lifecycle fixtures: reconnect, restart, slot reassignment | `connection_id` stable per principal+slot; `connection_epoch` monotonically increasing; new scope on instrument reassignment | `test/ingestion/connection-identity/` report | `NOT_IMPLEMENTED` |
-| `AC-ING-011` | REQ-ING-007 | Full | — | Mixed LTP/LTPC/Quote/Full packet stream | Trades classified for candle aggregation; quotes/depth preserved but excluded from OHLCV; invalid events rejected | `test/ingestion/tick-classification/` report | `NOT_IMPLEMENTED` |
+| `AC-ING-011` | REQ-ING-007 | Full | — | Mixed LTPC/Full packet stream | Trades classified for candle aggregation; quotes/depth preserved but excluded from OHLCV; invalid events rejected | `test/ingestion/tick-classification/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-012` | REQ-ING-008 | Full | — | Duplicate fingerprint stream with forced Fluss retry | At-least-once boundary documented; duplicates appended; no silent elimination claimed | `test/ingestion/delivery-semantics/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-013` | REQ-ING-010, REQ-ING-011 | Full | — | Connection drop, heartbeat timeout, unknown version, decode failure burst | `suspected_discontinuities` record created per event type; invalid/unknown packets quarantined with reason; readiness false for affected stream | `test/ingestion/discontinuity-quarantine/` report | `NOT_IMPLEMENTED` |
-| `AC-ING-014` | REQ-ING-015 | Partial | Log format validation; secrets redaction | All required metrics emitted with bounded cardinality; structured logs include identity fields; raw packets and credentials absent from logs | `test/ingestion/telemetry/` report | `NOT_IMPLEMENTED` |
+| `AC-ING-014` | REQ-ING-015 | Partial | — | Log format validation; secrets redaction | All required metrics emitted with bounded cardinality; structured logs include identity fields; raw packets and credentials absent from logs | `test/ingestion/telemetry/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-015` | REQ-ING-016 | Indirect | — | Covered by AC-ING-001 through AC-ING-014 above | Aggregate acceptance gates proven | `test/ingestion/acceptance-summary/` report | `NOT_IMPLEMENTED` |
 
 ### Storage
@@ -68,6 +68,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-FLS-014` | REQ-FLS-004 | Full | — | Cross-domain identity fixture: each table with its declared identity fields | No `order_id` in any table; each domain uses correct identity set; schema version present on every table | `test/storage/identity-fields/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-015` | REQ-FLS-006 | Full | — | Normal candle session; CANDLE_WINDOW_MS=15000 | Append-only output; OHLCV fields match aggregation; no late corrections written; retention ≥3 days | `test/storage/candle-log/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-016` | REQ-FLS-007 | Full | — | Candidate + ranking event stream | `Signal_Candidates` and `Ranking_Results` immutable; strategy/ranking version fields present; single writer (Signal job) for ranking | `test/storage/strategy-ranking-audit/` report | `NOT_IMPLEMENTED` |
+| `AC-FLS-017` | REQ-FLS-017 | Full | — | DEC-038 state-ownership contract per Fluss-owned Signal table (dedup, candle, forming bar, current signal state) | Each Fluss-owned table defines owner, keys/bucket.key, update semantics, TTL/cleanup mechanism (no per-key TTL in Fluss 0.9.1), rebuild source, versioning, restart/rehydration, and consistency/fail-closed rule; Flink checkpoints are not a duplicate copy of Fluss-owned state | `test/storage/dec038-state-ownership/` report | `NOT_IMPLEMENTED` |
 
 ### Compute
 
@@ -162,7 +163,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-EXE-013` | REQ-EXE-010 | Full | — | 7-year audit reconstruction | Every money-moving call reconstructable from immutable audit | `test/executor/audit-reconstruction/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-014` | REQ-EXE-010 | Full | — | NotImplementedError scaffold replaced | All gates pass | Code review + test suite | `NOT_IMPLEMENTED` |
 | `AC-EXE-015` | REQ-EXE-007 | Indirect | — | Covered by AC-EXE-014 (MVP no-op; future action gate passes through same attempt/fencing/reconciliation protocol as entry) | — | `test/executor/scaffold/` report | `NOT_IMPLEMENTED` |
-| `AC-EXE-016` | REQ-EXE-009 | Partial | Arrow REST latency/status, consumer lag, security events | Gate state/epoch, halt latency, attempts by phase/outcome, unknown outcomes, duplicate suppressions, reconciliation duration, mapping/quarantine, approval events | `test/executor/health-observability/` report | `NOT_IMPLEMENTED` |
+| `AC-EXE-016` | REQ-EXE-009 | Partial | Arrow REST latency/status, consumer lag, security events | — | Gate state/epoch, halt latency, attempts by phase/outcome, unknown outcomes, duplicate suppressions, reconciliation duration, mapping/quarantine, approval events | `test/executor/health-observability/` report | `NOT_IMPLEMENTED` |
 
 ### Babysitter
 
@@ -214,8 +215,8 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-PF-015` | REQ-PF-001 | Full | — | Production manifest scan | Exact image digests/versions pinned for Fluss, Flink, Arrow REST, OpenObserve, all project services; `latest` absent; version ranges absent | `test/platform/exact-versions/` report | `NOT_IMPLEMENTED` |
 | `AC-PF-016` | REQ-PF-003 | Full | — | Network isolation scan | Compose: isolated bridge only; Production: encrypted overlay, only authorized operator/UI/API ingress; Fluss tablet/RPC/checkpoint/service ports not publicly exposed | `test/platform/networking/` report | `NOT_IMPLEMENTED` |
 | `AC-PF-017` | REQ-PF-006 | Full | — | Service inventory scan | Fluss coordinator+tablets, Flink control+workers, Ingestion, Signal+Babysitter submitter, Action Capture, Executor, OpenObserve all deployed; Executor fencing active | `test/platform/service-topology/` report | `NOT_IMPLEMENTED` |
-| `AC-PF-018` | REQ-PF-007 | Partial | Startup dependency declarations alone not sufficient | Schemas present; Fluss quorum healthy; Signal/Babysitter RUNNING+checkpointing; Executor durable; contracts/credentials valid; changelog + observability healthy before ENABLED | `test/platform/startup-readiness/` report | `NOT_IMPLEMENTED` |
-| `AC-PF-019` | REQ-PF-008 | Partial | Money-moving rollback behavior; schema-breaking migration approval | Rolling/canary only with proven compatibility; gate halted before money-moving change; rollback preserves readability and defaults to halted | `test/platform/deployment-rollback/` report | `NOT_IMPLEMENTED` |
+| `AC-PF-018` | REQ-PF-007 | Partial | Startup dependency declarations alone not sufficient | — | Schemas present; Fluss quorum healthy; Signal/Babysitter RUNNING+checkpointing; Executor durable; contracts/credentials valid; changelog + observability healthy before ENABLED | `test/platform/startup-readiness/` report | `NOT_IMPLEMENTED` |
+| `AC-PF-019` | REQ-PF-008 | Partial | Money-moving rollback behavior; schema-breaking migration approval | — | Rolling/canary only with proven compatibility; gate halted before money-moving change; rollback preserves readability and defaults to halted | `test/platform/deployment-rollback/` report | `NOT_IMPLEMENTED` |
 
 ### Non-functional
 
@@ -225,7 +226,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-NFR-002` | NFR-PERF-002 | Full | — | Trigger tick → instruction commit | p99 <100 ms at variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) | `test/nfr/decision-latency/` report | `NOT_IMPLEMENTED` |
 | `AC-NFR-003` | NFR-PERF-002 | Full | — | Failure detection → data processing resumed | <30 s | `test/nfr/recovery-time/` report | `NOT_IMPLEMENTED` |
 | `AC-NFR-004` | NFR-PERF-002 | Full | — | Uncertainty detection → gate blocks new calls | <5 s | `test/nfr/safe-halt-time/` report | `NOT_IMPLEMENTED` |
-| `AC-NFR-005` | NFR 3.4.1 | Full | — | Object-lock enforcement on test prefix | Write prevented after lock; delete rejected | `test/nfr/audit-worm/` report | `EVIDENCE_BLOCKED` |
+| `AC-NFR-005` | NFR 3.4.1 | Full | — | Object-lock enforcement on test prefix (R2 bucket locks — indefinite rule via Cloudflare API; the S3 Object Lock API is not implemented on R2, 2026-08-14) | Write prevented after lock; delete rejected | `test/nfr/audit-worm/` report | `EVIDENCE_BLOCKED` (mechanism pinned 2026-08-14: R2 bucket locks; needs a Cloudflare API token to apply/verify) |
 | `AC-NFR-006` | NFR 3.4.1 | Full | — | Legal hold freeze/release cycle | All versions preserved during hold; release restores normal lifecycle | `test/nfr/audit-legal-hold/` report | `EVIDENCE_BLOCKED` |
 | `AC-NFR-007` | NFR 3.4.1 | Full | — | Key rotation without audit loss | Old keys decrypt existing data; new keys encrypt future audit | `test/nfr/audit-key-rotation/` report | `EVIDENCE_BLOCKED` |
 | `AC-NFR-008` | NFR 3.4.1 | Full | — | Retrieval SLA measurement | Single record reconstructable <15 min from cold storage | `test/nfr/audit-retrieval-sla/` report | `EVIDENCE_BLOCKED` |
@@ -236,14 +237,14 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 
 ## Coverage summary
 
-119 requirements are covered by 142 acceptance tests. Some tests intentionally cover multiple requirements; no requirement may remain unmapped.
+132 requirements are covered by 152 acceptance tests. Some tests intentionally cover multiple requirements; no requirement may remain unmapped.
 
 | Domain | Requirements | Acceptance IDs | Ratio |
 | --- | ---: | ---: | --- |
-| Ingestion | 16 | 15 | 1:1.1 |
-| Storage | 16 | 16 | 1:1.0 |
+| Ingestion | 16 | 15 | 1:0.9 |
+| Storage | 17 | 17 | 1:1.0 |
 | Compute | 13 | 16 | 1:1.2 |
-| Business Logic | 12 | 12 | 1:1.0 |
+| Business Logic | 11 | 12 | 1:1.1 |
 | Ranking | 9 | 9 | 1:1.0 |
 | Action Capture | 13 | 17 | 1:1.3 |
 | Executor | 13 | 16 | 1:1.2 |
@@ -251,14 +252,14 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | Observability | 8 | 10 | 1:1.3 |
 | Platform | 12 | 19 | 1:1.6 |
 | Non-functional | 12 | 12 | 1:1.0 |
-| **Total** | **119** | **142** | **1:1.2** |
+| **Total** | **132** | **152** | **1:1.1** |
 
 ## Summary
 
 | Domain | Total ACs | Passed | Failed | Evidence Blocked | Not Implemented |
 | --- | --- | --- | --- | --- | --- |
-| Ingestion | 15 | 0 | 0 | 0 | 15 |
-| Storage | 16 | 0 | 0 | 0 | 16 |
+| Ingestion | 15 | 0 | 0 | 4 | 11 |
+| Storage | 17 | 0 | 0 | 0 | 17 |
 | Compute | 16 | 0 | 0 | 0 | 16 |
 | Business Logic | 12 | 0 | 0 | 0 | 12 |
 | Ranking | 9 | 0 | 0 | 0 | 9 |
@@ -267,8 +268,8 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | Babysitter | 9 | 0 | 0 | 0 | 9 |
 | Observability | 10 | 0 | 0 | 0 | 10 |
 | Platform | 19 | 0 | 0 | 0 | 19 |
-| Non-functional | 12 | 0 | 0 | 8 | 4 |
-| **Total** | **142** | **0** | **0** | **10** | **132** |
+| Non-functional | 12 | 0 | 0 | 7 | 5 |
+| **Total** | **152** | **0** | **0** | **13** | **139** |
 
 ---
 

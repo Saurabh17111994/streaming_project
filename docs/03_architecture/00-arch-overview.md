@@ -79,7 +79,7 @@ There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. 
 | --- | --- | --- |
 | Ingestion | Broker connection, decode, normalization, packet preservation, fingerprinting, discontinuity evidence | Candles, strategy, broker orders |
 | Fluss | Tables, DDL, distribution, replication, retention, changelog, lake tiering | Strategy rules and broker calls |
-| Signal Flink job | Dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions | Arrow REST calls and authoritative fills |
+| Signal Flink job | Computes/operates: dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions — durable dedup/candle/signal state is Fluss-owned (DEC-038); Flink keeps only bounded working + recovery state | Arrow REST calls and authoritative fills |
 | Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine. Position projector runs in-process | Strategy and order submission |
 | Position projector | Fill-derived `Positions` aggregate (runs inside Action Capture process for MVP) | Raw order lifecycle authority |
 | Babysitter | Position observation; no-op in MVP; future structured actions | New entry signals, lifecycle authority, direct broker calls |
@@ -168,22 +168,24 @@ Every failure test records:
 
 Data-path recovery and order-path safe-halt are separate clocks. The five-second safe-halt target applies to the complete fault→gate-block interval including detection delay.
 
-## State capacity architecture
+## State capacity architecture and ownership (DEC-038)
 
-Every managed and durable state category must have a defined capacity budget for production readiness:
+**State ownership boundary (2026-08-14):** Fluss is the authoritative durable hot-state layer for the Signal job's large business state; Flink owns only the small working state needed for active processing plus the minimal recovery/checkpoint state needed to restart. The Signal job performs computation; Fluss owns the durable business state; Flink owns small working/recovery state. The Flink checkpoint is intentionally small and is not a second copy of Fluss-owned business state.
 
-| State category | Cardinality bound | Serialized size/entry | Checkpoint contribution | Cleanup |
+Every managed and durable state category must have a defined capacity budget for production readiness. The **checkpoint contribution** column distinguishes Flink-checkpointed state (small) from Fluss-owned durable state (large):
+
+| State category | Cardinality bound | Serialized size/entry | Checkpoint contribution | Owner / cleanup |
 | --- | --- | --- | --- | --- |
-| Fingerprint dedup | entries = rate × dedup_horizon | ~64 B fingerprint + metadata | Included in Signal checkpoint | TTL expiry |
-| Candle/forming-bar windows | instruments × (allowed_lateness + window_size) / window_size | Per-instrument window accumulator | Included in Signal checkpoint | Emit on finalization |
-| Active candidates | configurable max per instrument × instruments | Per-candidate record ~1 KB | Included in Signal checkpoint | Expiry, invalidation, instruction creation |
-| Portfolio reservations | max concurrent × portfolios | Per-reservation record ~512 B | Included in Signal checkpoint | Terminal state release |
-| Execution attempts | active + reconciliation window | Per-attempt record ~1 KB | N/A (KV durable state) | Reconciliation disposition |
-| Projection ledger | incomplete records | Per-ledger entry ~256 B | N/A (KV durable state) | Completion or manual disposition |
-| Postback quarantine | unresolved records | Per-quarantine entry ~2 KB | N/A (LOG durable state) | Manual disposition or expiry |
-| Suspected discontinuities | operational investigation window | Per-discontinuity ~512 B | N/A (LOG durable state) | Time-based cleanup |
+| Fingerprint dedup | entries = rate × dedup_horizon | ~64 B fingerprint + metadata | **Not a full copy** — Flink keeps only a bounded working cache; the authoritative set is a Fluss KV state table (DEC-038) | Fluss KV (authoritative) + Flink cache; expiry column/cleanup path (no per-key TTL in Fluss 0.9.1 — mechanism must be tested) |
+| Candle/forming-bar windows | instruments × (allowed_lateness + window_size) / window_size | Per-instrument window accumulator | Small in-flight accumulator + `emitted` flag; final rows already Fluss KV | Flink (transient) + `feature_candles_15s` KV (durable) |
+| Active candidates | configurable max per instrument × instruments | Per-candidate record ~1 KB | Small; output already Fluss LOG/KV | Flink (working) + `Signal_Candidates`/`_current` (durable) |
+| Portfolio reservations | max concurrent × portfolios | Per-reservation record ~512 B | Included in Signal checkpoint | Out of scope (unchanged) |
+| Execution attempts | active + reconciliation window | Per-attempt record ~1 KB | N/A (KV durable state) | Fluss KV durable state |
+| Projection ledger | incomplete records | Per-ledger entry ~256 B | N/A (KV durable state) | Fluss KV durable state |
+| Postback quarantine | unresolved records | Per-quarantine entry ~2 KB | N/A (LOG durable state) | Fluss LOG durable state |
+| Suspected discontinuities | operational investigation window | Per-discontinuity ~512 B | N/A (LOG durable state) | Fluss LOG durable state |
 
-All bounds that depend on external configuration (instruments, portfolios, rate) must be workload-validated at the variable 50,000 ticks/s average baseline with every instrument capped at 30 ticks/s. (The 90,000 ticks/s peak is retired, DEC-036.) State categories without a measured bound are evidence-gated until measurement.
+All bounds that depend on external configuration (instruments, portfolios, rate) must be workload-validated at the variable 50,000 ticks/s average baseline with every instrument capped at 30 ticks/s. (The 90,000 ticks/s peak is retired, DEC-036.) State categories without a measured bound are evidence-gated until measurement. The dedup checkpoint contribution above is a target — the actual checkpoint size after externalization must be measured, not asserted (DEC-038).
 
 ## Required logical state inventory
 
@@ -192,7 +194,8 @@ The architecture mandates these logical tables before physical DDL generation:
 | Table | Type | Writer |
 | --- | --- | --- |
 | `raw_table_1` | LOG | Ingestion |
-| `feature_candles_15s` | LOG | Signal job |
+| `feature_candles_15s` | KV (PK `instrument_token, window_start` — sole candle output, 2026-08-13) | Signal job |
+| `forming_bar` | KV (PK `instrument_token`) | Signal job |
 | `Signal_Candidates` | LOG | Signal job |
 | `Signal_Candidates_current` | KV | Signal job |
 | `Ranking_Results` | LOG | Signal job |
@@ -207,8 +210,9 @@ The architecture mandates these logical tables before physical DDL generation:
 | `Execution_Attempts` | KV | Executor |
 | `Order_Correlation` | KV | Executor |
 | `Execution_Audit` | LOG | Executor |
-| `Safety_Halt_Requests` | LOG/control | Authorized components |
+| `Safety_Halt_Requests` | KV | Authorized components |
 | `suspected_discontinuities` | LOG | Ingestion |
+| `ingestion_quarantine` | LOG | Ingestion |
 | `instruments` | Manifest | Operators |
 | `Position_Actions` | Future LOG | Babysitter (post-MVP) |
 

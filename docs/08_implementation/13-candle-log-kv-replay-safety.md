@@ -216,7 +216,8 @@ Before implementation:
 - [x] `SignalDetectionFunctionTest.java`
 - [x] `DdlBootstrapSchemaAgreementTest.java`
 - [x] Directly affected SQL, contract, implementation, README, and evidence documents only
-  (P9: SQL README, 00_RECONCILIATION_BLOCKER.md, storage reqs/contracts, 04-signal-job.md,
+  (P9: SQL README, 00_RECONCILIATION_BLOCKER.md — removed 2026-08-15, superseded by the
+  capability-evidence apply contract; storage reqs/contracts, 04-signal-job.md,
   compute README, Candle15s javadoc, evidence register, final report.)
 
 ### Do not modify
@@ -234,26 +235,28 @@ Before implementation:
 
 ## 5.1 Requirement traceability
 
+The requirements in this table are **scoped to this dossier** (prefix `REQ13-*`): they are implementation constraints for the candle LOG→KV replay-safety program, not global `REQ-*` requirements, and they do not appear in the acceptance matrix. Global requirement coverage for the signal job is [`04-signal-job.md`](./04-signal-job.md) (`REQ-FC-*`, `REQ-SS-*`, `REQ-RNK-*`).
+
 | Requirement | Required behavior | Owner phase | Proving test/evidence | Completion gate |
 | --- | --- | --- | --- | --- |
-| `REQ-CKV-001` | Preserve existing candle LOG unchanged | 1, 5 | DDL contract test; sink configuration test | P1, P5 |
-| `REQ-CKV-002` | Add canonical KV with exact key and bucket routing | 1, 4, 5 | DDL test; metadata validator; KV integration test | P1, P4, P7 |
-| `REQ-CKV-003` | Preserve exact 15-column row contract and schema version `2` | 1 | shared-contract and DDL parity tests | P1 |
-| `REQ-CKV-004` | Permit only configured canonical algorithm/configuration | 2, 8 | policy unit tests; migration audit/load evidence | P2, P8 |
-| `REQ-CKV-005` | Write every candle to LOG and KV without a Fluss read-back | 5 | graph/sink wiring test; JobGraph evidence | P5, P6 |
-| `REQ-CKV-006` | Keep signal detection on the in-memory candle stream | 5 | graph/wiring test and code review | P5 |
-| `REQ-CKV-007` | Reject missing/wrong table contracts before execution | 4 | pure metadata-validator tests; integration preflight | P4, P7 |
-| `REQ-RPL-001` | Require exactly one startup mode | 3 | startup-mode unit matrix | P3 |
-| `REQ-RPL-002` | Never fall back from failed restore to replay | 3, 8 | configuration/control-flow test; runbook review | P3, P8 |
-| `REQ-RPL-003` | Full replay is explicit break-glass and observable | 3, 9 | unit tests; structured startup event | P3, P9 |
-| `REQ-CHK-001` | Preserve existing stateful operator identity or stop | 6 | deterministic old/new JobGraph comparison | P6 code |
-| `REQ-CHK-002` | Prove restore with a copied checkpoint | 6 | isolated restore and first successful checkpoint | P6 operational |
-| `REQ-MIG-001` | Read complete LOG plus Iceberg history | 8 | catalog union-read evidence | P8 audit |
-| `REQ-MIG-002` | Abort on conflicting candle business values | 8 | dry-run conflict report | P8 audit |
-| `REQ-MIG-003` | Load one canonical row per key and retain LOG | 8 | source/destination reconciliation | P8 load |
-| `REQ-MIG-004` | Bounded replay does not increase KV keys | 7, 8 | gated KV test; bounded operational replay | P7, P8 cutover |
-| `REQ-OPS-001` | Shared dual-sink failures remain fail-closed | 5, 8 | failure-semantics review and rollback runbook | P5, P8 |
-| `REQ-OPS-002` | Runtime bootstrap cannot create compute tables | 4 | DdlBootstrap ownership/creation tests | P4 |
+| `REQ13-CKV-001` | Preserve existing candle LOG unchanged | 1, 5 | DDL contract test; sink configuration test | P1, P5 |
+| `REQ13-CKV-002` | Add canonical KV with exact key and bucket routing | 1, 4, 5 | DDL test; metadata validator; KV integration test | P1, P4, P7 |
+| `REQ13-CKV-003` | Preserve exact 15-column row contract and schema version `2` | 1 | shared-contract and DDL parity tests | P1 |
+| `REQ13-CKV-004` | Permit only configured canonical algorithm/configuration | 2, 8 | policy unit tests; migration audit/load evidence | P2, P8 |
+| `REQ13-CKV-005` | Write every candle to LOG and KV without a Fluss read-back | 5 | graph/sink wiring test; JobGraph evidence | P5, P6 |
+| `REQ13-CKV-006` | Keep signal detection on the in-memory candle stream | 5 | graph/wiring test and code review | P5 |
+| `REQ13-CKV-007` | Reject missing/wrong table contracts before execution | 4 | pure metadata-validator tests; integration preflight | P4, P7 |
+| `REQ13-RPL-001` | Require exactly one startup mode | 3 | startup-mode unit matrix | P3 |
+| `REQ13-RPL-002` | Never fall back from failed restore to replay | 3, 8 | configuration/control-flow test; runbook review | P3, P8 |
+| `REQ13-RPL-003` | Full replay is explicit break-glass and observable | 3, 9 | unit tests; structured startup event | P3, P9 |
+| `REQ13-CHK-001` | Preserve existing stateful operator identity or stop | 6 | deterministic old/new JobGraph comparison | P6 code |
+| `REQ13-CHK-002` | Prove restore with a copied checkpoint | 6 | isolated restore and first successful checkpoint | P6 operational |
+| `REQ13-MIG-001` | Read complete LOG plus Iceberg history | 8 | catalog union-read evidence | P8 audit |
+| `REQ13-MIG-002` | Abort on conflicting candle business values | 8 | dry-run conflict report | P8 audit |
+| `REQ13-MIG-003` | Load one canonical row per key and retain LOG | 8 | source/destination reconciliation | P8 load |
+| `REQ13-MIG-004` | Bounded replay does not increase KV keys | 7, 8 | gated KV test; bounded operational replay | P7, P8 cutover |
+| `REQ13-OPS-001` | Shared dual-sink failures remain fail-closed | 5, 8 | failure-semantics review and rollback runbook | P5, P8 |
+| `REQ13-OPS-002` | Runtime bootstrap cannot create compute tables | 4 | DdlBootstrap ownership/creation tests | P4 |
 
 ## 5.2 Dependency and execution order
 
@@ -947,7 +950,7 @@ Business conflict fields exclude `output_ts` and include all other business/sche
   `Restoring job 87c48642… from Savepoint 1538`, checkpoint numbering continued
   1539→1540→1541 (323 MB, 610–991 ms).)
 - [x] Abort rather than automatically full-replay if restore fails.
-  (Startup gate A3.2/REQ-RPL-002 — no fallback path; restore failure is fatal.
+  (Startup gate A3.2/REQ13-RPL-002 — no fallback path; restore failure is fatal.
   Restore succeeded in this run, so the abort path itself was not triggered live;
   its behavior is pinned by `SignalJobConfigTest` + control-flow coverage.)
 - [x] Use FULL_REPLAY only with explicit operator approval, capacity review, and `ALLOW_FULL_REPLAY=true`.
@@ -1173,7 +1176,9 @@ Executed with the offline-approved tooling against the dev cluster (Fluss
   actual 21 files, LOG/KV kinds, `22_feature_candles_15s_current.sql` row.)
 - [x] Update reconciliation blocker.
   (2026-08-10: `00_RECONCILIATION_BLOCKER.md` superseded note — DDL set now 21
-  numbered files ending `22_feature_candles_15s_current.sql`.)
+  numbered files ending `22_feature_candles_15s_current.sql`. The file was
+  removed 2026-08-15 — superseded by the capability-evidence apply contract,
+  see `12-version-compatibility-evidence.md`.)
 - [x] Update storage requirements and contracts.
   (2026-08-10: `02-storage.md` — `feature_candles_15s_current` row +
   REQ-FLS-006 projection text; `docs/04_contracts/02-storage.md` Market list.)
@@ -1408,7 +1413,7 @@ The original incident is not considered fully resolved until:
 | P7 unit tests | `COMPLETE` | 2026-08-10 | common + compute (81) + ingestion (175) green |
 | P7 integration tests | `COMPLETE` | 2026-08-10 | `CandleCurrentKvIdempotencyTest` PASSED |
 | P8 migration audit/load/cutover | `COMPLETE` (dev) | 2026-08-10 | audit conflict resolved by recorded decision (accept list, re-run exit 0); load EXECUTED (1,351,301 rows, DEST_ROWS_AFTER == DISTINCT_KEYS, 10.76 s); dual-sink cutover EXECUTED (job `87c48642…`, restore chk-1538, live dual writes verified); B8.7 rollback rehearsal EXECUTED + re-cutover (`92104dac…`, chk-1732). Production data-plane remains operator blue-green (B8.1) |
-| P9 documentation/evidence closure | `COMPLETE` | 2026-08-10 | SQL README, blocker, storage reqs/contracts, signal-job doc, compute README, `Candle15s` javadocs, evidence register, launch audit, `final-report-2026-08-10.md` |
+| P9 documentation/evidence closure | `COMPLETE` | 2026-08-10 | SQL README, blocker (file removed 2026-08-15, superseded by the capability-evidence apply contract), storage reqs/contracts, signal-job doc, compute README, `Candle15s` javadocs, evidence register, launch audit, `final-report-2026-08-10.md` |
 
 Overall statuses:
 

@@ -9,17 +9,25 @@
       "bucket_key": "instrument_token",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Ingestion",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "feature_candles_15s",
       "ddl_path": "03_feature_candles_15s.sql",
-      "ddl_sha256": "8392129dc3f1eff8c16c9df1f3d268f34cc60171630697f2667540713faa35b8",
+      "ddl_sha256": "91deef11b9c7673f89ce3223d85cdbfe3f14f1b47b74ccf958ac14c4a4705034",
       "table_kind": "KV",
       "primary_key": "instrument_token, window_start",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-CONN-007"
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "2",
+      "writer_owner": "Signal job",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "forming_bar",
@@ -29,7 +37,11 @@
       "primary_key": "instrument_token",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "1",
+      "writer_owner": "Signal job",
+      "retention_policy": "none",
+      "lake_policy": "off"
     },
     {
       "table_name": "Signal_Candidates",
@@ -39,7 +51,11 @@
       "bucket_key": "instrument_token",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-CONN-007"
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "3",
+      "writer_owner": "Signal job",
+      "retention_policy": "7d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Ranking_Results",
@@ -49,7 +65,11 @@
       "bucket_key": "evaluation_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Signal job",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Trade_Decisions",
@@ -59,7 +79,11 @@
       "bucket_key": "instruction_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Signal job (sole writer)",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Fills",
@@ -69,7 +93,11 @@
       "bucket_key": "postback_event_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Action Capture",
+      "retention_policy": "7d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Order_Lifecycle",
@@ -79,7 +107,11 @@
       "primary_key": "account_scope_id, broker_order_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Action Capture",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Positions",
@@ -89,7 +121,11 @@
       "primary_key": "position_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Position projector (Action Capture, in-process)",
+      "retention_policy": "90d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Execution_Gate",
@@ -99,7 +135,11 @@
       "primary_key": "execution_partition_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Executor",
+      "retention_policy": "30d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Execution_Attempts",
@@ -109,7 +149,11 @@
       "primary_key": "execution_attempt_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Executor",
+      "retention_policy": "30d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Order_Correlation",
@@ -119,7 +163,11 @@
       "primary_key": "instruction_id, execution_attempt_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Executor",
+      "retention_policy": "30d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Execution_Audit",
@@ -129,7 +177,11 @@
       "bucket_key": "audit_event_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Executor",
+      "retention_policy": "5d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Portfolio_Reservations",
@@ -139,7 +191,11 @@
       "primary_key": "reservation_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Signal job",
+      "retention_policy": "2d",
+      "lake_policy": "off"
     },
     {
       "table_name": "Postback_Quarantine",
@@ -149,7 +205,11 @@
       "bucket_key": "quarantine_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Action Capture",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "Postback_Projection_Ledger",
@@ -159,7 +219,11 @@
       "primary_key": "postback_event_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Action Capture",
+      "retention_policy": "2d",
+      "lake_policy": "off"
     },
     {
       "table_name": "Safety_Halt_Requests",
@@ -169,7 +233,11 @@
       "primary_key": "halt_request_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "3",
+      "writer_owner": "Authorized components (Signal job, Action Capture, platform health, operators)",
+      "retention_policy": "30d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "suspected_discontinuities",
@@ -179,27 +247,39 @@
       "bucket_key": "discontinuity_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "2",
+      "writer_owner": "Ingestion",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     },
     {
       "table_name": "instruments",
       "ddl_path": "20_instruments.sql",
-      "ddl_sha256": "40ee17d8c17b14935996bbc5948ed1e0e408ffbc1c3fe2b852f921aded2baf60",
+      "ddl_sha256": "e61694279ebe352bee4c31ccaea3bc1ac01a01c0a761dc1c79dd0ebfab7e9eac",
       "table_kind": "KV",
       "primary_key": "instrument_token, manifest_version",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "3",
+      "writer_owner": "Operators",
+      "retention_policy": "90d",
+      "lake_policy": "off"
     },
     {
       "table_name": "ingestion_quarantine",
       "ddl_path": "21_ingestion_quarantine.sql",
-      "ddl_sha256": "d130586cbd63b221b162a5f778c6b3ac1a3cff639a368e294ca3c1c2aa1c7bbc",
+      "ddl_sha256": "df55f3656b103dac38e10a66d7e5857fa3e12b1fc3aac8e3c7129962a1718a9e",
       "table_kind": "LOG",
       "bucket_key": "quarantine_id",
       "primary_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-SRV-005"
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "1",
+      "writer_owner": "Ingestion",
+      "retention_policy": "2d",
+      "lake_policy": "off"
     },
     {
       "table_name": "Signal_Candidates_current",
@@ -209,7 +289,53 @@
       "primary_key": "instrument_token",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-CONN-007"
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "1",
+      "writer_owner": "Signal job",
+      "retention_policy": "7d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
+    },
+    {
+      "table_name": "fingerprint_dedup",
+      "ddl_path": "24_fingerprint_dedup.sql",
+      "ddl_sha256": "822a52fcdecee94115cd654627d7df300d24088d553d18acd70364db44f9eeda",
+      "table_kind": "KV",
+      "primary_key": "instrument_token, fingerprint_version, event_fingerprint",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "1",
+      "writer_owner": "Signal job",
+      "retention_policy": "2d",
+      "lake_policy": "off"
+    },
+    {
+      "table_name": "trade_instruction_state",
+      "ddl_path": "25_trade_instruction_state.sql",
+      "ddl_sha256": "860d5523cc05132d2900c4c5203a94db0e1d56c727f484869affae91315de05e",
+      "table_kind": "KV",
+      "primary_key": "instruction_id",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "1",
+      "writer_owner": "Signal job (sole writer)",
+      "retention_policy": "2d",
+      "lake_policy": "off"
+    },
+    {
+      "table_name": "eod_offload_state",
+      "ddl_path": "26_eod_offload_state.sql",
+      "ddl_sha256": "3d979bbb75de79c74dbdac35c13fd1e6ad3046387c651cd2b932a607ce634069",
+      "table_kind": "KV",
+      "primary_key": "record_id",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "1",
+      "writer_owner": "EOD controller (sole writer)",
+      "retention_policy": "2d",
+      "lake_policy": "off"
     }
   ]
 }

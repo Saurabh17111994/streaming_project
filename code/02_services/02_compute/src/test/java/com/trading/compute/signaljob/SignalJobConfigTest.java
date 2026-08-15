@@ -54,10 +54,29 @@ class SignalJobConfigTest {
         assertEquals("breakout-20-bullish-trend", cfg.signalRuleId());
         assertEquals(20, cfg.signalLookbackCandles());
         assertEquals(1L, cfg.signalQuantity());
+        // Slice 2.2 forming-bar placeholder defaults (Phase C)
+        assertEquals("breakout-5-forming-bar", cfg.formingRuleId());
+        assertEquals(5, cfg.formingLookbackCandles());
+        // forming_bar KV persistence defaults (persistence phase, 2026-08-16)
+        assertEquals("forming_bar", cfg.formingBarTable());
+        assertEquals(250L, cfg.formingBarWriteBatchMs());
         // OTLP collector: compose DNS default, live-run override (process rule 2)
         assertEquals("otel-collector:4318", cfg.otelCollectorHost());
         // state restore: absent by default (first start replays from offset 0)
         assertEquals(null, cfg.stateRecoveryPath());
+        // SCH-19 machinery (gated off: the ranking feed does not exist yet)
+        assertEquals("Trade_Decisions", cfg.tradeDecisionsTable());
+        assertEquals("trade_instruction_state", cfg.tradeInstructionStateTable());
+        assertEquals(false, cfg.tradeDecisionsEnabled(),
+                "TRADE_DECISIONS_ENABLED defaults to false — the decision dual-sink stays off "
+                        + "until the ranking feed exists");
+        // DEC-038 dedup externalization defaults
+        assertEquals("fingerprint_dedup", cfg.dedupStateTable());
+        assertEquals(250_000L, cfg.dedupCacheMaxEntries());
+        assertEquals(33_554_432L, cfg.dedupCacheMaxBytes());
+        assertEquals(250L, cfg.dedupWriteBatchMs());
+        assertEquals(5_000L, cfg.dedupWriteBatchSize());
+        assertEquals(60_000L, cfg.dedupCleanupIntervalMs());
     }
 
     @Test
@@ -202,6 +221,19 @@ class SignalJobConfigTest {
         env.put("SIGNAL_RULE_ID", "my-rule");
         env.put("SIGNAL_LOOKBACK_CANDLES", "5");
         env.put("SIGNAL_QUANTITY", "3");
+        env.put("FORMING_RULE_ID", "my-forming-rule");
+        env.put("FORMING_LOOKBACK_CANDLES", "8");
+        env.put("FORMING_BAR_TABLE", "forming_bar_dev");
+        env.put("FORMING_BAR_WRITE_BATCH_MS", "100");
+        env.put("TRADE_DECISIONS_TABLE", "Trade_Decisions_dev");
+        env.put("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state_dev");
+        env.put("TRADE_DECISIONS_ENABLED", "true");
+        env.put("DEDUP_STATE_TABLE", "fingerprint_dedup_dev");
+        env.put("DEDUP_CACHE_MAX_ENTRIES", "100000");
+        env.put("DEDUP_CACHE_MAX_BYTES", "16777216");
+        env.put("DEDUP_WRITE_BATCH_MS", "100");
+        env.put("DEDUP_WRITE_BATCH_SIZE", "2000");
+        env.put("DEDUP_CLEANUP_INTERVAL_MS", "30000");
         SignalJobConfig cfg = SignalJobConfig.from(env);
         assertEquals(2_500L, cfg.outOfOrderMs());
         assertEquals(1_000L, cfg.allowedLatenessMs());
@@ -216,6 +248,122 @@ class SignalJobConfigTest {
         assertEquals("my-rule", cfg.signalRuleId());
         assertEquals(5, cfg.signalLookbackCandles());
         assertEquals(3L, cfg.signalQuantity());
+        assertEquals("my-forming-rule", cfg.formingRuleId());
+        assertEquals(8, cfg.formingLookbackCandles());
+        assertEquals("forming_bar_dev", cfg.formingBarTable());
+        assertEquals(100L, cfg.formingBarWriteBatchMs());
+        assertEquals("Trade_Decisions_dev", cfg.tradeDecisionsTable());
+        assertEquals("trade_instruction_state_dev", cfg.tradeInstructionStateTable());
+        assertEquals(true, cfg.tradeDecisionsEnabled(),
+                "explicit TRADE_DECISIONS_ENABLED=true must enable the dual-sink gate");
+        assertEquals("fingerprint_dedup_dev", cfg.dedupStateTable());
+        assertEquals(100_000L, cfg.dedupCacheMaxEntries());
+        assertEquals(16_777_216L, cfg.dedupCacheMaxBytes());
+        assertEquals(100L, cfg.dedupWriteBatchMs());
+        assertEquals(2_000L, cfg.dedupWriteBatchSize());
+        assertEquals(30_000L, cfg.dedupCleanupIntervalMs());
+    }
+
+    /**
+     * Production env: DEPLOYMENT_ENV must be explicit, backend rocksdb, and
+     * CHECKPOINT_DIR an S3 URI (tracker 14 P4.1/P4.2) — plus the pinned
+     * checkpoint/dedup keys from {@link #env()}.
+     */
+    private static Map<String, String> productionEnv() {
+        Map<String, String> env = env();
+        env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
+        env.put("STATE_BACKEND", "rocksdb");
+        env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/job");
+        env.put("S3_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");
+        env.put("AWS_ACCESS_KEY_ID", "r2accesskey000000000000");
+        env.put("AWS_SECRET_ACCESS_KEY", "r2s3cr3tvalue000000000000");
+        return env;
+    }
+
+    @Test
+    void acceptsPinnedRestartValuesInProduction() {
+        Map<String, String> env = productionEnv();
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
+        SignalJobConfig cfg = SignalJobConfig.from(env);
+        assertEquals(PlatformConfig.RESTART_MAX_ATTEMPTS, cfg.restartMaxAttempts());
+        assertEquals(PlatformConfig.RESTART_DELAY_MS, cfg.restartDelayMs());
+    }
+
+    @Test
+    void rejectsDeviatingRestartMaxAttemptsInProduction() {
+        Map<String, String> env = productionEnv();
+        env.put("RESTART_MAX_ATTEMPTS", "5");
+        env.put("RESTART_DELAY_MS", "30000");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("RESTART_MAX_ATTEMPTS"), e.getMessage());
+        assertTrue(e.getMessage().contains("3"), e.getMessage());
+    }
+
+    @Test
+    void rejectsDeviatingRestartDelayInProduction() {
+        Map<String, String> env = productionEnv();
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "45000");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("RESTART_DELAY_MS"), e.getMessage());
+        assertTrue(e.getMessage().contains("30000"), e.getMessage());
+    }
+
+    @Test
+    void rejectsMissingRestartKeysInProduction() {
+        // No unsafe default may be substituted in production: a missing retry
+        // budget must fail startup, never silently default to a bounded value.
+        Map<String, String> env = productionEnv();
+        env.remove("RESTART_MAX_ATTEMPTS");
+        env.remove("RESTART_DELAY_MS");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("RESTART_MAX_ATTEMPTS"), e.getMessage());
+    }
+
+    @Test
+    void rejectsMissingRestartDelayInProduction() {
+        Map<String, String> env = productionEnv();
+        env.remove("RESTART_DELAY_MS");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("RESTART_DELAY_MS"), e.getMessage());
+    }
+
+    @Test
+    void rejectsInvalidTradeDecisionsEnabledBoolean() {
+        Map<String, String> env = env();
+        env.put("TRADE_DECISIONS_ENABLED", "yes");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("TRADE_DECISIONS_ENABLED"), e.getMessage());
+    }
+
+    @Test
+    void rejectsNonPositiveFormingBarWriteBatchMs() {
+        Map<String, String> env = env();
+        env.put("FORMING_BAR_WRITE_BATCH_MS", "0");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("FORMING_BAR_WRITE_BATCH_MS"), e.getMessage());
+    }
+
+    @Test
+    void rejectsNonPositiveDedupTuningKeys() {
+        for (String key : new String[] {"DEDUP_CACHE_MAX_ENTRIES", "DEDUP_CACHE_MAX_BYTES",
+                "DEDUP_WRITE_BATCH_MS", "DEDUP_WRITE_BATCH_SIZE", "DEDUP_CLEANUP_INTERVAL_MS"}) {
+            Map<String, String> env = env();
+            env.put(key, "0");
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> SignalJobConfig.from(env), key + " must reject a non-positive value");
+            assertTrue(e.getMessage().contains(key),
+                    "error must name the key, got: " + e.getMessage());
+        }
     }
 
     // ── tracker 14 P2: canonical version pair is pinned fail-closed
@@ -279,6 +427,15 @@ class SignalJobConfigTest {
         assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
     }
 
+    @Test
+    void rejectsFormingLookbackBelowTwo() {
+        Map<String, String> env = env();
+        env.put("FORMING_LOOKBACK_CANDLES", "1");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("FORMING_LOOKBACK_CANDLES"), e.getMessage());
+    }
+
     // ── tracker 14 P4: state backend + durable checkpoints ────────────────
 
     @Test
@@ -297,6 +454,8 @@ class SignalJobConfigTest {
     void productionDefaultsToRocksdb() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         env.put("S3_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");
         env.put("AWS_ACCESS_KEY_ID", "r2accesskey000000000000");
@@ -314,6 +473,8 @@ class SignalJobConfigTest {
     void s3ObjectStoreWithoutCredentialsFailsClosed() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> SignalJobConfig.from(env));
@@ -326,6 +487,8 @@ class SignalJobConfigTest {
     void r2EndpointFallbackWhenS3EndpointAbsent() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         env.put("R2_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");
         env.put("AWS_ACCESS_KEY_ID", "r2accesskey000000000000");
@@ -349,6 +512,8 @@ class SignalJobConfigTest {
     void rejectsHeapStateInProduction() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("STATE_BACKEND", "hashmap");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         IllegalStateException e = assertThrows(IllegalStateException.class,
@@ -361,6 +526,8 @@ class SignalJobConfigTest {
     void rejectsLocalOnlyCheckpointPathInProduction() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "/tmp/signaljob-checkpoints");
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> SignalJobConfig.from(env));
@@ -371,6 +538,8 @@ class SignalJobConfigTest {
     void rejectsMissingCheckpointDirInProduction() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> SignalJobConfig.from(env));
         assertTrue(e.getMessage().contains("CHECKPOINT_DIR"), e.getMessage());
@@ -391,6 +560,8 @@ class SignalJobConfigTest {
     void productionAcceptsS3CheckpointAndSavepoint() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3a://signal-checkpoints/prod");
         env.put("SAVEPOINT_DIR", "s3://signal-savepoints/prod");
         env.put("S3_ENDPOINT", "https://signal-test.r2.cloudflarestorage.com");
@@ -409,6 +580,8 @@ class SignalJobConfigTest {
     void rejectsNonS3SavepointDirInProduction() {
         Map<String, String> env = env();
         env.put("DEPLOYMENT_ENV", "production");
+        env.put("RESTART_MAX_ATTEMPTS", "3");
+        env.put("RESTART_DELAY_MS", "30000");
         env.put("CHECKPOINT_DIR", "s3://signal-checkpoints/prod");
         env.put("SAVEPOINT_DIR", "/tmp/savepoints");
         IllegalStateException e = assertThrows(IllegalStateException.class,

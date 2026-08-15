@@ -87,11 +87,12 @@ Automatic resume and approval reuse across epochs are prohibited.
 
 1. Identify the affected job, checkpoint, source offsets, watermark, state size, failure, and sink status.
 2. Halt the order path if state continuity or instruction correctness is uncertain.
-3. Restore from the tested encrypted S3 checkpoint/savepoint.
-4. Verify dedup, window, forming-bar, ranking, and source state consistency.
-5. Verify no duplicate immutable instruction and no unaccounted partial sink visibility.
-6. If restoration cannot be proven, remain not ready and execute the approved reset/replay procedure.
-7. Reconcile before any gate resume.
+3. Restore the compact checkpoint from the tested encrypted S3 checkpoint/savepoint (DEC-038: the checkpoint holds source offsets, watermarks, timers, in-flight windows, and working-cache metadata — not the full dedup set).
+4. Verify Fluss authoritative-state availability and compatibility (dedup state table, candle/signal tables); rehydrate the dedup working cache from Fluss.
+5. Verify window, forming-bar, ranking, and source state consistency; verify the Fluss dedup table holds the accepted set (checkpoint did not duplicate it).
+6. Verify no duplicate immutable instruction and no unaccounted partial sink visibility.
+7. If restoration or Fluss-state verification cannot be proven, remain not ready and execute the approved reset/replay procedure.
+8. Reconcile before any gate resume.
 
 ## Fluss quorum, tablet, or workload VM loss
 
@@ -159,10 +160,12 @@ path throws `StringIndexOutOfBoundsException` at `SignalJob.java:310`).
    `/opt/flink/jobs/compute.jar`).
 2. Copy the jar into the jobmanager container if rebuilt.
 3. Submit with the pinned env set (exact working dev command):
-   `docker exec -e RAW_TABLE=… -e CANDLE_TABLE=… -e CANDLE_CURRENT_TABLE=… -e SIGNAL_CANDIDATES_TABLE=… -e ALLOW_FULL_REPLAY=true -e CHECKPOINT_DIR=file:///tmp/p8-checkpoints -e FLUSS_BOOTSTRAP_SERVERS=fluss-coordinator:9123 -e DEDUP_TTL_MS=300000 -e CANDLE_WINDOW_MS=15000 -e CHECKPOINT_INTERVAL_MS=10000 -e CHECKPOINT_TIMEOUT_MS=30000 -e MAX_CONCURRENT_CHECKPOINTS=1 01_docker-flink-jobmanager-1 flink run -d -c com.trading.compute.signaljob.SignalJob /opt/flink/jobs/compute.jar`
-   (Restore mode: omit `ALLOW_FULL_REPLAY` and set `STATE_RECOVERY_PATH` to the
-   previous run's last checkpoint; the log line `signal-job: startup mode =
-   RESTORE (restore=…, fullReplay=false)` at INFO confirms restore.)
+   `docker exec -e RAW_TABLE=… -e CANDLE_TABLE=… -e SIGNAL_CANDIDATES_TABLE=… -e SIGNAL_CURRENT_TABLE=… -e STATE_RECOVERY_PATH=… -e CHECKPOINT_DIR=file:///tmp/p8-checkpoints -e FLUSS_BOOTSTRAP_SERVERS=fluss-coordinator:9123 -e DEDUP_TTL_MS=300000 -e CANDLE_WINDOW_MS=15000 -e CHECKPOINT_INTERVAL_MS=10000 -e CHECKPOINT_TIMEOUT_MS=30000 -e MAX_CONCURRENT_CHECKPOINTS=1 01_docker-flink-jobmanager-1 flink run -d -c com.trading.compute.signaljob.SignalJob /opt/flink/jobs/compute.jar`
+   (This is the normal RESTORE-mode command: `STATE_RECOVERY_PATH` names the
+   previous run's last checkpoint and `ALLOW_FULL_REPLAY` is absent; the log
+   line `signal-job: startup mode = RESTORE (restore=…, fullReplay=false)` at
+   INFO confirms restore. The FULL_REPLAY break-glass variant sets
+   `ALLOW_FULL_REPLAY=true` and omits `STATE_RECOVERY_PATH`.)
 4. Health: verify via `ps`, log evidence (`Restoring job`, `Completed
    checkpoint`, sink `RUNNING`), and checkpoint continuity — NOT the hub
    readiness report, which false-alarms "NOT ready" while the job is healthy.
@@ -178,6 +181,13 @@ Set `STATE_RECOVERY_PATH` to the PREVIOUS RUN's last checkpoint directory
 (`file:///tmp/p8-checkpoints/<previous-jobid>/chk-N`). Scope any log grep to
 new log lines after restart. Verify `Restoring job` appears, then completed
 checkpoints advance.
+
+Under DEC-038 (2026-08-14) the checkpoint is compact: it restores source
+offsets, watermarks, timers, in-flight windows, and dedup working-cache
+metadata. After restore, verify the Fluss authoritative state (dedup state
+table, candle/signal tables) is reachable and compatible, and that the dedup
+working cache rehydrates from Fluss — the checkpoint is not a second complete
+copy of the durable Signal business state.
 
 **JM/TM container recreate destroys container-local `/tmp` checkpoints** (not on a
 named volume; 2026-08-11 incident: a `docker cp` preserve raced live checkpointing,
@@ -215,8 +225,8 @@ history (`ALLOW_FULL_REPLAY=true` accepted via A3.4).
 ## Checkpoint failure (SignalJob)
 
 Trigger: `SIGNAL-crit-checkpoint-failed` (failed checkpoints > 0) or
-`SIGNAL-error-checkpoint-slow` (duration >= 240000 ms = 80% of the pinned
-300000 ms timeout).
+`SIGNAL-error-checkpoint-slow` (duration >= 24000 ms = 80% of the pinned
+30000 ms timeout).
 
 1. Capture JobID, failed checkpoint count, last completed checkpoint, source
    offsets, state size, and sink status.
@@ -235,14 +245,14 @@ Trigger: DDL/version preflight blocks startup (validation/contract gate).
 
 1. Capture the failing table, expected vs actual schema, and version matrix
    state.
-2. Check the table contract fields: PK, routing, bucket count, and the full column/type/nullability set (`CandleTableContractValidator` today; re-targeted by the 2026-08-13 re-scope to `feature_candles_15s` LOG + `Signal_Candidates` LOG + `Signal_Candidates_current` KV — SIGNAL-SCHEMA-001, pending implementation).
+2. Check the table contract fields: PK, routing, bucket count, and the full column/type/nullability set (`TableContractValidator`, re-targeted by the 2026-08-13 re-scope to `feature_candles_15s` KV PK exactly `(instrument_token, window_start)` + `Signal_Candidates` LOG + `Signal_Candidates_current` KV PK `[instrument_token]` — SIGNAL-SCHEMA-001, implemented).
 3. Do NOT bypass the gate; reconcile the DDL/schema with the manifest
    (`ddl_apply.py --force` regeneration must be byte-identical) and re-run.
 4. Closure: preflight passes, job starts in the intended mode.
 
 ## Migration conflict (CandleMigrationTool) — RETIRED
 
-> **RETIRED (2026-08-13):** `CandleMigrationTool` is decommissioned with the candle KV projection (requirement change — candle output is LOG-only). The procedure below is retained as the historical record of the implemented candle-KV migration conflict handling.
+> **RETIRED (2026-08-13):** `CandleMigrationTool` is decommissioned with the candle KV projection (requirement change — `feature_candles_15s` is now the KV-only sole candle output). The procedure below is retained as the historical record of the implemented candle-KV migration conflict handling.
 
 Trigger: `CandleMigrationTool` audit/load exits 2 (unaccepted conflicts) or 1
 (accept-list entries match no canonical key).
@@ -276,7 +286,7 @@ Trigger: `SIGNAL-error-flink-jm-scrape-down` / `SIGNAL-error-flink-tm-scrape-dow
 
 ## Rollback (candle LOG→KV replay, CANDLE-KV-REPLAY-001) — RETIRED
 
-> **RETIRED (2026-08-13):** the candle dual-sink this runbook rolls back is retired (candle output is LOG-only). The registry and chk-1539 cutoff below are historical dev-rehearsal evidence. The re-scope target is the SIGNAL dual-sink rollback runbook (`Signal_Candidates` LOG + `Signal_Candidates_current` KV), delivered by tracker 14 P10 (`docs/08_implementation/09-production-swarm.md`).
+> **RETIRED (2026-08-13):** the candle dual-sink this runbook rolls back is retired (`feature_candles_15s` is now the KV-only sole candle output). The registry and chk-1539 cutoff below are historical dev-rehearsal evidence. The re-scope target is the SIGNAL dual-sink rollback runbook (`Signal_Candidates` LOG + `Signal_Candidates_current` KV), delivered by tracker 14 P10 (`docs/08_implementation/09-production-swarm.md`).
 
 Exact dev-rehearsed registry (2026-08-10, tracker
 `docs/08_implementation/13-candle-log-kv-replay-safety.md`):
@@ -337,19 +347,20 @@ All rules route to the `dev-webhook` destination in dev (receiver logs:
 alerts have no first-class severity field — severity rides the rule-name prefix
 (`SIGNAL-crit`/`error`/`warn`, `ING-crit`/`warn`). Realtime rules evaluate
 continuously; while a condition holds, fires repeat on the ~30–75 s window
-cadence. 24 rules provisioned (9 ING- ingestion + 15 SIGNAL- compute).
+cadence. 26 rules provisioned (9 ING- ingestion + 17 SIGNAL- compute).
 
 Compute/SignalJob rules:
 
 | Rule | Severity | Condition | Response | Recovery |
 | --- | --- | --- | --- | --- |
 | SIGNAL-crit-checkpoint-failed | Critical | failed checkpoints > 0 | Checkpoint failure runbook | checkpoint completes, count resets |
-| SIGNAL-error-checkpoint-slow | Error | duration >= 240000 ms | Checkpoint failure runbook | duration back under 80% of timeout |
+| SIGNAL-error-checkpoint-slow | Error | duration >= 24000 ms | Checkpoint failure runbook | duration back under 80% of timeout |
 | SIGNAL-error-job-restarting | Error | restarts > 0 | Check flink_logs for the restart cause | restarts stop |
 | SIGNAL-error-source-stalled | Error | source rate == 0 (2 min) | Check feed/bridge; **false-fires on quiesced dev feed** | feed resumes |
 | SIGNAL-warn-kv-sink-zero | Warning | kv-sink rate == 0 (2 min) | Check KV sink task; **false-fires on quiesced dev feed** | sink writes resume |
-| SIGNAL-warn-dedup-state | Warning | dedup state count > 250000 | Check dedup memory envelope (P5/P4 scope) | count drops |
-| SIGNAL-warn-dedup-expiry | Warning | expiry index > 250000 | Check expiry index growth | index shrinks |
+| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup` (DDL `24_fingerprint_dedup.sql` on file, applied with the DEC-038 implementation stage), not Flink state | table size plateaus back under envelope |
+| SIGNAL-warn-dedup-expiry | Warning | expired-row cleanup backlog > bound | Check the dedup cleanup pass (`DEDUP_CLEANUP_INTERVAL_MS`) and delete throughput | backlog drains |
+| SIGNAL-warn-dedup-cache-hit | Warning | dedup cache hit ratio below threshold (60 s) | Hot path degrading toward per-tick Fluss lookups — check cache bound vs envelope (DEC-038) | hit ratio recovers |
 | SIGNAL-warn-schema-rejected-rate | Warning | rejects per flush > 10 | Check raw_table_1 schema vs validator | rejects stop |
 | SIGNAL-crit-schema-version-rejected | Critical | any schema-version reject | Schema-preflight runbook | zero rejects |
 | SIGNAL-crit-full-replay-started | Critical | startup mode == FULL_REPLAY | Replay incident runbook (fires only when the emitter ships in production) | replay drains, job runs |

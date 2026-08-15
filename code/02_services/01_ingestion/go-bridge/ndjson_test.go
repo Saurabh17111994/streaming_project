@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -323,4 +326,139 @@ func TestIngSecRed001SecretRedaction(t *testing.T) {
 	if len(long) > 512 {
 		t.Fatalf("ING-SEC-RED-001: diagnostic not bounded (%d chars)", len(long))
 	}
+}
+
+// ING-RES-004 — every NDJSON emit path (tick, bridge_event, bridge_metrics)
+// carries contract_version=2 — schema conformance across the whole contract.
+func TestIngRes004AllEmitPathsCarryContractVersion2(t *testing.T) {
+	var out bytes.Buffer
+	emitter := NewBridgeEmitter(&out)
+	now := time.Now()
+	if err := emitter.EmitTick(Tick{Feed: "hft", Mode: "ltpc", Token: 7, LTP: 10050, TS: 1_000}, "c", "hft-0", 1, now, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.EmitEvent(BridgeEvent{Event: "slot_state", SlotID: "hft-0", ConnectionID: "hft-0", ConnectionEpoch: 1, State: "ACTIVE", ReceivedTsMs: now.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.EmitMetrics(BridgeMetrics{TsMs: now.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 records (tick/event/metrics), got %d", len(lines))
+	}
+	for _, line := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatal(err)
+		}
+		if v, _ := rec["contract_version"].(float64); int(v) != NDJSONContractVersion {
+			t.Fatalf("record missing contract_version=%d: %s", NDJSONContractVersion, line)
+		}
+	}
+}
+
+// ING-TCP-003 — the per-token counter report (ING-TCP-001) is emitted as
+// bounded chunks (20 tokens/line), the file + stderr mirror are byte-identical,
+// and the file is written FIRST so a dead stderr (SIGPIPE path) cannot lose
+// the reconcile evidence.
+func TestIngTcp003TickCountReportChunkedFileAndStderrMirror(t *testing.T) {
+	defer restoreTickCountGlobals()
+
+	// 1,024 distinct tokens with deterministic counts 1..1024 (total 524,800).
+	tickCountsMu.Lock()
+	tickCounts = map[int32]int64{}
+	for i := int32(1); i <= 1024; i++ {
+		tickCounts[i] = int64(i)
+	}
+	tickCountsMu.Unlock()
+
+	reportPath := filepath.Join(t.TempDir(), "arrow-tick-counts.txt")
+	tickCountsFilePath = reportPath // main() assigns this from ARROW_TICK_COUNTS_FILE
+	mirrorPath := filepath.Join(t.TempDir(), "stderr.txt")
+	mirror, err := os.Create(mirrorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = mirror
+	reportTickCounts()
+	os.Stderr = oldStderr
+	if err := mirror.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// File + stderr mirror are byte-identical (the reconcile may read either).
+	fileBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("report file missing: %v", err)
+	}
+	mirrorBytes, err := os.ReadFile(mirrorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(fileBytes, mirrorBytes) {
+		t.Fatal("ING-TCP-003: file and stderr mirror must be byte-identical")
+	}
+
+	// 1,024 tokens at 20/line → exactly 52 bounded chunks.
+	lines := strings.Split(strings.TrimSpace(string(fileBytes)), "\n")
+	if len(lines) != 52 {
+		t.Fatalf("1,024-token report: got %d lines, want 52 (20/line)", len(lines))
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "arrow-tick-counts: total=524800 chunk=") {
+			t.Fatalf("line %d malformed: %q", i, line)
+		}
+		if !strings.Contains(line, fmt.Sprintf("chunk=%d/52", i)) {
+			t.Fatalf("line %d missing chunk marker: %q", i, line)
+		}
+		// Bounded line: 20 token pairs + header, far under Java's 603 B
+		// truncation limit (the reason chunking exists).
+		if len(line) > 603 {
+			t.Fatalf("line %d exceeds the 603 B log-truncation bound: %d B", i, len(line))
+		}
+	}
+}
+
+// ING-TCP-003 — the report file persists even when stderr is dead (the SIGPIPE
+// path: the parent JVM closes the child's pipe, so stderr writes fail). The
+// file write happens FIRST, so the reconcile evidence survives.
+func TestIngTcp003ReportFilePersistsWhenStderrDies(t *testing.T) {
+	defer restoreTickCountGlobals()
+
+	tickCountsMu.Lock()
+	tickCounts = map[int32]int64{1: 5, 2: 7, 3: 11}
+	tickCountsMu.Unlock()
+
+	reportPath := filepath.Join(t.TempDir(), "counts.txt")
+	tickCountsFilePath = reportPath
+
+	// /dev/full fails every write (ENOSPC) — a clean stand-in for a dead pipe.
+	devFull, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("/dev/full unavailable — cannot simulate a dead stderr")
+	}
+	oldStderr := os.Stderr
+	os.Stderr = devFull
+	reportTickCounts() // must not hang, must not panic: file written before stderr
+	os.Stderr = oldStderr
+	devFull.Close()
+
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ING-TCP-003: report file must persist despite dead stderr: %v", err)
+	}
+	if !strings.Contains(string(data), "arrow-tick-counts: total=23") {
+		t.Fatalf("report content wrong: %q", string(data))
+	}
+}
+
+// restoreTickCountGlobals puts the package-level tick-count state back for
+// other tests (the goroutine ticker and main's shutdown path read these).
+func restoreTickCountGlobals() {
+	tickCountsMu.Lock()
+	tickCounts = nil
+	tickCountsMu.Unlock()
+	tickCountsFilePath = "/tmp/arrow-tick-counts.txt"
 }

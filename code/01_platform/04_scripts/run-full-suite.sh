@@ -2,8 +2,11 @@
 # =============================================================================
 # run-full-suite.sh — Steps 1-4 of the remaining plan, ONE unattended run.
 #
+#   Stage 0a Python unit suites (tests/ — incl. the ING-TCP-002
+#            reconcile-compare comparator) — fast static fail before builds
 #   Stage 1  Monday verification gates (Go -race, E2E binaries, docker build
-#            smoke, Java full gate FLUSS+MANIFEST+PERF+E2E, schema/perf cert)
+#            smoke, Java full gate FLUSS+MANIFEST+PERF+E2E, docs-audit incl.
+#            C16 env-key drift, schema/perf cert)
 #   Stage 2  100-cycle reconnect marathon (wall clock, REAL backoff) against
 #            the fake HFT broker on the host — journal + FD/thread evidence
 #   Stage 3  Container runtime run — ingestion image in compose against the
@@ -155,6 +158,19 @@ if [ "$FAILED" = 1 ]; then
 	exit 1
 fi
 echo "preflight OK ($(now))"
+
+# ── Stage 0a: Python unit suites (fast static fail) ─────────────────────────
+# The ING-TCP-002 reconcile-compare suite lives here (tests/test_reconcile_compare.py)
+# and underpins the count-based losslessness proof; docs-audit C16 (env-key
+# drift) runs inside Stage 1's Monday gates after the Java suite.
+echo "=== Stage 0a: Python unit suites (reconcile-compare + gate helpers)"
+if ! python3 -m unittest discover -s "$SCRIPT_DIR/tests" -p "test_*.py" \
+	> "$OUT/gates/python-tests.log" 2>&1; then
+	stage_fail 0 "python unit suites failed — see $OUT/gates/python-tests.log"
+	RESULT="FAIL"
+	exit 1
+fi
+echo "python unit suites OK (reconcile-compare comparator + gate helpers) — $(now)"
 
 # ── Stage 0b: builds ──────────────────────────────────────────────────────────
 echo "=== Stage 0b: builds (jar + bridge + faketool + dropper)"

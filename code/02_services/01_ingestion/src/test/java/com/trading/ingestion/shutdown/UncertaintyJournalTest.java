@@ -27,7 +27,7 @@ class UncertaintyJournalTest {
         UncertaintyJournal journal = new UncertaintyJournal(journalPath);
 
         UncertaintyJournal.Entry entry = new UncertaintyJournal.Entry(
-                "test-instance", Instant.now(), 1000, 950, 10, 40, 50000, "shutdown"
+                "test-instance", Instant.now(), 1000, 950, 10, 40, 50000, 50, 2500, "shutdown"
         );
 
         journal.write(entry);
@@ -46,7 +46,7 @@ class UncertaintyJournalTest {
         for (int i = 0; i < 5; i++) {
             journal.write(new UncertaintyJournal.Entry(
                     "instance-" + i, Instant.now(),
-                    100, 90, 5, 5, 5000, "test-" + i
+                    100, 90, 5, 5, 5000, 10, 500, "test-" + i
             ));
         }
 
@@ -59,7 +59,7 @@ class UncertaintyJournalTest {
     void entryContainsAllFields() {
         UncertaintyJournal.Entry entry = new UncertaintyJournal.Entry(
                 "test-1", Instant.ofEpochMilli(1719000000000L),
-                1000, 950, 10, 40, 50000, "shutdown"
+                1000, 950, 10, 40, 50000, 50, 2500, "shutdown"
         );
 
         String json = entry.toJson();
@@ -69,6 +69,8 @@ class UncertaintyJournalTest {
         assertTrue(json.contains("\"total_failed\":10"));
         assertTrue(json.contains("\"total_rejected\":40"));
         assertTrue(json.contains("\"total_bytes_accepted\":50000"));
+        assertTrue(json.contains("\"pending_records\":50"));
+        assertTrue(json.contains("\"pending_bytes\":2500"));
         assertTrue(json.contains("\"reason\":\"shutdown\""));
     }
 
@@ -76,7 +78,7 @@ class UncertaintyJournalTest {
     @DisplayName("JSON escapes special characters in instance ID")
     void jsonEscapesSpecialCharacters() {
         UncertaintyJournal.Entry entry = new UncertaintyJournal.Entry(
-                "test-\\\"quote", Instant.now(), 0, 0, 0, 0, 0, "reason"
+                "test-\\\"quote", Instant.now(), 0, 0, 0, 0, 0, 0, 0, "reason"
         );
 
         String json = entry.toJson();
@@ -96,7 +98,7 @@ class UncertaintyJournalTest {
     @DisplayName("Control characters are escaped so JSONL stays one line (R-194)")
     void jsonEscapesControlCharacters() {
         UncertaintyJournal.Entry entry = new UncertaintyJournal.Entry(
-                "instance", Instant.now(), 0, 0, 0, 0, 0, "crash reason\nsecond line\twith tab"
+                "instance", Instant.now(), 0, 0, 0, 0, 0, 0, 0, "crash reason\nsecond line\twith tab"
         );
         String json = entry.toJson();
         assertTrue(!json.contains("\n"), "newline must be escaped — JSONL invariant (R-194)");
@@ -109,7 +111,7 @@ class UncertaintyJournalTest {
         // Simulate UNCERTAINTY_JOURNAL_PATH=journal.jsonl (no parent).
         java.nio.file.Path cwd = java.nio.file.Paths.get("").toAbsolutePath();
         UncertaintyJournal journal = new UncertaintyJournal(cwd.resolve("journal.jsonl"));
-        journal.write(new UncertaintyJournal.Entry("i", Instant.now(), 1, 1, 0, 0, 10, "x"));
+        journal.write(new UncertaintyJournal.Entry("i", Instant.now(), 1, 1, 0, 0, 10, 0, 0, "x"));
         assertTrue(java.nio.file.Files.exists(cwd.resolve("journal.jsonl")),
                 "write with bare filename must succeed (R-117)");
         java.nio.file.Files.deleteIfExists(cwd.resolve("journal.jsonl"));

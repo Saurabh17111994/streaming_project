@@ -6,22 +6,19 @@ The Signal Flink job consumes `raw_table_1`, performs bounded fingerprint dedupl
 
 **Tier-scoped deployment (current testing phase):** the current phase builds and validates the Signal job on the approved 1,024-instrument / single-connection envelope (20,480 ticks/s at 20 Hz per instrument). The 3,000-instrument / 50,000 ticks/s variable baseline remains the deferred production target (`PERF-PROD-60000-001`; `PERF-PROD-90000-001` retired with the peak campaign, DEC-036); per-instrument windowing, dedup, and candle logic are identical across envelopes — only the load/acceptance profile differs.
 
-## State
+## State (DEC-038 — authoritative → Fluss, transient/recovery → Flink)
 
-- Fingerprint dedup state with configured, bounded TTL covering the declared ingestion retry/replay horizon plus watermark delay; deployment rejects shorter or unbounded values
-- Per-instrument event-time window state
-- Forming-bar accumulator
-- Source offsets and version metadata
+The Signal job's state splits into three categories:
+
+**Authoritative durable state — Fluss:** the fingerprint dedup set (a Fluss KV state table keyed `(instrument_token, fingerprint_version, event_fingerprint)` → `(first_seen, expiry)`, `bucket.key = instrument_token`), closed candles (`feature_candles_15s` KV), and current signal state (`Signal_Candidates_current` KV). Dedup has configured, bounded TTL covering the declared ingestion retry/replay horizon plus watermark delay; deployment rejects shorter or unbounded values. Durable state survives a Flink restart independently of a large Flink checkpoint.
+
+**Transient execution state — Flink working state:** per-instrument event-time window accumulator, the `candle-emitted` window flag, the signal-detection ring buffers, and a bounded in-process dedup working cache so the hot path performs no Fluss round trip per tick.
+
+**Recovery state — Flink checkpoint:** source offsets, watermarks, event-time timers, and minimal execution metadata. The checkpoint is intentionally small and is not a second complete copy of Fluss-owned business state.
 
 Production checkpoints/savepoints use encrypted S3. The exact state backend and connector versions are pinned and tested.
 
-## Event-time contract
-
-The deployed watermark, allowed-lateness, and source-idleness values are configuration parameters, not universal protocol constants. The default profile is bounded out-of-orderness of five seconds, allowed lateness of five seconds, and source idleness of fifteen seconds, as specified by the requirements; each value may be changed only through a tested deployment profile. A source without a verified event timestamp cannot advance the watermark.
-
-A candle is final from its first write: the final row emits at first window fire (watermark ≥ `window_end`), an `emitted` window-state flag makes any allowed-lateness re-trigger a no-op (late-within-lateness folds into the accumulator and is counted, never re-written), and no correction/update row exists in MVP. The "final after `window_end + allowed_lateness`" phrasing means the finalization boundary — the candle is not corrected after that point.
-
-Open/close tie ordering is deterministic from the versioned fingerprint specification, not broker `seq_no`.
+**Restart contract:** restore the compact Flink checkpoint → verify Fluss authoritative-state availability and compatibility → rehydrate only the working state actually needed → resume. Fluss unavailability/incompatibility fails the job closed (no silent replay); deterministic continuation and safe degradation are preserved.
 
 ## Event-time and finalization
 
@@ -48,6 +45,8 @@ Compute SHALL expose both typed closed-candle events and typed forming-bar event
 ## Guarantees
 
 Exactly-once applies only to the pinned integration-tested Flink state/sink boundary. It does not imply cross-table atomic visibility or broker-call exactly-once.
+
+**State-boundary acceptance:** (1) large durable Signal state is observable in Fluss; (2) the Flink checkpoint remains bounded and does not duplicate the full durable state; (3) restart restores compact Flink state and rehydrates from Fluss without full raw-history replay; (4) Fluss state unavailability or incompatibility causes safe degradation; (5) checkpoint failures remain safe.
 
 ## Acceptance
 

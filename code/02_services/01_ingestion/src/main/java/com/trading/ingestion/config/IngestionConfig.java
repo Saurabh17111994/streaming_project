@@ -44,6 +44,7 @@ public final class IngestionConfig {
     public final long maxPendingBytes;
     public final double pendingWarningPercent;
     public final Duration appendTimeout;
+    public final Duration drainDeadline;
     public final long clockOffsetLimitMs;
     public final long arrowMaxEventAgeMs;
     public final long arrowMaxFutureEventSkewMs;
@@ -83,6 +84,7 @@ public final class IngestionConfig {
         this.maxPendingBytes = b.maxPendingBytes;
         this.pendingWarningPercent = b.pendingWarningPercent;
         this.appendTimeout = b.appendTimeout;
+        this.drainDeadline = b.drainDeadline;
         this.clockOffsetLimitMs = b.clockOffsetLimitMs;
         this.arrowMaxEventAgeMs = b.arrowMaxEventAgeMs;
         this.arrowMaxFutureEventSkewMs = b.arrowMaxFutureEventSkewMs;
@@ -163,6 +165,8 @@ public final class IngestionConfig {
         // ---- Timing ----
         int timeoutSec = intRange(env, "APPEND_TIMEOUT_SECONDS", 5, 1, 30, errors);
         b.appendTimeout = Duration.ofSeconds(timeoutSec);
+        b.drainDeadline = Duration.ofSeconds(
+                intRange(env, "DRAIN_DEADLINE_SECONDS", 30, 1, 300, errors));
         b.clockOffsetLimitMs = longRange(env, "CLOCK_OFFSET_LIMIT_MS",
                 100L, 10L, 60_000L, errors);
         b.arrowMaxEventAgeMs = requiredLong(env, "ARROW_MAX_EVENT_AGE_MS", errors);
@@ -248,6 +252,7 @@ public final class IngestionConfig {
         m.put("MAX_PENDING_APPEND_BYTES", maxPendingBytes);
         m.put("PENDING_APPEND_WARNING_PERCENT", pendingWarningPercent);
         m.put("APPEND_TIMEOUT", appendTimeout);
+        m.put("DRAIN_DEADLINE_SECONDS", drainDeadline.getSeconds());
         m.put("CLOCK_OFFSET_LIMIT_MS", clockOffsetLimitMs);
         m.put("ARROW_MAX_EVENT_AGE_MS", arrowMaxEventAgeMs);
         m.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", arrowMaxFutureEventSkewMs);
@@ -412,6 +417,7 @@ public final class IngestionConfig {
         long maxPendingBytes = 67_108_864L;
         double pendingWarningPercent = 0.80;
         Duration appendTimeout = Duration.ofSeconds(5);
+        Duration drainDeadline = Duration.ofSeconds(30);
         long clockOffsetLimitMs = 100L;
         long arrowMaxEventAgeMs;
         long arrowMaxFutureEventSkewMs;

@@ -10,12 +10,13 @@ Arrow market-data stream
       ├─ normalized typed fields
       ├─ versioned event fingerprint
       └─ suspected-discontinuity evidence
-  → raw_table_1 LOG (at-least-once raw append)
+  → raw_table_1 LOG (at-least-once raw append; rebuild source for Fluss-owned state)
   → Signal Flink job
       ├─ eligible-trade filtering
       ├─ bounded best-effort fingerprint deduplication
+      │    └─ dedup set: Fluss KV state table (authoritative, DEC-038) + Flink working cache
       ├─ 15-second event-time candle state (keyed by instrument_token)
-      ├─ final feature_candles_15s LOG
+      │    └─ durable rows: feature_candles_15s KV (authoritative)
       ├─ forming-bar typed in-process handoff
       ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
@@ -34,15 +35,49 @@ Arrow market-data stream
   → broker
 ```
 
+**State boundary (DEC-038, 2026-08-14):** the Signal Flink job computes; Fluss owns the authoritative durable hot state. Fluss: fingerprint-dedup KV state table (new, when implemented), `feature_candles_15s` KV (durable candles), `Signal_Candidates` LOG + `Signal_Candidates_current` KV (durable signals). Flink: source offsets, watermarks, window/lateness timers, in-flight accumulators, dedup working cache, signal ring buffers. Flink checkpoints are small and are not a second copy of the Fluss-owned business state.
+
 Ranking consumes typed in-process candidate/state snapshots. It does not read `Signal_Candidates` from Fluss, create a second evaluation window, or run as a separate job.
 
 ## Event-time and deduplication
 
 Ingestion preserves every accepted raw packet and does not claim exact deduplication. Compute deduplicates within bounded state using the versioned `event_fingerprint` and scope. The TTL covers the declared ingestion retry/replay horizon plus watermark delay and cannot be unbounded or shorter than that horizon.
 
+Under DEC-038 the dedup set is Fluss-owned: the authoritative first-seen/expiry set lives in a Fluss KV state table, and Flink keeps a bounded working cache so the hot path does not perform a Fluss round trip per tick. The design must specify the cache bound, the write cadence for first-seen entries, and the cleanup path (Fluss 0.9.1 has no per-key TTL — an expiry column plus a tested cleanup mechanism). On restart Flink rehydrates the cache from the Fluss table; if the table is unavailable or incompatible the job fails closed rather than silently replaying.
+
 The default tested profile is five seconds bounded out-of-orderness, five seconds allowed lateness, and fifteen seconds source idleness. These are configuration values, not broker guarantees. A source without a verified event timestamp cannot advance the watermark.
 
 For each non-empty 15-second event-time window, the Signal job emits one final candle after the watermark passes `window_end + allowed_lateness`. Later events are discarded and measured in MVP. Open/close event-time ties use the versioned fingerprint ordering specification, never an assumed broker `seq_no`.
+
+## Restart vs state rebuild (DEC-038)
+
+The two paths below are distinct and must never be conflated. A normal Flink restart is the routine recovery path; a Fluss-state rebuild is an exceptional controlled procedure.
+
+**Normal Flink restart (routine):**
+
+```text
+Flink failure
+  → restore compact Flink checkpoint (source offsets, watermarks,
+    window/lateness timers, in-flight accumulators, working-cache metadata)
+  → verify Fluss authoritative-state availability and compatibility (startup preflight)
+  → rehydrate only the required working state from Fluss (dedup cache from the dedup
+    state table; candles/signals already Fluss-owned)
+  → resume from the recovered source position
+```
+
+A normal restart SHALL NOT replay complete `raw_table_1` history to rebuild durable state that already exists in Fluss.
+
+**Exceptional Fluss-state rebuild (controlled, not routine):**
+
+```text
+Fluss state missing / corrupt / incompatible / unavailable
+  → fail closed or stay degraded — never treated as an empty state
+  → controlled bounded replay of `raw_table_1` within the dedup TTL horizon
+  → reconstruct the authoritative Fluss state
+  → verify state/schema compatibility before resume
+```
+
+The rebuild is exceptional recovery, not a normal restart path; it is governed by the approved replay plan (`../05_deployment/03-rollback.md`), not by routine job-restart automation.
 
 ## Candidate, ranking, and instruction flow
 
@@ -100,14 +135,15 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | Table | Type | Writer | Primary consumers | Retention/lake role |
 | --- | --- | --- | --- | --- |
 | `raw_table_1` | LOG | Ingestion | Signal job | ≥3 trading days; EOD Iceberg |
-| `feature_candles_15s` | LOG | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
+| `feature_candles_15s` | KV (upsert, PK `(instrument_token, window_start)` — sole candle output, 2026-08-13) | Signal job | Downstream/lake | ≥3 trading days; EOD Iceberg |
+| `forming_bar` | KV (PK `instrument_token`) | Signal job | Business Logic (Slice 2.2) / reconciliation | Current state; rebuildable from raw_table_1 replay |
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Signal_Candidates_current` | KV | Signal job | Current-state readers/reconciliation | Current state; rebuildable from LOG |
 | `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Trade_Decisions` | Immutable feed | Signal job | Executor | Replay/reconciliation buffer; audit-linked |
 | `Portfolio_Reservations` | KV/logical state | Signal job | Executor/reconciliation | Active + rebuild window |
 | `Postback_Projection_Ledger` | KV | Action Capture | Recovery scanner | Incomplete + recovery window |
-| `Safety_Halt_Requests` | LOG/control | Authorized components | Executor | Safety/reconciliation window |
+| `Safety_Halt_Requests` | KV | Authorized components | Executor | Safety/reconciliation window |
 | `Fills` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
 | `Order_Lifecycle` | KV | Action Capture | Executor/operations | Current state; rebuildable |
 | `Positions` | KV | Position projector | Babysitter/Executor | Current state; rebuildable |
@@ -117,6 +153,7 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `Execution_Audit` | LOG | Executor | Operations/audit | Encrypted seven-year audit |
 | `Postback_Quarantine` | LOG | Action Capture | Reconciliation | Until disposition plus evidence retention |
 | `suspected_discontinuities` | LOG | Ingestion | Operations | Investigation window |
+| `ingestion_quarantine` | LOG | Ingestion | Operations/quarantine review | Investigation window (2d TTL) |
 | `instruments` | Manifest | Operators | Ingestion | Current and prior versions |
 | `Position_Actions` | Future LOG | Babysitter | Executor | Disabled in MVP |
 
@@ -139,7 +176,7 @@ Eligible immutable event tables offload at EOD to encrypted Iceberg/S3. The EOD 
 
 Every offload produces a manifest with source range, counts, bytes, schema versions, hashes/checksums, commit identifier, verification status, and retries.
 
-A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated.
+A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; an indefinite rule on the audit prefix is the WORM-equivalent (the S3 Object Lock API is not implemented on R2).**
 
 ## Safe-halt coupling
 

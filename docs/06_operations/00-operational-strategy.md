@@ -85,6 +85,7 @@ Operations records UTC timestamps, workload, software/configuration versions, ga
 ## References
 
 - Runbooks: `./01-runbooks.md`
+- Seven-year audit store (R2 bucket locks): `./06-audit-store.md`
 - Observability, dashboards, alerts, and thresholds: `../08_implementation/10-observability.md`
 - DR: `./04-dr-plan.md`
 - Maintenance: `./05-maintenance.md`

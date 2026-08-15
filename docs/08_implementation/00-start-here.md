@@ -25,6 +25,8 @@ Use the repository authority order from [`../01_project/00-index.md`](../01_proj
 
 An implementation dossier must not silently redefine an upstream requirement. If implementation detail exposes a conflict, record it in [`01-foundation.md`](./01-foundation.md) and keep the affected work blocked until the authoritative layer is reconciled.
 
+The 2026-08-14 doc-consistency reconciliation is recorded as [`DEC-039`](../01_project/04-decisions.md). The dossiers in this directory implement its settled facts: HFT feed modes are canonical `ltpc` (40 B) + `full` (196 B); timestamps are canonical epoch milliseconds; `Postback_Projection_Ledger` is included in the MVP build; `Safety_Halt_Requests` is a KV control table; the acceptance matrix is fully mapped (132 requirements / 152 acceptance tests).
+
 ## Documentation-first workflow
 
 ```text
@@ -55,6 +57,7 @@ Documentation-complete is not code-complete. A checklist item may be marked docu
 | [`09-production-swarm.md`](./09-production-swarm.md) | Production runtime instructions and test design | 9 |
 | [`10-observability.md`](./10-observability.md) | Monitoring/operations instructions and test design | 10 |
 | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, and final release evidence | 11–12 |
+| [`15-ingestion-test-hardening.md`](./15-ingestion-test-hardening.md) | Ingestion test-hardening backlog — additional robustness tests mapped to `03-ingestion.md` aspects (2026-08-15 audit) | 4 (ingestion) |
 | **Roadmap** | Step-by-step plans live INSIDE their dossiers (2026-08-13 merge): current build plan → `04-signal-job.md` (appended section); P7 bench + completed gaps → `11-testing-and-release.md`; P10 rehearsal → `09-production-swarm.md`; agent-2 executor plan → `07-executor.md` | — |
 
 ## Document status vocabulary
@@ -80,7 +83,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | Broker protocols | Evidence-blocked | Implementing | Untested | Blocked |
 | DDL/schema | Design-ready | Implementing | Untested | Blocked |
 | Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
-| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 183 compute tests green + 7-test gated battery) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
+| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 188 compute tests green + 7-test gated battery, re-measured 2026-08-15) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
 | Action Capture | Design-ready | Not-implemented | Untested | Blocked |
 | Babysitter | Design-ready | Not-implemented | Untested | Blocked |
 | Executor | Design-ready | Not-implemented | Untested | Blocked |
@@ -134,7 +137,7 @@ If contract and dossier disagree, the contract wins. Flag the conflict in
 
 ### Phase 2: Ingestion ✅ COMPLETED (2026-08-09)
 
-Status: Phases 2a-2g done — 300 tests (188 ingestion + 112 common), 0 failures, 7 env-gated skips; E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append 49,578 tps / p99 &lt; 5 ms; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak PASS (100/100 cycles, 2852.7 s, no leak; hub res001-soak, 2026-08-13); the 3,000-instrument / 3-connection production-envelope run is removed from acceptance (DEC-037) — see [`03-ingestion.md`](./03-ingestion.md) Status.
+Status: Phases 2a-2g done — 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/268); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 + ING-INT-004; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus (CHG-008/009/010); +4 M2 hardening 2026-08-15 — ING-UNIT-018 config parity (CHG-012); +13 M3 failure-path E2E 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 readiness matrix (CHG-017); +7 M4 Go-bridge/data-quality 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003 (CHG-018); +3 M5 telemetry/ops 2026-08-15 — ING-UNIT-021/022 OTLP scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint harness (CHG-019)), 0 failures, 8 ingestion env-gated skips (common 340/0/1-skip; the 11 live-Fluss common integration tests run only with `FLUSS_BOOTSTRAP` set); E2E fake-broker → Fluss green (10,716 rows persisted, 58,951 ticks/s baseline probe on the 1,024-instrument envelope). Open items: 50k perf gate certified 2026-08-13 at the synthetic hot-path envelope (socket 49,242 tps / 0 wire loss; append 49,578 tps / p99 &lt; 5 ms; the 90k peak campaign is retired, DEC-036); ING-RES-001 real-backoff soak PASS (100/100 cycles, 2852.7 s, no leak; hub res001-soak, 2026-08-13); the 3,000-instrument / 3-connection production-envelope run is removed from acceptance (DEC-037) — see [`03-ingestion.md`](./03-ingestion.md) Status.
 
 Read these **in order** before writing any code:
 

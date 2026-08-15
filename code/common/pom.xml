@@ -31,13 +31,19 @@
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
     </dependency>
-    <!-- Fluss client — test scope only, for the integration-tagged
-         CompatFlussIntegrationTest (real LOG/KV/partial_update
-         capability evidence against a live cluster). -->
+    <!-- Fluss client — compile scope since 2026-08-15: the DDL application
+         contract tool (com.trading.common.schema.ddl.DdlApplyTool) lives in
+         main and needs the client to parse/apply/inspect DDLs. The consumer
+         services already carry fluss-client (ingestion declares it directly;
+         compute via fluss-flink-2.2), so this does not change their runtime
+         images. Also serves the integration-tagged CompatFluss* capability
+         tests (real LOG/KV/changelog evidence against a live cluster).
+         The 0.9.1-incubating client jar is a self-contained shaded artifact
+         (its own pom declares runtime deps test-scoped), so the fat-jar
+         builds are unaffected. -->
     <dependency>
       <groupId>org.apache.fluss</groupId>
       <artifactId>fluss-client</artifactId>
-      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>

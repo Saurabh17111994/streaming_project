@@ -3,10 +3,12 @@ package com.trading.ingestion.bridge;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -88,5 +90,55 @@ class PayloadHashValidatorTest {
     void missingPayloadRejected() {
         assertEquals(PayloadHashValidator.Result.MALFORMED_PAYLOAD,
                 PayloadHashValidator.validate(null, sha256Hex(new byte[]{1})));
+    }
+
+    // ---- ING-UNIT-015: base64 form edge cases ----
+
+    @Test
+    @DisplayName("ING-UNIT-015: unpadded base64 is accepted (Java's basic decoder is padding-lenient)")
+    void unpaddedBase64Accepted() {
+        byte[] packet = {1, 2, 3, 4, 5, 6, 7, 8};
+        String padded = b64(packet);
+        String unpadded = padded.replaceAll("=+$", "");
+        assertTrue(unpadded.length() < padded.length(), "unpadded form must actually drop the padding");
+        assertEquals(PayloadHashValidator.Result.VALID,
+                PayloadHashValidator.validate(unpadded, sha256Hex(packet)),
+                "the padding-lenient decoder must accept the unpadded form");
+        assertArrayEquals(packet, PayloadHashValidator.decodeValid(unpadded, sha256Hex(packet)));
+    }
+
+    @Test
+    @DisplayName("ING-UNIT-015: URL-safe base64 is rejected (bridge emits the basic alphabet)")
+    void urlSafeBase64Rejected() {
+        byte[] packet = {(byte) 0xFB, 0x00, 0x01}; // decodes to '-' / '_' under URL-safe encoding
+        String urlSafe = Base64.getUrlEncoder().encodeToString(packet);
+        assertTrue(urlSafe.contains("-") || urlSafe.contains("_"),
+                "URL-safe alphabet uses -/_ — the fixture must exercise it");
+        assertEquals(PayloadHashValidator.Result.MALFORMED_PAYLOAD,
+                PayloadHashValidator.validate(urlSafe, sha256Hex(packet)),
+                "a URL-safe payload must be quarantined as MALFORMED_PAYLOAD, never silently dropped");
+    }
+
+    @Test
+    @DisplayName("ING-UNIT-015: multi-frame large payload validates and round-trips byte-exactly")
+    void largeMultiFramePayloadValidates() {
+        byte[] packet = new byte[65_536]; // a multi-frame packet far above the 40 B single-frame shape
+        new Random(42L).nextBytes(packet);
+        assertEquals(PayloadHashValidator.Result.VALID,
+                PayloadHashValidator.validate(b64(packet), sha256Hex(packet)));
+        assertArrayEquals(packet, PayloadHashValidator.decodeValid(b64(packet), sha256Hex(packet)),
+                "decoded bytes must equal the original packet exactly");
+    }
+
+    @Test
+    @DisplayName("ING-UNIT-015: SHA-256 of the empty payload is a real digest — empty is a typed rejection, never dropped (R-186)")
+    void emptyPayloadHashIsRealDigest() {
+        // sha256("") is a real, well-known digest — an empty payload is NOT
+        // a missing hash: the digest exists, the payload is still rejected
+        // with a typed result (R-186: never silently dropped).
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                sha256Hex(new byte[0]), "SHA-256 of the empty input is a real digest");
+        assertEquals(PayloadHashValidator.Result.MALFORMED_PAYLOAD,
+                PayloadHashValidator.validate(b64(new byte[0]), sha256Hex(new byte[0])));
     }
 }
