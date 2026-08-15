@@ -8,6 +8,7 @@ import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -320,6 +321,69 @@ class FingerprintDedupFunctionTest {
             KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> h, GenericRowData row)
             throws Exception {
         h.processElement(row, row.getLong(RawTableColumns.EVENT_TIME));
+    }
+
+    // ── DEC-038 bounded-checkpoint invariant: eviction deletes the timer ──
+
+    @Test
+    void evictionKeepsTimerStateBoundedByCacheCap() throws Exception {
+        // Small entry cap so eviction is the steady state; bytes cap stays
+        // high so the entry bound governs (min semantics).
+        Map<String, String> env = env();
+        env.put("DEDUP_CACHE_MAX_ENTRIES", "8");
+        InMemoryFingerprintDedupStateStore store = new InMemoryFingerprintDedupStateStore();
+        SignalJobConfig config = SignalJobConfig.from(env);
+        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
+                new FingerprintDedupFunction(config, () -> store),
+                row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
+                Types.LONG);
+        harness.open();
+
+        // 100 distinct fingerprints with distinct event times → 100 distinct
+        // expiry instants → 100 event-time timers WOULD accumulate without the
+        // eviction timer-deletion fix (SIG-STATE-001, DEC-038 hard invariant:
+        // checkpoint must not grow with Fluss dedup cardinality). With the fix,
+        // evicting a bucket deletes its timer, so the live timer count stays ≤
+        // the cache cap.
+        for (int i = 0; i < 100; i++) {
+            process(TestRawRows.row(1L, T0 + i * 1_000L, "fp-evict-" + i, "TRADE", 100 + i, i));
+        }
+
+        assertTrue(harness.numEventTimeTimers() <= 8,
+                "evicted buckets' timers must be deleted (bounded checkpoint): timers="
+                        + harness.numEventTimeTimers() + " cap=8");
+        assertTrue(ComputeOtlpEmitter.dedupStateCount() <= 8,
+                "cache entry count bounded by the cap");
+        assertTrue(ComputeOtlpEmitter.dedupExpiryIndexCount() <= 8,
+                "expiry-index bucket count bounded by the cap");
+
+        // Model the real writer→sink path: the dedup function only EMITS
+        // first-seen rows on its side output; the FingerprintDedupWriterFunction
+        // + fingerprint_dedup sink perform the durable putFirstSeen. Push the
+        // side-output rows into the store so the authoritative set holds all
+        // 100 accepted fingerprints.
+        ConcurrentLinkedQueue<StreamRecord<RowData>> writeOut = harness.getSideOutput(
+                FingerprintDedupFunction.DEDUP_WRITE_OUTPUT);
+        for (StreamRecord<RowData> r : writeOut) {
+            RowData row = r.getValue();
+            store.putFirstSeen(
+                    row.getLong(FingerprintDedupTableColumns.INSTRUMENT_TOKEN),
+                    row.getString(FingerprintDedupTableColumns.FINGERPRINT_VERSION).toString(),
+                    row.getString(FingerprintDedupTableColumns.EVENT_FINGERPRINT).toString(),
+                    row.getLong(FingerprintDedupTableColumns.FIRST_SEEN_MS),
+                    row.getLong(FingerprintDedupTableColumns.EXPIRY_MS));
+        }
+        assertEquals(100, store.rowCount(),
+                "all 100 first-seen rows are durable in the store (the writer path); "
+                        + "the bounded cache is only the working state");
+
+        // An EVICTED fingerprint re-arrives inside its TTL: cache miss →
+        // authoritative store SEEN_LIVE → still deduped (correctness intact,
+        // eviction never widens the dedup window).
+        long emittedBefore = emittedCount(harness);
+        process(TestRawRows.row(1L, T0, "fp-evict-0", "TRADE", 200, 1000));
+        assertEquals(emittedBefore, emittedCount(harness),
+                "re-delivery of an evicted in-TTL fingerprint must still be dropped");
     }
 
     // ── DEC-038 telemetry: cache hit/miss + rehydration latency/failures ──

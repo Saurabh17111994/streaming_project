@@ -297,6 +297,16 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
      * (effective cap = min): evict the earliest-expiring cache entries until
      * under the cap. Eviction never touches the store — an evicted fingerprint
      * is re-decided authoritatively on its next occurrence (query-on-miss).
+     *
+     * <p><b>DEC-038 hard invariant (evidenced 2026-08-15, SIG-STATE-001):</b>
+     * the evicted bucket's event-time timer is DELETED here. Without this,
+     * every accepted fingerprint registers a timer that outlives its cache
+     * entry, so the checkpoint's timer state grows with the total accepted
+     * count (the Fluss dedup cardinality) instead of the bounded cache —
+     * exactly the "checkpoint must not duplicate the durable set" violation
+     * the contract forbids. Deleting the timer keeps checkpoint state bounded
+     * by the cache cap; a re-arriving fingerprint inside its TTL re-registers
+     * it via the authoritative query-on-miss path.
      */
     private void evictToBounds(Context ctx) throws Exception {
         long cap = Math.min(config.dedupCacheMaxEntries(), maxEntriesByBytes());
@@ -326,6 +336,10 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
                 }
             }
             expiryIndex.remove(earliest);
+            // Bounded checkpoint invariant (DEC-038): the bucket's timer has no
+            // remaining cache entries — delete it so timer state stays ≤ cache
+            // cap and the checkpoint never mirrors Fluss dedup cardinality.
+            ctx.timerService().deleteEventTimeTimer(earliest);
             dedupCount -= evicted;
             expiryIndexCount--;
             bytesEstimate -= evicted * PER_ENTRY_ESTIMATE_BYTES + PER_BUCKET_ESTIMATE_BYTES;
