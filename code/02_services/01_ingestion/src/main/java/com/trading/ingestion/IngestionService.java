@@ -1425,6 +1425,25 @@ public final class IngestionService {
                 Thread.currentThread().interrupt();
             }
         }
+        // Final orphan sweep (CHG-016): a bridge the main loop restarted
+        // between the signal step above (whose `bp` may already be dead or
+        // null) and `running=false` was never signaled — re-read the current
+        // process and take it down (graceful, then forced) so nothing survives
+        // the JVM halt. Without this, a late-restart bridge would keep running
+        // after the JVM exits, emitting into a dead pipe forever.
+        Process latest = currentBridgeProcess;
+        if (latest != null && latest != bp && latest.isAlive()) {
+            LOG.warn("ingestion: reaping late bridge (pid={}) spawned during shutdown", latest.pid());
+            signalBridge(latest);
+            try {
+                if (!latest.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                    latest.destroyForcibly();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                latest.destroyForcibly();
+            }
+        }
         LOG.info("ingestion: drained (totalTicks={}, errors={})",
                 frameCount.get(), errorCount.get());
     }

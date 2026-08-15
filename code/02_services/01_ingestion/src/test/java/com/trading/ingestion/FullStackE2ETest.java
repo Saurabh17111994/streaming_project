@@ -77,6 +77,12 @@ import org.slf4j.LoggerFactory;
  *       shutdown, which is why the JSON log was complete while the buffer
  *       froze. Files survive {@code destroy()}, so the final report is now
  *       reliably captured.</li>
+ *   <li>No-orphan guard (CHG-016): after the service exits, the test asserts
+ *       the bridge pid (parsed from {@code arrow-bridge started (pid=N)},
+ *       last match) is no longer alive — the shutdown hook's final reaping
+ *       sweep must have taken it down — and the fake broker is force-reaped
+ *       and asserted dead, so nothing the service or the test spawned
+ *       survives.</li>
  * </ul>
  */
 @DisplayName("ING-E2E-001: full-stack fake broker → Fluss")
@@ -119,6 +125,12 @@ class FullStackE2ETest {
     /** Matches the service's final bridge-loop report. */
     private static final Pattern BRIDGE_LOOP_ENDED = Pattern.compile(
             "bridge loop ended \\(ticks=(\\d+), errors=(\\d+), restarts=(\\d+)\\)");
+
+    /** Matches the service's bridge-launch log line, whose pid the no-orphan
+     *  guard reaps against: {@code arrow-bridge started (pid=N)}. The last
+     *  match is the bridge current at shutdown (restarts spawn newer pids). */
+    private static final Pattern BRIDGE_PID = Pattern.compile(
+            "arrow-bridge started \\(pid=(\\d+)\\)");
     private static final long POLL_INTERVAL_MS = 250;
 
     @TempDir
@@ -279,8 +291,39 @@ class FullStackE2ETest {
                             + finalRestarts + "; service stderr tail:\n" + tail(log));
             assertTrue(!log.contains("FATAL append error"),
                     "no append failures may occur; service stderr tail:\n" + tail(log));
+
+            // 5b. No-orphan guard (CHG-016): the bridge the service spawned
+            //     must not survive the service's exit — the shutdown hook
+            //     signals it and reaps it (a survivor would keep emitting
+            //     into a dead pipe forever). The report above was flushed by
+            //     the hook, so the bridge was signaled; assert its pid (the
+            //     last one launched) is gone.
+            Matcher bm = BRIDGE_PID.matcher(log);
+            long bridgePid = -1;
+            while (bm.find()) {
+                bridgePid = Long.parseLong(bm.group(1));
+            }
+            if (bridgePid > 0) {
+                boolean bridgeAlive = ProcessHandle.of(bridgePid)
+                        .map(ProcessHandle::isAlive).orElse(false);
+                assertTrue(!bridgeAlive,
+                        "the bridge process (pid=" + bridgePid
+                                + ") must not survive the service's exit — the shutdown hook "
+                                + "should have reaped it; service stderr tail:\n" + tail(log));
+            }
         } finally {
-            faketool.destroyForcibly();
+            // Reap the fake broker too: nothing the test spawned may survive.
+            if (faketool.isAlive()) {
+                faketool.destroyForcibly();
+            }
+            try {
+                faketool.waitFor(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            assertTrue(!faketool.isAlive(),
+                    "faketool (pid=" + faketool.pid()
+                            + ") must not survive the test — no orphaned broker");
         }
     }
 
