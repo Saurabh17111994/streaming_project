@@ -407,6 +407,7 @@ public final class DdlBootstrap {
             .column("broker_order_id", org.apache.fluss.types.DataTypes.STRING())
             .column("instruction_id", org.apache.fluss.types.DataTypes.STRING())
             .column("client_order_ref", org.apache.fluss.types.DataTypes.STRING())
+            .column("record_id", org.apache.fluss.types.DataTypes.STRING())
             .build();
 
     private static TableDescriptor logTable(String... bucketKeys) {
@@ -482,6 +483,12 @@ public final class DdlBootstrap {
                     Map.entry("Postback_Projection_Ledger",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "broker_order_id").build()),
                     Map.entry("instruments",
-                            TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "instrument_token").build())
+                            TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(1, "instrument_token").build()),
+                    Map.entry("fingerprint_dedup",
+                            kvTable("instrument_token")),
+                    Map.entry("trade_instruction_state",
+                            kvTable("instruction_id")),
+                    Map.entry("eod_offload_state",
+                            kvTable("record_id"))
             );
 }
