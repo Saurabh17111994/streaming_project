@@ -17,6 +17,14 @@ import java.util.Map;
  * (PlatformConfig.requirePresent). All other keys are tuning parameters with
  * documented defaults from the Signal-job dossier.
  *
+ * <p>The fixed-delay restart strategy
+ * ({@code RESTART_MAX_ATTEMPTS=3}, {@code RESTART_DELAY_MS=30000}) is
+ * production-pinned: in {@code DEPLOYMENT_ENV=production} the two keys must be
+ * present and exactly equal the PlatformConfig pins or startup fails — a
+ * deployment cannot silently raise the retry budget. Dev keeps them as
+ * overridable tuning defaults (failure-injection integration tests rely on
+ * low attempts).
+ *
  * <p>Build via {@link #fromEnv()} in production; {@link #from(Map)} is exposed
  * so the rejection rules are unit-testable without touching {@code System.getenv}.
  *
@@ -123,8 +131,8 @@ public record SignalJobConfig(
                 requirePinnedLong(env, "CHECKPOINT_INTERVAL_MS", PlatformConfig.CHECKPOINT_INTERVAL_MS),
                 requirePinnedLong(env, "CHECKPOINT_TIMEOUT_MS", PlatformConfig.CHECKPOINT_TIMEOUT_MS),
                 requirePinnedInt(env, "MAX_CONCURRENT_CHECKPOINTS", PlatformConfig.MAX_CONCURRENT_CHECKPOINTS),
-                intValue(env, "RESTART_MAX_ATTEMPTS", 3),
-                longValue(env, "RESTART_DELAY_MS", 30_000L),
+                restartMaxAttempts(env),
+                restartDelayMs(env),
                 checkpointDir(env),
                 env.getOrDefault("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates"),
                 env.getOrDefault("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current"),
@@ -258,6 +266,35 @@ public record SignalJobConfig(
             throw new IllegalStateException("Config SIGNAL_QUANTITY must be > 0, got " + value);
         }
         return value;
+    }
+
+    /**
+     * Fixed-delay restart strategy (CHECKPOINT_RESTART_STRATEGY, dossier
+     * config contract). Dev defaults {@code RESTART_MAX_ATTEMPTS} to
+     * {@link PlatformConfig#RESTART_MAX_ATTEMPTS} and allows overrides
+     * (failure-injection integration tests use low attempts to fail fast);
+     * {@code DEPLOYMENT_ENV=production} pins the exact value and requires it
+     * explicit — a deployment cannot silently raise the retry budget or widen
+     * the delay (bounded retry only, never unbounded).
+     */
+    private static int restartMaxAttempts(Map<String, String> env) {
+        if ("production".equals(deploymentEnv(env))) {
+            return requirePinnedInt(env, "RESTART_MAX_ATTEMPTS",
+                    PlatformConfig.RESTART_MAX_ATTEMPTS);
+        }
+        return intValue(env, "RESTART_MAX_ATTEMPTS", PlatformConfig.RESTART_MAX_ATTEMPTS);
+    }
+
+    /**
+     * Fixed-delay restart delay (see {@link #restartMaxAttempts(Map)}): dev
+     * tuning default 30 s, production-pinned to
+     * {@link PlatformConfig#RESTART_DELAY_MS} and required explicit.
+     */
+    private static long restartDelayMs(Map<String, String> env) {
+        if ("production".equals(deploymentEnv(env))) {
+            return requirePinnedLong(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
+        }
+        return longValue(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
     }
 
     private static long requirePinnedLong(Map<String, String> env, String key, long pinned) {

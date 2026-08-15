@@ -239,10 +239,20 @@ public final class SignalJob {
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
                 .window(TumblingEventTimeWindows.of(Duration.ofMillis(config.candleWindowMs())))
                 .allowedLateness(Duration.ofMillis(config.allowedLatenessMs()))
+                .sideOutputLateData(CandleLateDrop.OUTPUT)
                 .aggregate(new CandleAggregateFunction(), new CandleEmitFunction(config))
                 .returns(CandleTableColumns.ROW_TYPE_INFO)
                 .name("candle-15s")
                 .uid("candle-15s");
+
+        // REQ-FC-006: raw ticks dropped as beyond-allowed-lateness are counted
+        // (compute.candles.late.dropped) instead of vanishing silently. The
+        // counter operator is observability-only — no keyed state, no output.
+        candles.getSideOutput(CandleLateDrop.OUTPUT)
+                .process(new CandleLateDrop.CounterFunction(config.candleWindowMs()))
+                .returns(ticks.getType())
+                .name("candle-late-drop-counter")
+                .uid("candle-late-drop-counter");
 
         // Tracker 14 box 682/116 (2026-08-12): the candle sink is
         // wrapped in StallGuardedSink — a Flink-side watchdog

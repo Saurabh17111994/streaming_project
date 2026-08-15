@@ -100,6 +100,36 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public static final String DEDUP_STATE_BYTES_METRIC = "compute.dedup.state.bytes.estimate";
 
     /**
+     * Beyond-allowed-lateness discard counter (REQ-FC-006): incremented once
+     * per raw tick dropped by the 15 s candle window because its event time is
+     * past {@code window_end + ALLOWED_LATENESS_MS}. DELTA non-monotonic —
+     * fires on NEW drops, never on replay. The data point carries the LATEST
+     * drop's attributes (instrument token, window end, lateness, reason) as a
+     * single bounded attribute set — no per-key labels (DEC-038 bounded
+     * cardinality rule). OpenObserve stream:
+     * {@code compute_candles_late_dropped}.
+     */
+    public static final String CANDLE_LATE_DROPPED_METRIC = "compute.candles.late.dropped";
+
+    /**
+     * DEC-038 dedup telemetry. The bounded Flink cache's hot-path decisions
+     * are counted as DELTA sums (cache hit = definite duplicate from the
+     * cache alone; cache miss = store consulted); the cache hit ratio is the
+     * drained-window gauge hits/(hits+misses) so OpenObserve sees the
+     * architecture behave as intended without per-key labels. The query-on-
+     * miss rehydration read (lazy rehydration) is measured as a last-value
+     * gauge; a store failure is counted (DELTA) BEFORE the task fails closed
+     * (SIG-STATE-003 — never an empty dedup set).
+     */
+    public static final String DEDUP_CACHE_HITS_METRIC = "compute.dedup.cache.hits";
+    public static final String DEDUP_CACHE_MISSES_METRIC = "compute.dedup.cache.misses";
+    public static final String DEDUP_CACHE_HIT_RATIO_METRIC = "compute.dedup.cache.hit.ratio";
+    public static final String DEDUP_REHYDRATION_FAILURES_METRIC =
+            "compute.dedup.rehydration.failures";
+    public static final String DEDUP_REHYDRATION_LATENCY_METRIC =
+            "compute.dedup.rehydration.latency.ms";
+
+    /**
      * Incremented by CanonicalSignalFilterFunction (once per non-canonical
      * signal row); drained (delta) by the flush thread.
      */
@@ -121,6 +151,28 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     private static final AtomicLong DEDUP_STATE_COUNT = new AtomicLong();
     private static final AtomicLong DEDUP_EXPIRY_INDEX_COUNT = new AtomicLong();
     private static final AtomicLong DEDUP_STATE_BYTES = new AtomicLong();
+
+    /** Beyond-lateness drop counter (REQ-FC-006); drained (delta) by the flush thread. */
+    private static final AtomicLong CANDLE_LATE_DROPPED = new AtomicLong();
+
+    /**
+     * Latest drop's attributes (bounded: ONE attribute set, refreshed per
+     * drop) — the data point rides the {@link #CANDLE_LATE_DROPPED_METRIC}
+     * sum so the operator sees which instrument/window/how-late the recent
+     * drops hit without unbounded per-key labels (DEC-038 cardinality rule).
+     */
+    private static volatile long LATE_DROP_INSTRUMENT = -1L;
+    private static volatile long LATE_DROP_WINDOW_END_MS = -1L;
+    private static volatile long LATE_DROP_LATENESS_MS = -1L;
+    private static volatile String LATE_DROP_REASON = null;
+
+    /** DEC-038 dedup cache/rehydration statics; drained (delta) by the flush thread. */
+    private static final AtomicLong DEDUP_CACHE_HITS = new AtomicLong();
+    private static final AtomicLong DEDUP_CACHE_MISSES = new AtomicLong();
+    private static final AtomicLong DEDUP_REHYDRATION_FAILURES = new AtomicLong();
+
+    /** Last store-lookup duration (gauge; -1 = never measured). */
+    private static final AtomicLong DEDUP_REHYDRATION_LATENCY_MS = new AtomicLong(-1L);
 
     /**
      * Extra resource attributes (tracker 14 P8.0/831), configured once at job
@@ -155,6 +207,23 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     /** TEST-ONLY: resets the configured extras to none. */
     static void resetResourceAttributesForTest() {
         extraResourceAttributes = new String[0];
+    }
+
+    /**
+     * TEST-ONLY: resets the DEC-038/late-drop statics so independent harnesses
+     * in one test JVM do not leak counters across tests (same discipline as
+     * {@link #resetDedupGaugesForTest()}).
+     */
+    public static void resetDedupTelemetryForTest() {
+        CANDLE_LATE_DROPPED.set(0L);
+        LATE_DROP_INSTRUMENT = -1L;
+        LATE_DROP_WINDOW_END_MS = -1L;
+        LATE_DROP_LATENESS_MS = -1L;
+        LATE_DROP_REASON = null;
+        DEDUP_CACHE_HITS.set(0L);
+        DEDUP_CACHE_MISSES.set(0L);
+        DEDUP_REHYDRATION_FAILURES.set(0L);
+        DEDUP_REHYDRATION_LATENCY_MS.set(-1L);
     }
 
     /** TEST-ONLY: returns the startup mode to its unrecorded (-1) state. */
@@ -237,6 +306,88 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     }
 
     /**
+     * Called by the candle late-drop counter once per raw tick dropped by the
+     * 15 s window beyond {@code window_end + ALLOWED_LATENESS_MS} (REQ-FC-006).
+     * Increments the DELTA counter and refreshes the single latest-drop
+     * attribute set (bounded cardinality — no per-key labels). NEVER blocking.
+     */
+    public static void recordCandleLateDrop(
+            long instrumentToken, long windowEndMs, long latenessMs, String reason) {
+        CANDLE_LATE_DROPPED.incrementAndGet();
+        LATE_DROP_INSTRUMENT = instrumentToken;
+        LATE_DROP_WINDOW_END_MS = windowEndMs;
+        LATE_DROP_LATENESS_MS = latenessMs;
+        LATE_DROP_REASON = reason;
+    }
+
+    /** Deltas the beyond-lateness drop counter (public: cross-package counter tests read it). */
+    public long drainCandleLateDropDelta() {
+        return CANDLE_LATE_DROPPED.getAndSet(0);
+    }
+
+    /** Called by {@code FingerprintDedupFunction} on a cache-only definite duplicate. */
+    public static void recordDedupCacheHit() {
+        DEDUP_CACHE_HITS.incrementAndGet();
+    }
+
+    /** Called by {@code FingerprintDedupFunction} on a cache miss (store consulted). */
+    public static void recordDedupCacheMiss() {
+        DEDUP_CACHE_MISSES.incrementAndGet();
+    }
+
+    /**
+     * Called by {@code FingerprintDedupFunction} when the authoritative store
+     * lookup throws — the task fails closed right after (SIG-STATE-003); this
+     * counter proves the failure happened rather than being silently
+     * swallowed.
+     */
+    public static void recordDedupRehydrationFailure() {
+        DEDUP_REHYDRATION_FAILURES.incrementAndGet();
+    }
+
+    /** Last-value gauge for the query-on-miss store lookup duration (ms). */
+    public static void recordDedupRehydrationLatencyMs(long ms) {
+        DEDUP_REHYDRATION_LATENCY_MS.set(ms);
+    }
+
+    /** Deltas the dedup cache-hit counter (public: cross-package dedup tests read it). */
+    public long drainDedupCacheHitsDelta() {
+        return DEDUP_CACHE_HITS.getAndSet(0);
+    }
+
+    /** Deltas the dedup cache-miss counter (public: cross-package dedup tests read it). */
+    public long drainDedupCacheMissesDelta() {
+        return DEDUP_CACHE_MISSES.getAndSet(0);
+    }
+
+    /** Deltas the dedup rehydration-failure counter (public: cross-package dedup tests read it). */
+    public long drainDedupRehydrationFailuresDelta() {
+        return DEDUP_REHYDRATION_FAILURES.getAndSet(0);
+    }
+
+    /** TEST-ONLY getter: last store-lookup duration, -1 = never measured. */
+    public static long rehydrationLatencyMsForTest() {
+        return DEDUP_REHYDRATION_LATENCY_MS.get();
+    }
+
+    /** TEST-ONLY getters: the latest recorded late-drop attributes. */
+    public static long lateDropInstrumentForTest() {
+        return LATE_DROP_INSTRUMENT;
+    }
+
+    public static long lateDropWindowEndMsForTest() {
+        return LATE_DROP_WINDOW_END_MS;
+    }
+
+    public static long lateDropLatenessMsForTest() {
+        return LATE_DROP_LATENESS_MS;
+    }
+
+    public static String lateDropReasonForTest() {
+        return LATE_DROP_REASON;
+    }
+
+    /**
      * Deltas the static counter since the last drain (package-visible for the
      * drain-contract test; the flush thread is the only caller in production).
      */
@@ -311,7 +462,12 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         long delta = drainDelta();
         long sourceIdleAtTail = drainSourceIdleAtTailDelta();
         long signalKvFiltered = drainSignalKvFilteredNonCanonicalDelta();
-        String json = buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered);
+        long candleLateDropped = drainCandleLateDropDelta();
+        long dedupCacheHits = drainDedupCacheHitsDelta();
+        long dedupCacheMisses = drainDedupCacheMissesDelta();
+        long dedupRehydrationFailures = drainDedupRehydrationFailuresDelta();
+        String json = buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered,
+                candleLateDropped, dedupCacheHits, dedupCacheMisses, dedupRehydrationFailures);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -426,14 +582,21 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      * metrics still appear in the payload at 0).
      */
     String buildMetricsJson(long delta) {
-        return buildMetricsJson(delta, 0L, 0L);
+        return buildMetricsJson(delta, 0L, 0L, 0L, 0L, 0L, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail) {
-        return buildMetricsJson(delta, sourceIdleAtTail, 0L);
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L, 0L, 0L, 0L, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered) {
+        return buildMetricsJson(delta, sourceIdleAtTail, signalKvFiltered,
+                0L, 0L, 0L, 0L);
+    }
+
+    String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered,
+            long candleLateDropped, long dedupCacheHits, long dedupCacheMisses,
+            long dedupRehydrationFailures) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -464,6 +627,11 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"isMonotonic\":false,")
           .append("\"dataPoints\":[{\"asInt\":").append(signalKvFiltered).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
+        appendLateDropSum(sb, candleLateDropped, now);
+        appendDeltaSum(sb, DEDUP_CACHE_HITS_METRIC, dedupCacheHits, "lookups", now);
+        appendDeltaSum(sb, DEDUP_CACHE_MISSES_METRIC, dedupCacheMisses, "lookups", now);
+        appendDeltaSum(sb, DEDUP_REHYDRATION_FAILURES_METRIC, dedupRehydrationFailures,
+                "failures", now);
         if (mode != -1L) {
             sb.append(",{\"name\":\"").append(STARTUP_MODE_METRIC).append("\",")
               .append("\"unit\":\"mode\",")
@@ -476,8 +644,53 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         appendGauge(sb, DEDUP_EXPIRY_INDEX_COUNT_METRIC, DEDUP_EXPIRY_INDEX_COUNT.get(),
                 "buckets", now);
         appendGauge(sb, DEDUP_STATE_BYTES_METRIC, DEDUP_STATE_BYTES.get(), "bytes", now);
+        // DEC-038: last query-on-miss store lookup (rehydration) duration and
+        // the drained-window cache hit ratio hits/(hits+misses) — 0 when the
+        // window saw no lookups (not a 0% ratio claim). The ratio is shipped as
+        // integer basis points (×10000) to keep the payload all-integer.
+        long rehydrationMs = DEDUP_REHYDRATION_LATENCY_MS.get();
+        if (rehydrationMs >= 0L) {
+            appendGauge(sb, DEDUP_REHYDRATION_LATENCY_METRIC, rehydrationMs, "ms", now);
+        }
+        long lookups = dedupCacheHits + dedupCacheMisses;
+        long ratioBp = lookups == 0 ? 0L : Math.round(10000.0 * dedupCacheHits / lookups);
+        appendGauge(sb, DEDUP_CACHE_HIT_RATIO_METRIC, ratioBp, "bp", now);
         sb.append("]}]}]}");
         return sb.toString();
+    }
+
+    private static void appendDeltaSum(StringBuilder sb, String name, long value, String unit,
+            long now) {
+        sb.append(",{\"name\":\"").append(name).append("\",")
+          .append("\"unit\":\"").append(unit).append("\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
+          .append("\"isMonotonic\":false,")
+          .append("\"dataPoints\":[{\"asInt\":").append(value).append(",")
+          .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
+    }
+
+    /**
+     * Beyond-lateness drop sum (REQ-FC-006): the count plus the single
+     * latest-drop attribute set (instrument, window end, lateness, reason) —
+     * bounded cardinality, never per-key. An empty attribute array when no
+     * drop has been recorded since the last flush.
+     */
+    private static void appendLateDropSum(StringBuilder sb, long count, long now) {
+        sb.append(",{\"name\":\"").append(CANDLE_LATE_DROPPED_METRIC).append("\",")
+          .append("\"unit\":\"drops\",")
+          .append("\"sum\":{\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\",")
+          .append("\"isMonotonic\":false,")
+          .append("\"dataPoints\":[{\"asInt\":").append(count).append(",")
+          .append("\"attributes\":[");
+        String reason = LATE_DROP_REASON;
+        if (reason != null) {
+            appendAttr(sb, "instrument_token", String.valueOf(LATE_DROP_INSTRUMENT));
+            appendAttr(sb, "window_end_ms", String.valueOf(LATE_DROP_WINDOW_END_MS));
+            appendAttr(sb, "lateness_ms", String.valueOf(LATE_DROP_LATENESS_MS));
+            appendAttr(sb, "reason", reason);
+            sb.setLength(sb.length() - 1); // drop trailing comma after the last attribute
+        }
+        sb.append("],\"timeUnixNano\":\"").append(now).append("\"}]}}");
     }
 
     private static void appendGauge(StringBuilder sb, String name, long value, String unit,
@@ -487,6 +700,7 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"gauge\":{\"dataPoints\":[{\"asInt\":").append(value).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
     }
+
 
     private static void appendAttr(StringBuilder sb, String key, String value) {
         sb.append("{\"key\":\"").append(escapeJson(key)).append("\",")

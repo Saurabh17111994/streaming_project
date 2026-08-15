@@ -85,6 +85,10 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
     private transient MapState<Long, List<String>> expiryIndex;
     private transient Counter firstEvents;
     private transient Counter duplicates;
+    /** DEC-038 telemetry: hot-path cache decisions + authoritative-store failures. */
+    private transient Counter cacheHits;
+    private transient Counter cacheMisses;
+    private transient Counter rehydrationFailures;
 
     /**
      * Gauge state (tracker 14 P5.1): live sizes of the two MapStates plus a
@@ -135,6 +139,12 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
 
         firstEvents = getRuntimeContext().getMetricGroup().counter("compute.dedup.first");
         duplicates = getRuntimeContext().getMetricGroup().counter("compute.dedup.duplicates");
+        cacheHits = getRuntimeContext().getMetricGroup().counter(
+                "compute.dedup.cache.hits");
+        cacheMisses = getRuntimeContext().getMetricGroup().counter(
+                "compute.dedup.cache.misses");
+        rehydrationFailures = getRuntimeContext().getMetricGroup().counter(
+                "compute.dedup.rehydration.failures");
 
         getRuntimeContext().getMetricGroup().gauge("compute.dedup.state.count",
                 (Gauge<Long>) () -> dedupCount);
@@ -206,13 +216,30 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
 
         if (dedup.contains(stateKey)) {
             duplicates.inc();
+            cacheHits.inc();
+            ComputeOtlpEmitter.recordDedupCacheHit();
             return;
         }
 
         // Cache miss — decide against the authoritative store (query-on-miss,
-        // lazy rehydration). Never trust the cache alone (SIG-STATE-003).
-        FingerprintDedupStateStore.Lookup verdict = dedupStore.lookup(
-                token, version, fingerprint, nowWall);
+        // lazy rehydration). Never trust the cache alone (SIG-STATE-003). The
+        // lookup IS the rehydration read: its duration is the rehydration
+        // latency gauge; a failure is counted before the task fails closed
+        // (never an empty dedup set).
+        cacheMisses.inc();
+        ComputeOtlpEmitter.recordDedupCacheMiss();
+        FingerprintDedupStateStore.Lookup verdict;
+        long lookupStartNanos = System.nanoTime();
+        try {
+            verdict = dedupStore.lookup(token, version, fingerprint, nowWall);
+        } catch (Exception e) {
+            rehydrationFailures.inc();
+            ComputeOtlpEmitter.recordDedupRehydrationFailure();
+            throw e;
+        } finally {
+            long lookupMs = (System.nanoTime() - lookupStartNanos) / 1_000_000L;
+            ComputeOtlpEmitter.recordDedupRehydrationLatencyMs(lookupMs);
+        }
         if (verdict == FingerprintDedupStateStore.Lookup.SEEN_LIVE) {
             duplicates.inc();
             // Warm the cache so the authoritative read is not repeated per row.

@@ -53,7 +53,10 @@ class SignalJobOperatorUidTest {
         EXPECTED_OPERATORS.put("raw-table-1", "Source: raw-table-1");
         EXPECTED_OPERATORS.put("raw-validation", "raw-validation");
         EXPECTED_OPERATORS.put("fingerprint-dedup", "fingerprint-dedup");
+        EXPECTED_OPERATORS.put("fingerprint-dedup-writer", "fingerprint-dedup-writer");
+        EXPECTED_OPERATORS.put("fingerprint-dedup-sink", "fingerprint-dedup-sink");
         EXPECTED_OPERATORS.put("candle-15s", "candle-15s");
+        EXPECTED_OPERATORS.put("candle-late-drop-counter", "candle-late-drop-counter");
         EXPECTED_OPERATORS.put("feature-candles-15s-sink", "feature-candles-15s-sink");
         EXPECTED_OPERATORS.put("signal-detection", "signal-detection");
         EXPECTED_OPERATORS.put("signal-candidates-sink", "signal-candidates-sink");

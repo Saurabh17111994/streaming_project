@@ -50,6 +50,20 @@ public final class PlatformConfig {
     public static final long CHECKPOINT_TIMEOUT_MS = 30_000L;
     public static final int MAX_CONCURRENT_CHECKPOINTS = 1;
 
+    // ---- fixed-delay restart strategy (CHECKPOINT_RESTART_STRATEGY) ----
+    /**
+     * Governed pins for the fixed-delay restart strategy (dossier config
+     * contract): any production deployment SHALL use exactly 3 attempts with a
+     * 30 s delay — bounded retry, never unbounded (REQ-FC-006 checkpoint
+     * contract). Enforced by SignalJobConfig in
+     * {@code DEPLOYMENT_ENV=production}: missing or deviating values fail
+     * startup so a deployment cannot silently raise the retry budget or widen
+     * the delay. Dev keeps them as tuning defaults (failure-injection
+     * integration tests use low attempts to fail fast).
+     */
+    public static final int RESTART_MAX_ATTEMPTS = 3;
+    public static final long RESTART_DELAY_MS = 30_000L;
+
     // ---- sink write-path (tracker 14 box 682/116, 2026-08-12) ----
     /**
      * Governed pin: the sink write-path stall bound. Any single

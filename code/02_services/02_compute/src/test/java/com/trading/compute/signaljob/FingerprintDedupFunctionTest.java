@@ -1,9 +1,12 @@
 package com.trading.compute.signaljob;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
@@ -240,6 +243,7 @@ class FingerprintDedupFunctionTest {
     void resetGaugeMirrors() {
         // JVM-wide statics — every test starts from a clean mirror.
         ComputeOtlpEmitter.resetDedupGaugesForTest();
+        ComputeOtlpEmitter.resetDedupTelemetryForTest();
     }
 
     @Test
@@ -316,5 +320,70 @@ class FingerprintDedupFunctionTest {
             KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> h, GenericRowData row)
             throws Exception {
         h.processElement(row, row.getLong(RawTableColumns.EVENT_TIME));
+    }
+
+    // ── DEC-038 telemetry: cache hit/miss + rehydration latency/failures ──
+
+    @Test
+    void dedupCacheTelemetryTracksHotPathDecisions() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        openHarness();
+        // First occurrence: cache miss (store consulted) → accept. Re-delivery:
+        // cache hit (definite duplicate) → drop. No further store round trip.
+        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
+
+        assertEquals(1, emitter.drainDedupCacheMissesDelta(),
+                "first occurrence is a cache miss (query-on-miss rehydration)");
+        assertEquals(1, emitter.drainDedupCacheHitsDelta(),
+                "in-TTL re-delivery is a cache-only definite duplicate");
+        assertTrue(ComputeOtlpEmitter.rehydrationLatencyMsForTest() >= 0L,
+                "the store lookup is timed (rehydration latency gauge)");
+        assertEquals(0, emitter.drainDedupRehydrationFailuresDelta(),
+                "no store failures on the healthy path");
+    }
+
+    @Test
+    void rehydrationFailureFailsClosedAndIsCounted() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        // Store whose lookup throws — the authoritative read must fail the
+        // task (SIG-STATE-003, never an empty dedup set) AFTER counting the
+        // failure so it is observable.
+        FingerprintDedupStateStore failingStore = new FingerprintDedupStateStore() {
+            @Override
+            public Lookup lookup(long token, String version, String fingerprint, long nowMs) {
+                throw new IllegalStateException("fingerprint_dedup unavailable");
+            }
+
+            @Override
+            public void putFirstSeen(long token, String version, String fingerprint,
+                    long firstSeenMs, long expiryMs) {}
+
+            @Override
+            public List<DedupExpiry.CleanupCandidate> scanExpired(
+                    long token, long nowMs, int maxBatchSize) {
+                return List.of();
+            }
+
+            @Override
+            public void delete(List<DedupExpiry.CleanupCandidate> batch) {}
+
+            @Override
+            public void close() {}
+        };
+        SignalJobConfig config = SignalJobConfig.from(env());
+        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
+                new FingerprintDedupFunction(config, () -> failingStore),
+                row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
+                Types.LONG);
+        harness.open();
+
+        assertThrows(IllegalStateException.class,
+                () -> process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1)),
+                "a store failure must fail the task, never silently accept");
+        assertEquals(1, emitter.drainDedupRehydrationFailuresDelta(),
+                "the failure is counted before the task fails closed");
+        assertTrue(ComputeOtlpEmitter.rehydrationLatencyMsForTest() >= 0L,
+                "the failed lookup is still timed");
     }
 }

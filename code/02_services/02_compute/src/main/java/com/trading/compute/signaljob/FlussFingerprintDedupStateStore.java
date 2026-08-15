@@ -27,10 +27,14 @@ import org.apache.fluss.utils.CloseableIterator;
  * {@code kv.format-version=2}) is the documented-working COMPAT-FLUSS-005
  * combo for raw-client upsert — same shape as {@code feature_candles_15s}.
  *
- * <p>Bucket for a token is {@code token % bucketNumber} (bucket key =
- * {@code instrument_token}), so scan/delete are scoped to one bucket. Delete
- * on composite keys is evidence-gated (SIG-STATE-001); the mechanism here is
- * the same encoder path the proven upsert uses.
+ * <p>Bucket for a token is assigned by Fluss's own bucketing machinery
+ * (bucket key = {@code instrument_token}) via {@link DedupBucketAssigner} —
+ * NOT {@code token % bucketNumber}; that mismatch (SIG-STATE-001, 2026-08-15)
+ * made {@code scanExpired} read the wrong bucket and silently miss expired
+ * rows. Delete on composite keys was also evidenced 2026-08-15:
+ * {@code UpsertWriter.delete} requires the FULL table row (checkFieldCount),
+ * so the cleanup pass rebuilds it from the candidate (value columns unused by
+ * the delete encoder).
  *
  * <p>Owns its {@link Connection} — {@link #close()} releases it.
  */
@@ -41,6 +45,7 @@ public final class FlussFingerprintDedupStateStore implements FingerprintDedupSt
     private final Connection connection;
     private final Table table;
     private final TableInfo info;
+    private final DedupBucketAssigner bucketAssigner;
     private final long timeoutMs;
 
     private FlussFingerprintDedupStateStore(Connection connection, Table table, TableInfo info,
@@ -48,6 +53,7 @@ public final class FlussFingerprintDedupStateStore implements FingerprintDedupSt
         this.connection = connection;
         this.table = table;
         this.info = info;
+        this.bucketAssigner = DedupBucketAssigner.of(info);
         this.timeoutMs = timeoutMs;
     }
 
@@ -78,14 +84,8 @@ public final class FlussFingerprintDedupStateStore implements FingerprintDedupSt
         return token + KEY_SEP + version + KEY_SEP + fingerprint;
     }
 
-    /** Key row for lookup/delete — PK fields in DDL order. */
-    private static GenericRow keyRow(long token, String version, String fingerprint) {
-        return GenericRow.of(token, BinaryString.fromString(version),
-                BinaryString.fromString(fingerprint));
-    }
-
     private int bucketOf(long token) {
-        return (int) ((token % info.getNumBuckets() + info.getNumBuckets()) % info.getNumBuckets());
+        return bucketAssigner.bucket(token);
     }
 
     @Override
@@ -161,11 +161,31 @@ public final class FlussFingerprintDedupStateStore implements FingerprintDedupSt
                 long token = Long.parseLong(parts[0]);
                 String version = parts[1];
                 String fingerprint = parts[2];
-                writer.delete(keyRow(token, version, fingerprint))
+                // delete() requires the FULL table row (checkFieldCount == 6),
+                // not the 3-field key row the lookuper takes: the writer encodes
+                // the PK + bucket key from it. The value columns are unused by
+                // the delete encoder but must be present — rebuilt from the
+                // candidate's own first_seen/expiry (evidence, SIG-STATE-001).
+                writer.delete(fullRow(token, version, fingerprint,
+                                c.firstSeenMs(), c.expiryMs()))
                         .get(timeoutMs, TimeUnit.MILLISECONDS);
             }
         } finally {
             writer.flush();
         }
+    }
+
+    /** Key row for lookup — PK fields in DDL order (delete takes the full row). */
+    private static GenericRow keyRow(long token, String version, String fingerprint) {
+        return GenericRow.of(token, BinaryString.fromString(version),
+                BinaryString.fromString(fingerprint));
+    }
+
+    /** Full 6-column row in DDL order — the shape {@code UpsertWriter.delete} requires. */
+    private static GenericRow fullRow(long token, String version, String fingerprint,
+            long firstSeenMs, long expiryMs) {
+        return GenericRow.of(token, BinaryString.fromString(version),
+                BinaryString.fromString(fingerprint), firstSeenMs, expiryMs,
+                BinaryString.fromString(FingerprintDedupTableColumns.SCHEMA_VERSION_V1));
     }
 }
