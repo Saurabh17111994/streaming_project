@@ -85,7 +85,16 @@ public record SignalJobConfig(
         String s3SecretKey,
         String s3Region,
         boolean s3PathStyle,
-        long sinkWriteStallTimeoutMs) implements Serializable {
+        long sinkWriteStallTimeoutMs,
+        String tradeDecisionsTable,
+        String tradeInstructionStateTable,
+        boolean tradeDecisionsEnabled,
+        String dedupStateTable,
+        long dedupCacheMaxEntries,
+        long dedupCacheMaxBytes,
+        long dedupWriteBatchMs,
+        long dedupWriteBatchSize,
+        long dedupCleanupIntervalMs) implements Serializable {
 
     public static SignalJobConfig fromEnv() {
         return from(System.getenv());
@@ -141,7 +150,16 @@ public record SignalJobConfig(
                 s3SecretKey(env),
                 s3Region(env),
                 s3PathStyle(env),
-                sinkWriteStallTimeoutMs(env));
+                sinkWriteStallTimeoutMs(env),
+                env.getOrDefault("TRADE_DECISIONS_TABLE", "Trade_Decisions"),
+                env.getOrDefault("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state"),
+                booleanValue(env, "TRADE_DECISIONS_ENABLED", false),
+                env.getOrDefault("DEDUP_STATE_TABLE", "fingerprint_dedup"),
+                positiveLong(env, "DEDUP_CACHE_MAX_ENTRIES", 250_000L),
+                positiveLong(env, "DEDUP_CACHE_MAX_BYTES", 33_554_432L),
+                positiveLong(env, "DEDUP_WRITE_BATCH_MS", 250L),
+                positiveLong(env, "DEDUP_WRITE_BATCH_SIZE", 5_000L),
+                positiveLong(env, "DEDUP_CLEANUP_INTERVAL_MS", 60_000L));
     }
 
     /**
@@ -537,6 +555,43 @@ public record SignalJobConfig(
             throw new IllegalStateException("Config SOURCE_IDLE_ALERT_MS must be > 0 "
                     + "(pinned default " + PlatformConfig.SOURCE_IDLE_ALERT_MS
                     + "), got " + value);
+        }
+        return value;
+    }
+
+    /**
+     * Strict boolean (no unsafe default substitution when the key is present
+     * but unparsable) — the pattern of {@link #stateBackendManagedMemory}.
+     * Used for the SCH-19 decision-sink gate {@code TRADE_DECISIONS_ENABLED}
+     * (default {@code false}: the ranking feed does not exist yet; the
+     * machinery stays off until wired).
+     */
+    private static boolean booleanValue(Map<String, String> env, String key,
+            boolean defaultValue) {
+        String raw = env.get(key);
+        if (raw == null) {
+            return defaultValue;
+        }
+        String trimmed = raw.trim();
+        if (!trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false")) {
+            throw new IllegalStateException("Config " + key + " must be 'true' or 'false' "
+                    + "(case-insensitive), got '" + trimmed + "'");
+        }
+        return Boolean.parseBoolean(trimmed);
+    }
+
+    /**
+     * DEC-038 dedup tuning keys (DEDUP_CACHE_* / DEDUP_WRITE_* /
+     * DEDUP_CLEANUP_*): defaulted and validated at startup — a missing key
+     * falls back to the documented starting value, a present non-positive
+     * value is fatal (a zero cache bound or write cadence would break the
+     * bounded-cache contract; see 04-signal-job.md §Design — fingerprint_dedup).
+     */
+    private static long positiveLong(Map<String, String> env, String key, long defaultValue) {
+        long value = longValue(env, key, defaultValue);
+        if (value <= 0) {
+            throw new IllegalStateException("Config " + key + " must be > 0 "
+                    + "(default " + defaultValue + "), got " + value);
         }
         return value;
     }

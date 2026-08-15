@@ -38,18 +38,34 @@ public final class BabysitterJob {
         // Fail closed if anyone tries to override the action flag.
         // R-286: trim the env value — ' false ' or 'false\n' from config-file
         // exports previously triggered the guard spuriously.
-        String envValue = System.getenv("POSITION_ACTIONS_ENABLED");
+        validateActionFlag(System.getenv("POSITION_ACTIONS_ENABLED"));
+        LOG.info(
+            "babysitter: starting MVP no-op job (POSITION_ACTIONS_ENABLED={})",
+            POSITION_ACTIONS_ENABLED
+        );
+        buildTopology().execute("Babysitter MVP no-op job");
+    }
+
+    /**
+     * Fail closed if {@code envValue} is anything but unset or {@code false}
+     * (case-insensitive, trimmed). Package-private so BAB-UNIT-002 can drive
+     * every variant without a Flink cluster.
+     */
+    static void validateActionFlag(String envValue) {
         if (envValue != null
                 && !"false".equalsIgnoreCase(envValue.trim())) {
             throw new IllegalStateException(
                 "POSITION_ACTIONS_ENABLED must be false in MVP; got '" + envValue + "'"
             );
         }
-        LOG.info(
-            "babysitter: starting MVP no-op job (POSITION_ACTIONS_ENABLED={})",
-            POSITION_ACTIONS_ENABLED
-        );
+    }
 
+    /**
+     * Builds the MVP no-op topology (marker source → no-op map → discard)
+     * without submitting it. Package-private so BAB-UNIT-001 can inspect the
+     * generated graph and assert zero {@code Position_Actions} operators.
+     */
+    static StreamExecutionEnvironment buildTopology() {
         StreamExecutionEnvironment env =
             StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
@@ -59,19 +75,26 @@ public final class BabysitterJob {
         // minimal marker source -> no-op map -> discard sink so the MVP job
         // submits; the real Positions-changelog source replaces this per the
         // implementation dossier.
+        // Explicit operator names + UIDs pin the restore anchors
+        // (CHECKPOINT-RESTORE-001 / DEC-035) so a future topology change
+        // cannot silently drift them.
         env.fromElements(0L)
+                .name("babysitter-mvp-source")
+                .uid("babysitter-mvp-source")
                 .map(value -> {
                     // MVP no-op marker: never produces Position_Actions.
                     return value;
                 })
                 .name("babysitter-mvp-marker")
+                .uid("babysitter-mvp-marker")
                 .map(value -> (Void) null)
-                .name("babysitter-mvp-discard");
+                .name("babysitter-mvp-discard")
+                .uid("babysitter-mvp-discard");
 
         // TODO: wire Positions changelog source, observation state,
         //   checkpointing, and zero-action emission per the implementation
         //   dossier (docs/08_implementation/06-babysitter.md).
 
-        env.execute("Babysitter MVP no-op job");
+        return env;
     }
 }

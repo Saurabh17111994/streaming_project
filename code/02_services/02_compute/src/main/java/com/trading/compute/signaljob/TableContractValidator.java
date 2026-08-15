@@ -58,6 +58,8 @@ public final class TableContractValidator {
 
     private static final String SIGNAL_CONTRACT = "tracker 14 re-scoped P2, SIGNAL-SCHEMA-001";
     private static final String CANDLE_CONTRACT = "tracker 14 P1, CANDLE-SCHEMA-002";
+    private static final String TRADE_CONTRACT = "SCH-19, TRADE-SCHEMA-001";
+    private static final String DEDUP_CONTRACT = "DEC-038, DEDUP-SCHEMA-001";
 
     private TableContractValidator() {}
 
@@ -81,7 +83,8 @@ public final class TableContractValidator {
         }
         validateSchema(info, CandleTableSchema.COLUMNS, CandleTableSchema.COLUMN_TYPE_ROOTS,
                 "15-column v2 candle", CANDLE_CONTRACT);
-        validateRouting(info, CANDLE_CONTRACT);
+        validateRouting(info, CandleTableSchema.BUCKET_KEY, CandleTableSchema.BUCKET_COUNT,
+                CANDLE_CONTRACT);
     }
 
     /** Signal LOG: append-only, no primary key, instrument_token routing, exact 22-col schema. */
@@ -89,7 +92,55 @@ public final class TableContractValidator {
         requireNoPrimaryKey(info, "append-only signal LOG", SIGNAL_CONTRACT);
         validateSchema(info, signalNames(), SignalCandidatesTableColumns.TYPE_ROOTS,
                 "22-column v3 signal", SIGNAL_CONTRACT);
-        validateRouting(info, SIGNAL_CONTRACT);
+        validateRouting(info, CandleTableSchema.BUCKET_KEY, CandleTableSchema.BUCKET_COUNT,
+                SIGNAL_CONTRACT);
+    }
+
+    /**
+     * Trade_Decisions LOG: append-only, no primary key, instruction_id
+     * routing, exact 25-col v2 schema (SCH-19, REQ-FLS-008).
+     */
+    public static void validateTradeDecisionsLogTable(TableInfo info) {
+        requireNoPrimaryKey(info, "immutable instruction LOG", TRADE_CONTRACT);
+        validateSchema(info, Arrays.asList(TradeDecisionsTableColumns.NAMES),
+                TradeDecisionsTableColumns.TYPE_ROOTS, "25-column v2 trade decision",
+                TRADE_CONTRACT);
+        validateRouting(info, "instruction_id", 8, TRADE_CONTRACT);
+    }
+
+    /**
+     * trade_instruction_state KV: PK exactly [instruction_id], bucket.key
+     * exactly [instruction_id] (single-field PK — raw-client writable per the
+     * COMPAT-FLUSS-005 matrix), exact 4-col v1 schema (SCH-19 index).
+     */
+    public static void validateTradeInstructionStateKvTable(TableInfo info) {
+        List<String> expectedPk = List.of(TradeInstructionStateColumns.NAMES[
+                TradeInstructionStateColumns.INSTRUCTION_ID]);
+        requireExactPrimaryKey(info, expectedPk, TRADE_CONTRACT);
+        validateSchema(info, Arrays.asList(TradeInstructionStateColumns.NAMES),
+                TradeInstructionStateColumns.TYPE_ROOTS, "4-column v1 instruction index",
+                TRADE_CONTRACT);
+        validateRouting(info, "instruction_id", 8, TRADE_CONTRACT);
+    }
+
+    /**
+     * fingerprint_dedup KV: PK exactly [instrument_token, fingerprint_version,
+     * event_fingerprint], bucket.key exactly [instrument_token] (PK prefix —
+     * per-instrument colocation), exact 6-col v1 schema (DEC-038). Invoked by
+     * the extended preflight when the dedup externalization stage wires the
+     * table into the job (SIG-STATE-001/002/003); the validator itself is
+     * unit-tested regardless.
+     */
+    public static void validateFingerprintDedupTable(TableInfo info) {
+        List<String> expectedPk = List.of(
+                FingerprintDedupTableColumns.NAMES[FingerprintDedupTableColumns.INSTRUMENT_TOKEN],
+                FingerprintDedupTableColumns.NAMES[FingerprintDedupTableColumns.FINGERPRINT_VERSION],
+                FingerprintDedupTableColumns.NAMES[FingerprintDedupTableColumns.EVENT_FINGERPRINT]);
+        requireExactPrimaryKey(info, expectedPk, DEDUP_CONTRACT);
+        validateSchema(info, Arrays.asList(FingerprintDedupTableColumns.NAMES),
+                FingerprintDedupTableColumns.TYPE_ROOTS, "6-column v1 dedup state",
+                DEDUP_CONTRACT);
+        validateRouting(info, "instrument_token", 16, DEDUP_CONTRACT);
     }
 
     /** Signal current-state KV: PK exactly [instrument_token], instrument_token routing, exact 22-col schema. */
@@ -110,7 +161,8 @@ public final class TableContractValidator {
         }
         validateSchema(info, signalNames(), SignalCandidatesTableColumns.TYPE_ROOTS,
                 "22-column v3 signal", SIGNAL_CONTRACT);
-        validateRouting(info, SIGNAL_CONTRACT);
+        validateRouting(info, CandleTableSchema.BUCKET_KEY, CandleTableSchema.BUCKET_COUNT,
+                SIGNAL_CONTRACT);
     }
 
     /**
@@ -179,25 +231,43 @@ public final class TableContractValidator {
             }
         }
     }
-    private static void validateRouting(TableInfo info, String contractId) {
-        String bucketKey = CandleTableSchema.BUCKET_KEY;
+    private static void requireExactPrimaryKey(TableInfo info, List<String> expectedPk,
+            String contractId) {
+        if (!info.hasPrimaryKey()) {
+            throw new ContractViolation(
+                    "KV table " + info.getTablePath() + " must carry primary key exactly "
+                            + expectedPk + " but has NO primary key (" + contractId + ")");
+        }
+        if (!expectedPk.equals(info.getPrimaryKeys())) {
+            throw new ContractViolation(
+                    "KV table " + info.getTablePath() + " must carry primary key exactly "
+                            + expectedPk + ", got " + info.getPrimaryKeys() + " (" + contractId + ")");
+        }
+    }
+
+    /**
+     * Routing check: bucket.key must equal {@code expectedBucketKey} exactly
+     * and the bucket count must equal {@code expectedBucketCount}.
+     */
+    private static void validateRouting(TableInfo info, String expectedBucketKey,
+            int expectedBucketCount, String contractId) {
         if (!info.hasBucketKey()) {
             throw new ContractViolation(
                     "table " + info.getTablePath() + " must set bucket.key explicitly, but uses the default ("
                             + contractId + ")");
         }
         List<String> bucketKeys = info.getBucketKeys();
-        if (!List.of(bucketKey).equals(bucketKeys)) {
+        if (!List.of(expectedBucketKey).equals(bucketKeys)) {
             throw new ContractViolation(
                     "table " + info.getTablePath() + " must be distributed by bucket.key exactly ["
-                            + bucketKey + "] (per-ticker colocation), got "
+                            + expectedBucketKey + "] (colocation), got "
                             + bucketKeys + " (" + contractId + ")");
         }
         int buckets = info.getNumBuckets();
-        if (buckets != CandleTableSchema.BUCKET_COUNT) {
+        if (buckets != expectedBucketCount) {
             throw new ContractViolation(
-                    "table " + info.getTablePath() + " must have " + CandleTableSchema.BUCKET_COUNT
-                            + " buckets (per-ticker colocation), got " + buckets
+                    "table " + info.getTablePath() + " must have " + expectedBucketCount
+                            + " buckets (colocation), got " + buckets
                             + " (" + contractId + ")");
         }
     }

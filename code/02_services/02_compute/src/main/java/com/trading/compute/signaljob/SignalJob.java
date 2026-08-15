@@ -197,12 +197,43 @@ public final class SignalJob {
                 .name("raw-validation")
                 .uid("raw-validation");
 
-        DataStream<RowData> deduped = valid
+        SingleOutputStreamOperator<RowData> deduped = valid
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
-                .process(new FingerprintDedupFunction(config))
+                .process(new FingerprintDedupFunction(config, () ->
+                        FlussFingerprintDedupStateStore.open(
+                                config.bootstrapServers(), config.database(),
+                                config.dedupStateTable(),
+                                java.time.Duration.ofMillis(config.dedupCleanupIntervalMs()))))
                 .returns(ticks.getType())
                 .name("fingerprint-dedup")
                 .uid("fingerprint-dedup");
+
+        // DEC-038 (2026-08-15): the authoritative dedup set lives in Fluss.
+        // First-seen fingerprints leave the dedup operator via the side output
+        // and are durably upserted to fingerprint_dedup through the batched
+        // writer (DEDUP_WRITE_BATCH_MS / DEDUP_WRITE_BATCH_SIZE cadence) + the
+        // FlussSink (INSERT -> UPSERT; barrier-aligned). The sink is wrapped in
+        // StallGuardedSink like every other Fluss sink (box 682/116).
+        deduped
+                .getSideOutput(FingerprintDedupFunction.DEDUP_WRITE_OUTPUT)
+                .keyBy(row -> 0L)
+                .process(new FingerprintDedupWriterFunction(config))
+                .name("fingerprint-dedup-writer")
+                .uid("fingerprint-dedup-writer")
+                .setParallelism(1)
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.dedupStateTable())
+                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
+                .name("fingerprint-dedup-sink")
+                .uid("fingerprint-dedup-sink");
 
         SingleOutputStreamOperator<RowData> candles = deduped
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
@@ -440,6 +471,38 @@ public final class SignalJob {
                             config.database(), config.signalCurrentTable()))
                     .getTableInfo();
             TableContractValidator.validateSignalCurrentKvTable(signalCurrent);
+            // DEC-038: the authoritative dedup set lives in Fluss, so the
+            // fingerprint_dedup table is a hard startup dependency — fail
+            // closed on drift, never run with an empty/mismatched dedup set
+            // (SIG-STATE-003).
+            org.apache.fluss.metadata.TableInfo dedupState = conn
+                    .getTable(org.apache.fluss.metadata.TablePath.of(
+                            config.database(), config.dedupStateTable()))
+                    .getTableInfo();
+            TableContractValidator.validateFingerprintDedupTable(dedupState);
+            // SCH-19 (machinery): when the decision dual-sink is enabled, the
+            // Trade_Decisions LOG + trade_instruction_state KV index must
+            // match the contracts the write paths rely on before the graph is
+            // built — fail closed on drift, never write degraded. Disabled by
+            // default: the ranking feed (Slice 3) does not exist yet.
+            if (config.tradeDecisionsEnabled()) {
+                org.apache.fluss.metadata.TableInfo tradeLog = conn
+                        .getTable(org.apache.fluss.metadata.TablePath.of(
+                                config.database(), config.tradeDecisionsTable()))
+                        .getTableInfo();
+                TableContractValidator.validateTradeDecisionsLogTable(tradeLog);
+                org.apache.fluss.metadata.TableInfo tradeIndex = conn
+                        .getTable(org.apache.fluss.metadata.TablePath.of(
+                                config.database(), config.tradeInstructionStateTable()))
+                        .getTableInfo();
+                TableContractValidator.validateTradeInstructionStateKvTable(tradeIndex);
+                LOG.info("signal-job: trade-decisions LOG contract OK ({})",
+                        config.tradeDecisionsTable());
+                LOG.info("signal-job: {}", TableContractValidator.schemaReport(
+                        tradeLog, TradeDecisionsTableColumns.COLUMN_NULLABLE_IN_DDL));
+                LOG.info("signal-job: trade-instruction-state KV contract OK ({})",
+                        config.tradeInstructionStateTable());
+            }
             // Log the validated schema reports — exact live columns/types
             // (and the DDL-vs-live nullability divergence where Fluss does
             // not carry NOT NULL) as startup evidence.
