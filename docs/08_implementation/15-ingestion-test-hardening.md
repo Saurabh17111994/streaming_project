@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-> **Status:** **M1 (Safety core) landed 2026-08-15** — ING-FAIL-004 (concurrency), ING-FAIL-005 (halt-latch pinned), ING-FAIL-007 (TIME_JUMP wired), ING-DQ-010 (no-silent-drop) implemented; **ING-DQ-011 (fuzz corpus) landed early 2026-08-15** (G4 RESOLVED); **M2 (Losslessness + config) landed 2026-08-15** — ING-TCP-002 (comparator suite, 20 tests), ING-UNIT-018 (Java↔Go parity table, 11 keys), ING-UNIT-019 (C16 env-key drift check) (G3/G7 RESOLVED); ingestion suite 211/0/8-skips. M3–M5 remain as backlog below.
+> **Status:** **M1 (Safety core) landed 2026-08-15** — ING-FAIL-004 (concurrency), ING-FAIL-005 (halt-latch pinned), ING-FAIL-007 (TIME_JUMP wired), ING-DQ-010 (no-silent-drop) implemented; **ING-DQ-011 (fuzz corpus) landed early 2026-08-15** (G4 RESOLVED); **M2 (Losslessness + config) landed 2026-08-15** — ING-TCP-002 (comparator suite, 20 tests), ING-UNIT-018 (Java↔Go parity table, 11 keys), ING-UNIT-019 (C16 env-key drift check) (G3/G7 RESOLVED); **M3 (Failure-path E2E) landed 2026-08-15** — ING-FAIL-008 (crash-loop), ING-FAIL-009 (auth-failure), ING-FAIL-010 (shutdown-deadlock), ING-INT-005 (READY gating matrix, G8 RESOLVED) implemented; ingestion suite 224/0/8-skips (M3: +13). M4–M5 remain as backlog below.
 >
 > **Source dossier:** [`03-ingestion.md`](./03-ingestion.md) — every test below maps to one of its aspects (packet processing, fingerprint, backpressure, failure matrix, config contract, losslessness, Go bridge, telemetry, startup/readiness).
 >
@@ -21,7 +21,7 @@ The 2026-08-15 audit verified that every requirement of `03-ingestion.md` is imp
 | G5 | Process-level Go bridge tests are minimal | Medium | Only `hft_policy_test.go` drives the real binary; FATAL-exit codes and pin enforcement are otherwise untested at the process level. |
 | G6 | Metrics-side secret scrubbing is untested | Medium | Log scrubbing (ING-SEC-RED-001) is tested; the OTLP export body is never scanned for leaked credentials/raw payloads. |
 | G7 | Config parity Java↔Go is by convention only | Medium | **RESOLVED in M2 (2026-08-15)** — a single 11-key table mirrored in `ConfigParityTest` (Java) and `hft_policy_test.go` (Go): same defaults, accepted values, rejected values (Java throws, Go exits FATAL 2). The parity test drove out a real divergence: the Go bridge read `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` inline with fail-open semantics (non-integers silently ignored) — both now flow through `hftRange`/`hftPin`. |
-| G8 | READY gating has no exhaustive no-false-positive test | Low | `HealthProbe.isReady()` has 7 dimensions; only a subset of combinations is tested. |
+| G8 | READY gating has no exhaustive no-false-positive test | Low | **RESOLVED in M3 (2026-08-15)** — `ReadinessGatingMatrixTest` (ING-INT-005) walks every `HealthProbe.isReady()` dimension (liveness, Fluss, tracker, broker, subscription, data, frame recency, clock): ready only when all eight are true, false when any single one is false. |
 
 ## 2. Test inventory
 
@@ -57,9 +57,9 @@ Conventions: Java = JUnit 5 under `code/02_services/01_ingestion/src/test/java/`
 | Test ID | Priority | Gap | Input/action | Pass result | Implementing class |
 | --- | --- | --- | --- | --- | --- |
 | `ING-FAIL-007` | P1 | G1 — TIME_JUMP never emitted | **Code change:** on a clock-offset violation crossing `CLOCK_OFFSET_LIMIT_MS` (continuous offset monitor or bridge-restart hook), write a TIME_JUMP discontinuity row | One TIME_JUMP row per violation with the epoch + last-tick snapshot; reason mapping added to `DiscontinuityReasonMappingTest`; if the enum is removed instead, the test asserts the removal | `IngestionService`/`NtpClockChecker` + new `TimeJumpDiscontinuityTest` |
-| `ING-FAIL-008` | P2 | Crash-loop only unit-tested | Scripted fake bridge binary that exits non-zero repeatedly | Java logs `BRIDGE_CRASH`, writes a DROP discontinuity, restarts exactly once, then exits 0; readiness marker cleared | `BridgeCrashLoopE2ETest` (scripted bridge pattern from `FullStackE2ETest`) |
-| `ING-FAIL-009` | P2 | Auth-failure path untested E2E | Bad `ARROW_TOKEN`/revoked creds | Bridge exits 2, Java exits on pipe close, zero partial appends, `auth_failure` evidence row written | `BridgeAuthFailureE2ETest` |
-| `ING-FAIL-010` | P3 | Shutdown deadlock not tested | Fluss ack never completes; call `shutdown()` twice | Exits within the drain deadline (no hang); journal records the exact remaining pending bytes (R-260); second `shutdown()` is a no-op (single journal entry, single drain) | `ShutdownDeadlockTest` |
+| `ING-FAIL-008` | P2 | Crash-loop only unit-tested | Scripted fake bridge binary that exits non-zero repeatedly | Java logs `BRIDGE_CRASH`, writes a DROP discontinuity, restarts exactly once, then exits 0; readiness marker cleared | ✅ landed 2026-08-15: `BridgeCrashLoopE2ETest` (scripted bridge pattern from `FullStackE2ETest`, default-run via the ING-DQ-010 no-op-sink seam; 2× BRIDGE_CRASH + 2× DROP rows, one restart, terminal shutdown, readiness marker cleared, single journal entry) |
+| `ING-FAIL-009` | P2 | Auth-failure path untested E2E | Bad `ARROW_TOKEN`/revoked creds | Bridge exits 2, Java exits on pipe close, zero partial appends, `auth_failure` evidence row written | ✅ landed 2026-08-15: `BridgeAuthFailureE2ETest` (scripted bridge mirrors the real auth drain: `auth_failure` → `bridge_shutdown` → exit 2; DROP evidence with the auth reason, zero accepted ticks, no restart, clean single shutdown) |
+| `ING-FAIL-010` | P3 | Shutdown deadlock not tested | Fluss ack never completes; call `shutdown()` twice | Exits within the drain deadline (no hang); journal records the exact remaining pending bytes (R-260); second `shutdown()` is a no-op (single journal entry, single drain) | ✅ landed 2026-08-15: `ShutdownDeadlockTest` — un-cancelable stuck ack, `DRAIN_DEADLINE_SECONDS` (new config key, default 30) makes the deadline provable; journal entry pins `pending_records`/`pending_bytes` (new `UncertaintyJournal.Entry` fields, R-260); duplicate shutdown writes nothing |
 
 ### 2.5 Configuration contract (dossier §Configuration contract, §Startup sequence)
 
@@ -95,7 +95,7 @@ Conventions: Java = JUnit 5 under `code/02_services/01_ingestion/src/test/java/`
 
 | Test ID | Priority | Gap | Input/action | Pass result | Implementing class |
 | --- | --- | --- | --- | --- | --- |
-| `ING-INT-005` | P2 | G8 — READY gating not exhaustive | Walk every readiness dimension (fluss, tracker, broker, subscription, data, frame recency, clock) | Readiness is false when any one dimension is false and true only when all are — no false positive | new `ReadinessGatingMatrixTest` |
+| `ING-INT-005` | P2 | G8 — READY gating not exhaustive | Walk every readiness dimension (fluss, tracker, broker, subscription, data, frame recency, clock) | Readiness is false when any one dimension is false and true only when all are — no false positive | ✅ landed 2026-08-15: `ReadinessGatingMatrixTest` (10 cases — all-true baseline + one flip per dimension incl. liveness, data/partial-ack, stale frame, and the fail-closed clock) |
 | `ING-INT-006` | P3 | Entrypoint exit codes untested | `docker-entrypoint.sh` FATAL paths: missing `FLUSS_BOOTSTRAP` (2), missing manifest (2), missing bridge binary (1) | Exit codes and messages match the documented contract | `test_docker_entrypoint.sh` (bash harness) |
 
 ## 3. Implementation order (milestones)
@@ -106,7 +106,7 @@ Each milestone ends with its full suite green and the catalog updated — nothin
 | --- | --- | --- |
 | **M1 — Safety core** ✅ landed 2026-08-15 | `ING-FAIL-007`, `ING-FAIL-005`, `ING-FAIL-004`, `ING-DQ-010` | Closed the two code gaps (TIME_JUMP wired; halt-latch pinned "until restart"), pinned the tracker under concurrency, proved the no-silent-drop invariant. Suite 204/0/8-skips. |
 | **M2 — Losslessness + config** ✅ landed 2026-08-15 | `ING-TCP-002`, `ING-UNIT-018`, `ING-UNIT-019` | Comparator suite (20 tests, fail-closed hardening), 11-key Java↔Go parity table (drove out the LATENCY_MS/CONNECTIONS fail-open reads — both now hftRange/hftPin), docs-audit C16 env-key drift check; all wired into `run-monday-gates.sh` + `run-full-suite.sh` so comparator/env-key regressions fail CI. Suite 211/0/8-skips. |
-| **M3 — Failure-path E2E** | `ING-FAIL-008`, `ING-FAIL-009`, `ING-FAIL-010`, `ING-INT-005` | Crash-loop, auth-failure, shutdown-deadlock, and the READY gating matrix. |
+| **M3 — Failure-path E2E** ✅ landed 2026-08-15 | `ING-FAIL-008`, `ING-FAIL-009`, `ING-FAIL-010`, `ING-INT-005` | Crash-loop, auth-failure, shutdown-deadlock, and the READY gating matrix. Two small code changes shipped with the tests: `DRAIN_DEADLINE_SECONDS` config key (deadline was hardcoded 30 s — the deadlock test proves the deadline is honored) and `pending_records`/`pending_bytes` on the uncertainty journal entry (R-260 exact-bytes pin). Suite 224/0/8-skips. |
 | **M4 — Go bridge + data quality** | ~~`ING-DQ-011`~~ ✅ landed 2026-08-15, `ING-UNIT-014`, `ING-UNIT-015`, `ING-UNIT-016`, `ING-UNIT-017`, `ING-RES-002`, `ING-RES-003`, `ING-RES-004`, `ING-TCP-003` | Fuzz corpus (**ING-DQ-011 done — `FuzzIngestionTest`**), golden pins, plan boundaries, backoff, contract version. |
 | **M5 — Telemetry + ops** | `ING-UNIT-021`, `ING-UNIT-022`, `ING-INT-006` | Metrics scrubbing + cardinality, entrypoint exit codes. |
 

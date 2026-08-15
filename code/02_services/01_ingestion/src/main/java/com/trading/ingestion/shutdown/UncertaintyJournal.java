@@ -117,6 +117,8 @@ public final class UncertaintyJournal {
         public final long totalFailed;
         public final long totalRejected;
         public final long totalBytesAccepted;
+        public final long pendingRecords;
+        public final long pendingBytes;
         public final String shutdownReason;
 
         public Entry(String instanceId,
@@ -126,6 +128,8 @@ public final class UncertaintyJournal {
                      long totalFailed,
                      long totalRejected,
                      long totalBytesAccepted,
+                     long pendingRecords,
+                     long pendingBytes,
                      String shutdownReason) {
             this.instanceId = instanceId;
             this.shutdownTime = shutdownTime;
@@ -134,6 +138,8 @@ public final class UncertaintyJournal {
             this.totalFailed = totalFailed;
             this.totalRejected = totalRejected;
             this.totalBytesAccepted = totalBytesAccepted;
+            this.pendingRecords = pendingRecords;
+            this.pendingBytes = pendingBytes;
             this.shutdownReason = shutdownReason;
         }
 
@@ -143,12 +149,14 @@ public final class UncertaintyJournal {
                             + "\"total_accepted\":%d,\"total_appended\":%d,"
                             + "\"total_failed\":%d,\"total_rejected\":%d,"
                             + "\"total_bytes_accepted\":%d,"
+                            + "\"pending_records\":%d,\"pending_bytes\":%d,"
                             + "\"reason\":\"%s\"}",
                     escape(instanceId),
                     ISO.format(shutdownTime),
                     totalAccepted, totalAppended,
                     totalFailed, totalRejected,
                     totalBytesAccepted,
+                    pendingRecords, pendingBytes,
                     escape(shutdownReason));
         }
 

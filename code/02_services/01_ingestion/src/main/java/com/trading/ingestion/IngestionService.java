@@ -196,7 +196,7 @@ public final class IngestionService {
         });
         this.writer = new RawTickWriter(flussWriter, tracker, config.rawTableName,
                 config.appendTimeout,
-                java.time.Duration.ofSeconds(30)); // drain deadline
+                config.drainDeadline); // drain deadline (DRAIN_DEADLINE_SECONDS)
         // Async append completions (throughput plan Phase 2): metrics, error
         // counters, and discontinuity evidence are driven by the writer's
         // completion callback — write() no longer blocks on the Fluss ack.
@@ -1389,7 +1389,10 @@ public final class IngestionService {
         }
         health.markNotAlive();
 
-        // J3, I10: Persist uncertainty counters before drain
+        // J3, I10: Persist uncertainty counters before drain. R-260: the
+        // entry pins the EXACT bytes/records still pending at shutdown — the
+        // drain (writer.close below) may time out on an un-acking Fluss, so
+        // the journal must record what the drain was unable to flush.
         journal.write(new UncertaintyJournal.Entry(
                 instanceId,
                 Instant.now(),
@@ -1398,6 +1401,8 @@ public final class IngestionService {
                 tracker.totalFailed(),
                 tracker.totalRejected(),
                 tracker.totalBytesAccepted(),
+                tracker.pendingRecords(),
+                tracker.pendingBytes(),
                 "shutdown"
         ));
 
