@@ -1,5 +1,6 @@
 package com.trading.compute.signaljob;
 
+import com.trading.common.model.FormingBar;
 import com.trading.common.schema.CandleTableSchema;
 import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.time.Duration;
@@ -323,7 +324,46 @@ public final class SignalJob {
                 .name("signal-detection")
                 .uid("signal-detection");
 
-        signals
+        // Slice 2.2 forming-bar handoff (REQ-FC-007/AC-FC-014, REQ-FC-013):
+        // the LIVE forming bar forks off the SAME deduped tick stream (the
+        // candle window's input), updated in-process on every accepted tick
+        // and handed straight to Business Logic — no Fluss round trip, no
+        // database read/write, no new transport on the hot path. The
+        // completed-candle pipeline above is untouched: the window operator
+        // remains the sole producer of finalized candles.
+        //
+        // Topology (both branches coexist from the same deduped input):
+        //   deduped ── keyBy(token) ── FormingBarBuilder (per-tick emit)
+        //        └── (existing) keyBy(token) ── window ── candle sink / SignalDetection
+        //   FormingBarBuilder ── connect(candles) ── FormingBarDetection ── union ──
+        //        existing signal LOG + KV dual-sink (REQ-SS-003 + DEC-035)
+        DataStream<FormingBar> formingBars = deduped
+                .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
+                .process(new FormingBarBuilderFunction(config))
+                .returns(FormingBarTypeInfo.INSTANCE)
+                .name("forming-bar-builder")
+                .uid("forming-bar-builder");
+
+        // The detector co-locates both inputs by instrument key: the live
+        // forming-bar events (input 1) and the completed candles (input 2,
+        // the same stream SignalDetectionFunction consumes — the lookback
+        // history). Candidate rows union into the existing signal sinks.
+        DataStream<RowData> formingSignals = formingBars
+                .connect(candles)
+                .keyBy(
+                        bar -> bar.instrumentToken(),
+                        candle -> candle.getLong(CandleTableColumns.INSTRUMENT_TOKEN))
+                .process(new FormingBarDetectionFunction(config))
+                .returns(SignalCandidatesTableColumns.ROW_TYPE_INFO)
+                .name("forming-bar-detection")
+                .uid("forming-bar-detection");
+
+        // Both candidate producers feed the SAME dual-sink (candle rule +
+        // forming-bar rule). The canonical filter admits the pinned forming-
+        // bar rule id into the KV current-state; the LOG keeps everything.
+        DataStream<RowData> allSignals = signals.union(formingSignals);
+
+        allSignals
                 .sinkTo(new StallGuardedSink<>(
                         FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
@@ -338,7 +378,7 @@ public final class SignalJob {
                 .name("signal-candidates-sink")
                 .uid("signal-candidates-sink");
 
-        signals
+        allSignals
                 .filter(new CanonicalSignalFilterFunction())
                 .name("canonical-signal-filter")
                 .uid("canonical-signal-filter")

@@ -70,6 +70,16 @@ public final class SignalCandidatesTableColumns {
     public static final String CANONICAL_RULE_ID = "breakout-20-bullish-trend";
 
     /**
+     * Second pinned canonical rule id (Slice 2.2 forming-bar handoff,
+     * Phase C): the forming-bar placeholder detector's rule. The KV
+     * current-state filter admits BOTH canonical rule ids (the candle rule
+     * and the forming-bar rule) with the same canonical strategy identity;
+     * everything else stays filtered from the KV projection. PLACEHOLDER
+     * identity — the real strategy replaces it without pipeline changes.
+     */
+    public static final String CANONICAL_FORMING_RULE_ID = "breakout-5-forming-bar";
+
+    /**
      * Fluss {@code DataTypeRoot} name per column, DDL index order (frozen
      * 22-column v3 layout). The re-targeted table contract validator compares
      * live metadata roots against this list column by column.

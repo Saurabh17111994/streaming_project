@@ -9,11 +9,20 @@ import org.apache.flink.table.data.StringData;
  * Bidirectional mapper between the in-process {@link FormingBar} record and
  * the {@code forming_bar} KV row (v1 layout, {@link FormingBarTableColumns}).
  * The durable projection is the current-state bar per instrument
- * (PK {@code instrument_token}); the in-process {@code windowEnd} is not
- * persisted (see the columns pin — one source of truth for the window
- * duration). Rehydration reads a row back into a record with
- * {@code windowEnd = 0} until the caller restores it from its own window
- * cadence.
+ * (PK {@code instrument_token}); the in-process {@code windowEnd},
+ * {@code exchange}, and {@code symbol} are NOT persisted (see the columns
+ * pin — the KV current-state projection holds only the bar's OHLCV/last-event
+ * identity; rehydration restores exchange/symbol from the completed-candle
+ * stream). Rehydration reads a row back into a record with
+ * {@code windowEnd = 0} and {@code exchange/symbol = null} until the caller
+ * restores them.
+ *
+ * <p>Storage semantics note (forming candle): this mapper exists for the
+ * FUTURE persistence phase. The live forming-bar hot path in this phase
+ * hands the in-process record directly to Business Logic and never touches
+ * the {@code forming_bar} table — and when persistence lands it SHALL be
+ * KV/current-state/upsert only (latest state replaces previous per
+ * instrument/window), never append-only history.
  */
 public final class FormingBarRowMapper {
 
@@ -55,6 +64,8 @@ public final class FormingBarRowMapper {
                 row.getLong(FormingBarTableColumns.VOLUME),
                 row.getInt(FormingBarTableColumns.TICK_COUNT),
                 row.getLong(FormingBarTableColumns.LAST_EVENT_TIME),
-                fp == null ? null : fp.toString());
+                fp == null ? null : fp.toString(),
+                null, // exchange is not persisted (v1) — caller restores it
+                null); // symbol is not persisted (v1) — caller restores it
     }
 }

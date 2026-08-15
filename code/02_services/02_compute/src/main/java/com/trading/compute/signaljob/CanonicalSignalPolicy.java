@@ -2,15 +2,16 @@ package com.trading.compute.signaljob;
 
 /**
  * Canonical-signal policy (DEC-035, tracker 14 re-scoped P2 —
- * SIGNAL-SCHEMA-001).
+ * SIGNAL-SCHEMA-001; extended Slice 2.2 forming-bar handoff, Phase C).
  *
  * <p>A signal row is <b>canonical</b> iff all four identity columns equal the
  * expected values exactly: {@code schema_version == expectedSchemaVersion}
  * <em>and</em> {@code strategy_id == expectedStrategyId} <em>and</em>
  * {@code strategy_version == expectedStrategyVersion} <em>and</em>
- * {@code rule_id == expectedRuleId}. Any other combination — a strategy
- * iteration, an unversioned row, a blank value — is non-canonical and is
- * excluded from the canonical current-state projection
+ * {@code rule_id} equals {@code expectedRuleId} <em>or</em> (Phase C) the
+ * alternate forming-bar rule id {@code alternateRuleId}. Any other
+ * combination — a strategy iteration, an unversioned row, a blank value — is
+ * non-canonical and is excluded from the canonical current-state projection
  * ({@code Signal_Candidates_current}). The LOG twin
  * ({@code Signal_Candidates}) keeps every emitted signal regardless, so no
  * audit history is lost by the filter.
@@ -19,7 +20,11 @@ package com.trading.compute.signaljob;
  * canonical constants (the config defaults ARE the canonical identity); an
  * overridden {@code SIGNAL_STRATEGY_*} config therefore feeds rows that this
  * policy filters from the KV projection and counts via
- * {@code compute.signal.kv.filtered.noncanonical}.
+ * {@code compute.signal.kv.filtered.noncanonical}. Phase C adds the pinned
+ * forming-bar rule id ({@code CANONICAL_FORMING_RULE_ID}) as the second
+ * accepted rule — same canonical strategy/schema/version, distinct rule — so
+ * forming-bar placeholder candidates reach the KV current-state like candle
+ * candidates (REQ-SS-003 + DEC-035 dual-sink contract).
  *
  * <p>Strict exact-match semantics: {@code null} and blank values never match,
  * and whitespace is not trimmed (a padded value is a different identity
@@ -30,15 +35,8 @@ public final class CanonicalSignalPolicy {
     private CanonicalSignalPolicy() {}
 
     /**
-     * @param schemaVersion            the row's {@code schema_version}
-     * @param strategyId               the row's {@code strategy_id}
-     * @param strategyVersion          the row's {@code strategy_version}
-     * @param ruleId                   the row's {@code rule_id}
-     * @param expectedSchemaVersion    the pinned expected schema version
-     * @param expectedStrategyId       the pinned expected strategy id
-     * @param expectedStrategyVersion  the pinned expected strategy version
-     * @param expectedRuleId           the pinned expected rule id
-     * @return true iff all four row identity columns exactly equal the expected values
+     * Single-rule form (pre-Phase-C callers/tests): canonical iff all four
+     * row identity columns exactly equal the expected values.
      */
     public static boolean isCanonical(
             String schemaVersion,
@@ -49,13 +47,39 @@ public final class CanonicalSignalPolicy {
             String expectedStrategyId,
             String expectedStrategyVersion,
             String expectedRuleId) {
-        return expectedSchemaVersion != null
+        return isCanonical(schemaVersion, strategyId, strategyVersion, ruleId,
+                expectedSchemaVersion, expectedStrategyId, expectedStrategyVersion,
+                expectedRuleId, null);
+    }
+
+    /**
+     * Two-rule form (Phase C): canonical iff all four identity columns equal
+     * the expected values with {@code ruleId} matching {@code expectedRuleId}
+     * OR (when {@code alternateRuleId} is non-null) {@code alternateRuleId}.
+     * The schema/strategy/version must match the pinned expected identity in
+     * both cases — the alternate is a second pinned rule of the same
+     * canonical strategy, not a relaxation of the other columns.
+     */
+    public static boolean isCanonical(
+            String schemaVersion,
+            String strategyId,
+            String strategyVersion,
+            String ruleId,
+            String expectedSchemaVersion,
+            String expectedStrategyId,
+            String expectedStrategyVersion,
+            String expectedRuleId,
+            String alternateRuleId) {
+        boolean identityMatch = expectedSchemaVersion != null
                 && expectedSchemaVersion.equals(schemaVersion)
                 && expectedStrategyId != null
                 && expectedStrategyId.equals(strategyId)
                 && expectedStrategyVersion != null
-                && expectedStrategyVersion.equals(strategyVersion)
-                && expectedRuleId != null
-                && expectedRuleId.equals(ruleId);
+                && expectedStrategyVersion.equals(strategyVersion);
+        if (!identityMatch) {
+            return false;
+        }
+        return (expectedRuleId != null && expectedRuleId.equals(ruleId))
+                || (alternateRuleId != null && alternateRuleId.equals(ruleId));
     }
 }

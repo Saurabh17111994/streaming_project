@@ -54,6 +54,9 @@ class SignalJobConfigTest {
         assertEquals("breakout-20-bullish-trend", cfg.signalRuleId());
         assertEquals(20, cfg.signalLookbackCandles());
         assertEquals(1L, cfg.signalQuantity());
+        // Slice 2.2 forming-bar placeholder defaults (Phase C)
+        assertEquals("breakout-5-forming-bar", cfg.formingRuleId());
+        assertEquals(5, cfg.formingLookbackCandles());
         // OTLP collector: compose DNS default, live-run override (process rule 2)
         assertEquals("otel-collector:4318", cfg.otelCollectorHost());
         // state restore: absent by default (first start replays from offset 0)
@@ -215,6 +218,8 @@ class SignalJobConfigTest {
         env.put("SIGNAL_RULE_ID", "my-rule");
         env.put("SIGNAL_LOOKBACK_CANDLES", "5");
         env.put("SIGNAL_QUANTITY", "3");
+        env.put("FORMING_RULE_ID", "my-forming-rule");
+        env.put("FORMING_LOOKBACK_CANDLES", "8");
         env.put("TRADE_DECISIONS_TABLE", "Trade_Decisions_dev");
         env.put("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state_dev");
         env.put("TRADE_DECISIONS_ENABLED", "true");
@@ -238,6 +243,8 @@ class SignalJobConfigTest {
         assertEquals("my-rule", cfg.signalRuleId());
         assertEquals(5, cfg.signalLookbackCandles());
         assertEquals(3L, cfg.signalQuantity());
+        assertEquals("my-forming-rule", cfg.formingRuleId());
+        assertEquals(8, cfg.formingLookbackCandles());
         assertEquals("Trade_Decisions_dev", cfg.tradeDecisionsTable());
         assertEquals("trade_instruction_state_dev", cfg.tradeInstructionStateTable());
         assertEquals(true, cfg.tradeDecisionsEnabled(),
@@ -402,6 +409,15 @@ class SignalJobConfigTest {
         Map<String, String> env = env();
         env.put("SIGNAL_QUANTITY", "0");
         assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
+    }
+
+    @Test
+    void rejectsFormingLookbackBelowTwo() {
+        Map<String, String> env = env();
+        env.put("FORMING_LOOKBACK_CANDLES", "1");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("FORMING_LOOKBACK_CANDLES"), e.getMessage());
     }
 
     // ── tracker 14 P4: state backend + durable checkpoints ────────────────

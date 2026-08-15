@@ -89,7 +89,8 @@ class FormingBarTableColumnsAgreementTest {
     void mapperRoundTripsRecordToRowAndBack() {
         FormingBar bar = new FormingBar(
                 12345L, 1_700_000_000_000L, 1_700_000_015_000L,
-                100L, 120L, 90L, 110L, 1_000L, 42L, 1_700_000_014_999L, "fp-1");
+                100L, 120L, 90L, 110L, 1_000L, 42L, 1_700_000_014_999L, "fp-1",
+                "NSE", "RELIANCE");
         RowData row = FormingBarRowMapper.toRow(bar);
 
         assertEquals(FormingBarTableColumns.FIELD_COUNT, row.getArity());
@@ -104,14 +105,18 @@ class FormingBarTableColumnsAgreementTest {
         assertEquals(bar.tickCount(), back.tickCount());
         assertEquals(bar.lastEventTime(), back.lastEventTime());
         assertEquals(bar.lastFingerprint(), back.lastFingerprint());
-        // windowEnd is not persisted in v1 — the caller restores it.
+        // windowEnd / exchange / symbol are not persisted in v1 — the caller
+        // restores them (windowEnd from its own cadence, exchange/symbol from
+        // the completed-candle stream).
         assertEquals(0L, back.windowEnd());
+        assertNull(back.exchange());
+        assertNull(back.symbol());
     }
 
     @Test
     void nullFingerprintRoundTripsAsNull() {
         FormingBar bar = new FormingBar(
-                1L, 100L, 200L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, null);
+                1L, 100L, 200L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, null, null, null);
         RowData row = FormingBarRowMapper.toRow(bar);
         assertEquals(true, row.isNullAt(FormingBarTableColumns.LAST_EVENT_FINGERPRINT));
         assertNull(FormingBarRowMapper.fromRow(row).lastFingerprint());
