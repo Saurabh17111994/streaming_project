@@ -3,7 +3,8 @@ package com.trading.common.schema.execution;
 /**
  * Attempt lifecycle store (docs/08_implementation/07-executor.md &rarr;
  * "Attempt rules"): mints exactly one PREPARED attempt per
- * (instruction_id, request_hash) and refuses to rewrite an attempt's identity.
+ * (instruction_id, request_hash), refuses to rewrite an attempt's identity,
+ * and applies only legal phase transitions with a monotonic {@code phase_epoch}.
  *
  * <p>The {@code prepare} contract, per the dossier:
  * <ul>
@@ -14,6 +15,20 @@ package com.trading.common.schema.execution;
  *   <li>a modified decision under an existing instruction_id (same id, different
  *       request_hash) is a contract violation: the store requests a halt through
  *       its callback and does not mutate anything.</li>
+ * </ul>
+ *
+ * <p>The transition contract, per the dossier:
+ * <ul>
+ *   <li>legal transitions are PREPARED &rarr; SUBMITTING; SUBMITTING &rarr;
+ *       ACCEPTED / REJECTED / CANCELLED / UNKNOWN; UNKNOWN &rarr;
+ *       ACCEPTED / REJECTED / CANCELLED — the UNKNOWN exits only through
+ *       {@link #resolveUnknown} (explicit reconciliation result), never via
+ *       {@link #transition} (blocks new submissions and auto-retry);</li>
+ *   <li>every accepted transition increments {@code phase_epoch} by exactly 1;</li>
+ *   <li>a stale {@code phase_epoch} update (expected != current) is rejected
+ *       without mutation;</li>
+ *   <li>terminal phases (ACCEPTED / REJECTED / CANCELLED) cannot transition
+ *       again.</li>
  * </ul>
  */
 public interface AttemptStore {
@@ -54,5 +69,55 @@ public interface AttemptStore {
         }
     }
 
+    enum TransitionOutcome {
+        /** Phase/phase_epoch updated (phase_epoch + 1). */
+        APPLIED,
+        /** Expected phase_epoch != current — rejected without mutation. */
+        STALE_EPOCH,
+        /** The from&rarr;to move is not in the legal map — rejected without mutation. */
+        ILLEGAL_TRANSITION,
+        /** The attempt is already in a terminal phase — cannot transition again. */
+        TERMINAL,
+        /** No attempt with that execution_attempt_id. */
+        NOT_FOUND
+    }
+
+    record TransitionResult(TransitionOutcome outcome, AttemptRecord record, String reason) {
+
+        public static TransitionResult applied(AttemptRecord record) {
+            return new TransitionResult(TransitionOutcome.APPLIED, record, null);
+        }
+
+        public static TransitionResult rejected(TransitionOutcome outcome, AttemptRecord record,
+                                                String reason) {
+            return new TransitionResult(outcome, record, reason);
+        }
+    }
+
     PrepareResult prepare(PrepareRequest request);
+
+    /**
+     * Applies a submission-path phase transition. The UNKNOWN phase cannot exit
+     * through this method — use {@link #resolveUnknown} (explicit reconciliation
+     * result). Returns the updated record on {@code APPLIED}; on any rejection
+     * the store is unchanged.
+     *
+     * @param executionAttemptId  target attempt
+     * @param expectedPhaseEpoch  caller's view of the current phase_epoch; a
+     *                            mismatch rejects the update as stale without
+     *                            mutation
+     * @param newPhase            the phase to move to
+     */
+    TransitionResult transition(String executionAttemptId, long expectedPhaseEpoch,
+                                String newPhase);
+
+    /**
+     * Resolves an UNKNOWN attempt to a terminal phase — the ONLY way out of
+     * UNKNOWN, and only through an explicit reconciliation result (the caller
+     * supplies the resolved phase after verified broker/order evidence). Any
+     * non-UNKNOWN attempt, or a resolved phase outside ACCEPTED / REJECTED /
+     * CANCELLED, is rejected without mutation.
+     */
+    TransitionResult resolveUnknown(String executionAttemptId, long expectedPhaseEpoch,
+                                    String resolvedPhase);
 }

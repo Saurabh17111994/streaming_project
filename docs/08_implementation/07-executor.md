@@ -884,9 +884,15 @@ uncertainty into a blocked state before a future broker adapter exists.
   under an existing instruction_id raises a contract violation + halt, identity
   never rewritten; the Fluss-backed store + transitions land when the module
   joins the reactor)_
-- [ ] Implement exact legal phase transitions, monotonic `phase_epoch`, stale
+- [x] Implement exact legal phase transitions, monotonic `phase_epoch`, stale
   update rejection, terminal protection, and UNKNOWN resolution only through
   explicit reconciliation result.
+  _(core IMPLEMENTED 2026-08-15 in common —
+  `InMemoryAttemptStore.transition`/`resolveUnknown` over
+  `SUBMIT_TRANSITIONS`/`RESOLVE_TRANSITIONS`: phase_epoch +1 per applied move,
+  stale-epoch rejection, terminal protection, UNKNOWN exits only via explicit
+  `resolveUnknown`; the SCH-15 `checkWrite` guard runs on every mutation — a
+  drifted matrix fails the store closed, proven by test)_
 - [ ] Ensure a modified decision under an existing instruction ID raises a
   contract violation and requests a halt through a callback.
 - [ ] Test `EXE-UNIT-002`, `EXE-UNIT-006`, duplicate replay, modified replay,

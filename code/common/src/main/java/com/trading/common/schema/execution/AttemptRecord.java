@@ -1,6 +1,7 @@
 package com.trading.common.schema.execution;
 
 import com.trading.common.schema.ownership.ExecutionAttemptsColumns;
+import java.util.Set;
 
 /**
  * Immutable Execution_Attempts row
@@ -38,6 +39,15 @@ public record AttemptRecord(
         String schemaVersion) {
 
     public static final String PHASE_PREPARED = "PREPARED";
+    public static final String PHASE_SUBMITTING = "SUBMITTING";
+    public static final String PHASE_ACCEPTED = "ACCEPTED";
+    public static final String PHASE_REJECTED = "REJECTED";
+    public static final String PHASE_CANCELLED = "CANCELLED";
+    public static final String PHASE_UNKNOWN = "UNKNOWN";
+
+    /** Terminal phases cannot transition again (dossier "Attempt rules"). */
+    public static final Set<String> TERMINAL_PHASES =
+            Set.of(PHASE_ACCEPTED, PHASE_REJECTED, PHASE_CANCELLED);
 
     /**
      * Mints the PREPARED attempt (phase_epoch = 0, retry_attempt = 0,
@@ -54,5 +64,20 @@ public record AttemptRecord(
                 executionPartitionId, requestHash, clientOrderRef, null, gateEpoch,
                 PHASE_PREPARED, 0L, null, null, nowTs, null, null, null, 0,
                 ExecutionAttemptsColumns.SCHEMA_VERSION_V2);
+    }
+
+    /**
+     * Returns a copy with the given phase and {@code phaseEpoch + 1} — the only
+     * columns the attempt-store transitions touch (phase/phase_epoch). Every
+     * other column (identity, call evidence) is preserved untouched.
+     */
+    public AttemptRecord withPhase(String newPhase) {
+        if (newPhase == null || newPhase.isBlank()) {
+            throw new IllegalArgumentException("phase must be non-blank");
+        }
+        return new AttemptRecord(executionAttemptId, accountScopeId, instructionId, actionId,
+                executionPartitionId, requestHash, clientOrderRef, brokerOrderId, gateEpoch,
+                newPhase, phaseEpoch + 1, outcome, outcomeDetail, preparedTs, submittedTs,
+                terminalTs, brokerResponseSummary, retryAttempt, schemaVersion);
     }
 }

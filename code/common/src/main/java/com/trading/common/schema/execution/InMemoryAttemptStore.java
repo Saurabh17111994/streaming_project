@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * In-memory {@link AttemptStore} — the pure-JVM core of the executor attempt
@@ -14,38 +15,76 @@ import java.util.Objects;
  * first production consumer of the SCH-15 column-ownership guard
  * ({@link ColumnOwnership#checkWrite}).
  *
- * <p>{@link #prepare} is wired to the guard two ways:
+ * <p>The guard runs on every mutation:
  * <ul>
- *   <li><b>Store-level identity guard:</b> a duplicate (instruction_id,
- *       request_hash) returns the existing PREPARED attempt untouched; a
- *       modified decision under an existing instruction_id (same id, different
- *       hash) is a contract violation — the halt callback fires and no row is
- *       created or mutated. The identity columns of the PREPARED attempt are
- *       never rewritten after minting.</li>
- *   <li><b>Matrix self-assertion:</b> before accepting the minted row,
- *       {@code checkWrite(WRITER_ATTEMPT_STORE, phase, phase_epoch, prepared_ts,
- *       retry_attempt)} runs — if the ownership matrix ever drifts (those
- *       columns reassigned to identity or to the broker-adapter group), the
- *       store fails closed at the first write instead of silently writing
- *       columns it no longer owns.</li>
+ *   <li><b>Store-level identity guard ({@link #prepare}):</b> a duplicate
+ *       (instruction_id, request_hash) returns the existing PREPARED attempt
+ *       untouched; a modified decision under an existing instruction_id (same
+ *       id, different hash) is a contract violation — the halt callback fires
+ *       and no row is created or mutated. The identity columns of the PREPARED
+ *       attempt are never rewritten after minting.</li>
+ *   <li><b>Matrix self-assertion (every mutation):</b> before accepting a minted
+ *       row or an applied transition, {@code checkWrite(WRITER_ATTEMPT_STORE, …)}
+ *       runs over the exact columns the mutation writes (prepare: phase,
+ *       phase_epoch, prepared_ts, retry_attempt; transitions: phase,
+ *       phase_epoch). If the ownership matrix ever drifts — those columns
+ *       reassigned to identity or to the broker-adapter group — the store fails
+ *       closed at the first write instead of silently writing columns it no
+ *       longer owns.</li>
  * </ul>
  *
- * <p>Not thread-safe; single-writer executor. The Fluss-backed store and the
- * remaining Task 5 items (legal transitions, stale-epoch rejection, terminal
- * protection, UNKNOWN resolution) land with the {@code 04_executor} module.
+ * <p>Transition rules (dossier "Attempt rules"):
+ * <ul>
+ *   <li>legal moves are PREPARED &rarr; SUBMITTING; SUBMITTING &rarr; ACCEPTED /
+ *       REJECTED / CANCELLED / UNKNOWN (via {@link #transition}); UNKNOWN &rarr;
+ *       ACCEPTED / REJECTED / CANCELLED only via {@link #resolveUnknown} (explicit
+ *       reconciliation) — UNKNOWN can never go back to SUBMITTING, so there is no
+ *       automatic retry;</li>
+ *   <li>every accepted transition increments {@code phase_epoch} by exactly 1;</li>
+ *   <li>a stale expected {@code phase_epoch} rejects the update without mutation;</li>
+ *   <li>terminal phases (ACCEPTED / REJECTED / CANCELLED) cannot transition again.</li>
+ * </ul>
+ *
+ * <p>Not thread-safe; single-writer executor. The Fluss-backed store lands with
+ * the {@code 04_executor} module; transitions only ever touch phase/phase_epoch —
+ * call-evidence columns (outcome, submitted/terminal timestamps, broker order id)
+ * belong to the broker-adapter's group and are never written here.
  */
 public final class InMemoryAttemptStore implements AttemptStore {
 
     private static final ColumnOwnership MATRIX = ExecutionAttemptsColumnOwnership.MATRIX;
     private static final String WRITER = ExecutionAttemptsColumnOwnership.WRITER_ATTEMPT_STORE;
 
+    /** Submission-path legal transitions (dossier). UNKNOWN exits live in RESOLVE. */
+    private static final Map<String, Set<String>> SUBMIT_TRANSITIONS = Map.of(
+            AttemptRecord.PHASE_PREPARED, Set.of(AttemptRecord.PHASE_SUBMITTING),
+            AttemptRecord.PHASE_SUBMITTING, Set.of(AttemptRecord.PHASE_ACCEPTED,
+                    AttemptRecord.PHASE_REJECTED, AttemptRecord.PHASE_CANCELLED,
+                    AttemptRecord.PHASE_UNKNOWN));
+
+    /** Reconciliation-path legal transitions (explicit result only). */
+    private static final Map<String, Set<String>> RESOLVE_TRANSITIONS = Map.of(
+            AttemptRecord.PHASE_UNKNOWN, Set.of(AttemptRecord.PHASE_ACCEPTED,
+                    AttemptRecord.PHASE_REJECTED, AttemptRecord.PHASE_CANCELLED));
+
+    private final ColumnOwnership matrix;
     private final Map<String, AttemptRecord> byAttemptId = new LinkedHashMap<>();
     private final Map<String, String> instructionToAttemptId = new HashMap<>();
     private final Map<String, String> instructionHashToAttemptId = new HashMap<>();
     private final Runnable haltCallback;
 
     public InMemoryAttemptStore(Runnable haltCallback) {
+        this(haltCallback, MATRIX);
+    }
+
+    /**
+     * Test seam: inject a different ownership matrix so a drift (e.g. phase
+     * moved to identity or to another writer) can be proven to fail the store
+     * closed at the first mutation.
+     */
+    InMemoryAttemptStore(Runnable haltCallback, ColumnOwnership matrix) {
         this.haltCallback = Objects.requireNonNull(haltCallback, "haltCallback");
+        this.matrix = Objects.requireNonNull(matrix, "matrix");
     }
 
     private static String replayKey(String instructionId, String requestHash) {
@@ -78,9 +117,8 @@ public final class InMemoryAttemptStore implements AttemptStore {
                 request.executionPartitionId(), request.requestHash(),
                 request.clientOrderRef(), request.gateEpoch(), request.nowTs());
 
-        // First consumer of the SCH-15 guard: the mutable group this store
-        // writes must still belong to the attempt-store (and none of it be
-        // identity) — fail closed on matrix drift before accepting the row.
+        // Guard on every mutation: the mutable group this store writes must
+        // still belong to the attempt-store (and none of it be identity).
         assertWritableColumns(ExecutionAttemptsColumns.PHASE,
                 ExecutionAttemptsColumns.PHASE_EPOCH,
                 ExecutionAttemptsColumns.PREPARED_TS,
@@ -92,14 +130,74 @@ public final class InMemoryAttemptStore implements AttemptStore {
         return PrepareResult.created(created);
     }
 
+    @Override
+    public TransitionResult transition(String executionAttemptId, long expectedPhaseEpoch,
+                                       String newPhase) {
+        return applyTransition(executionAttemptId, expectedPhaseEpoch, newPhase,
+                SUBMIT_TRANSITIONS, "illegal transition (submission path)");
+    }
+
+    @Override
+    public TransitionResult resolveUnknown(String executionAttemptId, long expectedPhaseEpoch,
+                                           String resolvedPhase) {
+        return applyTransition(executionAttemptId, expectedPhaseEpoch, resolvedPhase,
+                RESOLVE_TRANSITIONS, "resolveUnknown requires an UNKNOWN attempt and a terminal phase");
+    }
+
+    private TransitionResult applyTransition(String executionAttemptId, long expectedPhaseEpoch,
+                                             String newPhase, Map<String, Set<String>> legal,
+                                             String illegalReason) {
+        if (newPhase == null || newPhase.isBlank()) {
+            return TransitionResult.rejected(TransitionOutcome.ILLEGAL_TRANSITION, null,
+                    "phase must be non-blank");
+        }
+        AttemptRecord current = byAttemptId.get(executionAttemptId);
+        if (current == null) {
+            return TransitionResult.rejected(TransitionOutcome.NOT_FOUND, null,
+                    "no attempt " + executionAttemptId);
+        }
+        if (AttemptRecord.TERMINAL_PHASES.contains(current.phase())) {
+            return TransitionResult.rejected(TransitionOutcome.TERMINAL, current,
+                    "terminal phase " + current.phase() + " cannot transition");
+        }
+        Set<String> allowed = legal.get(current.phase());
+        if (allowed == null || !allowed.contains(newPhase)) {
+            return TransitionResult.rejected(TransitionOutcome.ILLEGAL_TRANSITION, current,
+                    illegalReason + ": " + current.phase() + " -> " + newPhase);
+        }
+        if (current.phaseEpoch() != expectedPhaseEpoch) {
+            return TransitionResult.rejected(TransitionOutcome.STALE_EPOCH, current,
+                    "expected phase_epoch " + expectedPhaseEpoch + " but current is "
+                            + current.phaseEpoch());
+        }
+
+        // Guard on every mutation: transitions only ever touch phase/phase_epoch
+        // (the attempt-store group) — fail closed on matrix drift.
+        assertWritableColumns(ExecutionAttemptsColumns.PHASE,
+                ExecutionAttemptsColumns.PHASE_EPOCH);
+
+        AttemptRecord next = current.withPhase(newPhase);
+        byAttemptId.put(executionAttemptId, next);
+        return TransitionResult.applied(next);
+    }
+
     /**
      * The column-ownership guard surface for the attempt-store writer: any
      * column outside the attempt-store group (identity or broker-adapter's)
-     * throws, naming the real owner. Called by {@link #prepare} and exercised
-     * directly by tests.
+     * throws, naming the real owner. Called by every mutation path and
+     * exercised directly by tests.
      */
     void assertWritableColumns(int... columns) {
-        MATRIX.checkWrite(WRITER, columns);
+        matrix.checkWrite(WRITER, columns);
+    }
+
+    /**
+     * Test-only seam: seeds an attempt directly, bypassing prepare's minting
+     * guards, so the transition/resolveUnknown paths can be exercised against
+     * a deliberately drifted ownership matrix (fail-closed proof).
+     */
+    void seedForTest(AttemptRecord record) {
+        byAttemptId.put(Objects.requireNonNull(record, "record").executionAttemptId(), record);
     }
 
     public AttemptRecord attemptById(String executionAttemptId) {
