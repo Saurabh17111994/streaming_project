@@ -42,6 +42,16 @@ import org.slf4j.LoggerFactory;
  *       deadlines) instead of a fixed 8 s sleep, so a slow JVM/clock-check no
  *       longer fails a healthy run and a fast run finishes as soon as the
  *       evidence appears.</li>
+ *   <li>Cluster pre-flight (2026-08-15): before launching the service the test
+ *       verifies the dev Fluss stack serves data — TCP 9123 (coordinator) and
+ *       TCP 9124 (tablet) must accept. The tablet only binds after every log
+ *       segment recovers, so a missing tablet listener with a crash-looping
+ *       container means truncated segments from an unclean shutdown; the
+ *       failure message points at the surgical repair
+ *       ({@code code/01_platform/04_scripts/fluss-repair/repair-tablet.sh},
+ *       runbook section in 11-testing-and-release.md). Without this, the test
+ *       burned the full 90 s startup window polling for {@code Fluss
+ *       connected} and failed with a confusing stderr tail.</li>
  * </ul>
  */
 @DisplayName("ING-E2E-001: full-stack fake broker → Fluss")
@@ -51,6 +61,12 @@ class FullStackE2ETest {
 
     /** Startup deadline — the poll returns as soon as the markers appear. */
     private static final long STARTUP_TIMEOUT_MS = 90_000;
+
+    /** Dev-cluster ports: coordinator client RPC and tablet server. */
+    private static final int FLUSS_COORDINATOR_PORT = 9123;
+    private static final int FLUSS_TABLET_PORT = 9124;
+    /** Pre-flight TCP connect timeout — success is sub-ms on a healthy stack. */
+    private static final int PREFLIGHT_TCP_TIMEOUT_MS = 5_000;
     /** Bounded window to observe the forced-disconnect evidence after startup. */
     private static final long DISCONNECT_WINDOW_MS = 30_000;
     private static final long POLL_INTERVAL_MS = 250;
@@ -64,6 +80,10 @@ class FullStackE2ETest {
         assumeTrue("true".equalsIgnoreCase(
                 System.getenv().getOrDefault("INGESTION_INT_TEST_E2E", "false")),
                 "Skipping — set INGESTION_INT_TEST_E2E=true");
+
+        // 0. Pre-flight: the dev Fluss stack must serve data before we burn
+        //    the startup window (see the cluster-health javadoc note).
+        preflightCluster();
 
         // 1. Start the standalone fake HFT broker on a free port.
         int port = freePort();
@@ -156,6 +176,119 @@ class FullStackE2ETest {
         } finally {
             faketool.destroyForcibly();
         }
+    }
+
+    /**
+     * Pre-flight cluster-health check: the dev Fluss stack must actually serve
+     * data before the test launches the service.
+     *
+     * <p>The check is cheap and precise: TCP 9123 (coordinator client RPC) and
+     * TCP 9124 (tablet) must accept. The tablet only binds after <b>every</b>
+     * log segment recovers, so a missing tablet listener while its container
+     * crash-loops means truncated segments from an unclean shutdown — the
+     * docker status probe distinguishes that from a stopped stack and points
+     * at the surgical repair (fluss-repair/repair-tablet.sh; runbook section
+     * in 11-testing-and-release.md).
+     */
+    private static void preflightCluster() {
+        if (!tcpReachable("127.0.0.1", FLUSS_COORDINATOR_PORT)) {
+            fail("ING-E2E-001 pre-flight: Fluss coordinator not reachable on 127.0.0.1:"
+                    + FLUSS_COORDINATOR_PORT + " — start the dev stack "
+                    + "(code/01_platform/01_docker) before running this test");
+        }
+        if (!tcpReachable("127.0.0.1", FLUSS_TABLET_PORT)) {
+            String diag = dockerTabletStatus();
+            if (diag != null && diag.contains("Restarting")) {
+                fail("ING-E2E-001 pre-flight: Fluss tablet is crash-looping (" + diag + ") — "
+                        + "likely truncated log segments from an unclean shutdown. Run the "
+                        + "surgical repair: code/01_platform/04_scripts/fluss-repair/repair-tablet.sh "
+                        + "(procedure in the ING-E2E-001 runbook section of 11-testing-and-release.md) "
+                        + "before retrying");
+            }
+            fail("ING-E2E-001 pre-flight: Fluss tablet not reachable on 127.0.0.1:"
+                    + FLUSS_TABLET_PORT + " — start the dev stack (code/01_platform/01_docker) "
+                    + "before running this test"
+                    + (diag == null ? "" : " (docker status: " + diag + ")"));
+        }
+    }
+
+    /** True if a TCP connect to {@code host}:{@code port} succeeds within the pre-flight timeout. */
+    private static boolean tcpReachable(String host, int port) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress(host, port), PREFLIGHT_TCP_TIMEOUT_MS);
+            return true;
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Best-effort docker status line for the tablet container via
+     * {@code docker ps -a} (e.g. {@code Restarting (5) 3 seconds ago}), or
+     * {@code null} when the CLI is unavailable or no matching container
+     * exists. Several compose projects can leave fluss-tablet containers
+     * around (this host also has an Exited one from another stack), so the
+     * match prefers the crash-loop symptom (Restarting), then an Up
+     * container, then the most recently stopped match — mirroring
+     * repair-tablet.sh's discovery. Recency is ranked by the "ago" unit in
+     * the status line (seconds/minutes &lt; hours &lt; days &lt; weeks+), since
+     * CreatedAt is the container's original creation time and is not the
+     * right signal.
+     */
+    private static String dockerTabletStatus() {
+        try {
+            String[] cmd = {"docker", "ps", "-a", "--format", "{{.Names}}	{{.Status}}",
+                    "--filter", "name=fluss-tablet"};
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            p.waitFor(5, TimeUnit.SECONDS);
+            String restarting = null, up = null;
+            String recentStatus = null;
+            int recentRank = Integer.MAX_VALUE;
+            for (String line : out.split("\n")) {
+                String[] parts = line.split("\t");
+                if (parts.length < 2 || !parts[0].contains("fluss-tablet")) {
+                    continue;
+                }
+                String status = parts[1];
+                if (restarting == null && status.startsWith("Restarting")) {
+                    restarting = status;
+                }
+                if (up == null && status.startsWith("Up")) {
+                    up = status;
+                }
+                int rank = agoRank(status);
+                if (rank < recentRank) {
+                    recentRank = rank;
+                    recentStatus = status;
+                }
+            }
+            if (restarting != null) {
+                return restarting;
+            }
+            if (up != null) {
+                return up;
+            }
+            return recentStatus;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Recency rank of a docker status line by its "ago" unit: 0 = seconds/
+     *  minutes, 1 = hours, 2 = days, 3 = weeks or longer (unparseable = 3). */
+    private static int agoRank(String status) {
+        String s = status.toLowerCase();
+        if (s.contains("second") || s.contains("minute")) {
+            return 0;
+        }
+        if (s.contains("hour")) {
+            return 1;
+        }
+        if (s.contains("day")) {
+            return 2;
+        }
+        return 3;
     }
 
     /** Poll {@code buffer} for {@code marker} until it appears or the deadline passes. */

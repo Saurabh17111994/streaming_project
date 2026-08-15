@@ -160,10 +160,41 @@ Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/sch
 | `ING-SAFE-001` | Slot-scoped safety halt requests | halt_request_id is slot-scoped and tuple-deterministic; assigned-token-set hash is deterministic and order-independent. |
 | `ING-SAFE-002` | Partial ack → unsafe, full ack never unsafe | Bridge-event safety mapping exact per plan. |
 | `ING-SAFE-003` | RECOVERED only on ACTIVE + full-ack subscription | No other combination recovers a slot. |
-| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. Verified by `FullStackE2ETest` (env-gated on `INGESTION_INT_TEST_E2E=true`). **Harness hardened 2026-08-15 (CHG-011):** `LOG_DIR` points at a writable JUnit temp dir (log4j's `JSON_FILE` appender otherwise swallows the service's logs and the assertions go blind) and startup/disconnect markers (`Fluss connected`, `arrow-bridge started`, `event=disconnect`) are polled with bounded deadlines instead of a fixed 8 s sleep. Passed 2026-08-15 on the dev cluster at manifest 24 (schema verified 24/0/0). |
+| `ING-E2E-001` | Full-stack fake broker → Fluss | Bridge ingests fake ticks into Fluss and survives a forced disconnect; rows persisted end-to-end. Verified by `FullStackE2ETest` (env-gated on `INGESTION_INT_TEST_E2E=true`). **Harness hardened 2026-08-15 (CHG-011):** `LOG_DIR` points at a writable JUnit temp dir (log4j's `JSON_FILE` appender otherwise swallows the service's logs and the assertions go blind) and startup/disconnect markers (`Fluss connected`, `arrow-bridge started`, `event=disconnect`) are polled with bounded deadlines instead of a fixed 8 s sleep. **Cluster pre-flight 2026-08-15 (CHG-013):** before launch the test verifies TCP 9123 (coordinator) and 9124 (tablet) accept; a crash-looping tablet (truncated log segments from an unclean shutdown) fails fast with a pointer to the surgical repair (`code/01_platform/04_scripts/fluss-repair/repair-tablet.sh`) instead of burning the 90 s startup window. Passed 2026-08-15 on the dev cluster at manifest 24 (schema verified 24/0/0). |
 | `THR-PROBE-001` | Client capacity probe without per-row blocking | 20,480 rows submitted non-blocking; rows/s and avg/p50/p99 reported; no ack-wait bottleneck. |
 
 Evidence: approved packet corpus, manifest snapshot, deterministic clock, workload seed, append-outcome log, metrics report, and quarantine records. Real broker credentials are never used in unit tests.
+
+#### ING-E2E-001 runbook: cluster-health pre-flight and the truncated-segment repair
+
+**Pre-flight (CHG-013).** Before launching the service, `FullStackE2ETest` verifies the dev Fluss stack serves data — TCP 9123 (coordinator) and TCP 9124 (tablet) must accept. The tablet only binds after *every* log segment recovers, so a missing tablet listener while its container crash-loops means truncated segments from an unclean shutdown; the failure message names the repair tool below. A stopped stack (both ports down) reports "start the dev stack" instead. `docker ps --filter name=fluss-tablet` distinguishes the two, so the message is targeted.
+
+**Symptom.** After the tablet is killed mid-write, it crash-loops on startup with:
+
+```
+Failed to load record batch at position N from FileRecords(...)
+Caused by: java.io.EOFException: Failed to read `record batch header` ...
+Expected to read 48 bytes, but reached end of file after reading M bytes.
+```
+
+and the service reports `Alive tablet server is empty` / schema verification fails. The tablet's data volume contains segments whose tail is a preallocated/zeroed region left past the last complete batch. **Fluss's reported error position is NOT the true boundary** — a zeroed batch header misparses as valid and the reader jumps through the garbage region (observed 2026-08-15: reported 670,347,188, real boundary 670,345,400; the first "40-byte" truncation just exposed the next misread).
+
+**Repair (surgical — removes only the zeroed/never-written tail bytes, never complete records):**
+
+```bash
+# Report only (no changes):
+DRY_RUN=1 code/01_platform/04_scripts/fluss-repair/repair-tablet.sh
+# Scan + repair the live raw_table_1 table (auto-detected):
+code/01_platform/04_scripts/fluss-repair/repair-tablet.sh
+# A specific table dir (from the tablet's error message):
+code/01_platform/04_scripts/fluss-repair/repair-tablet.sh raw_table_1-696
+```
+
+The tool discovers the tablet container + data volume, scans every segment with the server's own batch arithmetic (`LogScan.py`: `batchSize = 12 + int32_le(header[8:12])`; an all-zero 48-byte header marks the preallocated tail), truncates each affected segment to the exact end of the last complete batch, restarts the tablet, and verifies recovery completed. It refuses to act while the tablet is Up (a healthy active segment is mid-append — the scanner may catch an in-progress write).
+
+**Verify.** After repair, the service startup log must show `ddl-bootstrap: verified 24 tables ok, 0 missing, 0 schema-mismatch` (manifest 24), then `Fluss connected` — then re-run ING-E2E-001.
+
+**History.** 2026-08-15 the dev cluster hit this on 12 of raw_table_1's 16 buckets (zero-tail deltas 160–3,040 bytes each, all from today's E2E runs); all were repaired with the tool and the schema re-verified 24/0/0. Backup of the original corrupt bucket-6 segment: host `/tmp/fluss-repair/raw_table_1-696-log-6/`.
 
 ### Signal job
 
