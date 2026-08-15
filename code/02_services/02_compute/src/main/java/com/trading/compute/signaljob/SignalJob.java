@@ -337,7 +337,7 @@ public final class SignalJob {
         //        └── (existing) keyBy(token) ── window ── candle sink / SignalDetection
         //   FormingBarBuilder ── connect(candles) ── FormingBarDetection ── union ──
         //        existing signal LOG + KV dual-sink (REQ-SS-003 + DEC-035)
-        DataStream<FormingBar> formingBars = deduped
+        SingleOutputStreamOperator<FormingBar> formingBars = deduped
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
                 .process(new FormingBarBuilderFunction(config))
                 .returns(FormingBarTypeInfo.INSTANCE)
@@ -357,6 +357,41 @@ public final class SignalJob {
                 .returns(SignalCandidatesTableColumns.ROW_TYPE_INFO)
                 .name("forming-bar-detection")
                 .uid("forming-bar-detection");
+
+        // Forming-bar durable home (persistence phase, 2026-08-16): the
+        // builder's PERSIST_OUTPUT carries every tick's snapshot to a
+        // coalescing writer (keyed by instrument — one buffered row per
+        // instrument, the LATEST forming bar) that flushes on the
+        // FORMING_BAR_WRITE_BATCH_MS cadence into the forming_bar KV
+        // current-state projection (PK instrument_token, INSERT→UPSERT).
+        // Current-state only, never per-tick history; the finalized candle
+        // remains the completed-candle pipeline's artifact. The hot path
+        // (tick → builder → detector → Business Logic) is untouched — the
+        // Fluss write is off the per-tick path.
+        formingBars
+                .getSideOutput(FormingBarBuilderFunction.PERSIST_OUTPUT)
+                .keyBy(bar -> bar.instrumentToken())
+                .process(new FormingBarWriterFunction(config))
+                .returns(FormingBarTableColumns.ROW_TYPE_INFO)
+                .name("forming-bar-writer")
+                .uid("forming-bar-writer")
+                .sinkTo(new StallGuardedSink<>(
+                        FlussSink.<RowData>builder()
+                                .setBootstrapServers(config.bootstrapServers())
+                                .setDatabase(config.database())
+                                .setTable(config.formingBarTable())
+                                // KV upsert: forming_bar is a KV table (PK
+                                // instrument_token) — (false, false) maps
+                                // INSERT RowKinds to UPSERTs so replay/re-
+                                // flush re-emits converge on the same key.
+                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
+                                .setOption("client.request-timeout",
+                                        config.sinkWriteStallTimeoutMs() + "ms")
+                                .setOption("client.writer.retries", "2")
+                                .build(),
+                        config.sinkWriteStallTimeoutMs()))
+                .name("forming-bar-sink")
+                .uid("forming-bar-sink");
 
         // Both candidate producers feed the SAME dual-sink (candle rule +
         // forming-bar rule). The canonical filter admits the pinned forming-
@@ -530,6 +565,16 @@ public final class SignalJob {
                             config.database(), config.dedupStateTable()))
                     .getTableInfo();
             TableContractValidator.validateFingerprintDedupTable(dedupState);
+            // Forming-bar durable home (persistence phase, 2026-08-16): the
+            // forming_bar KV is Fluss-authoritative durable state (DEC-038
+            // matrix) — a hard startup dependency like the dedup table; fail
+            // closed on drift, never write to a table that contradicts the
+            // 11-column v1 current-state contract.
+            org.apache.fluss.metadata.TableInfo formingBar = conn
+                    .getTable(org.apache.fluss.metadata.TablePath.of(
+                            config.database(), config.formingBarTable()))
+                    .getTableInfo();
+            TableContractValidator.validateFormingBarKvTable(formingBar);
             // SCH-19 (machinery): when the decision dual-sink is enabled, the
             // Trade_Decisions LOG + trade_instruction_state KV index must
             // match the contracts the write paths rely on before the graph is
@@ -569,6 +614,11 @@ public final class SignalJob {
             LOG.info("signal-job: {}",
                     TableContractValidator.schemaReport(
                             signalCurrent, SignalCandidatesTableColumns.COLUMN_NULLABLE_IN_DDL));
+            LOG.info("signal-job: forming-bar KV contract OK ({})",
+                    config.formingBarTable());
+            LOG.info("signal-job: {}",
+                    TableContractValidator.schemaReport(
+                            formingBar, FormingBarTableColumns.COLUMN_NULLABLE_IN_DDL));
         } catch (TableContractValidator.ContractViolation e) {
             throw e; // contract drift: fail closed, do not build a degraded graph
         } catch (Exception e) {

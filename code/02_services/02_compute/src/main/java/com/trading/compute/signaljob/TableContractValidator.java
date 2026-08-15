@@ -60,6 +60,7 @@ public final class TableContractValidator {
     private static final String CANDLE_CONTRACT = "tracker 14 P1, CANDLE-SCHEMA-002";
     private static final String TRADE_CONTRACT = "SCH-19, TRADE-SCHEMA-001";
     private static final String DEDUP_CONTRACT = "DEC-038, DEDUP-SCHEMA-001";
+    private static final String FORMING_BAR_CONTRACT = "DEC-038, FORMING-BAR-SCHEMA-001";
 
     private TableContractValidator() {}
 
@@ -141,6 +142,24 @@ public final class TableContractValidator {
                 FingerprintDedupTableColumns.TYPE_ROOTS, "6-column v1 dedup state",
                 DEDUP_CONTRACT);
         validateRouting(info, "instrument_token", 16, DEDUP_CONTRACT);
+    }
+
+    /**
+     * Forming-bar current-state KV (forming-bar persistence phase,
+     * 2026-08-16): PK exactly [instrument_token], instrument_token routing,
+     * exact 11-column v1 schema. The durable home of the live forming bar
+     * (DEC-038 state-ownership matrix); the writer emits one upsert per
+     * instrument per cadence — current-state only, never history.
+     */
+    public static void validateFormingBarKvTable(TableInfo info) {
+        requireExactPrimaryKey(info,
+                List.of(FormingBarTableColumns.NAMES[FormingBarTableColumns.INSTRUMENT_TOKEN]),
+                FORMING_BAR_CONTRACT);
+        validateSchema(info, Arrays.asList(FormingBarTableColumns.NAMES),
+                FormingBarTableColumns.TYPE_ROOTS, "11-column v1 forming bar",
+                FORMING_BAR_CONTRACT);
+        validateRouting(info, FormingBarTableColumns.NAMES[FormingBarTableColumns.INSTRUMENT_TOKEN],
+                16, FORMING_BAR_CONTRACT);
     }
 
     /** Signal current-state KV: PK exactly [instrument_token], instrument_token routing, exact 22-col schema. */

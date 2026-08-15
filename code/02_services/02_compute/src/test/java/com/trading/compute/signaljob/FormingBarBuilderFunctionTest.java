@@ -188,4 +188,27 @@ class FormingBarBuilderFunctionTest {
         assertEquals(2, bars.size());
         assertNotNull(bars.get(0));
     }
+
+    @Test
+    void persistSideOutputCarriesEverySnapshot() throws Exception {
+        openHarness();
+        process(TestRawRows.row(7L, T0 + 1_000L, "fp-1", "TRADE", 100, 5));
+        process(TestRawRows.row(7L, T0 + 4_000L, "fp-2", "TRADE", 102, 2));
+        process(TestRawRows.row(8L, T0 + 2_000L, "fp-3", "TRADE", 50, 1));
+
+        // The persistence leg sees the SAME snapshots as the Business Logic
+        // stream — the writer coalesces, so this is never a per-tick Fluss
+        // write, but the side output must carry every update (the durable
+        // current-state must converge to the latest bar).
+        List<FormingBar> persisted = harness.getSideOutput(
+                        FormingBarBuilderFunction.PERSIST_OUTPUT)
+                .stream()
+                .filter(o -> o instanceof StreamRecord)
+                .map(o -> (FormingBar) ((StreamRecord<?>) o).getValue())
+                .toList();
+        assertEquals(3, persisted.size(), "one persist snapshot per accepted tick");
+        assertEquals(T0, persisted.get(0).windowStart());
+        assertEquals(102, persisted.get(1).closePaise(), "same latest-bar semantics as main output");
+        assertEquals(8L, persisted.get(2).instrumentToken());
+    }
 }

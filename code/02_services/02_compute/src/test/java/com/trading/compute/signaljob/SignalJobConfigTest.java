@@ -57,6 +57,9 @@ class SignalJobConfigTest {
         // Slice 2.2 forming-bar placeholder defaults (Phase C)
         assertEquals("breakout-5-forming-bar", cfg.formingRuleId());
         assertEquals(5, cfg.formingLookbackCandles());
+        // forming_bar KV persistence defaults (persistence phase, 2026-08-16)
+        assertEquals("forming_bar", cfg.formingBarTable());
+        assertEquals(250L, cfg.formingBarWriteBatchMs());
         // OTLP collector: compose DNS default, live-run override (process rule 2)
         assertEquals("otel-collector:4318", cfg.otelCollectorHost());
         // state restore: absent by default (first start replays from offset 0)
@@ -220,6 +223,8 @@ class SignalJobConfigTest {
         env.put("SIGNAL_QUANTITY", "3");
         env.put("FORMING_RULE_ID", "my-forming-rule");
         env.put("FORMING_LOOKBACK_CANDLES", "8");
+        env.put("FORMING_BAR_TABLE", "forming_bar_dev");
+        env.put("FORMING_BAR_WRITE_BATCH_MS", "100");
         env.put("TRADE_DECISIONS_TABLE", "Trade_Decisions_dev");
         env.put("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state_dev");
         env.put("TRADE_DECISIONS_ENABLED", "true");
@@ -245,6 +250,8 @@ class SignalJobConfigTest {
         assertEquals(3L, cfg.signalQuantity());
         assertEquals("my-forming-rule", cfg.formingRuleId());
         assertEquals(8, cfg.formingLookbackCandles());
+        assertEquals("forming_bar_dev", cfg.formingBarTable());
+        assertEquals(100L, cfg.formingBarWriteBatchMs());
         assertEquals("Trade_Decisions_dev", cfg.tradeDecisionsTable());
         assertEquals("trade_instruction_state_dev", cfg.tradeInstructionStateTable());
         assertEquals(true, cfg.tradeDecisionsEnabled(),
@@ -335,6 +342,15 @@ class SignalJobConfigTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> SignalJobConfig.from(env));
         assertTrue(e.getMessage().contains("TRADE_DECISIONS_ENABLED"), e.getMessage());
+    }
+
+    @Test
+    void rejectsNonPositiveFormingBarWriteBatchMs() {
+        Map<String, String> env = env();
+        env.put("FORMING_BAR_WRITE_BATCH_MS", "0");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("FORMING_BAR_WRITE_BATCH_MS"), e.getMessage());
     }
 
     @Test

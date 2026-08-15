@@ -45,10 +45,13 @@ class TableContractValidatorTest {
     private static final List<String> INSTRUCTION_TYPES = TradeInstructionStateColumns.TYPE_ROOTS;
     private static final List<String> DEDUP_NAMES = Arrays.asList(FingerprintDedupTableColumns.NAMES);
     private static final List<String> DEDUP_TYPES = FingerprintDedupTableColumns.TYPE_ROOTS;
+    private static final List<String> FORMING_BAR_NAMES = Arrays.asList(FormingBarTableColumns.NAMES);
+    private static final List<String> FORMING_BAR_TYPES = FormingBarTableColumns.TYPE_ROOTS;
 
     private static final String TRADE_LOG = "Trade_Decisions";
     private static final String TRADE_INDEX = "trade_instruction_state";
     private static final String DEDUP_TABLE = "fingerprint_dedup";
+    private static final String FORMING_BAR_TABLE = "forming_bar";
     private static final String INSTRUCTION_ID = "instruction_id";
 
     // ── candle KV (CANDLE-SCHEMA-002) ──
@@ -453,6 +456,43 @@ class TableContractValidatorTest {
                         dedup(DEDUP_TABLE, DEDUP_PK, List.of(TOKEN), 17)));
     }
 
+    // ── forming_bar KV current-state home (DEC-038, FORMING-BAR-SCHEMA-001) ──
+
+    @Test
+    @DisplayName("forming-bar KV with PK exactly [instrument_token] and matching routing passes")
+    void formingBarKvExactPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateFormingBarKvTable(
+                formingBar(FORMING_BAR_TABLE, List.of(TOKEN), List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV without a primary key is rejected (current-state contract)")
+    void formingBarKvNoPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, null, List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV with a wider primary key is rejected (exact per-ticker current state)")
+    void formingBarKvWiderPkRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, List.of(TOKEN, "window_start"),
+                                List.of(TOKEN), 16)));
+    }
+
+    @Test
+    @DisplayName("forming-bar KV with schema drift is rejected (10 columns)")
+    void formingBarKvSchemaDriftRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(FORMING_BAR_TYPES);
+        shortTypes.remove(10); // drop schema_version -> 10 columns
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateFormingBarKvTable(
+                        formingBar(FORMING_BAR_TABLE, List.of(TOKEN), List.of(TOKEN), 16,
+                                shortTypes, false)));
+    }
+
     // ── fixtures ──
 
     /**
@@ -524,6 +564,18 @@ class TableContractValidatorTest {
             int numBuckets, List<String> columnTypes, boolean pkNonNullable) {
         return table(name, schemaPk, bucketKeys, numBuckets, DEDUP_NAMES, DEDUP_TYPES,
                 columnTypes, pkNonNullable);
+    }
+
+    private static TableInfo formingBar(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, FORMING_BAR_NAMES,
+                FORMING_BAR_TYPES, null, true);
+    }
+
+    private static TableInfo formingBar(String name, List<String> schemaPk, List<String> bucketKeys,
+            int numBuckets, List<String> columnTypes, boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, FORMING_BAR_NAMES,
+                FORMING_BAR_TYPES, columnTypes, pkNonNullable);
     }
 
     private static TableInfo table(String name, List<String> schemaPk, List<String> bucketKeys,

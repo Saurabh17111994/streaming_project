@@ -8,6 +8,7 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 
 /**
  * Forming-bar builder (Slice 2.2 forming-bar handoff, REQ-FC-007): consumes
@@ -41,6 +42,18 @@ import org.apache.flink.util.Collector;
 public class FormingBarBuilderFunction extends KeyedProcessFunction<Long, RowData, FormingBar> {
 
     private static final long serialVersionUID = 1L;
+
+    /**
+     * Durable-persistence leg (forming_bar KV current-state home, 2026-08-16):
+     * every accepted tick's {@link FormingBar} snapshot is also emitted here,
+     * for the coalescing {@link FormingBarWriterFunction}. Same event, second
+     * consumer — the main output remains the Business Logic stream exactly as
+     * before (REQ-FC-007); the persist leg exists so the Fluss KV projection
+     * can hold the latest forming bar per instrument without putting any
+     * per-tick write on the hot path.
+     */
+    public static final OutputTag<FormingBar> PERSIST_OUTPUT = new OutputTag<>(
+            "forming-bar-persist", FormingBarTypeInfo.INSTANCE);
 
     private static final ValueStateDescriptor<CandleAccumulator> ACC_DESCRIPTOR =
             new ValueStateDescriptor<>("forming-bar-acc", CandleAccumulator.class);
@@ -88,7 +101,7 @@ public class FormingBarBuilderFunction extends KeyedProcessFunction<Long, RowDat
 
         updateCounter.inc();
 
-        out.collect(new FormingBar(
+        FormingBar bar = new FormingBar(
                 tick.getLong(RawTableColumns.INSTRUMENT_TOKEN),
                 windowStart,
                 windowStart + windowMs,
@@ -101,6 +114,10 @@ public class FormingBarBuilderFunction extends KeyedProcessFunction<Long, RowDat
                 acc.lastEventTime == Long.MIN_VALUE ? eventTime : acc.lastEventTime,
                 acc.lastFingerprint,
                 acc.exchange,
-                acc.symbol));
+                acc.symbol);
+        out.collect(bar);
+        // Same snapshot to the persistence leg (the writer coalesces — the
+        // side output is in-process, never a Fluss write per tick).
+        ctx.output(PERSIST_OUTPUT, bar);
     }
 }
