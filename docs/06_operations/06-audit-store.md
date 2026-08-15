@@ -8,8 +8,7 @@ owner: Platform Team
 ```
 
 This runbook provisions and validates the seven-year audit store on Cloudflare R2
-and records the WORM control (NFR 3.4.1 / AC-NFR-005 / SCH-24). It is the
-operational face of `code/01_platform/04_scripts/audit_r2.py`.
+and records the WORM control (NFR 3.4.1 / AC-NFR-005). It is the
 
 ## Background (the reality, 2026-08-14)
 
@@ -117,8 +116,7 @@ recorded in `limitations`.
   `work_item_id`, `requirement_ids`, `artifact`, `version`, `environment`,
   `workload`, `clock`, `result`, `owner`, `date`, `checks`, `limitations`.
 - Store the evidence file path and `result` in the change/evidence record for
-  SCH-24 / NFR 3.4.1. Never commit the Cloudflare token or R2 secret into the
-  evidence.
+  NFR 3.4.1. Never commit the Cloudflare token or R2 secret into the
 
 ## Verification and closure evidence
 

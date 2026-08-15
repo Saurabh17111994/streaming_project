@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 327 tests (188 ingestion + 139 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common +27 seven-year-audit core tests 2026-08-14), 0 failures, 7 env-gated skips — `ING-UNIT-*`, `ING-INT-001..003`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 370 tests (193 ingestion + 177 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common +27 seven-year-audit core tests 2026-08-14 and +21 on 2026-08-15 — recounted 2026-08-15: 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live), 0 failures, 8 env-gated skips (ingestion; the 10 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..004`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -89,11 +89,28 @@ The following mappings identify the detailed sections in this catalog.
 | `COMPAT-FLUSS-002` | Raw `BYTES` write/read round trip | Original bytes and hash are unchanged. |
 | `COMPAT-FLUSS-003` | LOG, KV, and changelog behavior | Observed behavior matches the table contract. |
 | `COMPAT-FLUSS-004` | Stale, regressive, and conflicting KV updates | Invalid transition is rejected, quarantined, and audited. |
+| `COMPAT-FLUSS-005` | Raw-client composite-PK upsert matrix (kv.format-version × bucket key) | A composite-PK KV table is writable by the raw client exactly when `table.kv.format-version=2` AND the bucket key is a single-field subset of the PK; all other cells fail with the documented `IcebergKeyEncoder` signature. |
+| `COMPAT-FLUSS-006` | Bucket-distribution skew probe (SCH-07 evidence) | Distinct bucket-key values spread evenly across `bucket.num` buckets (no empty/hot bucket); a constant bucket key collapses to exactly one bucket. |
 | `SCHEMA-REC-001` | Clean-break reset, replay, and rollback readability | Rebuilt state matches expected state without silent data loss. |
 | `SCHEMA-EOD-001` | Offload retry and retention-expiry protection | Source data cannot expire before verified offload. |
-| `SCHEMA-AUDIT-001` | Seven-year audit reconstruction simulation | A selected order path can be reconstructed from immutable evidence. |
 
 Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, effective-schema output, fixture checksum, and test report for every run.
+
+**Implemented as of 2026-08-15** — executable tests do not yet carry all COMPAT-* IDs in code; the mapping is:
+
+| Implementing test class | Tests | Covers |
+| --- | --- | --- |
+| `CompatFlussDdlParityIntegrationTest` | 1 | `COMPAT-FLUSS-001` (SCH-12/13 — every approved DDL applies as an admin-API descriptor on the pinned Fluss and inspects with manifest parity, including the **full WITH-option set** (every declared option honored, `bucket.num`/`bucket.key` + the `table.datalake.enabled` dev deviation carved out); 21/21 tables green on the live dev cluster 2026-08-15; env-gated on `FLUSS_BOOTSTRAP`) |
+| `CompatFlussIntegrationTest` | 8 | `COMPAT-FLUSS-002` (BYTES round trip), `COMPAT-FLUSS-003` (LOG append-only + KV upsert/lookup + partial-update merge + **KV changelog records are FULL row images** — SCH-14), `COMPAT-FLUSS-004` (KV last-write-wins observed; stale-write rejection belongs to `KvStateUpdateProtocol`), `COMPAT-FLUSS-006` (bucket-distribution skew probe — 400 distinct keys over an 8-bucket LOG table spread across every bucket within mean+3σ, plus the constant-key control collapsing all rows into exactly one bucket; the live half of the "non-null routing and bucket-skew tests" requirement, SCH-07), `COMPAT-FLINK-002` (SCH-16 — cross-table writes visible per-table, no atomic commit; evidence `logs/schema-compat/compat-flink-002-20260815.md`), `SCHEMA-REC-001` (clean-break rebuild converges), `SCHEMA-AUDIT-001` (tiered-storage half — documented skip; the chain/reconstruction half lives in `AuditReconstructionSimulationTest`) |
+| `KvStaleWriteRejectionTest` | 7 | `COMPAT-FLUSS-004` (the rejected/quarantined/audited half — a projector-layer store driven through `KvStateUpdateProtocol`: stale/regressive/conflict/unknown writes are rejected without mutating state, raise the halt signal, and are quarantined; duplicates are no-ops; a mixed sequence never regresses and every attempt is audited) |
+| `CompatFlussCompositeKeyIntegrationTest` | 1 | `COMPAT-FLUSS-005` (raw-client composite-PK matrix re-verified on every live run — v1/v2 × default vs single-field-subset bucket key, 4 cells; runs the SHARED `CompositeKeyMatrixVerifier`, which also gates every DDL apply IN-BAND — `DdlApplyTool` re-derives the matrix against the live cluster before creating anything and refuses on deviation, never merely referencing capability evidence; the working cell is what `feature_candles_15s`/`instruments` carry; `Order_Lifecycle`/`Order_Correlation` stay Flink-connector-only — the DDL apply contract now refuses to mark an apply PASS while limited tables exist unless `--ack-limitations` names exactly them (`DDL_APPLY_ACK_LIMITATIONS`; `DdlApplyToolStatusTest`); evidence `logs/schema-compat/composite-pk-raw-client-20260815.md`; env-gated on `FLUSS_BOOTSTRAP`) |
+| `CompositeKeyMatrixVerifierTest` | 4 | Pure-JVM pin of the COMPAT-FLUSS-005 matrix: the documented 4-cell spec (configs + expected outcomes) and the expected-outcome matching both the integration test and the in-band apply gate rely on — cell drift fails before any cluster is needed |
+| `DdlApplyToolStatusTest` | 10 | Apply-status decision (step 8 — PASS only when every smoke passes; composite-PK limitation → `PASS_WITH_LIMITATION` with dedicated exit 6 on exact acknowledgment, exit 1 otherwise; `--ack-limitations auto` predicts the limited tables from the manifest — composite PK with bucket key = PK — so operators confirm, never guess; failures (incl. matrix deviations) dominate; `RESULT=` sentinel) |
+| `CleanBreakSimulationTest` | 4 | `SCHEMA-REC-001` clean-break drill (full replay reconverges; partial/mutated source diverges and fails closed) |
+| `InstrumentManifestWriterTest` | 4 | `ING-SCHEMA-002` (DDL-order row mapping, entry validation R-115/R-116/R-193, empty/duplicate-composite-key refusal) |
+| `InstrumentManifestWriterIntegrationTest` | 1 | `ING-INT-004` (first production composite-PK raw-client writer — live upserts into an `instruments`-shaped scratch table, version retention, idempotent re-load; env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`) |
+
+Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15; the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
 
 ### Ingestion
 
@@ -109,6 +126,7 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-INT-001` | Load manifest and subscribe | Every required instrument is subscribed or readiness is false. |
 | `ING-INT-002` | Append accepted packets to Fluss | Every outcome has receive, start, acknowledgement/uncertainty timestamps. |
 | `ING-INT-003` | Send multiple accepted ticks | Exactly one append submission is made per tick; no application batch exceeds one record. |
+| `ING-INT-004` | Instrument manifest writer — composite-PK raw-client upserts into the `instruments` KV table | Every manifest row upserts by `(instrument_token, manifest_version)`; prior versions are retained (R-090); re-loading the same manifest is idempotent (no new rows). Live proof 2026-08-15 (`InstrumentManifestWriterIntegrationTest`, env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`). |
 | `BROKER-MD-001` | Market-data packet corpus, endpoint behavior, protocol fields, limits, and unknown-version handling | Live wire frames from the HFT feed captured 2026-08-13 (`socket.arrow.trade` 40/196 B zstd LE) decode to typed fields; AutoLogin verified as a non-interactive auth path; observed behavior recorded as protocol evidence (`logs/broker-md-001/`); unsupported or unknown behavior blocks readiness rather than being guessed. (The Standard feed `ds.arrow.trade` evidence was retired with the Standard feed removal 2026-08-14.) |
 | `ING-FAIL-001` | Disconnect and reconnect broker | Connection epoch increases and subscription completeness is rechecked. Unit: `ReconnectEpochSequenceTest` (epoch strictly increases across disconnect→reconnect; full ack = no row, partial ack = FEED_HEALTH) + `ReadinessRecoveryTest`/`SlotHealthTest` (completeness recheck) + `BridgeRestartDecisionTest` (ING-UNIT-012); live: `ING-E2E-001` forced disconnect. |
 | `ING-FAIL-002` | Slow/unavailable Fluss writer | 80% warning and 100% stop behavior occur within both bounds; no unrecorded drop. Verified by `AppendTrackerTest` (record/byte 80% warning → readiness false; 100% records → `tryAccept` false; warning + critical listeners fire; halted stays halted; pending counters reconcile on success and failure). |
@@ -120,6 +138,7 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `ING-UNIT-011` | Bridge event → discontinuity reason mapping | Disconnect/auth/shutdown → DROP; heartbeat/stall → HEARTBEAT_GAP; reconnect → RECONNECT; partial subscription_ack → FEED_HEALTH; non-evidence events produce no row. |
 | `ING-UNIT-012` | Bridge restart policy | Unexpected exit restarts once; a second unexpected exit is terminal; clean exit 0 and shutdown never restart. |
 | `ING-SCHEMA-001` | Writer schema ↔ DDL agreement | Written columns match source DDL order; raw_table_1 v2 = 20 columns; ack_ts nullable; no `retention.days` option; lake-claiming DDLs carry datalake options. |
+| `ING-SCHEMA-002` | Instrument manifest writer row mapping + fail-closed validation | `toRow` builds the 14-column DDL-order row; entry validation rejects non-positive identity/keys and blank routing fields (R-115/R-116/R-193); an empty manifest or duplicate `(instrument_token, manifest_version)` is refused before any write. |
 | `ING-DQ-001` | Malformed-line quality classification | MALFORMED_JSON with raw bytes preserved; static detail bounded and line-safe; quarantine reason vocabulary exact per plan. |
 | `ING-DQ-002` | Stale classification precedence | Stale/future timestamps (5 s max age, 2 s future skew) are quarantined before any trade path. |
 | `ING-SAFE-001` | Slot-scoped safety halt requests | halt_request_id is slot-scoped and tuple-deterministic; assigned-token-set hash is deterministic and order-independent. |
@@ -197,6 +216,12 @@ Evidence: versioned postback fixtures, projection-ledger snapshots, crash-point 
 | `BAB-OPS-001` | Job readiness state | Babysitter health never claims Executor trading readiness. |
 
 Evidence: input fixture, output capture proving zero actions, checkpoint/restore report, changelog-gap record, and readiness metrics.
+
+**Implemented 2026-08-15** — executable tests do not yet carry BAB-* IDs in code; the mapping is:
+
+| Implementing test class | Tests | Covers BAB-* |
+| --- | --- | --- |
+| `BabysitterJobTest` | 3 | `BAB-UNIT-001` (MVP topology emits zero `Position_Actions` — cluster-free StreamGraph inspection of `BabysitterJob.buildTopology()`: no operator produces `Position_Actions`, only the pinned marker → discard topology, every node UID-pinned per CHECKPOINT-RESTORE-001/DEC-035) and `BAB-UNIT-002` (action-enable fails closed: any `POSITION_ACTIONS_ENABLED` value other than `false` — trimmed, case-insensitive — is rejected at startup with `IllegalStateException` naming the flag; unset/`false` accepted). `BAB-INT-001`, `BAB-HARNESS-001`, `BAB-FAIL-001`, `BAB-FAIL-002`, `BAB-OPS-001` pending until the Positions-changelog source and observation state land (06-babysitter.md) |
 
 ### Executor
 
@@ -360,6 +385,8 @@ Deterministic tests use fixed clocks, versioned fixtures, stable IDs/seeds, and 
 - `COMPAT-FLUSS-002`: BYTES round trip.
 - `COMPAT-FLUSS-003`: LOG/KV/changelog semantics.
 - `COMPAT-FLUSS-004`: partial update and stale-write application protocol.
+- `COMPAT-FLUSS-005`: raw-client composite-PK matrix (kv.format-version × bucket key).
+- `COMPAT-FLUSS-006`: bucket-distribution skew probe (distinct keys spread evenly; constant key collapses).
 - `COMPAT-FLINK-001`: source/sink checkpoint and restore.
 - `COMPAT-FLINK-002`: cross-table partial visibility behavior.
 - `BROKER-MD-001`: market packet corpus/protocol compatibility.
@@ -538,6 +565,8 @@ CI must fail for:
 - Requirement/contract/DDL/schema mismatch.
 - Failing/skipped/flaky mandatory test.
 - Missing evidence metadata.
+- DDL apply exit-code contract drift: `make ddl-apply-smoke` (env-gated on `FLUSS_BOOTSTRAP`; in the Monday gate) must pass — the orchestrator is run three times against scratch-prefixed catalogs and the terminal contract (0 full PASS / 6 acknowledged `PASS_WITH_LIMITATION` / 1 refused limitation) plus the `RESULT=`/`DDL-APPLY-RESULT:` sentinels and evidence record are asserted; when docker + the ddl-apply image are present a fourth containerized drill mounts a pre-seeded engine-uid 644 evidence record and asserts the apply exits 1 with `EVIDENCE OWNERSHIP CHECK FAILED` naming the seed (`ddl_apply_smoke.py`; see `02-schema-storage.md`).
+- Non-root evidence ownership contract drift: `make evidence-ownership-check` (in the Monday gate DDL step and `docs-audit` C15) must pass — the evidence root dir must carry setgid + group-write (2775), and every evidence record the ddl-apply container wrote (owner == the engine uid) must be group-writable AND carry the engine GID; no record or root dir may be root-owned (`evidence_ownership_check.py`; host-side `make ddl` records are out of scope).
 
 `CI-PERF-001`: the variable baseline and peak benchmark profiles use a recorded seed, the production instrument count, no fixed 50 ms schedule, no per-instrument rate above 30 ticks/s, and zero acknowledged loss.
 

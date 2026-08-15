@@ -216,7 +216,8 @@ Before implementation:
 - [x] `SignalDetectionFunctionTest.java`
 - [x] `DdlBootstrapSchemaAgreementTest.java`
 - [x] Directly affected SQL, contract, implementation, README, and evidence documents only
-  (P9: SQL README, 00_RECONCILIATION_BLOCKER.md, storage reqs/contracts, 04-signal-job.md,
+  (P9: SQL README, 00_RECONCILIATION_BLOCKER.md — removed 2026-08-15, superseded by the
+  capability-evidence apply contract; storage reqs/contracts, 04-signal-job.md,
   compute README, Candle15s javadoc, evidence register, final report.)
 
 ### Do not modify
@@ -1175,7 +1176,9 @@ Executed with the offline-approved tooling against the dev cluster (Fluss
   actual 21 files, LOG/KV kinds, `22_feature_candles_15s_current.sql` row.)
 - [x] Update reconciliation blocker.
   (2026-08-10: `00_RECONCILIATION_BLOCKER.md` superseded note — DDL set now 21
-  numbered files ending `22_feature_candles_15s_current.sql`.)
+  numbered files ending `22_feature_candles_15s_current.sql`. The file was
+  removed 2026-08-15 — superseded by the capability-evidence apply contract,
+  see `12-version-compatibility-evidence.md`.)
 - [x] Update storage requirements and contracts.
   (2026-08-10: `02-storage.md` — `feature_candles_15s_current` row +
   REQ-FLS-006 projection text; `docs/04_contracts/02-storage.md` Market list.)
@@ -1410,7 +1413,7 @@ The original incident is not considered fully resolved until:
 | P7 unit tests | `COMPLETE` | 2026-08-10 | common + compute (81) + ingestion (175) green |
 | P7 integration tests | `COMPLETE` | 2026-08-10 | `CandleCurrentKvIdempotencyTest` PASSED |
 | P8 migration audit/load/cutover | `COMPLETE` (dev) | 2026-08-10 | audit conflict resolved by recorded decision (accept list, re-run exit 0); load EXECUTED (1,351,301 rows, DEST_ROWS_AFTER == DISTINCT_KEYS, 10.76 s); dual-sink cutover EXECUTED (job `87c48642…`, restore chk-1538, live dual writes verified); B8.7 rollback rehearsal EXECUTED + re-cutover (`92104dac…`, chk-1732). Production data-plane remains operator blue-green (B8.1) |
-| P9 documentation/evidence closure | `COMPLETE` | 2026-08-10 | SQL README, blocker, storage reqs/contracts, signal-job doc, compute README, `Candle15s` javadocs, evidence register, launch audit, `final-report-2026-08-10.md` |
+| P9 documentation/evidence closure | `COMPLETE` | 2026-08-10 | SQL README, blocker (file removed 2026-08-15, superseded by the capability-evidence apply contract), storage reqs/contracts, signal-job doc, compute README, `Candle15s` javadocs, evidence register, launch audit, `final-report-2026-08-10.md` |
 
 Overall statuses:
 

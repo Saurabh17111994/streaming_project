@@ -358,7 +358,7 @@ Compute/SignalJob rules:
 | SIGNAL-error-job-restarting | Error | restarts > 0 | Check flink_logs for the restart cause | restarts stop |
 | SIGNAL-error-source-stalled | Error | source rate == 0 (2 min) | Check feed/bridge; **false-fires on quiesced dev feed** | feed resumes |
 | SIGNAL-warn-kv-sink-zero | Warning | kv-sink rate == 0 (2 min) | Check KV sink task; **false-fires on quiesced dev feed** | sink writes resume |
-| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup` (planned — DDL not yet applied), not Flink state | table size plateaus back under envelope |
+| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup` (DDL `24_fingerprint_dedup.sql` on file, applied with the DEC-038 implementation stage), not Flink state | table size plateaus back under envelope |
 | SIGNAL-warn-dedup-expiry | Warning | expired-row cleanup backlog > bound | Check the dedup cleanup pass (`DEDUP_CLEANUP_INTERVAL_MS`) and delete throughput | backlog drains |
 | SIGNAL-warn-dedup-cache-hit | Warning | dedup cache hit ratio below threshold (60 s) | Hot path degrading toward per-tick Fluss lookups — check cache bound vs envelope (DEC-038) | hit ratio recovers |
 | SIGNAL-warn-schema-rejected-rate | Warning | rejects per flush > 10 | Check raw_table_1 schema vs validator | rejects stop |

@@ -93,7 +93,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | `Execution_Gate`            | KV                                    | Executor                    | Gate state and approvals                     |
 | `Execution_Attempts`        | KV                                    | Executor                    | Attempt state and request hash               |
 | `Execution_Audit`           | LOG                                   | Executor                    | Immutable execution and gate audit           |
-| `Position_Actions`          | LOG                                   | Babysitter after MVP        | Structured future position actions; no DDL yet — not in the 21-table manifest |
+| `Position_Actions`          | LOG                                   | Babysitter after MVP        | Structured future position actions; no DDL yet — not in the 24-table manifest |
 | `Postback_Quarantine`       | LOG                                   | Action Capture              | Uncorrelated/invalid postbacks               |
 | `Portfolio_Reservations`    | KV (EVIDENCE-GATED)                   | Signal job ranking operator | Reservation state per portfolio + instrument  |
 | `Postback_Projection_Ledger`| KV (EVIDENCE-GATED)                   | Action Capture              | Durable projection completion tracking        |

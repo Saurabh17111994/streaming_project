@@ -22,6 +22,7 @@ Two colocated processes in the same container consume the evidence-approved brok
 - `raw_table_1`: original bytes, payload hash, decoder/protocol version, typed fields, timestamps, fingerprint/version, validity state
 - `suspected_discontinuities`: connection/subscription/heartbeat/decoder evidence; never fabricated sequence ranges
 - Quarantine for unknown versions, decode failures, and missing instrument identity
+- `instruments` (operator manifest loader): one row per `(instrument_token, manifest_version)` upserted through the raw client with the composite PK — the first production composite-PK raw-client writer (kv.format-version=2 + single-field subset bucket key; ING-INT-004 live proof 2026-08-15). Re-loading a manifest version is idempotent; prior versions are retained (R-090). The Arrow `GET /nse` / `GET /all` daily fetch remains open (static CSV source); the persistence path is implemented.
 
 ## Guarantees
 

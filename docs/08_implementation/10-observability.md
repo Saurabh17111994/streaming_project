@@ -103,7 +103,7 @@ Show source throughput/lag; watermarks and allowed lateness; invalid, late, and 
 
 Dedicated panels for the externalized dedup model, with bounded cardinality (per-table gauges and per-reason counters, never per-key labels):
 
-- **Fluss dedup-table state** — entry count and serialized bytes (`fingerprint_dedup` — planned, DEC-038; DDL not yet applied), and dedup update rate (durable writes/s, batched/async).
+- **Fluss dedup-table state** — entry count and serialized bytes (`fingerprint_dedup` — DEC-038; DDL `24_fingerprint_dedup.sql` on file, applied to dev with the DEC-038 implementation stage), and dedup update rate (durable writes/s, batched/async).
 - **Flink dedup cache** — cache size/utilization vs the `DEDUP_CACHE_MAX_ENTRIES`/`DEDUP_CACHE_MAX_BYTES` bounds, and cache hit ratio (hot-path lookups absorbed by the cache; a sustained drop means the hot path is leaking to per-tick Fluss lookups).
 - **Cleanup** — expired-row cleanup rate and backlog (rows past `expiry_ms` awaiting delete).
 - **Rehydration** — rehydration duration and failures on restart (failures keep the job fail-closed, SIG-STATE-002/003), plus state-compatibility preflight failures on the dedup table.
