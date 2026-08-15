@@ -542,11 +542,15 @@ public final class IngestionService {
                 }
 
                 int exitCode = bridgeProcess.waitFor();
-                boolean requested = exitCode == 0 || !running;
+                // A shutdown-begun exit is a requested exit: the hook is
+                // tearing the bridge down, so a non-zero code (e.g. the
+                // forced-kill fallback, exit 137) must not be logged as a
+                // crash nor trigger a restart.
+                boolean requested = exitCode == 0 || !running || shutdownStarted.get();
                 recordBridgeExit(exitCode, requested, restartCount);
                 stderrThread.join(5_000);
 
-                switch (bridgeRestartDecision(running, exitCode, restartCount)) {
+                switch (bridgeRestartDecision(running, shutdownStarted.get(), exitCode, restartCount)) {
                 case RESTART:
                     restartCount++;
                     LOG.warn("ingestion: restarting bridge after unexpected exit (attempt {} of {})",
@@ -609,8 +613,9 @@ public final class IngestionService {
      * restarted once; a second unexpected exit in the same process is terminal;
      * a requested exit (code 0 or shutdown begun) is never restarted.
      */
-    static BridgeRestartDecision bridgeRestartDecision(boolean running, int exitCode, int restartCount) {
-        if (!running || exitCode == 0) return BridgeRestartDecision.NO_RESTART;
+    static BridgeRestartDecision bridgeRestartDecision(boolean running, boolean shutdownInProgress,
+                                                       int exitCode, int restartCount) {
+        if (!running || shutdownInProgress || exitCode == 0) return BridgeRestartDecision.NO_RESTART;
         return restartCount >= MAX_BRIDGE_RESTARTS
                 ? BridgeRestartDecision.TERMINAL
                 : BridgeRestartDecision.RESTART;
@@ -637,8 +642,58 @@ public final class IngestionService {
                     LOG.info("arrow-bridge: {}", safe);
                 }
             }
+        } catch (java.io.IOException e) {
+            // "Stream closed" is the JDK's Process.destroy() artifact: the
+            // parent-side process pipes are closed the moment the bridge is
+            // destroyed (destroy() itself, or the forced-kill fallback at
+            // shutdown), while the child may still be running. There is
+            // nothing left to read — the graceful path signals the bridge
+            // without closing the pipes (see signalBridge), so this only
+            // happens on the forced path. Not a drain failure; log at INFO.
+            if ("Stream closed".equals(e.getMessage())) {
+                LOG.info("arrow-bridge: stderr drain ended (stream closed — bridge being torn down)");
+            } else {
+                LOG.warn("arrow-bridge: stderr drain error: {}", sanitizeLog(e.getMessage()));
+            }
         } catch (Exception e) {
-            LOG.warn("arrow-bridge: stderr drain error: {}", e.getMessage());
+            LOG.warn("arrow-bridge: stderr drain error: {}", sanitizeLog(e.getMessage()));
+        }
+    }
+
+    /**
+     * Signal the bridge process (SIGTERM) WITHOUT closing the parent-side
+     * process pipes. {@link Process#destroy()} sends SIGTERM but on this JDK
+     * also closes the parent's input streams for the child with
+     * {@code IOException("Stream closed")} while the child is still running
+     * its shutdown work — the bridge-stderr drain thread would die before the
+     * bridge's final ARROW_TICK_COUNTS report arrives, the main loop would
+     * take the exception path instead of reading the final {@code
+     * bridge_shutdown} NDJSON event, and the authoritative per-token count for
+     * ING-TCP-001 would be lost from the logs (only the report FILE survives).
+     * Sending the signal via {@code kill -TERM <pid>} (POSIX) leaves the pipes
+     * open: the bridge writes its final report to stderr, drains, EOFs, and
+     * exits 0. Falls back to {@link Process#destroy()} if the signal cannot
+     * be delivered (kill missing or non-zero exit).
+     */
+    private void signalBridge(Process bridgeProcess) {
+        try {
+            Process kill = new ProcessBuilder("kill", "-TERM", String.valueOf(bridgeProcess.pid()))
+                    .redirectErrorStream(true).start();
+            if (!kill.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                kill.destroyForcibly();
+            }
+            if (kill.exitValue() != 0) {
+                LOG.warn("ingestion: kill -TERM failed (exit={}); falling back to Process.destroy()",
+                        kill.exitValue());
+                bridgeProcess.destroy();
+            }
+        } catch (java.io.IOException e) {
+            LOG.warn("ingestion: cannot signal bridge via kill ({}); falling back to Process.destroy()",
+                    sanitizeLog(e.getMessage()));
+            bridgeProcess.destroy();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            bridgeProcess.destroy();
         }
     }
 
@@ -1299,7 +1354,12 @@ public final class IngestionService {
         Process bp = currentBridgeProcess;
         if (bp != null && bp.isAlive()) {
             LOG.info("ingestion: signaling arrow-bridge (SIGTERM) for final tick-count report");
-            bp.destroy();
+            // Signal via kill -TERM, NOT Process.destroy(): destroy() closes
+            // the parent-side pipes immediately (IOException "Stream closed")
+            // so the bridge's final report and bridge_shutdown event are lost
+            // from the logs. kill leaves the pipes open for the bridge's clean
+            // exit (see signalBridge).
+            signalBridge(bp);
             try {
                 if (!bp.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
                     bp.destroyForcibly();
