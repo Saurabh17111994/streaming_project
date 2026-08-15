@@ -71,3 +71,23 @@ func TestReconnectLoopRecoversAfterFailures(t *testing.T) {
 		t.Fatal("recovered slot must not cancel the shared context")
 	}
 }
+
+// ING-RES-003 — Backoff(attempt) golden sequence: exactly 1,2,4,8,16,30,30…s
+// with NO jitter — deterministic for soak accounting (ING-RES-001).
+func TestBackoffGoldenSequence(t *testing.T) {
+	want := []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second,
+		30 * time.Second,
+	}
+	for i, w := range want {
+		if got := Backoff(i); got != w {
+			t.Fatalf("Backoff(%d)=%v, want %v — the sequence must be deterministic", i, got, w)
+		}
+	}
+	// Negative attempts clamp to attempt 0 (1 s) — a caller passing a
+	// decremented counter below zero must not produce a zero/negative delay.
+	if got := Backoff(-3); got != time.Second {
+		t.Fatalf("Backoff(-3)=%v, want 1s (clamped)", got)
+	}
+}

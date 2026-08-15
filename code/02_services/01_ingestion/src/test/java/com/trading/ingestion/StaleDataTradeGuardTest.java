@@ -55,4 +55,29 @@ class StaleDataTradeGuardTest {
         assertEquals(IngestionService.FreshnessDecision.FRESH,
                 IngestionService.classifyFreshness(RECEIVE + 2000, RECEIVE, MAX_FUTURE_SKEW_MS, MAX_AGE_MS));
     }
+
+    @Test
+    @DisplayName("ING-UNIT-014: exact boundary matrix — receive==broker time, ±1 ms over/under both limits")
+    void exactBoundaryMatrix() {
+        // Walk EVERY boundary: receive == broker time, one ms under/over
+        // maxEventAge, one ms under/over maxFutureSkew. The stale check is
+        // `receive - ts > maxAge` (age inclusive); the future check is
+        // `ts - receive > maxSkew` (skew inclusive) — both exact-boundary
+        // values are FRESH, one ms beyond flips the class.
+        record Case(long tsMs, IngestionService.FreshnessDecision want) {}
+        java.util.List<Case> cases = java.util.List.of(
+                new Case(RECEIVE, IngestionService.FreshnessDecision.FRESH),                       // receive == broker time
+                new Case(RECEIVE - MAX_AGE_MS + 1, IngestionService.FreshnessDecision.FRESH),      // 1 ms under max age
+                new Case(RECEIVE - MAX_AGE_MS, IngestionService.FreshnessDecision.FRESH),          // exactly max age (inclusive)
+                new Case(RECEIVE - MAX_AGE_MS - 1, IngestionService.FreshnessDecision.STALE),      // 1 ms over → STALE
+                new Case(RECEIVE + MAX_FUTURE_SKEW_MS - 1, IngestionService.FreshnessDecision.FRESH),   // 1 ms under skew
+                new Case(RECEIVE + MAX_FUTURE_SKEW_MS, IngestionService.FreshnessDecision.FRESH),       // exactly skew (inclusive)
+                new Case(RECEIVE + MAX_FUTURE_SKEW_MS + 1, IngestionService.FreshnessDecision.FUTURE)   // 1 ms over → FUTURE
+        );
+        for (Case c : cases) {
+            assertEquals(c.want(),
+                    IngestionService.classifyFreshness(c.tsMs(), RECEIVE, MAX_FUTURE_SKEW_MS, MAX_AGE_MS),
+                    "tsMs=" + c.tsMs() + " receive=" + RECEIVE);
+        }
+    }
 }

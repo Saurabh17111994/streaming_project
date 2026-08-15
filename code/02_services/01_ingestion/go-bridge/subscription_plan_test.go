@@ -96,3 +96,93 @@ func ids(n int) []int32 {
 	}
 	return out
 }
+
+// ING-RES-002 — plan-boundary N: every token appears exactly once, each
+// request ≤ MaxHFTTokensPerRequest, slot count ≤ configured connections, and
+// validateRequestUnion rejects duplicates/missing tokens.
+func TestIngRes002PlanBoundaries(t *testing.T) {
+	// The 512-boundary neighborhoods plus the 1024 connection limit and one
+	// over-capacity rejection (1025 on a single connection).
+	for _, n := range []int{1, 511, 512, 513, 1023, 1024} {
+		plan, err := BuildSubscriptionPlan(ids(n), 1, 1024, 512)
+		if err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		if len(plan.Slots) != 1 {
+			t.Fatalf("n=%d: slots=%d, want 1", n, len(plan.Slots))
+		}
+		slot := plan.Slots[0]
+
+		// Every token appears exactly once across the request union.
+		seen := map[int32]bool{}
+		for _, req := range slot.Requests {
+			if len(req) == 0 || len(req) > MaxHFTTokensPerRequest {
+				t.Fatalf("n=%d: request size %d outside (0, %d]", n, len(req), MaxHFTTokensPerRequest)
+			}
+			for _, tok := range req {
+				if seen[tok] {
+					t.Fatalf("n=%d: duplicate token %d", n, tok)
+				}
+				seen[tok] = true
+			}
+		}
+		if len(seen) != n {
+			t.Fatalf("n=%d: union has %d tokens, want %d", n, len(seen), n)
+		}
+		// The request union equals the slot's token set exactly.
+		if err := validateRequestUnion(slot); err != nil {
+			t.Fatalf("n=%d: validateRequestUnion rejected a valid plan: %v", n, err)
+		}
+		// Request chunk count = ceil(n / 512).
+		wantRequests := (n + MaxHFTTokensPerRequest - 1) / MaxHFTTokensPerRequest
+		if len(slot.Requests) != wantRequests {
+			t.Fatalf("n=%d: requests=%d, want %d", n, len(slot.Requests), wantRequests)
+		}
+	}
+
+	// 1025 tokens exceed one connection's capacity → never builds.
+	if _, err := BuildSubscriptionPlan(ids(1025), 1, 1024, 512); err == nil {
+		t.Fatal("ING-RES-002: 1025 tokens on one connection must be rejected")
+	}
+}
+
+// ING-RES-002 — validateRequestUnion fails closed on duplicates and missing
+// tokens (the plan's union invariant, exercised directly).
+func TestIngRes002ValidateRequestUnionRejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		slot  SlotAssignment
+	}{
+		{
+			name: "duplicate token across requests",
+			slot: SlotAssignment{Tokens: []int32{1, 2, 3}, Requests: [][]int32{{1, 2}, {2, 3}}},
+		},
+		{
+			name: "duplicate token within one request",
+			slot: SlotAssignment{Tokens: []int32{1, 2}, Requests: [][]int32{{1, 1, 2}}},
+		},
+		{
+			name: "token outside the assignment",
+			slot: SlotAssignment{Tokens: []int32{1, 2}, Requests: [][]int32{{1, 4}}},
+		},
+		{
+			name: "missing assignment token",
+			slot: SlotAssignment{Tokens: []int32{1, 2, 3}, Requests: [][]int32{{1, 2}}},
+		},
+		{
+			name: "empty request",
+			slot: SlotAssignment{Tokens: []int32{1}, Requests: [][]int32{{}}},
+		},
+		{
+			name: "request over MaxHFTTokensPerRequest",
+			slot: SlotAssignment{Tokens: ids(513), Requests: [][]int32{ids(513)}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateRequestUnion(tc.slot); err == nil {
+				t.Fatal("expected the union invariant to be rejected")
+			}
+		})
+	}
+}
