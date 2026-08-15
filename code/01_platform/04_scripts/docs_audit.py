@@ -58,6 +58,9 @@ Checks:
       group-writable (setgid 2775 evidence root + umask 002 -> 664), and no
       record may be root-owned (the engine never runs as root). Host-owned
       records (host-side make ddl) are out of scope.
+  C16 Env-key doc drift (ING-UNIT-019): every env key in the ingestion
+      dossier's "Configuration contract" table is read by IngestionConfig,
+      the Go bridge, or another ingestion service source.
 """
 
 import glob
@@ -258,21 +261,22 @@ def c6_test_counts():
     doc_c, doc_i, doc_comp = map(int, m.groups())
     c = surefire_total(COMMON_DIR, os.path.join(COMMON_DIR, "src", "test", "java"))
     i = surefire_total(INGEST_DIR, os.path.join(INGEST_DIR, "src", "test", "java"))
-    # compute module target/ is often absent or root-owned; only compare when present.
+    # compute module target/ is often absent or root-owned — and the Monday
+    # gate never runs compute tests — so compare its count ONLY when compute
+    # surefire reports actually exist. A fresh checkout must not spuriously
+    # fail C6 on a module that was not run (common/ingestion are still strict).
     comp_dir = os.path.join(ROOT, "code", "02_services", "02_compute")
-    comp = (
-        surefire_total(comp_dir, os.path.join(comp_dir, "src", "test", "java"))
-        if os.path.isdir(comp_dir)
-        else None
-    )
+    comp_reports = glob.glob(os.path.join(comp_dir, "target", "surefire-reports", "TEST-*.xml"))
     check("C6 common count matches doc", c == doc_c, f"surefire={c} doc={doc_c}")
     check("C6 ingestion count matches doc", i == doc_i, f"surefire={i} doc={doc_i}")
-    if comp is not None:
+    if comp_reports:
         check(
             "C6 compute count matches doc",
-            comp == doc_comp,
-            f"surefire={comp} doc={doc_comp}",
+            surefire_total(comp_dir, os.path.join(comp_dir, "src", "test", "java")) == doc_comp,
+            f"surefire={surefire_total(comp_dir, os.path.join(comp_dir, 'src', 'test', 'java'))} doc={doc_comp}",
         )
+    else:
+        check("C6 compute count (not built here — skipped)", True)
 
 
 def c7_version_pins():
@@ -1042,6 +1046,45 @@ def c15_evidence_ownership():
           not problems, detail + (("; " + "; ".join(problems[:3])) if problems else ""))
 
 
+def _ingestion_sources():
+    """Every file that reads ingestion env keys: main Java sources and the Go
+    bridge (test files excluded — a key only mentioned in a test would be
+    drift)."""
+    for root, _, files in os.walk(os.path.join(INGEST_DIR, "src", "main", "java")):
+        for f in files:
+            if f.endswith(".java"):
+                yield os.path.join(root, f)
+    bridge = os.path.join(INGEST_DIR, "go-bridge")
+    if os.path.isdir(bridge):
+        for root, _, files in os.walk(bridge):
+            for f in files:
+                if f.endswith(".go") and not f.endswith("_test.go"):
+                    yield os.path.join(root, f)
+
+
+def c16_env_key_drift():
+    """C16 (ING-UNIT-019): every env key documented in the ingestion dossier's
+    "Configuration contract" table must be read by IngestionConfig, the Go
+    bridge, or another ingestion service source. A documented key nobody reads
+    is doc drift; an undocumented key nobody can set is the mirror-image trap.
+    """
+    p = os.path.join(DOCS_DIR, "08_implementation", "03-ingestion.md")
+    txt = safe_read(p)
+    if txt is None:
+        return check("C16 ingestion dossier readable", False, p)
+    m = re.search(r"### Configuration contract\n(.*?)(?=\n### |\Z)", txt, re.S)
+    if not m:
+        return check("C16 config contract section found", False)
+    keys = re.findall(r"\| `([A-Z][A-Z0-9_]*)` \| (?:Yes|No) \|", m.group(1))
+    if not keys:
+        return check("C16 config contract env keys found", False)
+    sources = "".join(safe_read(s) or "" for s in _ingestion_sources())
+    missing = sorted(k for k in keys if f'"{k}"' not in sources)
+    check("C16 every documented env key is read by ingestion code",
+          not missing,
+          f"{len(keys)} documented keys; unread: {', '.join(missing) if missing else 'none'}")
+
+
 def main():
     c1_manifest()
     c2_ownership_matrix()
@@ -1058,6 +1101,7 @@ def main():
     c13_runbook_coverage()
     c14_change_control()
     c15_evidence_ownership()
+    c16_env_key_drift()
     if failures:
         print(f"\ndocs-audit: {len(failures)} check(s) FAILED — fix before proceeding")
         return 1

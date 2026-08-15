@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-> **Status:** **M1 (Safety core) landed 2026-08-15** — ING-FAIL-004 (concurrency), ING-FAIL-005 (halt-latch pinned), ING-FAIL-007 (TIME_JUMP wired), ING-DQ-010 (no-silent-drop) implemented; **ING-DQ-011 (fuzz corpus) landed early 2026-08-15** (G4 RESOLVED); ingestion suite 207/0/8-skips. M2–M5 remain as backlog below.
+> **Status:** **M1 (Safety core) landed 2026-08-15** — ING-FAIL-004 (concurrency), ING-FAIL-005 (halt-latch pinned), ING-FAIL-007 (TIME_JUMP wired), ING-DQ-010 (no-silent-drop) implemented; **ING-DQ-011 (fuzz corpus) landed early 2026-08-15** (G4 RESOLVED); **M2 (Losslessness + config) landed 2026-08-15** — ING-TCP-002 (comparator suite, 20 tests), ING-UNIT-018 (Java↔Go parity table, 11 keys), ING-UNIT-019 (C16 env-key drift check) (G3/G7 RESOLVED); ingestion suite 211/0/8-skips. M3–M5 remain as backlog below.
 >
 > **Source dossier:** [`03-ingestion.md`](./03-ingestion.md) — every test below maps to one of its aspects (packet processing, fingerprint, backpressure, failure matrix, config contract, losslessness, Go bridge, telemetry, startup/readiness).
 >
@@ -16,11 +16,11 @@ The 2026-08-15 audit verified that every requirement of `03-ingestion.md` is imp
 | --- | --- | --- | --- |
 | G1 | `TIME_JUMP` discontinuity is never emitted | High (code gap) | **RESOLVED in M1 (2026-08-15)** — `TimeJumpMonitor` + a periodic clock re-measurement in `IngestionService` emit one TIME_JUMP row per violation episode (ING-FAIL-007). |
 | G2 | AppendTracker halt latch never auto-resets | Medium (semantic ambiguity) | **RESOLVED in M1 (2026-08-15)** — pinned as "halted until restart" (fail-closed; a capacity fault needs operator restart, not silent resume) and asserted by ING-FAIL-005. |
-| G3 | `reconcile-compare.py` has zero tests | High (untested evidence tool) | The ING-TCP-001 losslessness proof rests entirely on this comparator. A regression could silently pass a reconcile. |
+| G3 | `reconcile-compare.py` has zero tests | High (untested evidence tool) | **RESOLVED in M2 (2026-08-15)** — `tests/test_reconcile_compare.py` (ING-TCP-002, 20 unittest cases): every mutation class (lost/extra/vanished), missing/truncated files **fail closed** (the comparator now exits 1 on an empty bridge or post-probe file instead of vacuous PASS), chunked reports, `-1` sentinel. |
 | G4 | No fuzz / property-based tests on the parse path | Medium | `processLine` is only exercised with hand-written fixtures; random/malformed input could throw uncaught or drop silently. **RESOLVED (2026-08-15)** — `FuzzIngestionTest` (ING-DQ-011): seeded generator (3 pinned seeds), no external property library; asserts no uncaught exception, no silent drop, error-counter ↔ INTERNAL_ERROR-evidence consistency, and seed-reproducibility. |
 | G5 | Process-level Go bridge tests are minimal | Medium | Only `hft_policy_test.go` drives the real binary; FATAL-exit codes and pin enforcement are otherwise untested at the process level. |
 | G6 | Metrics-side secret scrubbing is untested | Medium | Log scrubbing (ING-SEC-RED-001) is tested; the OTLP export body is never scanned for leaked credentials/raw payloads. |
-| G7 | Config parity Java↔Go is by convention only | Medium | Java `exactInt`/`intRange` and Go `hftPin`/`hftRange` could drift apart with both suites still green. |
+| G7 | Config parity Java↔Go is by convention only | Medium | **RESOLVED in M2 (2026-08-15)** — a single 11-key table mirrored in `ConfigParityTest` (Java) and `hft_policy_test.go` (Go): same defaults, accepted values, rejected values (Java throws, Go exits FATAL 2). The parity test drove out a real divergence: the Go bridge read `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` inline with fail-open semantics (non-integers silently ignored) — both now flow through `hftRange`/`hftPin`. |
 | G8 | READY gating has no exhaustive no-false-positive test | Low | `HealthProbe.isReady()` has 7 dimensions; only a subset of combinations is tested. |
 
 ## 2. Test inventory
@@ -65,15 +65,15 @@ Conventions: Java = JUnit 5 under `code/02_services/01_ingestion/src/test/java/`
 
 | Test ID | Priority | Gap | Input/action | Pass result | Implementing class |
 | --- | --- | --- | --- | --- | --- |
-| `ING-UNIT-018` | P1 | G7 — Java↔Go parity by convention only | Table-driven: for every `ARROW_HFT_*` key, feed the same accepted/rejected values to Java `exactInt`/`intRange` and Go `hftPin`/`hftRange` | Both sides agree on every accepted value, rejected value, and FATAL behavior | new `ConfigParityTest` (Java) + mirror table in `hft_policy_test.go` (Go) |
-| `ING-UNIT-019` | P2 | Doc drift for env keys unguarded | Extend `docs_audit.py` with a new C-check: parse the dossier's config table and assert every documented key is read by `IngestionConfig` or the Go bridge | New C-check PASS (like C6 for test counts) | `docs_audit.py` (new check) |
+| `ING-UNIT-018` | P1 | G7 — Java↔Go parity by convention only | Table-driven: for every `ARROW_HFT_*` key, feed the same accepted/rejected values to Java `exactInt`/`intRange` and Go `hftPin`/`hftRange` | Both sides agree on every accepted value, rejected value, and FATAL behavior | ✅ landed 2026-08-15: `ConfigParityTest` (Java, 4 tests) + mirror table in `hft_policy_test.go` (Go, incl. 13 exec-self FATAL cases); `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` converted to the mirrored helpers |
+| `ING-UNIT-019` | P2 | Doc drift for env keys unguarded | Extend `docs_audit.py` with a new C-check: parse the dossier's config table and assert every documented key is read by `IngestionConfig` or the Go bridge | New C-check PASS (like C6 for test counts) | ✅ landed 2026-08-15: `docs_audit.py` **C16** (`c16_env_key_drift`), PASS on the current table |
 | `ING-UNIT-020` | P3 | G5 — process-level FATAL exits | Build the bridge once; run with bad env (wrong pin, `ARROW_HFT_CONNECTIONS=2`, missing `ARROW_APP_ID`) | Exit code 2 + the documented FATAL message for each case | extend `hft_policy_test.go` |
 
 ### 2.6 Losslessness tooling (dossier §ING-TCP-001)
 
 | Test ID | Priority | Gap | Input/action | Pass result | Implementing class |
 | --- | --- | --- | --- | --- | --- |
-| `ING-TCP-002` | P1 | G3 — comparator untested | Synthetic tick-count fixtures with known lost / extra / vanished mutations; missing or truncated counter file | Each mutation class is detected (exact-equality mode fails on any delta); a missing/truncated file **fails closed**, never passes | `code/01_platform/04_scripts/tests/test_reconcile_compare.py` (`unittest`) |
+| `ING-TCP-002` | P1 | G3 — comparator untested | Synthetic tick-count fixtures with known lost / extra / vanished mutations; missing or truncated counter file | Each mutation class is detected (exact-equality mode fails on any delta); a missing/truncated file **fails closed**, never passes | ✅ landed 2026-08-15: `code/01_platform/04_scripts/tests/test_reconcile_compare.py` (20 unittest cases) + `reconcile-compare.py` fail-closed hardening |
 | `ING-TCP-003` | P3 | Counter-report persistence un-pinned | 1,024-token report emitted as bounded chunks (20/line); file + stderr mirror | Both are byte-identical; the file persists even when stderr dies (SIGPIPE path); `ARROW_TICK_COUNTS_FILE` honored | extend `go-bridge/ndjson_test.go` |
 
 ### 2.7 Go bridge (dossier §Process boundary, §ING-RES-001)
@@ -105,7 +105,7 @@ Each milestone ends with its full suite green and the catalog updated — nothin
 | Milestone | Tests | Scope |
 | --- | --- | --- |
 | **M1 — Safety core** ✅ landed 2026-08-15 | `ING-FAIL-007`, `ING-FAIL-005`, `ING-FAIL-004`, `ING-DQ-010` | Closed the two code gaps (TIME_JUMP wired; halt-latch pinned "until restart"), pinned the tracker under concurrency, proved the no-silent-drop invariant. Suite 204/0/8-skips. |
-| **M2 — Losslessness + config** | `ING-TCP-002`, `ING-UNIT-018`, `ING-UNIT-019` | Test the losslessness comparator; pin Java↔Go config parity; add the env-key doc-drift C-check. |
+| **M2 — Losslessness + config** ✅ landed 2026-08-15 | `ING-TCP-002`, `ING-UNIT-018`, `ING-UNIT-019` | Comparator suite (20 tests, fail-closed hardening), 11-key Java↔Go parity table (drove out the LATENCY_MS/CONNECTIONS fail-open reads — both now hftRange/hftPin), docs-audit C16 env-key drift check; all wired into `run-monday-gates.sh` + `run-full-suite.sh` so comparator/env-key regressions fail CI. Suite 211/0/8-skips. |
 | **M3 — Failure-path E2E** | `ING-FAIL-008`, `ING-FAIL-009`, `ING-FAIL-010`, `ING-INT-005` | Crash-loop, auth-failure, shutdown-deadlock, and the READY gating matrix. |
 | **M4 — Go bridge + data quality** | ~~`ING-DQ-011`~~ ✅ landed 2026-08-15, `ING-UNIT-014`, `ING-UNIT-015`, `ING-UNIT-016`, `ING-UNIT-017`, `ING-RES-002`, `ING-RES-003`, `ING-RES-004`, `ING-TCP-003` | Fuzz corpus (**ING-DQ-011 done — `FuzzIngestionTest`**), golden pins, plan boundaries, backoff, contract version. |
 | **M5 — Telemetry + ops** | `ING-UNIT-021`, `ING-UNIT-022`, `ING-INT-006` | Metrics scrubbing + cardinality, entrypoint exit codes. |

@@ -63,6 +63,17 @@ def main():
     print(f"bridge tokens: {len(bridge)}  bridge total: {sum(bridge.values())}")
     print(f"pre tokens: {len(pre)}  post tokens: {len(post)}  sink={args.sink}")
 
+    # Fail closed: an empty/truncated counter file must never reconcile as a
+    # pass — zero bridge emissions would vacuously match an empty sink (the
+    # 'no evidence is not evidence of no loss' trap). A missing file already
+    # crashes the parse; a truncated one yields {} and must exit 1 here.
+    if not bridge:
+        print("MISMATCH bridge file empty or truncated — no emitted-tick counts to reconcile")
+        return 1
+    if not post:
+        print("MISMATCH post probe file empty or truncated — no sink rows to reconcile")
+        return 1
+
     def sink_value(entry):
         raw, quar = entry
         return quar if args.sink == "quar" else raw if args.sink == "raw" else raw + quar

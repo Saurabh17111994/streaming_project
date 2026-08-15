@@ -8,7 +8,9 @@
 #      `faketool` build tag) and `go-bridge/arrow-bridge`; `go test` builds
 #      neither, so a clean checkout would fail the E2E gate.
 #   3. Full Java suite with ALL integration flags (needs local Fluss up)
-#   4. Report PASS/FAIL with evidence file paths and a terminal status marker
+#   4. Python unit suites (tests/ — incl. the ING-TCP-002 reconcile-compare
+#      comparator suite) + docs-audit (all C-checks incl. C16 env-key drift)
+#   5. Report PASS/FAIL with evidence file paths and a terminal status marker
 #
 # Usage:  ./run-monday-gates.sh
 #   - The script FAILS (exit != 0) if any suite fails, so you can wire it
@@ -58,7 +60,7 @@ gate_fail() {
 }
 
 # ── 0. Static checks: bash -n + shellcheck on every script (Phase 8 G4) ─────
-echo "=== [1/7] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
+echo "=== [1/10] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
 STATIC_LOG="$OUT_DIR/static-checks.log"
 : >"$STATIC_LOG"
 STATIC_FAIL=0
@@ -101,7 +103,7 @@ fi
 echo "PASS: static checks (${#SCRIPTS[@]} scripts bash -n + shellcheck clean)" | tee -a "$SUMMARY"
 
 # ── 0b. Compose config validation (G4) ────────────────────────────────────────
-echo "=== [2/7] docker compose config ===" | tee -a "$SUMMARY"
+echo "=== [2/10] docker compose config ===" | tee -a "$SUMMARY"
 COMPOSE_FILE="$CODE_DIR/01_platform/01_docker/docker-compose.yml"
 if [ -f "$COMPOSE_FILE" ]; then
 	if ! docker compose -f "$COMPOSE_FILE" config >/dev/null 2>>"$STATIC_LOG"; then
@@ -113,8 +115,25 @@ else
 	echo "WARN: compose file not found at $COMPOSE_FILE — skipping compose config" | tee -a "$SUMMARY"
 fi
 
+# ── 0c. Python unit suites (tests/ — incl. ING-TCP-002 reconcile-compare) ────
+# The comparator underpins the count-based losslessness proof; a regression
+# could silently pass a reconcile. No cluster needed — synthetic fixtures only.
+# docs-audit C16 (env-key drift) runs in its own step after the Java gate.
+echo "=== [3/10] Python unit suites (reconcile-compare ING-TCP-002 + gate helpers) ===" | tee -a "$SUMMARY"
+PY_LOG="$OUT_DIR/python-tests.log"
+if ! timeout 300 python3 -m unittest discover -s "$SCRIPT_DIR/tests" -p "test_*.py" \
+	>"$PY_LOG" 2>&1; then
+	echo "FAIL: python unit suites — see $PY_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+if ! grep -q "^OK" "$PY_LOG"; then
+	echo "FAIL: python unit suites did not report OK — see $PY_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: python unit suites ($(grep -oE 'Ran [0-9]+ tests' "$PY_LOG" | head -1 || echo 'all tests'))" | tee -a "$SUMMARY"
+
 # ── 1. Go suite with race detector (Phase 8: go test -race) ──────────────────
-echo "=== [3/7] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
+echo "=== [4/10] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
 if ! timeout "$GO_TIMEOUT_SEC" bash -c "cd '$BRIDGE_DIR' && go test -race -count=1 ./..."; then
 	echo "FAIL: Go suite failed or timed out — see $GO_LOG" | tee -a "$SUMMARY"
 	gate_fail
@@ -122,7 +141,7 @@ fi
 echo "PASS: Go suite (-race)" | tee -a "$SUMMARY"
 
 # ── 2. Build E2E test binaries (R-016) + docker build smoke ───────────────
-echo "=== [4/7] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
+echo "=== [5/10] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
 if ! (cd "$BRIDGE_DIR" &&
 	go build -tags faketool -o faketool/faketool ./faketool &&
 	go build -o arrow-bridge .); then
@@ -132,7 +151,7 @@ fi
 echo "PASS: E2E binaries built (faketool/faketool, arrow-bridge)" | tee -a "$SUMMARY"
 
 # ── 5. Docker build smoke (G4): ingestion image must build from the reactor root ──
-echo "=== [5/7] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
+echo "=== [6/10] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
 if command -v docker >/dev/null 2>&1 && [ -f "$CODE_DIR/02_services/01_ingestion/Dockerfile" ]; then
 	# The build needs network (base images + go/maven deps). Offline runs must
 	# not fail the gate on the network — but WITH images present, a build
@@ -157,7 +176,7 @@ else
 fi
 
 # ── 3. Full Java gate with ALL integration flags ──────────────────────────────
-echo "=== [6/7] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
+echo "=== [7/10] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_E2E=true INGESTION_INT_TEST_FLUSS=true \
 	INGESTION_INT_TEST_MANIFEST=true INGESTION_INT_TEST_PERF=true \
@@ -167,8 +186,25 @@ if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 fi
 echo "PASS: Java suite" | tee -a "$SUMMARY"
 
-# ── 3b. DDL apply exit-code contract smoke (scratch catalogs) ────────────────
-echo "=== [7/8] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
+# ── 3b. docs-audit (doc↔code truth gate, incl. C16 env-key drift) ───────────
+# Runs AFTER the Java gate so C6 (test counts vs surefire reports) sees fresh
+# results. C16 (ING-UNIT-019) pins that every documented env key in the
+# ingestion dossier's config contract is actually read by the code; a
+# comparator/env-key regression now fails CI instead of only local runs.
+echo "=== [8/10] docs-audit (doc↔code truth incl. C16 env-key drift) ===" | tee -a "$SUMMARY"
+AUDIT_LOG="$OUT_DIR/docs-audit.log"
+if ! timeout 300 python3 "$SCRIPT_DIR/docs_audit.py" >"$AUDIT_LOG" 2>&1; then
+	echo "FAIL: docs-audit — see $AUDIT_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+if ! grep -q "all checks pass" "$AUDIT_LOG"; then
+	echo "FAIL: docs-audit did not report all-checks-pass — see $AUDIT_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: docs-audit (incl. C16 env-key drift, C14 change records)" | tee -a "$SUMMARY"
+
+# ── 3c. DDL apply exit-code contract smoke (scratch catalogs) ────────────────
+echo "=== [9/10] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
 DDL_SMOKE_LOG="$OUT_DIR/ddl-smoke.log"
 DDL_SMOKE_TIMEOUT_SEC="${DDL_SMOKE_TIMEOUT_SEC:-1800}"
 # Env-gated: SKIPPED (exit 0) when FLUSS_BOOTSTRAP is unset; any deviation from
@@ -195,7 +231,7 @@ fi
 echo "PASS: evidence ownership check (container-written records group-writable)" | tee -a "$SUMMARY"
 
 # ── 4. Schema agreement + perf certification explicit gates (G5) ─────────────
-echo "=== [8/8] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
+echo "=== [10/10] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
 SCHEMA_PERF_LOG="$OUT_DIR/schema-perf.log"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_PERF=true \
@@ -215,7 +251,9 @@ echo "=== ALL GATES PASSED ===" | tee -a "$SUMMARY"
 echo "GATE RESULT: PASS" | tee -a "$SUMMARY"
 echo "Evidence:" | tee -a "$SUMMARY"
 echo "  Static: $STATIC_LOG" | tee -a "$SUMMARY"
+echo "  Python suites: $PY_LOG" | tee -a "$SUMMARY"
 echo "  Go:   $GO_LOG" | tee -a "$SUMMARY"
 echo "  Java: $JAVA_LOG" | tee -a "$SUMMARY"
+echo "  docs-audit: $AUDIT_LOG" | tee -a "$SUMMARY"
 echo "  DDL smoke: $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
 echo "  Schema/Perf: $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
