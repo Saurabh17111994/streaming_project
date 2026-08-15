@@ -8,12 +8,12 @@
 #
 # `make ddl` enforces the VERSION GATE on PLATFORM versions only
 # (FLINK_VERSION, FLUSS_VERSION): absent / 'latest' / placeholder -> FAIL.
-# DDL application stays blocked until capability evidence + the
-# reconciliation blocker exit criteria are met (project rule: no DDL apply
-# until pinned compatibility + schema lifecycle tests pass).
+# DDL application requires capability evidence (project rule: no DDL apply
+# until pinned compatibility + schema lifecycle tests pass). The historical
+# reconciliation blocker was removed 2026-08-15.
 #
 # See docs/08_implementation/01-foundation.md -> "Placeholder policy" (orig L178)
-# and code/01_platform/02_sql/ddl/00_RECONCILIATION_BLOCKER.md.
+# and docs/08_implementation/12-version-compatibility-evidence.md.
 
 FLINK_VERSION=2.2.1
 FLUSS_VERSION=0.9.1-incubating
