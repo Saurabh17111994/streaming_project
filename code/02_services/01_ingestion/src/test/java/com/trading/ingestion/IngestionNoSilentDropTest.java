@@ -3,17 +3,21 @@ package com.trading.ingestion;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.trading.ingestion.config.IngestionConfig;
+import com.trading.ingestion.discontinuity.DiscontinuitySink;
+import com.trading.ingestion.discontinuity.DiscontinuityWriter;
 import com.trading.ingestion.health.NtpClockChecker;
 import com.trading.ingestion.model.Instrument;
+import com.trading.ingestion.quarantine.QuarantineSink;
+import com.trading.ingestion.quarantine.QuarantineWriter;
+import com.trading.ingestion.safety.SafetyHaltWriter;
+import com.trading.ingestion.safety.SafetySink;
 import com.trading.ingestion.telemetry.OtlpMetricsEmitter;
 import com.trading.ingestion.write.FlussRowConverter;
 import com.trading.ingestion.write.RawTickWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -35,8 +39,7 @@ import org.junit.jupiter.api.Test;
  * vanish without evidence or throw out of the method. This test feeds a mixed
  * corpus (valid, malformed, unknown-feed, missing-instrument, invalid-values,
  * stale, future, huge, control-character) through the real service pipeline
- * (fake Fluss converter; unreachable quarantine/discontinuity writers behave
- * as they do with a down coordinator) and reconciles the outcome ledger:
+ * and reconciles the outcome ledger:
  *
  * <pre>{@code
  *   appendCalls + quarantineCalls == linesFed
@@ -44,14 +47,11 @@ import org.junit.jupiter.api.Test;
  *   errorCount == 0                 (no uncaught exception)
  * }</pre>
  *
- * <p><b>Cluster gating:</b> the service's evidence writers (quarantine /
- * discontinuity / safety) connect to Fluss at construction — the same reason
- * the other Fluss-backed paths (ING-E2E-001, ING-INT-004) are env-gated. This
- * test auto-probes the bootstrap (FLUSS_BOOTSTRAP, else localhost:9123) and
- * runs fully whenever a cluster is reachable; without one it skips. The
- * no-silent-drop ledger itself is asserted from in-process state (append
- * calls + decode-error metrics), so it does not depend on the Fluss writes
- * succeeding — only on the writers being constructible.
+ * <p><b>Default-run:</b> the service is constructed with no-op evidence sinks
+ * ({@link QuarantineSink}, {@link DiscontinuitySink}, {@link SafetySink}), so
+ * no reachable Fluss is required and the test always runs. The no-silent-drop
+ * ledger is asserted from in-process state (append calls + decode-error
+ * metrics); the sinks only need to accept the writes.
  */
 @DisplayName("ING-DQ-010: no-silent-drop — every line maps to exactly one outcome")
 class IngestionNoSilentDropTest {
@@ -62,19 +62,12 @@ class IngestionNoSilentDropTest {
     @Test
     @DisplayName("mixed corpus reconciles: appends + quarantines == lines fed, zero uncaught errors")
     void mixedCorpusNeverDropsSilently() throws Exception {
-        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "localhost:9123");
-        try (com.trading.ingestion.quarantine.QuarantineWriter probe =
-                     new com.trading.ingestion.quarantine.QuarantineWriter(bootstrap, "ing-dq-010-probe")) {
-            // construction succeeded → the service's evidence writers will construct too
-        } catch (Exception e) {
-            assumeTrue(false, "Skipping — no reachable Fluss at " + bootstrap
-                    + " (the service's evidence writers require one at construction)");
-        }
-        IngestionConfig config = buildConfig(bootstrap);
+        IngestionConfig config = buildConfig("localhost:9123");
         CountingConverter converter = new CountingConverter();
         NtpClockChecker clock = new NtpClockChecker("127.0.0.1:9", 100, false);
         IngestionService service = new IngestionService(
-                "ing-dq-010", instruments(), converter, config, clock);
+                "ing-dq-010", instruments(), converter, config, clock,
+                noopQuarantine(), noopDiscontinuity(), noopSafety());
 
         long now = System.currentTimeMillis();
         List<Line> corpus = new ArrayList<>();
@@ -200,6 +193,65 @@ class IngestionNoSilentDropTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    // ---- no-op evidence sinks (ING-DQ-010 default-run seam) ----
+
+    private static QuarantineSink noopQuarantine() {
+        return new QuarantineSink() {
+            @Override
+            public void write(byte[] rawPayload, QuarantineWriter.Reason reason, String detail) {
+            }
+
+            @Override
+            public void write(byte[] rawPayload, QuarantineWriter.Reason reason, String detail,
+                              Long instrumentToken, String exchange, String symbol) {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+    }
+
+    private static DiscontinuitySink noopDiscontinuity() {
+        return new DiscontinuitySink() {
+            @Override
+            public void write(DiscontinuityWriter.Reason reason, String note,
+                              DiscontinuityWriter.LastTickSnapshot before) {
+            }
+
+            @Override
+            public void write(DiscontinuityWriter.Reason reason, String note,
+                              DiscontinuityWriter.LastTickSnapshot before,
+                              Long instrumentToken, String exchange, String symbol) {
+            }
+
+            @Override
+            public void writeBridgeEvent(com.trading.ingestion.bridge.BridgeEvent event,
+                                         DiscontinuityWriter.LastTickSnapshot before) {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+    }
+
+    private static SafetySink noopSafety() {
+        return new SafetySink() {
+            @Override
+            public String write(String slotId, long connectionEpoch,
+                                SafetyHaltWriter.SafetyState state,
+                                SafetyHaltWriter.ReasonCode reasonCode, String assignedTokenHash,
+                                String evidenceReference, long detectedTsMs) {
+                return "noop";
+            }
+
+            @Override
+            public void close() {
+            }
+        };
     }
 
     /** Fake converter: counts appends, completes instantly, records packets. */

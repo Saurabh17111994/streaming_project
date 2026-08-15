@@ -44,7 +44,7 @@ import org.slf4j.LoggerFactory;
  * schema_version             STRING  — v1
  * </pre>
  */
-public class DiscontinuityWriter implements AutoCloseable {
+public class DiscontinuityWriter implements DiscontinuitySink {
 
     private static final Logger LOG = LoggerFactory.getLogger(DiscontinuityWriter.class);
 

@@ -48,7 +48,7 @@ import org.slf4j.LoggerFactory;
  * schema_version      STRING   — v1
  * </pre>
  */
-public class QuarantineWriter implements AutoCloseable {
+public class QuarantineWriter implements QuarantineSink {
 
     private static final Logger LOG = LoggerFactory.getLogger(QuarantineWriter.class);
 

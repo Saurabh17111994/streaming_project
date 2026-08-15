@@ -10,6 +10,7 @@ import com.trading.ingestion.bridge.BridgeEventParser;
 import com.trading.ingestion.bridge.BridgeMetrics;
 import com.trading.ingestion.bridge.BrokerQuarantine;
 import com.trading.ingestion.bridge.PayloadHashValidator;
+import com.trading.ingestion.discontinuity.DiscontinuitySink;
 import com.trading.ingestion.discontinuity.DiscontinuityWriter;
 import com.trading.ingestion.discontinuity.TimeJumpMonitor;
 import com.trading.ingestion.fingerprint.FingerprintBuilder;
@@ -20,7 +21,9 @@ import com.trading.ingestion.model.Instrument;
 import com.trading.ingestion.model.RawTick;
 import com.trading.ingestion.model.TickPacket;
 import com.trading.ingestion.model.ValidityClassification;
+import com.trading.ingestion.quarantine.QuarantineSink;
 import com.trading.ingestion.quarantine.QuarantineWriter;
+import com.trading.ingestion.safety.SafetySink;
 import com.trading.ingestion.shutdown.UncertaintyJournal;
 import com.trading.ingestion.telemetry.OtlpMetricsEmitter;
 import com.trading.ingestion.write.AppendTracker;
@@ -123,9 +126,9 @@ public final class IngestionService {
     private final NtpClockChecker clock;
     private final UncertaintyJournal journal;
     private final OtlpMetricsEmitter metrics;
-    private final QuarantineWriter quarantineWriter;
-    private final DiscontinuityWriter discontinuityWriter;
-    private final com.trading.ingestion.safety.SafetyHaltWriter safetyHaltWriter;
+    private final QuarantineSink quarantineWriter;
+    private final DiscontinuitySink discontinuityWriter;
+    private final SafetySink safetyHaltWriter;
     private final String manifestFingerprint;
     private final String assignedTokenSetHash;
     private final java.util.Set<String> safetyEmitted = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -145,6 +148,22 @@ public final class IngestionService {
                              FlussRowConverter flussWriter,
                              IngestionConfig config,
                              NtpClockChecker clock) {
+        this(instanceId, instruments, flussWriter, config, clock, null, null, null);
+    }
+
+    /**
+     * Test seam: accepts substitute evidence sinks so the service can be
+     * constructed and driven without a reachable Fluss (ING-DQ-010). A
+     * {@code null} sink falls back to the production Fluss-backed writer.
+     */
+    IngestionService(String instanceId,
+                     List<Instrument> instruments,
+                     FlussRowConverter flussWriter,
+                     IngestionConfig config,
+                     NtpClockChecker clock,
+                     QuarantineSink quarantineSink,
+                     DiscontinuitySink discontinuitySink,
+                     SafetySink safetySink) {
         this.config = config;
         this.clock = clock;
         if (config.uncertaintyJournalPath != null && !config.uncertaintyJournalPath.isBlank()) {
@@ -187,10 +206,13 @@ public final class IngestionService {
                 .max().orElse(0L);
         metrics.setManifestVersion(manifestVersion);
 
-        // Quarantine + discontinuity writers (Phase 2b)
-        this.quarantineWriter = new QuarantineWriter(config.flussBootstrap, instanceId);
-        this.discontinuityWriter = new DiscontinuityWriter(
-                config.flussBootstrap, instanceId, "arrow-bridge", connectionEpoch);
+        // Quarantine + discontinuity writers (Phase 2b). Test seam: substitute
+        // sinks (ING-DQ-010) bypass the Fluss-connection requirement.
+        this.quarantineWriter = quarantineSink != null
+                ? quarantineSink : new QuarantineWriter(config.flussBootstrap, instanceId);
+        this.discontinuityWriter = discontinuitySink != null
+                ? discontinuitySink : new DiscontinuityWriter(
+                        config.flussBootstrap, instanceId, "arrow-bridge", connectionEpoch);
 
         // Safety writer (Phase 6A — slot-scoped safety propagation).
         this.manifestFingerprint = InstrumentManifestLoader.computeFingerprint(instruments);
@@ -198,8 +220,9 @@ public final class IngestionService {
                 .computeAssignedTokenHash(instruments.stream()
                         .map(Instrument::instrumentToken).toList());
         String accountScope = System.getenv().getOrDefault("ACCOUNT_SCOPE_ID", "QP3796");
-        this.safetyHaltWriter = new com.trading.ingestion.safety.SafetyHaltWriter(
-                config.flussBootstrap, instanceId, manifestFingerprint, accountScope);
+        this.safetyHaltWriter = safetySink != null
+                ? safetySink : new com.trading.ingestion.safety.SafetyHaltWriter(
+                        config.flussBootstrap, instanceId, manifestFingerprint, accountScope);
         String readinessPath = System.getenv("READINESS_FILE_PATH");
         this.readinessFile = readinessPath == null || readinessPath.isBlank()
                 ? null : new ReadinessFile(java.nio.file.Paths.get(readinessPath));
