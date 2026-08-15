@@ -407,6 +407,30 @@ class FingerprintDedupFunctionTest {
                 "no store failures on the healthy path");
     }
 
+    // ── SIG-HARNESS-004: identical-looking events vs broker duplicates ─────
+
+    @Test
+    void identicalLookingEventsCollapseAndEmitLimitationEvidence() throws Exception {
+        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
+        openHarness();
+        // The documented fingerprint limitation (dossier §Dedup state): an
+        // identical legitimate event and a broker duplicate are INDISTINGUISHABLE
+        // by fingerprint — both carry the same content hash. The dedup applies
+        // the limitation consistently: the first occurrence passes, every
+        // identical-looking re-arrival inside the TTL is collapsed to a
+        // duplicate, and the metric/audit evidence is emitted (the cache-hit
+        // OTLP mirror — the same emission path a broker duplicate triggers).
+        process(TestRawRows.row(1L, T0, "fp-identical", "TRADE", 100, 1));
+        process(TestRawRows.row(1L, T0 + 1_000L, "fp-identical", "TRADE", 100, 1));
+
+        assertEquals(1, emittedCount(harness),
+                "the identical legitimate event is collapsed, never double-accepted");
+        assertEquals(1, emitter.drainDedupCacheHitsDelta(),
+                "the collapse is observable — duplicate/limitation audit evidence is emitted");
+        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+                "one accepted fingerprint in state, not two");
+    }
+
     @Test
     void rehydrationFailureFailsClosedAndIsCounted() throws Exception {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");

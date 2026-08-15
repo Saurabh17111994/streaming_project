@@ -64,6 +64,38 @@ final class ScratchTables {
         return signalColumns(Schema.newBuilder()).primaryKey("instrument_token").build();
     }
 
+    /** 6-column fingerprint_dedup state-table schema mirroring DDL 24 v1 (DEC-038). */
+    static Schema dedupSchema() {
+        return Schema.newBuilder()
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("fingerprint_version", DataTypes.STRING())
+                .column("event_fingerprint", DataTypes.STRING())
+                .column("first_seen_ms", DataTypes.BIGINT())
+                .column("expiry_ms", DataTypes.BIGINT())
+                .column("schema_version", DataTypes.STRING())
+                .primaryKey("instrument_token", "fingerprint_version", "event_fingerprint")
+                .build();
+    }
+
+    /**
+     * Create a fingerprint_dedup-shaped KV state table (16 buckets,
+     * {@code bucket.key = instrument_token}, {@code kv.format-version = 2} —
+     * the COMPAT-FLUSS-005 combo the raw-client store/sink require).
+     */
+    static Table createDedup(Connection connection, Admin admin, String name,
+            Duration timeout) throws Exception {
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(dedupSchema())
+                .distributedBy(16, "instrument_token")
+                .property("table.kv.format-version", "2")
+                .build();
+        TablePath path = TablePath.of("default", name);
+        admin.createTable(path, td, false).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        CREATED.add(name);
+        LOG.info("scratch: created fingerprint_dedup state table {}", name);
+        return connection.getTable(path);
+    }
+
     static Table create(Connection connection, Admin admin, String name, Schema schema,
             List<String> pk, int bucketCount, String what, Duration timeout) throws Exception {
         TableDescriptor td = TableDescriptor.builder()
@@ -78,6 +110,12 @@ final class ScratchTables {
         CREATED.add(name);
         LOG.info("p6: created scratch {} table {}", what, name);
         return connection.getTable(path);
+    }
+
+    /** Track a table created outside {@link #create}/{@link #createDedup} (for cleanup). */
+    static void rememberCreated(String name) {
+        CREATED.add(name);
+        LOG.info("scratch: tracking extra scratch table {}", name);
     }
 
     /** Best-effort drop of every table created through this utility. */
