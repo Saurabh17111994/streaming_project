@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,3 +166,98 @@ func TestHFTPolicyParityRejects(t *testing.T) {
 	}
 }
 
+// ING-UNIT-020 (M5, G5 remainder): the process-level FATAL exits assert exit
+// status 2 (ING-UNIT-018) but never the DOCUMENTED FATAL message text, and
+// the missing-ARROW_APP_ID startup FATAL is untested. The helper mode runs
+// the production validation path with a stderr-writing logf so the message
+// can be asserted; missing-env mode exercises envOrFatal exactly as main()
+// does on startup.
+func TestIngUnit020MissingAppIdAndFatalMessages(t *testing.T) {
+	if os.Getenv("GO_ING_UNIT_020_HELPER") == "1" {
+		switch os.Getenv("GO_ING_UNIT_020_MODE") {
+		case "missing_app_id":
+			envOrFatal("ARROW_APP_ID")
+		case "pin":
+			logf := func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "arrow-bridge: "+format+"\n", args...)
+			}
+			hftPin(logf, os.Getenv("GO_ING_UNIT_020_KEY"), 1)
+		case "range":
+			logf := func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "arrow-bridge: "+format+"\n", args...)
+			}
+			hftRange(logf, os.Getenv("GO_ING_UNIT_020_KEY"), 50, 50, 60_000)
+		}
+		return
+	}
+	cases := []struct {
+		name       string
+		env        []string
+		mode       string
+		key, val   string
+		wantExit   int
+		wantStderr string
+	}{
+		{
+			name:       "missing_ARROW_APP_ID",
+			env:        []string{"ARROW_APP_ID="},
+			mode:       "missing_app_id",
+			wantExit:   2,
+			wantStderr: "arrow-bridge: missing required env: ARROW_APP_ID",
+		},
+		{
+			name:       "ARROW_HFT_CONNECTIONS=2",
+			env:        []string{"ARROW_HFT_CONNECTIONS=2"},
+			mode:       "pin",
+			key:        "ARROW_HFT_CONNECTIONS",
+			wantExit:   2,
+			wantStderr: "arrow-bridge: FATAL: ARROW_HFT_CONNECTIONS=2 \u2014 pinned to 1",
+		},
+		{
+			name:       "ARROW_HFT_LATENCY_MS=49",
+			env:        []string{"ARROW_HFT_LATENCY_MS=49"},
+			mode:       "range",
+			key:        "ARROW_HFT_LATENCY_MS",
+			wantExit:   2,
+			wantStderr: "arrow-bridge: FATAL: ARROW_HFT_LATENCY_MS=49 \u2014 must be in range 50..60000",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestIngUnit020MissingAppIdAndFatalMessages")
+			base := []string{
+				"GO_ING_UNIT_020_HELPER=1",
+				"GO_ING_UNIT_020_MODE=" + c.mode,
+			}
+			if c.key != "" {
+				base = append(base, "GO_ING_UNIT_020_KEY="+c.key)
+			}
+			// Strip every policy env the helper reads from the parent env so a
+			// polluted test environment cannot mask the FATAL (the case's own
+			// values are appended last and win).
+			forced := map[string]bool{
+				"ARROW_APP_ID":          true,
+				"ARROW_HFT_CONNECTIONS": true,
+				"ARROW_HFT_LATENCY_MS":  true,
+			}
+			var env []string
+			for _, kv := range os.Environ() {
+				k, _, _ := strings.Cut(kv, "=")
+				if !forced[k] {
+					env = append(env, kv)
+				}
+			}
+			env = append(env, base...)
+			env = append(env, c.env...)
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			ee, ok := err.(*exec.ExitError)
+			if !ok || ee.ExitCode() != c.wantExit {
+				t.Fatalf("%s: exit=%v want status %d; output=%s", c.name, err, c.wantExit, out)
+			}
+			if !strings.Contains(string(out), c.wantStderr) {
+				t.Fatalf("%s: stderr %q missing documented FATAL message %q", c.name, out, c.wantStderr)
+			}
+		})
+	}
+}

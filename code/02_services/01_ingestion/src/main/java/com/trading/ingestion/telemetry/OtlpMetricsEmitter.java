@@ -44,6 +44,21 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(OtlpMetricsEmitter.class);
 
+    // G6 (ING-UNIT-021): the OTLP export body must never carry credentials or
+    // raw payloads. The only caller-supplied strings that reach the payload
+    // are the decode-error reason labels, so they are scrubbed with the same
+    // two-pass pattern family as the quarantine/safety writers (ING-SEC-RED-
+    // 001) before emission. Kept local — the writers' sanitizeDetail is a
+    // static utility that lives in the quarantine package and bounds to 512
+    // chars, which the reason labels do not need; the pattern itself must not
+    // drift, so the secret classes are enumerated identically.
+    private static final java.util.regex.Pattern SECRET_PATTERN = java.util.regex.Pattern.compile(
+            "(?i)(ARROW_APP_SECRET|ARROW_PASSWORD|ARROW_TOTP_KEY|ARROW_TOKEN|access_token|authorization|appID|token)([=:][^&\\s,}]+)");
+    // Runs first so `Bearer <token>` (space-separated) is consumed before the
+    // name=value pattern can eat only the literal `Bearer` and leak the token.
+    private static final java.util.regex.Pattern BEARER_PATTERN = java.util.regex.Pattern.compile(
+            "(?i)\\bBearer[=:\\s]+[^\\s,}]+");
+
     private final String collectorUrl;
     private final String instanceId;
     private final String serviceName = "ingestion";
@@ -437,7 +452,13 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
     }
 
-    /** Per-reason decode-error sum (R-258) — emitted so the breakdown reaches the collector. */
+    /**
+     * Per-reason decode-error sum (R-258) — emitted so the breakdown reaches
+     * the collector. The reason label is scrubbed first (G6/ING-UNIT-021): a
+     * decode-error detail can carry the raw offending line, and that line can
+     * contain ARROW_* values, Bearer tokens, or appID/token query strings —
+     * which must never leave the process on the OTLP wire.
+     */
     private void appendReasonSum(StringBuilder sb, String reason, long value, long timeNanos) {
         sb.append("{\"name\":\"decode.errors.by_reason\",")
           .append("\"unit\":\"errors\",")
@@ -445,8 +466,26 @@ public final class OtlpMetricsEmitter implements AutoCloseable {
           .append("\"isMonotonic\":true,")
           .append("\"dataPoints\":[{\"asInt\":").append(value).append(",")
           .append("\"attributes\":[{\"key\":\"reason\",\"value\":{\"stringValue\":\"")
-          .append(esc(reason)).append("\"}}],")
+          .append(esc(scrubReason(reason))).append("\"}}],")
           .append("\"timeUnixNano\":\"").append(timeNanos).append("\"}]}},");
+    }
+
+    /**
+     * G6: redact credential classes from a reason label before emission
+     * (mirrors ING-SEC-RED-001), then fail closed: if ANY credential marker
+     * survives the two passes (an unrecognized form, or a reason that is
+     * itself a literal secret), collapse the whole label — a collector must
+     * never see an ARROW_* name, Bearer marker, or raw_payload token even
+     * with its value redacted.
+     */
+    private static String scrubReason(String reason) {
+        if (reason == null) return "";
+        String safe = BEARER_PATTERN.matcher(reason).replaceAll("Bearer=[REDACTED]");
+        safe = SECRET_PATTERN.matcher(safe).replaceAll("$1=[REDACTED]");
+        if (safe.matches("(?is).*(ARROW_|\\bBearer\\b|raw_payload|appID|access_token|\\btoken\\b).*")) {
+            return "REDACTED";
+        }
+        return safe;
     }
 
     private void appendHistogram(StringBuilder sb, String name, String unit,

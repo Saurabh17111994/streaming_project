@@ -3,6 +3,7 @@ package com.trading.ingestion.write;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -214,6 +216,72 @@ class AppendTrackerTest {
         assertFalse(small.tryAccept(100), "accepts must stay rejected while halted");
         assertEquals(2, small.totalRejected());
         assertFalse(small.isReady(), "isReady must remain false even after a fresh reject");
+    }
+
+    // ---- ING-FAIL-006: 30s warning-window throttle ----
+
+    /**
+     * ING-FAIL-006: the 80% warning is throttled to at most one emission per
+     * 30 s window (the ≥80% readiness-false half is covered by
+     * warningAt80PercentRecords/warningAt80PercentBytes). The throttle window
+     * is a wall-clock {@code lastWarningAt + 30s} comparison, so the test
+     * advances the tracker's private clock marker by reflection instead of
+     * sleeping 30 s: within the window a re-crossing must NOT re-fire the
+     * listener; after the window elapses the next crossing must fire exactly
+     * once. Emitted-listener count (not the condition counter) is the
+     * assertion target.
+     */
+    @Test
+    @DisplayName("ING-FAIL-006: warning listener fires at most once per 30s window")
+    void warningThrottledToOncePer30sWindow() throws Exception {
+        // 1-byte records + a 100-record limit: the RECORD axis crosses the
+        // warning threshold (80) while the byte axis stays at ~1% of its
+        // limit, so only the record axis drives the warning and the tracker
+        // never approaches the halt ceiling (100) during the scenario.
+        AppendTracker small = new AppendTracker(100, 10_000_000, 0.80);
+        AtomicInteger fires = new AtomicInteger();
+        small.setListener((level, pr, pb, mr, mb, now) -> {
+            if (level == AppendTracker.BackpressureListener.Level.WARNING) {
+                fires.incrementAndGet();
+            }
+        });
+
+        Field lastWarningAt = AppendTracker.class.getDeclaredField("lastWarningAt");
+        lastWarningAt.setAccessible(true);
+
+        // Cross 80% — first crossing fires the warning (no prior marker).
+        for (int i = 0; i < 80; i++) {
+            assertTrue(small.tryAccept(1));
+        }
+        assertEquals(1, fires.get(), "first 80% crossing must fire exactly once");
+
+        // Re-cross 80% WITHIN the 30s window (81..98) — throttled, no re-fire.
+        // Stops at 98 so the two rewind accepts below (99 and 100) stay clear
+        // of the 100-record halt limit — the halt would reject tryAccept
+        // outright and mask the throttle under test.
+        for (int i = 0; i < 18; i++) {
+            assertTrue(small.tryAccept(1));
+        }
+        assertEquals(1, fires.get(), "re-crossings within 30s must not re-fire the warning");
+
+        // Rewind the clock marker to just inside the window (10s ago), then
+        // accept again (98 → 99) — still throttled: the marker from the first
+        // firing is only 10s old, so the 30s window has not elapsed.
+        lastWarningAt.set(small, Instant.now().minusSeconds(10));
+        assertTrue(small.tryAccept(1));
+        assertEquals(1, fires.get(), "10s-old marker must still throttle");
+
+        // Rewind past the window (31s ago) while the pressure stays ≥80% —
+        // the next accept (99 → 100) fires exactly once (the throttled
+        // emission since the first firing), opening a fresh 30s window.
+        lastWarningAt.set(small, Instant.now().minusSeconds(31));
+        assertTrue(small.tryAccept(1));
+        assertEquals(2, fires.get(), "crossing after the 30s window must fire exactly once more");
+
+        // And the fresh marker throttles again (100 → 101 hits the halt
+        // ceiling, but the warning must not re-fire from the halt itself).
+        small.tryAccept(1);
+        assertEquals(2, fires.get(), "second firing must open a fresh 30s window");
     }
 
     // ---- ING-FAIL-004: concurrency invariants ----
