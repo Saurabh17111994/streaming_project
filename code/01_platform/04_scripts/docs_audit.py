@@ -9,7 +9,7 @@ audit established. Failures are exit-code 1 with a named message; run as
 checks that have already caught real drift, so the same class of mistake fails fast.
 
 Checks:
-  C1  schema_manifest.json: 21 tables; every entry has non-null ddl_sha256,
+  C1  schema_manifest.json: 23 tables; every entry has non-null ddl_sha256,
       compatibility_class; LOG entries have non-null bucket_key.
   C2  OwnershipMatrix.java encodes exactly the 12 doc rows; test pins it.
   C3  Foundation schema-state diagram is the 5-state enum (no RECONCILED/...).
@@ -25,8 +25,13 @@ Checks:
       durability / LOG-control / ledger-skipped claims outside the dated
       decisions index; HFT frame sizes 40/196 B and ltpc+full-only mode switch;
       bridge ns->ms conversion; ledger + halt tables KV in manifest and DDL;
-      ledger live-in-dev evidence; exactly 21 DDLs with no dedup DDL yet; dedup
-      marked planned; forming_bar + ingestion_quarantine in all four inventories.
+      ledger live-in-dev evidence; 24 DDLs on file incl. the DEC-038 dedup DDL
+      (24_fingerprint_dedup.sql) + SCH-19 instruction-index DDL
+      (25_trade_instruction_state.sql) + SCH-23 EOD offload-state DDL
+      (26_eod_offload_state.sql)
+      (25_trade_instruction_state.sql); dedup marked implemented in
+      observability + runbooks; forming_bar + ingestion_quarantine in all four
+      inventories.
   C10 Dossier traceability (2026-08-14 five-fix traceability work): the
       11-testing-and-release.md acceptance-criteria coverage table lists every
       matrix AC domain with an owning dossier and ranges equal to the matrix;
@@ -48,6 +53,11 @@ Checks:
       (affected artifacts, compatibility class, savepoint impact, test
       updates, rollback behavior, plan tasks) with a valid compatibility
       class (01-foundation.md "Change control", orig L205).
+  C15 Non-root evidence ownership contract: every apply.json the ddl-apply
+      CONTAINER wrote (owner == the engine user, DDL_APPLY_UID) must be
+      group-writable (setgid 2775 evidence root + umask 002 -> 664), and no
+      record may be root-owned (the engine never runs as root). Host-owned
+      records (host-side make ddl) are out of scope.
 """
 
 import glob
@@ -58,6 +68,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 import change_control_check  # same directory; C14 record validator
+import evidence_ownership_check  # same directory; C15 non-root evidence gate
 
 ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,7 +111,7 @@ def c1_manifest():
     if m is None:
         return check("C1 manifest readable", False, p)
     tables = m.get("tables", [])
-    check("C1 manifest has 21 tables", len(tables) == 21, f"got {len(tables)}")
+    check("C1 manifest has 24 tables", len(tables) == 24, f"got {len(tables)}")
     bad_sha = [t["table_name"] for t in tables if not t.get("ddl_sha256")]
     bad_compat = [t["table_name"] for t in tables if not t.get("compatibility_class")]
     bad_routing = [
@@ -583,19 +594,30 @@ def c9_dec039_invariants():
     ) or ""
     check("C9 ledger live-in-dev evidence", "Postback_Projection_Ledger 705" in foundation)
 
-    # --- no dedup DDL yet; exactly 21 DDLs; dedup marked planned ---
+    # --- DEC-038 dedup DDL + SCH-19 instruction-index DDL + SCH-23 EOD state DDL; 24 DDLs ---
     sqls = sorted(f for f in os.listdir(DDL_DIR) if f.endswith(".sql"))
-    check("C9 DDL count = 21", len(sqls) == 21, f"got {len(sqls)}")
-    check("C9 dedup DDL not yet applied", not any(f.startswith("24_") for f in sqls))
+    check("C9 DDL count = 24", len(sqls) == 24, f"got {len(sqls)}")
+    check(
+        "C9 dedup DDL on file",
+        os.path.exists(os.path.join(DDL_DIR, "24_fingerprint_dedup.sql")),
+    )
+    check(
+        "C9 instruction-index DDL on file",
+        os.path.exists(os.path.join(DDL_DIR, "25_trade_instruction_state.sql")),
+    )
+    check(
+        "C9 eod offload-state DDL on file",
+        os.path.exists(os.path.join(DDL_DIR, "26_eod_offload_state.sql")),
+    )
     obs = safe_read(os.path.join(DOCS_DIR, "08_implementation", "10-observability.md")) or ""
     rb = safe_read(os.path.join(DOCS_DIR, "06_operations", "01-runbooks.md")) or ""
     check(
-        "C9 dedup marked planned (observability)",
-        "fingerprint_dedup" in obs and "DDL not yet applied" in obs,
+        "C9 dedup DDL implemented (observability)",
+        "fingerprint_dedup" in obs and "24_fingerprint_dedup.sql" in obs,
     )
     check(
-        "C9 dedup marked planned (runbooks)",
-        "fingerprint_dedup" in rb and "DDL not yet applied" in rb,
+        "C9 dedup DDL implemented (runbooks)",
+        "fingerprint_dedup" in rb and "24_fingerprint_dedup.sql" in rb,
     )
 
     # --- inventories include forming_bar + ingestion_quarantine ---
@@ -868,7 +890,7 @@ def c11_verification_mapping():
 WORM_TRIGGER_RE = re.compile(r"\b(worm|object[ _-]lock|write-once)\b", re.I)
 WORM_MECHANISM_RE = re.compile(r"bucket[ _-]lock", re.I)  # the R2 WORM mechanism
 WORM_API_LIMIT_RE = re.compile(r"object[ _-]lock api", re.I)  # the S3 API R2 doesn't implement
-WORM_CTRL_REF_RE = re.compile(r"AC-NFR-005|NFR 3\.4\.1|SCH-24")  # IDs that pin the mechanism
+WORM_CTRL_REF_RE = re.compile(r"AC-NFR-005|NFR 3\.4\.1")  # IDs that pin the mechanism
 WORM_GATE_RES = [
     re.compile(r"evidence[ -]gated", re.I),
     re.compile(r"evidence[ -]blocked", re.I),
@@ -1010,6 +1032,16 @@ def c14_change_control():
     )
 
 
+def c15_evidence_ownership():
+    problems, (checked, cw, host) = evidence_ownership_check.check_evidence_dir(
+        evidence_ownership_check.EVIDENCE_DIR,
+        evidence_ownership_check.CONTAINER_UID)
+    detail = (f"{checked} record(s), {cw} container-written, "
+              f"{host} host-owned (out of scope)")
+    check("C15 container-written evidence group-writable",
+          not problems, detail + (("; " + "; ".join(problems[:3])) if problems else ""))
+
+
 def main():
     c1_manifest()
     c2_ownership_matrix()
@@ -1025,6 +1057,7 @@ def main():
     c12_worm_statements()
     c13_runbook_coverage()
     c14_change_control()
+    c15_evidence_ownership()
     if failures:
         print(f"\ndocs-audit: {len(failures)} check(s) FAILED — fix before proceeding")
         return 1

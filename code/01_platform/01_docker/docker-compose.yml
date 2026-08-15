@@ -338,6 +338,61 @@ services:
       - ingestion-logs:/data/ingestion/logs
 
 
+  # ---- DDL apply contract (one-shot, dev/CI) ------------------------------
+  # The full 9-step DDL application contract engine (DdlApplyTool + ddl_apply.py
+  # + ddl_apply_smoke.py + the pinned DDL corpus) packaged so the contract runs
+  # INSIDE the compose network: FLUSS_BOOTSTRAP resolves via compose DNS
+  # (fluss-coordinator:9123) — no host /etc/hosts aliases. Not a long-running
+  # service; run one-shot with `docker compose run --rm ddl-apply ...`:
+  #   validate | apply | smoke | self-test  (see the entrypoint for flags/env).
+  ddl-apply:
+    build:
+      # The Dockerfile COPYs the parent POM + common module + platform scripts +
+      # DDL corpus, so the build context MUST be the repo root (../../../ from
+      # this compose file), mirroring the ingestion build-context rule (R-002).
+      context: ../../..
+      dockerfile: code/01_platform/01_docker/ddl-apply/Dockerfile
+    networks: [trading-net]
+    depends_on: [fluss-coordinator, fluss-tablet]
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+    volumes:
+      # Evidence lands on the host at repo-root logs/ddl-apply (same dir the
+      # host-side contract writes), so host automation can read the records.
+      # The entrypoint self-heals ownership each run: it claims ONLY the
+      # evidence ROOT dir for the non-root engine user (uid/gid 10001,
+      # DDL_APPLY_UID/GID overridable) — a top-level, non-recursive chown +
+      # setgid 2775 — and descendants inherit the group via the setgid bit, so
+      # records land group-writable (664). Redirect to any dedicated dir with
+      # DDL_APPLY_EVIDENCE_DIR (never a mount root: only that dir is claimed).
+      # Host delete/rotate without sudo needs a one-time shared group (then
+      # re-login):
+      #   sudo groupadd -g 10001 ddlapply && sudo usermod -aG ddlapply $USER
+      - ../../../logs/ddl-apply:/app/logs/ddl-apply
+
+  # ---- EOD controller (SCH-23, one-shot, dev/CI) --------------------------
+  # The plain-JVM EOD controller CLI (EodControllerTool + eod_controller.py)
+  # inside the compose network — same image as ddl-apply (it already carries
+  # the common classes + the pinned jars). Not long-running; run one-shot:
+  #   docker compose run --rm eod-controller status
+  #   docker compose run --rm eod-controller run
+  #   docker compose run --rm eod-controller extend --dry-run
+  # Env: FLUSS_BOOTSTRAP via compose DNS; EOD_DATABASE / EOD_STATE_TABLE /
+  # EOD_TABLES / EOD_TTL / EOD_SAFETY_FLOOR / EOD_EXTENSION / EOD_OFFLOAD /
+  # EOD_ZONE pass through (defaults live in the tool). The state table must
+  # exist first: `make ddl APPLY=1` (26_eod_offload_state.sql, manifest 24).
+  eod-controller:
+    build:
+      context: ../../..
+      dockerfile: code/01_platform/01_docker/ddl-apply/Dockerfile
+    entrypoint: []
+    networks: [trading-net]
+    depends_on: [fluss-coordinator, fluss-tablet]
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      EOD_M2_REPO: /opt/ddl-apply/m2/repository
+    command: ["python3", "/app/code/01_platform/04_scripts/eod_controller.py"]
+
   # ── Disabled services (uncomment as each phase is built) ────────────────
   #
   # action-capture:

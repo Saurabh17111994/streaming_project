@@ -6,12 +6,28 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit pin-check
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
 
 help:
 	@echo "Targets:"
 	@echo "  env    copy code/01_platform/01_docker/.env.example to code/01_platform/01_docker/.env, then add secrets"
-	@echo "  ddl    validate + emit schema manifest; apply gated on pinned versions + evidence"
+	@echo "  ddl    validate + emit schema manifest; APPLY=1 EVIDENCE=<file> runs the full 9-step"
+	@echo "         application contract (empty catalog, apply, parity, smoke, evidence record; PASS"
+	@echo "         only when every table smoke passes — composite-PK limitations need"
+	@echo "         DDL_APPLY_ACK_LIMITATIONS=<tables>); FLUSS_BOOTSTRAP=<host:port> picks the"
+	@echo "         cluster; DDL_APPLY_TABLE_PREFIX=<p> for dev-scratch verification only"
+	@echo "  ddl-apply-smoke  live regression smoke for the exit-code contract (0/6/1 + sentinels):"
+	@echo "         runs the orchestrator 3x against scratch-prefixed catalogs (PASS / refused /"
+	@echo "         acknowledged-auto) + a containerized bad-ownership drill (pre-seeded 644 record"
+	@echo "         -> apply exit 1 + EVIDENCE OWNERSHIP CHECK FAILED) when docker + the ddl-apply"
+	@echo "         image are available; env-gated on FLUSS_BOOTSTRAP, wired into make gate"
+	@echo "  ddl-image  build the ddl-apply contract image (one-shot container on trading-net;
+	@echo "         run: docker compose -f code/01_platform/01_docker/docker-compose.yml run"
+	@echo "         --rm ddl-apply {validate|apply|smoke|self-test}) — FLUSS_BOOTSTRAP resolves"
+	@echo "         via compose DNS, no host /etc/hosts aliases"
+	@echo "  evidence-ownership-check  non-root ownership contract gate: evidence root setgid 2775,"
+	@echo "         every container-written record group-writable with the engine GID, none root-owned;"
+	@echo "         wired into docs-audit C15 + the Monday gate DDL step"
 	@echo "  up     docker compose up -d, full stack"
 	@echo "  down   docker compose down"
 	@echo "  logs   tail compose logs"
@@ -39,7 +55,7 @@ env:
 ddl:
 	@python3 code/01_platform/04_scripts/ddl_apply.py \
 		$(if $(APPLY),--apply-verified,) $(if $(EVIDENCE),--matrix-evidence $(EVIDENCE),)
-	@echo "(DDL application is blocked until reconciliation blocker exit criteria are met.)"
+	@echo "(Plain 'make ddl' only validates; run 'make ddl APPLY=1 EVIDENCE=<file>' to execute the contract.)"
 
 up:
 	$(COMPOSE) up -d
@@ -70,6 +86,35 @@ test-ingestion:
 # parsing, provisioning/validation against an in-memory fake client).
 test-audit-r2:
 	python3 -m unittest discover -s code/01_platform/04_scripts/tests -v
+
+# Live regression smoke for the DDL apply exit-code contract (0 full PASS / 6
+# acknowledged PASS_WITH_LIMITATION / 1 refused) + the machine-readable
+# sentinels. Env-gated: SKIPPED when FLUSS_BOOTSTRAP is unset; wired into the
+# Monday verification gate (run-monday-gates.sh) after the Java full gate.
+ddl-apply-smoke:
+	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py
+
+# Run the SCH-23 EOD controller CLI on the host (status/run/extend/reconcile/
+# reset) against the live Fluss cluster. Env: FLUSS_BOOTSTRAP + EOD_* (see
+# eod_controller.py). Example: make eod-controller ARGS="status"
+eod-controller:
+	@python3 code/01_platform/04_scripts/eod_controller.py $(ARGS)
+
+# Build the DDL apply contract image (code/01_platform/01_docker/ddl-apply/):
+# multi-stage — maven builder compiles the engine, temurin-jre + python3
+# runtime carries the classes, the 5 pinned jars, the orchestrator/smoke, the
+# DDL corpus + manifest, and the matrix evidence. One-shot run inside the
+# compose network: docker compose run --rm ddl-apply {validate|apply|smoke|self-test}.
+ddl-image:
+	@docker compose -f code/01_platform/01_docker/docker-compose.yml build ddl-apply
+
+# Non-root ownership contract gate (evidence_ownership_check.py): every
+# apply.json the ddl-apply container wrote (owner == DDL_APPLY_UID) must be
+# group-writable (setgid 2775 evidence root + umask 002 -> 664) and no record
+# may be root-owned. Host-side records are out of scope. Also docs-audit C15
+# and the Monday gate DDL step.
+evidence-ownership-check:
+	@python3 code/01_platform/04_scripts/evidence_ownership_check.py
 
 # Phase 8: every guard fires on every run — the full Monday gate.
 gate:

@@ -167,8 +167,35 @@ if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 fi
 echo "PASS: Java suite" | tee -a "$SUMMARY"
 
+# ── 3b. DDL apply exit-code contract smoke (scratch catalogs) ────────────────
+echo "=== [7/8] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
+DDL_SMOKE_LOG="$OUT_DIR/ddl-smoke.log"
+DDL_SMOKE_TIMEOUT_SEC="${DDL_SMOKE_TIMEOUT_SEC:-1800}"
+# Env-gated: SKIPPED (exit 0) when FLUSS_BOOTSTRAP is unset; any deviation from
+# the 0/6/1 contract, the sentinels, or the evidence record FAILS the gate.
+if ! timeout "$DDL_SMOKE_TIMEOUT_SEC" python3 \
+	"$SCRIPT_DIR/ddl_apply_smoke.py" >"$DDL_SMOKE_LOG" 2>&1; then
+	echo "FAIL: DDL apply exit-code smoke — see $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+if grep -q "ddl-apply-smoke: SKIPPED" "$DDL_SMOKE_LOG"; then
+	echo "SKIP: DDL apply smoke (no FLUSS_BOOTSTRAP) — see $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
+else
+	echo "PASS: DDL apply exit-code smoke (0/6/1 + sentinels)" | tee -a "$SUMMARY"
+fi
+# Non-root ownership contract: every container-written evidence record must be
+# group-writable and none root-owned (evidence_ownership_check.py). No cluster
+# needed; vacuous when no container-written records exist (host-side records
+# are out of scope). Also wired into docs-audit C15 + make evidence-ownership-check.
+if ! timeout 60 python3 "$SCRIPT_DIR/evidence_ownership_check.py" \
+	>>"$DDL_SMOKE_LOG" 2>&1; then
+	echo "FAIL: evidence ownership check — see $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: evidence ownership check (container-written records group-writable)" | tee -a "$SUMMARY"
+
 # ── 4. Schema agreement + perf certification explicit gates (G5) ─────────────
-echo "=== [7/7] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
+echo "=== [8/8] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
 SCHEMA_PERF_LOG="$OUT_DIR/schema-perf.log"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_PERF=true \
@@ -190,4 +217,5 @@ echo "Evidence:" | tee -a "$SUMMARY"
 echo "  Static: $STATIC_LOG" | tee -a "$SUMMARY"
 echo "  Go:   $GO_LOG" | tee -a "$SUMMARY"
 echo "  Java: $JAVA_LOG" | tee -a "$SUMMARY"
+echo "  DDL smoke: $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
 echo "  Schema/Perf: $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
