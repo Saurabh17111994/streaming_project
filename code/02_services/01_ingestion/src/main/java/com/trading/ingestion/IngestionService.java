@@ -94,6 +94,11 @@ public final class IngestionService {
     private static final int MAX_BRIDGE_RESTARTS = 1;
     /** Wait before restarting a crashed bridge (plan: wait 1 second). */
     private static final long BRIDGE_RESTART_WAIT_MS = 1_000L;
+    /** Bounded join on the main thread from the shutdown hook: the JVM halts as
+     *  soon as every hook returns and does not wait for the main thread, so the
+     *  final {@code bridge loop ended} report (logged by main as it unwinds)
+     *  could race the halt. Join long enough for the unwind to flush it. */
+    private static final long SHUTDOWN_MAIN_JOIN_MS = 10_000L;
 
     private final String instanceId;
     private final AppendTracker tracker;
@@ -142,6 +147,10 @@ public final class IngestionService {
     /** stderr drain thread for the current bridge, joined at shutdown so the
      *  final tick-count report is flushed into the log before JVM halt. */
     private volatile Thread currentBridgeStderrThread;
+    /** The process's main thread (set by {@link #main}); the shutdown hook
+     *  joins it (bounded) so the final bridge-loop report flushes before the
+     *  JVM halts. Null outside main (unit tests) — the join is skipped. */
+    private volatile Thread mainThread;
 
     public IngestionService(String instanceId,
                              List<Instrument> instruments,
@@ -319,6 +328,11 @@ public final class IngestionService {
                     + "set UNCERTAINTY_JOURNAL_PATH to a writable path");
             System.exit(1);
         }
+
+        // Capture the main thread so the shutdown hook can join it (bounded) —
+        // without the join, the JVM halts the moment the hook returns and the
+        // main thread's final "bridge loop ended" report races the halt.
+        service.mainThread = Thread.currentThread();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("ingestion: shutdown requested");
@@ -1266,6 +1280,11 @@ public final class IngestionService {
             LOG.debug("ingestion: duplicate shutdown ignored");
             return;
         }
+        // Capture whether the bridge loop is live BEFORE flipping running below
+        // — only that case needs the main-thread join (a FATAL-startup System.exit
+        // also runs this hook, and main is blocked in System.exit there, so the
+        // join must be skipped or startup failures would stall the full bound).
+        boolean bridgeLoopLive = running;
         // Signal the bridge (SIGTERM) so its ctx.Done handler runs the final
         // ARROW_TICK_COUNTS report before the pipe closes. Without this the
         // bridge dies of SIGPIPE (exit 141) on JVM halt and the shutdown report
@@ -1332,6 +1351,20 @@ public final class IngestionService {
 
         // J2: Drain pending writes with deadline
         if (writer != null) writer.close();
+        // Join the main thread (bounded) when this is the shutdown hook and the
+        // bridge loop was live: the loop logs the final "bridge loop ended
+        // (ticks=…)" report after `running` flips false, and the JVM halts as
+        // soon as this hook returns without waiting for main. (Skipped when the
+        // bridge never launched — FATAL startup — or on a normal in-thread
+        // shutdown, where main IS this thread or already finished.)
+        if (bridgeLoopLive && mainThread != null
+                && Thread.currentThread() != mainThread && mainThread.isAlive()) {
+            try {
+                mainThread.join(SHUTDOWN_MAIN_JOIN_MS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
         LOG.info("ingestion: drained (totalTicks={}, errors={})",
                 frameCount.get(), errorCount.get());
     }
