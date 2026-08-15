@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-> **Status:** Proposed — no code landed. This is the referable backlog for the additional robustness tests identified by the 2026-08-15 audit of [`03-ingestion.md`](./03-ingestion.md) against the implemented ingestion service.
+> **Status:** **M1 (Safety core) landed 2026-08-15** — ING-FAIL-004 (concurrency), ING-FAIL-005 (halt-latch pinned), ING-FAIL-007 (TIME_JUMP wired), ING-DQ-010 (no-silent-drop) implemented; ingestion suite 204/0/8-skips. M2–M5 remain as backlog below.
 >
 > **Source dossier:** [`03-ingestion.md`](./03-ingestion.md) — every test below maps to one of its aspects (packet processing, fingerprint, backpressure, failure matrix, config contract, losslessness, Go bridge, telemetry, startup/readiness).
 >
@@ -14,8 +14,8 @@ The 2026-08-15 audit verified that every requirement of `03-ingestion.md` is imp
 
 | # | Gap | Severity | Detail |
 | --- | --- | --- | --- |
-| G1 | `TIME_JUMP` discontinuity is never emitted | High (code gap) | `DiscontinuityWriter.Reason.TIME_JUMP` is declared (`DiscontinuityWriter.java`) with javadoc "NTP clock offset exceeded limit", but no code path writes a TIME_JUMP row. Clock violations only log + block readiness. Either wire it or delete the enum. |
-| G2 | AppendTracker halt latch never auto-resets | Medium (semantic ambiguity) | `AppendTracker.halted` is set `true` at 100% and never cleared; recovery only happens via process restart. The dossier's "readiness-halt behavior" does not specify recovery; the intended lifecycle is unpinned. |
+| G1 | `TIME_JUMP` discontinuity is never emitted | High (code gap) | **RESOLVED in M1 (2026-08-15)** — `TimeJumpMonitor` + a periodic clock re-measurement in `IngestionService` emit one TIME_JUMP row per violation episode (ING-FAIL-007). |
+| G2 | AppendTracker halt latch never auto-resets | Medium (semantic ambiguity) | **RESOLVED in M1 (2026-08-15)** — pinned as "halted until restart" (fail-closed; a capacity fault needs operator restart, not silent resume) and asserted by ING-FAIL-005. |
 | G3 | `reconcile-compare.py` has zero tests | High (untested evidence tool) | The ING-TCP-001 losslessness proof rests entirely on this comparator. A regression could silently pass a reconcile. |
 | G4 | No fuzz / property-based tests on the parse path | Medium | `processLine` is only exercised with hand-written fixtures; random/malformed input could throw uncaught or drop silently. |
 | G5 | Process-level Go bridge tests are minimal | Medium | Only `hft_policy_test.go` drives the real binary; FATAL-exit codes and pin enforcement are otherwise untested at the process level. |
@@ -32,7 +32,7 @@ Conventions: Java = JUnit 5 under `code/02_services/01_ingestion/src/test/java/`
 
 | Test ID | Priority | Gap | Input/action | Pass result | Implementing class |
 | --- | --- | --- | --- | --- | --- |
-| `ING-DQ-010` | P1 | G4-adjacent — no global no-silent-drop invariant | Drive the full pipeline (fake bridge → Java → fake Fluss) with a mixed stream: valid ticks, malformed JSON, unknown feed, missing instrument, stale/future timestamps, hash mismatch, 1 MB lines, NUL bytes, Unicode | `accepted + quarantined + rejected == lines consumed` exactly; every line maps to exactly one evidence row (append or quarantine); zero uncaught exceptions | `IngestionNoSilentDropTest` (extends the `FullStackE2ETest` harness) |
+| `ING-DQ-010` | P1 | G4-adjacent — no global no-silent-drop invariant | Drive the full pipeline (fake bridge → Java → fake Fluss) with a mixed stream: valid ticks, malformed JSON, unknown feed, missing instrument, stale/future timestamps, 1 MB lines, NUL bytes | `accepted + quarantined + rejected == lines consumed` exactly; every line maps to exactly one evidence row (append or quarantine); zero uncaught exceptions. **Landed 2026-08-15** as `IngestionNoSilentDropTest` — the service's evidence writers require a reachable Fluss at construction, so the test auto-probes `FLUSS_BOOTSTRAP`/`localhost:9123` and runs whenever a cluster is reachable (the ledger is asserted from in-process append + decode-error counters, independent of the Fluss writes succeeding); without a cluster it skips | `IngestionNoSilentDropTest` |
 | `ING-DQ-011` | P1 | G4 — no fuzz coverage | Seeded property-based generator produces random NDJSON lines | No line throws out of `processLine`; every line yields one of {append, quarantine, reject}; the stream is re-runnable (fixed seed) | `FuzzIngestionTest` (JDK `java.util.Random` with fixed seed; no external property library) |
 | `ING-UNIT-014` | P2 | Freshness-gate boundaries unpinned | `ts_ms` exactly at `maxEventAge`, exactly at `maxFutureSkew`, ±1 ms over/under, receive==broker time | FRESH/STALE/FUTURE classification exact at every boundary | extend `StaleDataTradeGuardTest` |
 | `ING-UNIT-015` | P3 | Payload-hash edge cases | Empty payload, URL-safe base64, padded/unpadded variants, multi-frame large payloads | `PayloadHashValidator` accepts the valid forms and rejects the invalid ones with the typed result (R-186: SHA-256 of "" is a real digest, never dropped) | extend `PayloadHashValidatorTest` |
@@ -104,7 +104,7 @@ Each milestone ends with its full suite green and the catalog updated — nothin
 
 | Milestone | Tests | Scope |
 | --- | --- | --- |
-| **M1 — Safety core** | `ING-FAIL-007`, `ING-FAIL-005`, `ING-FAIL-004`, `ING-DQ-010` | Close the two code gaps (TIME_JUMP, halt-latch decision), pin the tracker under concurrency, prove the no-silent-drop invariant. |
+| **M1 — Safety core** ✅ landed 2026-08-15 | `ING-FAIL-007`, `ING-FAIL-005`, `ING-FAIL-004`, `ING-DQ-010` | Closed the two code gaps (TIME_JUMP wired; halt-latch pinned "until restart"), pinned the tracker under concurrency, proved the no-silent-drop invariant. Suite 204/0/8-skips. |
 | **M2 — Losslessness + config** | `ING-TCP-002`, `ING-UNIT-018`, `ING-UNIT-019` | Test the losslessness comparator; pin Java↔Go config parity; add the env-key doc-drift C-check. |
 | **M3 — Failure-path E2E** | `ING-FAIL-008`, `ING-FAIL-009`, `ING-FAIL-010`, `ING-INT-005` | Crash-loop, auth-failure, shutdown-deadlock, and the READY gating matrix. |
 | **M4 — Go bridge + data quality** | `ING-DQ-011`, `ING-UNIT-014`, `ING-UNIT-015`, `ING-UNIT-016`, `ING-UNIT-017`, `ING-RES-002`, `ING-RES-003`, `ING-RES-004`, `ING-TCP-003` | Fuzz corpus, golden pins, plan boundaries, backoff, contract version. |

@@ -4,6 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -167,5 +176,143 @@ class AppendTrackerTest {
         assertFalse(tracker.tryAccept(100), "First reject");
         assertFalse(tracker.tryAccept(1), "Subsequent small record also rejected");
         assertEquals(2, tracker.totalRejected());
+    }
+
+    // ---- ING-FAIL-005: halt-latch lifecycle (decided 2026-08-15) ----
+
+    /**
+     * ING-FAIL-005: the halt latch is pinned to "halted until process
+     * restart". Reaching a pending limit is a platform-capacity fault (dossier
+     * §Slow-Fluss policy), not a normal operating condition — the service must
+     * not silently resume after an acknowledged drop without an operator
+     * restart. Draining pending back to zero (success or failure) never
+     * unhalts, and accepts stay rejected while halted.
+     */
+    @Test
+    @DisplayName("ING-FAIL-005: halt latch persists after pending drains to zero")
+    void haltLatchPersistsAfterDrain() {
+        AppendTracker small = new AppendTracker(10, 100_000, 0.80);
+        for (int i = 0; i < 10; i++) {
+            assertTrue(small.tryAccept(100));
+        }
+        // 100% → halted.
+        assertFalse(small.tryAccept(100), "11th record must be rejected");
+        assertTrue(small.isHalted());
+        assertFalse(small.isReady());
+
+        // Drain every accepted record — success and failure paths both release.
+        for (int i = 0; i < 10; i++) {
+            if (i % 2 == 0) small.onAppendSuccess(100);
+            else small.onAppendFailure(100);
+        }
+        assertEquals(0, small.pendingRecords(), "pending must drain to zero");
+        assertEquals(0, small.pendingBytes(), "pending bytes must drain to zero");
+
+        // Pinned lifecycle: halted stays latched until restart.
+        assertTrue(small.isHalted(), "halt must persist after draining (fail-closed until restart)");
+        assertFalse(small.isReady(), "readiness must stay false while halted");
+        assertFalse(small.tryAccept(100), "accepts must stay rejected while halted");
+        assertEquals(2, small.totalRejected());
+        assertFalse(small.isReady(), "isReady must remain false even after a fresh reject");
+    }
+
+    // ---- ING-FAIL-004: concurrency invariants ----
+
+    /**
+     * ING-FAIL-004: the tracker is the money-safety backpressure core and must
+     * hold its invariants under concurrency. 16 threads race accept/release
+     * with a small limit so the 100% halt path is exercised concurrently;
+     * final state must reconcile exactly and pending counters must never go
+     * negative.
+     */
+    @Test
+    @DisplayName("ING-FAIL-004: concurrent accept/release keeps all tracker invariants")
+    void concurrentAcceptReleaseKeepsInvariants() throws Exception {
+        AppendTracker small = new AppendTracker(200, 50_000, 0.80);
+        int threads = 16;
+        int perThread = 5_000;
+        int inFlightBudget = 25; // hold up to 25 before releasing → pending can exceed the 200 limit → halt path races
+        java.util.Random rng = new java.util.Random(42);
+
+        AtomicLong accepted = new AtomicLong();
+        AtomicLong rejected = new AtomicLong();
+        AtomicLong appended = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong acceptedBytes = new AtomicLong();
+        AtomicBoolean negativeSeen = new AtomicBoolean();
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                long acc = 0, rej = 0, app = 0, fail = 0, bytes = 0;
+                List<Integer> held = new ArrayList<>();
+                for (int i = 0; i < perThread; i++) {
+                    int size = 100 + rng.nextInt(500);
+                    if (small.tryAccept(size)) {
+                        acc++;
+                        bytes += size;
+                        held.add(size);
+                        if (held.size() >= inFlightBudget) {
+                            for (int s : held) {
+                                if (rng.nextBoolean()) {
+                                    small.onAppendSuccess(s);
+                                    app++;
+                                } else {
+                                    small.onAppendFailure(s);
+                                    fail++;
+                                }
+                            }
+                            held.clear();
+                        }
+                    } else {
+                        rej++;
+                    }
+                    // Sampler: pending must never be observed negative.
+                    if (small.pendingRecords() < 0 || small.pendingBytes() < 0) {
+                        negativeSeen.set(true);
+                    }
+                }
+                // Release any held remainder.
+                for (int s : held) {
+                    if (rng.nextBoolean()) {
+                        small.onAppendSuccess(s);
+                        app++;
+                    } else {
+                        small.onAppendFailure(s);
+                        fail++;
+                    }
+                }
+                accepted.addAndGet(acc);
+                rejected.addAndGet(rej);
+                appended.addAndGet(app);
+                failed.addAndGet(fail);
+                acceptedBytes.addAndGet(bytes);
+                return null;
+            }));
+        }
+        start.countDown();
+        for (Future<?> f : futures) {
+            f.get(120, TimeUnit.SECONDS);
+        }
+        pool.shutdown();
+
+        // Every attempt either accepted or rejected — nothing vanishes.
+        assertEquals((long) threads * perThread, accepted.get() + rejected.get());
+        // Every accepted record completed exactly once, as success or failure.
+        assertEquals(accepted.get(), appended.get() + failed.get());
+        // Pending fully drained.
+        assertEquals(0, small.pendingRecords(), "pending records must reconcile to zero");
+        assertEquals(0, small.pendingBytes(), "pending bytes must reconcile to zero");
+        // Tracker totals match the workers' own accounting.
+        assertEquals(accepted.get(), small.totalAccepted());
+        assertEquals(rejected.get(), small.totalRejected());
+        assertEquals(appended.get(), small.totalAppended());
+        assertEquals(failed.get(), small.totalFailed());
+        assertEquals(acceptedBytes.get(), small.totalBytesAccepted(),
+                "accepted bytes must equal the sum of accepted record sizes");
+        assertFalse(negativeSeen.get(), "pending counters must never go negative");
     }
 }

@@ -11,6 +11,7 @@ import com.trading.ingestion.bridge.BridgeMetrics;
 import com.trading.ingestion.bridge.BrokerQuarantine;
 import com.trading.ingestion.bridge.PayloadHashValidator;
 import com.trading.ingestion.discontinuity.DiscontinuityWriter;
+import com.trading.ingestion.discontinuity.TimeJumpMonitor;
 import com.trading.ingestion.fingerprint.FingerprintBuilder;
 import com.trading.ingestion.health.HealthProbe;
 import com.trading.ingestion.health.NtpClockChecker;
@@ -79,6 +80,11 @@ public final class IngestionService {
 
     private static final long FRAME_STALE_MS = 15_000L;
     private static final long SUBSCRIPTION_COMPLETENESS_TIMEOUT_MS = 30_000L;
+    /** Clock re-measurement cadence (ING-FAIL-007). NTP queries are cheap but
+     *  not free; 60 s keeps the readiness clock dimension fresh without
+     *  hammering the time servers. */
+    private static final long CLOCK_MONITOR_INITIAL_DELAY_MS = 60_000L;
+    private static final long CLOCK_MONITOR_INTERVAL_MS = 60_000L;
     private static final double SLOW_FLUSS_PAUSE_PERCENT = 0.90;
     private static final double SLOW_FLUSS_RESUME_PERCENT = 0.50;
     /** Bridge restarts after an unexpected process exit (plan: restart exactly once). */
@@ -106,6 +112,12 @@ public final class IngestionService {
                 t.setDaemon(true);
                 return t;
             });
+
+    /** ING-FAIL-007: one TIME_JUMP discontinuity per clock-violation episode. */
+    private final TimeJumpMonitor timeJumpMonitor;
+    /** Re-measures the NTP offset; a violation crossing CLOCK_OFFSET_LIMIT_MS
+     *  emits TIME_JUMP evidence and refreshes the readiness clock dimension. */
+    private final java.util.concurrent.ScheduledExecutorService clockMonitorScheduler;
 
     private final IngestionConfig config;
     private final NtpClockChecker clock;
@@ -148,6 +160,12 @@ public final class IngestionService {
         this.tracker = new AppendTracker(config.maxPendingRecords, config.maxPendingBytes,
                 config.pendingWarningPercent);
         this.health = new HealthProbe(tracker, clock);
+        this.timeJumpMonitor = new TimeJumpMonitor(config.clockOffsetLimitMs);
+        this.clockMonitorScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ingestion-clock-monitor");
+            t.setDaemon(true);
+            return t;
+        });
         this.writer = new RawTickWriter(flussWriter, tracker, config.rawTableName,
                 config.appendTimeout,
                 java.time.Duration.ofSeconds(30)); // drain deadline
@@ -353,6 +371,11 @@ public final class IngestionService {
         // ---- Subscription completeness tracking (ING-2) ----
         java.util.Set<Long> seenTokens = java.util.concurrent.ConcurrentHashMap.newKeySet();
         long lastSubscriptionWarningNanos = System.nanoTime();
+
+        // ING-FAIL-007: periodic clock-offset re-measurement — a violation
+        // crossing CLOCK_OFFSET_LIMIT_MS emits a TIME_JUMP discontinuity
+        // (once per episode) and keeps the readiness clock dimension fresh.
+        startClockMonitor();
 
         // Start with broker not connected — set to true on first frame
         health.setBrokerConnected(false);
@@ -1172,6 +1195,47 @@ public final class IngestionService {
         }
     }
 
+    // ---- ING-FAIL-007: clock-jump monitoring ----
+
+    /**
+     * Start the periodic NTP clock re-measurement. Runs on its own daemon
+     * scheduler so a slow NTP query can never delay the broker-staleness
+     * watchdog or the read loop.
+     */
+    private void startClockMonitor() {
+        clockMonitorScheduler.scheduleAtFixedRate(() -> {
+            if (!running || clock == null) return;
+            try {
+                long offset = clock.measureOffsetMs();
+                handleClockMeasurement(offset);
+            } catch (NtpClockChecker.NtpException e) {
+                LOG.warn("ingestion: clock monitor check failed: {}", sanitizeLog(e.getMessage()));
+            }
+        }, CLOCK_MONITOR_INITIAL_DELAY_MS, CLOCK_MONITOR_INTERVAL_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Process one fresh clock-offset measurement. Emits exactly one
+     * {@code TIME_JUMP} discontinuity row per violation episode (ING-FAIL-007)
+     * and refreshes the readiness marker so the clock dimension tracks the
+     * latest measurement, not just the startup check.
+     */
+    void handleClockMeasurement(long offsetMs) {
+        if (timeJumpMonitor.onOffsetMeasured(offsetMs)) {
+            LOG.error("ingestion: TIME_JUMP — clock offset {}ms exceeds limit {}ms; "
+                            + "writing discontinuity evidence",
+                    offsetMs, config.clockOffsetLimitMs);
+            discontinuityWriter.write(
+                    DiscontinuityWriter.Reason.TIME_JUMP,
+                    "clock offset " + offsetMs + "ms exceeds limit "
+                            + config.clockOffsetLimitMs + "ms",
+                    lastTickSnapshot
+            );
+        }
+        updateReadinessFile();
+    }
+
     // ---- shutdown ----
 
     private void shutdown() {
@@ -1214,8 +1278,9 @@ public final class IngestionService {
             }
         }
         running = false;
-        // Stop the staleness watchdog (R-108).
+        // Stop the staleness watchdog (R-108) and the clock monitor (ING-FAIL-007).
         stalenessWatchdog.shutdownNow();
+        clockMonitorScheduler.shutdownNow();
         if (readinessFile != null) {
             try { readinessFile.clear(); }
             catch (java.io.IOException e) { LOG.warn("ingestion: readiness marker clear failed: {}", sanitizeLog(e.getMessage())); }
