@@ -20,12 +20,14 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -244,6 +246,161 @@ class CompatFlussIntegrationTest {
     LOG.info("compat-fluss-003: LOG append + KV upsert/lookup + partial_update merge OK");
   }
 
+  // ── COMPAT-FLUSS-003 (SCH-14): KV changelog records are FULL images ─────
+
+  /**
+   * A KV table's changelog (readable via LogScanner from offset 0) must carry
+   * a FULL row image per write — every column populated, not a delta of
+   * changed columns. Verified for full upserts and (merged) partial updates.
+   */
+  @Test
+  @DisplayName("COMPAT-FLUSS-003: KV changelog records are FULL row images")
+  void compatFluss003ChangelogFullImage() throws Exception {
+    connect();
+    String kvName = PREFIX + "kv_changelog_" + System.nanoTime();
+    Table kvTable = createTable(kvName, KV_SCHEMA, "key");
+
+    UpsertWriter w = kvTable.newUpsert().createWriter();
+    try {
+      w.upsert(GenericRow.of(bs("k1"), bs("v1"), bs("ACTIVE")))
+          .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } finally {
+      w.flush();
+    }
+
+    try (LogScanner s = kvTable.newScan().createLogScanner()) {
+      s.subscribe(0, 0L);
+      ScanRecords recs = s.poll(Duration.ofSeconds(3));
+      assertTrue(recs.count() >= 1, "changelog must expose the first upsert");
+      InternalRow row = recs.iterator().next().getRow();
+      assertNotNull(row.getString(0), "changelog record must carry the key (FULL image)");
+      assertNotNull(row.getString(1), "changelog record must carry the value (FULL image)");
+      assertNotNull(row.getString(2), "changelog record must carry the status (FULL image)");
+      assertEquals("v1", row.getString(1).toString(), "FULL image carries the written value");
+    }
+
+    // Second full upsert on the same key — changelog grows by another FULL
+    // record; the lookup reflects the latest write.
+    UpsertWriter w2 = kvTable.newUpsert().createWriter();
+    try {
+      w2.upsert(GenericRow.of(bs("k1"), bs("v2"), bs("ACTIVE")))
+          .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } finally {
+      w2.flush();
+    }
+    try (LogScanner s = kvTable.newScan().createLogScanner()) {
+      s.subscribe(0, 0L);
+      ScanRecords recs = s.poll(Duration.ofSeconds(3));
+      assertTrue(recs.count() >= 2, "changelog must grow per upsert (append-only)");
+      InternalRow last = null;
+      var it = recs.iterator();
+      while (it.hasNext()) {
+        last = it.next().getRow();
+      }
+      assertNotNull(last);
+      assertNotNull(last.getString(0));
+      assertNotNull(last.getString(1));
+      assertNotNull(last.getString(2));
+      assertEquals("v2", last.getString(1).toString(),
+          "latest changelog record carries the latest full image");
+    }
+
+    // A partial_update lands on the changelog as a merged FULL image (the
+    // untouched columns stay populated) — merge at the storage layer, not a
+    // column delta.
+    UpsertWriter w3 = kvTable.newUpsert().partialUpdate("key", "value").createWriter();
+    try {
+      w3.upsert(GenericRow.of(bs("k1"), bs("v3"), bs("IGNORED")))
+          .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } finally {
+      w3.flush();
+    }
+    try (LogScanner s = kvTable.newScan().createLogScanner()) {
+      s.subscribe(0, 0L);
+      ScanRecords recs = s.poll(Duration.ofSeconds(3));
+      var it = recs.iterator();
+      InternalRow last = null;
+      while (it.hasNext()) {
+        last = it.next().getRow();
+      }
+      assertNotNull(last, "partial update must be observable in the changelog");
+      assertNotNull(last.getString(0), "partial-update changelog record keeps the key");
+      assertNotNull(last.getString(1), "partial-update changelog record carries the merged value");
+      assertNotNull(last.getString(2),
+          "partial-update changelog record carries the merged status (FULL image, not a delta)");
+      assertEquals("v3", last.getString(1).toString());
+      assertEquals("ACTIVE", last.getString(2).toString(),
+          "untouched column preserved in the merged changelog image");
+    }
+    Lookuper lookuper = kvTable.newLookup().createLookuper();
+    InternalRow finalRow = lookuper.lookup(GenericRow.of(bs("k1")))
+        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).getSingletonRow();
+    assertNotNull(finalRow);
+    assertEquals("v3", finalRow.getString(1).toString());
+    assertEquals("ACTIVE", finalRow.getString(2).toString());
+
+    LOG.info("compat-fluss-003: KV changelog records are FULL row images (full upsert + partial update merge)");
+  }
+
+  // ── COMPAT-FLINK-002 (SCH-16): cross-table visibility ────────────────────
+
+  /**
+   * Fluss provides per-table consistency, not a cross-table atomic commit:
+   * a write to table A becomes visible before a later write to table B, and a
+   * reader can observe the partial two-table state in between. This probe
+   * records the observed limit — multi-table consumers (e.g. the Signal job's
+   * LOG + KV dual sinks) must reconcile partial visibility by ID, which is
+   * what SIG-INT-002 / the dual-sink reconciliation does.
+   */
+  @Test
+  @DisplayName("COMPAT-FLINK-002: cross-table writes are visible per-table, not atomically")
+  void compatFlink002CrossTableVisibility() throws Exception {
+    connect();
+    String nameA = PREFIX + "vis_a_" + System.nanoTime();
+    String nameB = PREFIX + "vis_b_" + System.nanoTime();
+    Table tableA = createTable(nameA, LOG_SCHEMA, "id");
+    Table tableB = createTable(nameB, LOG_SCHEMA, "id");
+
+    // Commit to A only.
+    AppendWriter wa = tableA.newAppend().createWriter();
+    try {
+      wa.append(GenericRow.of(1L, new byte[] {1}, bs("a1")))
+          .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } finally {
+      wa.flush();
+    }
+    // A is visible immediately …
+    try (LogScanner sa = tableA.newScan().createLogScanner()) {
+      sa.subscribe(0, 0L);
+      ScanRecords recs = sa.poll(Duration.ofSeconds(3));
+      assertEquals(1, recs.count(), "A's commit is visible immediately");
+    }
+    // … while B shows nothing: no cross-table atomic snapshot exists.
+    try (LogScanner sb = tableB.newScan().createLogScanner()) {
+      sb.subscribe(0, 0L);
+      ScanRecords recs = sb.poll(Duration.ofSeconds(3));
+      assertEquals(0, recs.count(),
+          "B must be empty until its own commit — cross-table writes are NOT atomic");
+    }
+
+    // Commit to B independently; both are now visible.
+    AppendWriter wb = tableB.newAppend().createWriter();
+    try {
+      wb.append(GenericRow.of(1L, new byte[] {1}, bs("b1")))
+          .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } finally {
+      wb.flush();
+    }
+    try (LogScanner sb = tableB.newScan().createLogScanner()) {
+      sb.subscribe(0, 0L);
+      ScanRecords recs = sb.poll(Duration.ofSeconds(3));
+      assertEquals(1, recs.count(), "B's commit is visible after its own append");
+    }
+
+    LOG.info("compat-flink-002: per-table visibility observed — no cross-table atomic commit; "
+        + "multi-table consumers reconcile by ID (SIG-INT-002)");
+  }
+
   // ── COMPAT-FLUSS-004: stale / conflict KV updates rejected ─────────────
 
   /**
@@ -329,20 +486,149 @@ class CompatFlussIntegrationTest {
     LOG.info("schema-rec-001: clean-break rebuild converged to latest state OK");
   }
 
-  // ── SCHEMA-AUDIT-001: 7-year audit reconstruction (documented skip) ─────
+  // ── COMPAT-FLUSS-006: bucket-distribution skew probe (SCH-07) ───────────
 
   /**
-   * 7-year audit reconstruction requires lake/tiered storage (S3 / Iceberg
-   * offload), which the local Docker Compose stack does not configure. This
-   * test is intentionally a documented skip: the behavior belongs to the
-   * EOD offload + audit-lake contract (foundation: "Seven-year audit
-   * boundary") and must be exercised where tiering is configured.
+   * Live half of the "non-null routing and bucket-skew tests" requirement
+   * (02-schema-storage.md test requirements; SCH-07 routing evidence). The
+   * pinned Fluss distribution must spread distinct bucket-key values across
+   * the declared {@code bucket.num} buckets with no empty or hot bucket, and a
+   * constant bucket key must collapse to exactly one bucket — the negative
+   * control proves the probe measures the real hash distribution, not a fixed
+   * partition. Writes 400 distinct-key rows to an 8-bucket LOG table, counts
+   * each bucket via the batch scanner, and asserts: (1) every bucket receives
+   * at least one record, (2) no bucket exceeds mean + 3σ, and (3) the
+   * constant-key control lands all rows in exactly one bucket.
    */
   @Test
-  @DisplayName("SCHEMA-AUDIT-001: 7-year reconstruction — skipped (needs tiered storage)")
+  @DisplayName("COMPAT-FLUSS-006: bucket distribution — distinct keys spread evenly, constant key collapses")
+  void compatFluss006BucketDistributionSkew() throws Exception {
+    connect();
+    int buckets = 8;
+    int rows = 400;
+    String tableName = PREFIX + "skew_" + System.nanoTime();
+
+    TableDescriptor td = TableDescriptor.builder()
+        .schema(LOG_SCHEMA)
+        .distributedBy(buckets, "id")
+        .build();
+    TablePath path = TablePath.of("default", tableName);
+    try {
+      admin.createTable(path, td, false).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    } catch (Exception e) {
+      if (e.getMessage() == null || !e.getMessage().toLowerCase().contains("already exist")) {
+        throw e;
+      }
+    }
+    CREATED_TABLES.add(tableName);
+    Table table = connection.getTable(path);
+
+    AppendWriter w = table.newAppend().createWriter();
+    try {
+      for (long i = 0; i < rows; i++) {
+        w.append(GenericRow.of(i, new byte[] {1}, bs("k" + i)))
+            .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+      }
+    } finally {
+      w.flush();
+    }
+
+    TableInfo info = table.getTableInfo();
+    assertEquals(buckets, info.getNumBuckets(),
+        "effective bucket count must match bucket.num");
+    long tableId = info.getTableId();
+
+    int[] perBucket = new int[buckets];
+    for (int b = 0; b < buckets; b++) {
+      // BatchScanner requires an explicit limit (the total row cap); rows is a
+      // safe upper bound since each bucket holds at most the full row set.
+      try (BatchScanner bs = table.newScan().limit(rows)
+          .createBatchScanner(new TableBucket(tableId, b))) {
+        var it = bs.pollBatch(Duration.ofSeconds(5));
+        int count = 0;
+        while (it.hasNext()) {
+          it.next();
+          count++;
+        }
+        it.close();
+        perBucket[b] = count;
+      }
+    }
+
+    double mean = (double) rows / buckets;
+    double sigma = Math.sqrt(mean * (1.0 - 1.0 / buckets));
+    double bound = mean + 3.0 * sigma;
+    int maxLoad = 0;
+    for (int b = 0; b < buckets; b++) {
+      maxLoad = Math.max(maxLoad, perBucket[b]);
+      assertTrue(perBucket[b] >= 1,
+          "bucket " + b + " must receive at least one record (distinct keys spread across "
+              + "all buckets): " + Arrays.toString(perBucket));
+      assertTrue(perBucket[b] <= bound,
+          "bucket " + b + " load " + perBucket[b] + " exceeds mean+3σ ("
+              + String.format("%.1f", bound) + "): " + Arrays.toString(perBucket));
+    }
+
+    // Negative control: a constant bucket key must collapse to ONE bucket.
+    String hotName = PREFIX + "skewhot_" + System.nanoTime();
+    TableDescriptor hotTd = TableDescriptor.builder()
+        .schema(LOG_SCHEMA)
+        .distributedBy(4, "id")
+        .build();
+    TablePath hotPath = TablePath.of("default", hotName);
+    admin.createTable(hotPath, hotTd, false).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    CREATED_TABLES.add(hotName);
+    Table hotTable = connection.getTable(hotPath);
+    AppendWriter hw = hotTable.newAppend().createWriter();
+    try {
+      for (int i = 0; i < 200; i++) {
+        hw.append(GenericRow.of(0L, new byte[] {1}, bs("same")))
+            .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+      }
+    } finally {
+      hw.flush();
+    }
+    long hotTableId = hotTable.getTableInfo().getTableId();
+    int hotBuckets = 0;
+    for (int b = 0; b < 4; b++) {
+      try (BatchScanner bs = hotTable.newScan().limit(200)
+          .createBatchScanner(new TableBucket(hotTableId, b))) {
+        var it = bs.pollBatch(Duration.ofSeconds(5));
+        int count = 0;
+        while (it.hasNext()) {
+          it.next();
+          count++;
+        }
+        it.close();
+        if (count > 0) {
+          hotBuckets++;
+        }
+      }
+    }
+    assertEquals(1, hotBuckets,
+        "constant bucket key must collapse all rows into exactly one bucket "
+            + "(proves the probe measures the real hash distribution)");
+
+    LOG.info("compat-fluss-006: bucket distribution OK — {} distinct keys over {} buckets, "
+            + "max load {} (mean {}, mean+3σ {}); constant-key control collapsed to 1 bucket",
+        rows, buckets, maxLoad, String.format("%.1f", mean), String.format("%.1f", bound));
+  }
+
+  // ── audit reconstruction (documented skip — retained for history) ─────────
+
+  /**
+   * The pure-JVM chain verification and order-path reconstruction from
+   * immutable evidence is implemented in {@code AuditReconstructionSimulationTest}
+   * (no cluster needed). The tiered-storage half (real S3/Iceberg offload,
+   * encryption, key management, periodic reconstruction against the live lake)
+   * was part of the removed SCH-24 audit pipeline and is no longer required.
+   */
+  @Test
+  @DisplayName("audit reconstruction: tiered-storage half — skipped (removed SCH-24)")
   void schemaAudit001SevenYearReconstruction() {
     assumeTrue(false,
-        "7-year reconstruction requires lake/tiered storage (S3/Iceberg), not configured in local Docker; "
-            + "exercised where EOD offload is deployed");
+        "the tiered-storage half of 7-year reconstruction (S3/Iceberg offload, encryption, "
+            + "key management) was SCH-24 — removed from scope; the chain/reconstruction half is "
+            + "covered by AuditReconstructionSimulationTest");
   }
 }

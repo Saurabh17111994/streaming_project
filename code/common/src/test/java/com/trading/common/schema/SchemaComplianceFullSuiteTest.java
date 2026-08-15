@@ -61,6 +61,36 @@ class SchemaComplianceFullSuiteTest {
   }
 
   @Test
+  void everyManifestTableHasRoutingIdentity() throws Exception {
+    // Full-manifest half of "non-null routing and bucket-skew tests": the
+    // RoutingKeyRule unit path checks LOG-only, so this asserts the complete
+    // committed set — every LOG table carries a non-null bucket.key and every
+    // KV table carries a primary key (its default routing identity); a KV
+    // entry that declares a bucket key must not declare it blank.
+    Path manifestPath = Path.of("..", "01_platform", "02_sql", "ddl", "schema_manifest.json");
+    SchemaManifest manifest =
+        new ObjectMapper().readValue(Files.readAllBytes(manifestPath), SchemaManifest.class);
+    List<String> violations = new java.util.ArrayList<>();
+    for (SchemaManifestEntry e : manifest.tables) {
+      if ("LOG".equalsIgnoreCase(e.tableKind)
+          && (e.bucketKey == null || e.bucketKey.isBlank())) {
+        violations.add(e.tableName + " (LOG) missing non-null bucket.key");
+      }
+      if ("KV".equalsIgnoreCase(e.tableKind)
+          && (e.primaryKey == null || e.primaryKey.isBlank())) {
+        violations.add(e.tableName + " (KV) missing primary key (default routing identity)");
+      }
+      if ("KV".equalsIgnoreCase(e.tableKind)
+          && e.bucketKey != null && e.bucketKey.isBlank()) {
+        violations.add(e.tableName + " (KV) declares an empty bucket.key");
+      }
+    }
+    assertThat(violations)
+        .as("every committed table must carry a routing identity")
+        .isEmpty();
+  }
+
+  @Test
   void committedManifestCarriesChecksumsAndCompatibilityClasses() throws Exception {
     // Foundation L848: every DDL entry must have a checksum AND a compatibility
     // class; candle/signal tables ride the Fluss-Flink connector boundary.
@@ -70,7 +100,7 @@ class SchemaComplianceFullSuiteTest {
         .isTrue();
     SchemaManifest manifest =
         new ObjectMapper().readValue(Files.readAllBytes(manifestPath), SchemaManifest.class);
-    assertThat(manifest.tables).hasSize(21);
+    assertThat(manifest.tables).hasSize(24);
     Map<String, String> boundaries = new HashMap<>();
     for (SchemaManifestEntry e : manifest.tables) {
       assertThat(e.ddlSha256).as(e.tableName + " ddl_sha256").isNotBlank();
