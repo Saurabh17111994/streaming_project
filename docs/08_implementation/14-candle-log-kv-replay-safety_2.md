@@ -1,5 +1,12 @@
 # Candle LOG/KV Replay Safety — Production Resolution Tracker
 
+> **ROLE — ACTIVE CORRECTIVE TRACKER (authoritative for this corrective phase):** this
+> file carries the re-scoped signal LOG/KV replay-safety execution plan and its
+> evidence (P0–P11). The canonical living signal-job design is
+> [`04-signal-job.md`](./04-signal-job.md); the frozen historical record of the retired
+> candle [LOG + KV] dual-sink era is
+> [`13-candle-log-kv-replay-safety.md`](./13-candle-log-kv-replay-safety.md).
+
 **File:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md`  
 **Status:** `IN_PROGRESS — production blocked` (RE-SCOPED 2026-08-13, see banner below)  
 **Purpose:** corrective implementation and evidence tracker after `13-candle-log-kv-replay-safety.md`.  

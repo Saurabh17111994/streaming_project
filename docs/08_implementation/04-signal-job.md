@@ -1,5 +1,12 @@
 # Signal Job
 
+> **ROLE — LIVING DOSSIER (canonical current design and evidence):** this file is the
+> authoritative signal-job dossier; new design and evidence land here. For the
+> replay-safety history (candle [LOG + KV] era, retired 2026-08-13) see
+> [`13-candle-log-kv-replay-safety.md`](./13-candle-log-kv-replay-safety.md); for the
+> active corrective tracker see
+> [`14-candle-log-kv-replay-safety_2.md`](./14-candle-log-kv-replay-safety_2.md).
+
 Build this phase, then implement the tests in the second section before moving on.
 
 ## What to build

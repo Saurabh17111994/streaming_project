@@ -1,5 +1,13 @@
 # Candle LOG + Canonical KV + Replay Safety
 
+> **ROLE — HISTORICAL RECORD (frozen, do not edit, do not read as current):** this is
+> the completed, superseded tracker `CANDLE-KV-REPLAY-001` for the retired candle
+> [LOG + KV] dual-sink era (built 2026-08-10; superseded 2026-08-13 by the signal
+> re-scope and the candle KV-only conversion). It is retained only as the accurate
+> historical record of what was built and verified. For the current signal-job design
+> see [`04-signal-job.md`](./04-signal-job.md); for the active corrective tracker see
+> [`14-candle-log-kv-replay-safety_2.md`](./14-candle-log-kv-replay-safety_2.md).
+
 **Tracker ID:** `CANDLE-KV-REPLAY-001`  
 **Status:** `COMPLETE — P0–P9 done; Phase 8 executed and verified on the dev cluster 2026-08-10 (historical load 1,351,301 rows, dual-sink cutover, B8.7 rollback rehearsal). Production data-plane execution remains the operator's blue-green step.` — **SCOPE SUPERSEDED 2026-08-13, see banner below; this document remains the accurate historical record of the implemented candle dual-sink. FURTHER SUPERSEDED (2026-08-13, later same day): the candle tables were converted to KV-only — `feature_candles_15s` is now the KV upsert table (PK `(instrument_token, window_start)`), the LOG-era dual-sink below is doubly superseded (see `04-signal-job.md` banner).**
 **Owner:** Compute / Storage / Operations  
