@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
 
 help:
 	@echo "Targets:"
@@ -34,6 +34,8 @@ help:
 	@echo "  build  build all service images"
 	@echo "  clean  stop stack + remove volumes"
 	@echo "  cep-check   fail if Flink CEP is referenced (project policy)"
+	@echo "  cep-check-module  CI-style module check: cep_guard.sh scoped to the compute module + the"
+	@echo "         SIG-UNIT-007 CepDependencyGuardTest, with an agreement/scope-parity assertion"
 	@echo "  test        run unit tests (common + ingestion)"
 	@echo "  test-ingestion  run only the ingestion module tests"
 	@echo "  test-audit-r2   run audit_r2.py unit tests (stdlib unittest, no R2 access needed)"
@@ -88,6 +90,11 @@ build:
 # Project rule: no CEP dependency in the MVP order path.
 cep-check:
 	@bash code/01_platform/04_scripts/cep_guard.sh .
+
+# CI-style module-scoped check: the shell guard and the SIG-UNIT-007 JUnit test
+# must both pass and agree on the scanned file set (cep_module_check.sh).
+cep-check-module:
+	@bash code/01_platform/04_scripts/cep_module_check.sh
 
 # Run all unit tests (common + ingestion modules).
 test:
