@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables pin-check ddl-apply-smoke ddl-image evidence-ownership-check
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
 
 help:
 	@echo "Targets:"
@@ -53,6 +53,11 @@ help:
 	@echo "              and docs-audit C6 line N/N/N citations vs the truth 340/234/325)"
 	@echo "              (forming-bar postponed, ranking/reservation postponed,"
 	@echo "              Trade_Decisions active) without a status marker"
+	@echo "  full-audit  run the whole doc audit in one command: the three gates (stale-tables,"
+	@echo "              docs-audit, --ddl parity) + the beyond-scanner sweeps (live ranking/"
+	@echo "              reservation claims, stale 'pending implementation' prose) + the"
+	@echo "              dossier-trio coherence checks (04-signal-job / 13 / 14 agree on the"
+	@echo "              re-scope, DEC-038 landing, and P11 status) — exit 0 only when all green"
 	@echo "  pin-check   pin discipline (foundation L548/553/554): matrix shape, corpus integrity,"
 	@echo "              external-SNAPSHOT ban, platform version pins"
 
@@ -165,6 +170,16 @@ docs-audit:
 # current-status marker). Exit 1 on un-annotated hits.
 stale-tables:
 	@python3 code/01_platform/04_scripts/stale_table_kind_scan.py --upstream
+
+# One-command full doc audit (2026-08-16 consolidation): the three gates
+# (stale-claim scanner --upstream, docs-audit, --ddl parity) plus the
+# beyond-scanner sweeps (live Ranking/Reservations/Decisions claims vs the
+# CHG-005 whitelist, stale 'pending implementation' prose in the upstream
+# layers) plus the dossier-trio coherence checks (04-signal-job / 13 / 14
+# must agree on the 2026-08-13 re-scope, the DEC-038 externalization landing,
+# and the P11 status). Exit 0 only when every layer is green.
+full-audit:
+	@bash code/01_platform/04_scripts/full_audit.sh
 
 # Foundation L548/553/554: pin discipline — matrix shape, corpus integrity,
 # external-SNAPSHOT ban, platform version pins. CI SHALL run this.
