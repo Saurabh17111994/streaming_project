@@ -155,6 +155,7 @@ Do not mark production-ready until every item below is complete. (2026-08-13: ca
 - [ ] 50k sustained throughput evidence passes (90k peak retired, DEC-036; re-scope: measured on the NEW signal dual-sink topology after implementation; the feed/tablet ceiling finding from P7 is topology-independent and already recorded).
 - [ ] p99 latency evidence passes.
 - [ ] checkpoint, memory, and recovery evidence passes.
+  (Deferred production gates — code-side backlog = the P7 re-run on the post-externalization topology; live-money BLOCKED.)
 - [x] Fluss/sink failure-injection evidence passes.
   (Register `FAILOVER-FLUSS-001` [x]: `CandleFailureInjectionIntegrationTest` 3/3 (checkpoint-failure → configured restart → FAILED; KV-table deletion → terminal FAILED via the `StallGuardedSink` watchdog, no hang; watermark-stall freeze/resume), live tablet-leader change + coordinator restart + checkpoint-timeout global restart recovery (dev bench job `a05c101f`, 2026-08-11/12). Terminal-failure completion upgraded 2026-08-12: `SINK_WRITE_STALL_TIMEOUT_MS=15000` bound + 5 s close cap make the deleted-table leg reach FAILED in ~25-30 s with the stall cause (`seen=[RUNNING, FAILED, FAILING]`); non-root gated run `logs/tracker-14/gated-run-20260812-nonroot-fullsuite.log`.)
 - [x] OpenObserve collector delivery is proven for metrics, logs, and enabled traces.
@@ -263,13 +264,20 @@ machinery is re-targeted to the signal current-state table:
 
 `Signal_Candidates_current` must satisfy:
 
-- [ ] `hasPrimaryKey() == true`; primary-key list exactly `[instrument_token]`.
-- [ ] exactly 22 columns; exact names and order from the signal row contract (`SignalCandidatesTableColumns`).
-- [ ] exact compatible Fluss logical types for every column; PK column NOT NULL.
-- [ ] bucket count 16; bucket key exactly `instrument_token` (`pk ⊇ bucketKey` holds by construction).
-- [ ] Compare metadata by semantic type (`DataTypeRoot.name()`), not Java implementation class identity.
-- [ ] Produce an error containing table name, expected contract, and actual mismatch.
-- [ ] Do not allow the connector's append/upsert writer selection to substitute for this check — `SignalJob.preflightTableContracts` runs before the environment is created.
+- [x] `hasPrimaryKey() == true`; primary-key list exactly `[instrument_token]`.
+  (`TableContractValidator.validateSignalCurrentKvTable` — `requireExactPrimaryKey`, PK exactly `[instrument_token]` (per-ticker current state), SIGNAL-SCHEMA-001.)
+- [x] exactly 22 columns; exact names and order from the signal row contract (`SignalCandidatesTableColumns`).
+  (`validateSchema` per-index name + order + count check against `SignalCandidatesTableColumns.NAMES`, 22-col v3 signal contract.)
+- [x] exact compatible Fluss logical types for every column; PK column NOT NULL.
+  (Per-index `DataTypeRoot` comparison against `TYPE_ROOTS`; PK NOT NULL is what Fluss enforces at `Schema.Builder.primaryKey()` — the live `TableInfo` reflects it.)
+- [x] bucket count 16; bucket key exactly `instrument_token` (`pk ⊇ bucketKey` holds by construction).
+  (`validateRouting` against `CandleTableSchema.BUCKET_KEY`/`BUCKET_COUNT`; wrong bucket key/count rejected.)
+- [x] Compare metadata by semantic type (`DataTypeRoot.name()`), not Java implementation class identity.
+  (`column.getDataType().getTypeRoot().name()` per index — never Java class identity.)
+- [x] Produce an error containing table name, expected contract, and actual mismatch.
+  (`ContractViolation` messages carry the table path, expected vs actual, and contract ID — fail-fast before graph build.)
+- [x] Do not allow the connector's append/upsert writer selection to substitute for this check — `SignalJob.preflightTableContracts` runs before the environment is created.
+  (`preflightTableContracts` is the first statement of `buildTopology`, before the environment exists — P1.2 [x].)
 
 Historical candle-KV checks (retired, kept for the record — all verified [x] 2026-08-11):
 `feature_candles_15s_current` PK exactly `[instrument_token, window_start]`; 15 columns
@@ -277,6 +285,13 @@ matching `CandleTableSchema.COLUMNS`; bucket.key `instrument_token`; `CandleTabl
 live preflight failures proven by P6.2 (missing/wrong-kind/wrong-schema tables, unreachable coordinator).
 
 Evidence: `CandleTableContractValidatorTest` 19/19, `preflightTableContracts` live-cluster path exercised by P6.2 (2026-08-11).
+
+**P1.1 signal-KV evidence (re-scope 2026-08-13, SIGNAL-SCHEMA-001):** the signal LOG no-PK
+and `Signal_Candidates_current` KV PK-`[instrument_token]` legs landed with the signal re-scope
+(`TableContractValidator.validateSignalLogTable`/`validateSignalCurrentKvTable`);
+`TableContractValidatorTest` 23/23; live preflight PASS — `PREFLIGHT_STATUS=PASS
+tables=feature_candles_15s,Signal_Candidates,Signal_Candidates_current`
+(`logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`, 04-signal-job.md Stage 6).
 
 ## P1.2 Implement startup lookup
 
@@ -522,12 +537,12 @@ The source LOG is lake-enabled. A plain limited `BatchScanner` is not accepted a
   (2026-08-11: `nullKeyFailsClosed` — a canonical row with null `instrument_token`/`window_start` throws before a key can be fabricated; malformed approval lines fail at parse.)
 - [x] source bucket is not skipped.
   (`bucketMappingIsStableAndTotal` — every token maps to exactly one of 16 buckets; main iterates all buckets 0..15.)
-- [ ] lake-only history is included in the union-read integration test.
+- [ ] ~~lake-only history is included in the union-read integration test.~~ **RETIRED 2026-08-13 — no candle migration/audit remains to test (P3 banner); the candle audit engine was deleted with the candle KV projection.**
   (BLOCKED: dev has no lake-only rows — the log retains full history under the 7d TTL and dev
   never truncates the log; the 2026-08-12 datalake-disable/re-enable experiment (ZK patch +
   coordinator restart, tiering resumed epoch 185→390) proved the recovery path but produced no
   lake-only history to include.)
-- [ ] moving-source boundary/tail replay is deterministic.
+- [ ] ~~moving-source boundary/tail replay is deterministic.~~ **RETIRED 2026-08-13 — candle migration deleted (P3 banner); the single-scan boundary note below is historical.**
   (Not implemented — migration is a single-scan boundary with writers stopped (P3.2), so tail replay never runs.)
 - [x] destination count equals approved distinct canonical keys.
   (`DEST_ROWS_AFTER` exit gate; dev evidence 2026-08-10: `DEST_ROWS_AFTER==DISTINCT_KEYS==1,351,301` — tracker 13 §B8.3.)
@@ -540,7 +555,7 @@ The source LOG is lake-enabled. A plain limited `BatchScanner` is not accepted a
 
 **P3 evidence (2026-08-11):** `CandleMigrationToolTest` 22/22 (18 pre-existing + 4 new: approval-provenance parsing, conflict-record business values, approval record with chosen/rejected hashes + provenance, null-key fail-closed). `AcceptEntry` now records optional `approver,reason,decidedAt` (4–7-field format); `conflictRecords()` carries every candidate's full business values; load/audit emit `CANDLE_MIGRATION_APPROVAL_RECORD` per approved key. Full compute suite 146/0/4.
 
-**P3 still open (blocked or not built):** catalog-union vs scan-total comparison (BLOCKED — dev datalake disabled at the time; lake tiering re-enabled 2026-08-11 and P3.2 proved the union read via `CANDLE-MIGRATION-002`); lake-only history union-read inclusion (BLOCKED — nothing expired past LOG retention yet); moving-source boundary/tail replay (by design single-scan with writers stopped); native/spill memory measurement (N/A on dev path). The production Flink/Table-API union-read batch job (P3.3/411) and the lake+log union-read proof are now BUILT/PROVEN 2026-08-12 (`CandleMigrationBatchJob`, evidence `logs/tracker-14/p3-3-batch-2026-08-12.md`).
+**P3 still open (blocked or not built) — RETIRED 2026-08-13 as a phase (candle migration deleted, P3 banner; retained as historical record):** catalog-union vs scan-total comparison (BLOCKED — dev datalake disabled at the time; lake tiering re-enabled 2026-08-11 and P3.2 proved the union read via `CANDLE-MIGRATION-002`); lake-only history union-read inclusion (BLOCKED — nothing expired past LOG retention yet); moving-source boundary/tail replay (by design single-scan with writers stopped); native/spill memory measurement (N/A on dev path). The production Flink/Table-API union-read batch job (P3.3/411) and the lake+log union-read proof are now BUILT/PROVEN 2026-08-12 (`CandleMigrationBatchJob`, evidence `logs/tracker-14/p3-3-batch-2026-08-12.md`).
 
 ## P3.5 R2 lake-read stall — two-day investigation, fix, residual risk (2026-08-11/12)
 
@@ -571,13 +586,13 @@ The production-path migration audit reads history through the Fluss Flink source
 - Post-fix canary `batch-audit-20260812-155017.log` wedged 3/3 on the SAME R2 edge blackhole (same `Net.poll` stack; pins proven effective in the same log: `RESOLVED_OPTION_COUNT=15`, `EFFECTIVE_*=30000`) — the blackhole is at the R2 edge, outside client control. Containment proven: the outer deadline terminated the run at 10 m (exit 124, trap removed the container). NMT exit summary NOT printed (SIGKILL before JVM exit stats — 0 hits in the log).
 - Open: full-run native peaks (box 428) + plan Phase 6 success evidence need a stall-free audit. The stall is intermittent: the byte-identical probe passes minutes later, the tiering job is healthy, and a 55m41s full audit succeeded pre-fix (2026-08-12 ~03:xx). Rerun until R2 cooperates; the deadline guarantees no infinite hang. Standing rule from this lesson (tracker header, 2026-08-12): every run > 10 min is gated by a ≤ 2-min smoke of the same machinery (`probe-r2.sh` + bounded reads) — a blackhole now costs 30 s, not 90 min. First application: Block 0's rerun — probe PASS 2026-08-12 17:3x (`logs/tracker-14/probe-r2-*.log`) while the full audit runs.
 
-## P3.6 Audit-run efficiency follow-up (2026-08-12 — option 1 IMPLEMENTED, options 2-3 open)
+## P3.6 Audit-run efficiency follow-up (2026-08-12 — option 1 IMPLEMENTED, options 2-3 open → RETIRED 2026-08-13 with the candle audit engine)
 
 Root cause: the ENTIRE batch pipeline ran at parallelism 1 (thread dump: `migration-source-lake-batch (1/1)`; `env.setParallelism(1)` hard pin): ~500 R2 parquet files fetched one at a time, each open ~1.5 s (probe-measured 1391-1740 ms). Not a data-volume problem — 1.6M rows is trivial for parquet — it is serial internet round-trips.
 
 1. **[x] Parallelism knob (implemented 2026-08-12; compute.jar rebuilt 18:21)**: `CANDLE_MIGRATION_PARALLELISM` (default 1, positive-int validated, fail-fast) → `env.setParallelism(N)`. Safe because the Fluss bounded source is the new Source API: `FlinkSourceEnumerator` distributes bucket splits across subtasks ("splits in same bucket → same subtask, uniformly distributed across subtasks" — no duplication; verified against fluss-flink-common 0.9.1-incubating). Gate/report/stats sinks explicitly pinned to parallelism 1 (the `notFound` global check needs every approval key in one task; evidence file needs one writer). `run-batch.sh` passes the knob with default 16. Tests: compute module 218/0/0/11 (was 216; +2 parallel-pipeline MiniCluster tests — clean audit converges and unaccepted conflict still fails closed, both at parallelism 4).
-2. [ ] **Metadata-only count reconciliation**: Iceberg manifests carry per-file row counts; the union-total check (`UNION_TOTAL==FULL_TOTAL`, 16/16 buckets) is answerable from manifests + log offsets without fetching data files — minutes. Only the 25 conflict keys need real rows. This is the engine production P10.2's dry audit should use (production data >> dev).
-3. [ ] **Incremental audits**: track the last audited snapshot; read only new snapshots on re-runs.
+2. [ ] ~~**Metadata-only count reconciliation**: Iceberg manifests carry per-file row counts; the union-total check (`UNION_TOTAL==FULL_TOTAL`, 16/16 buckets) is answerable from manifests + log offsets without fetching data files — minutes. Only the 25 conflict keys need real rows. This is the engine production P10.2's dry audit should use (production data >> dev).~~ **RETIRED 2026-08-13 — the candle migration/audit engine (`CandleMigrationBatchJob`) was deleted with the candle KV projection; options 2–3 target the retired engine.**
+3. [ ] ~~**Incremental audits**: track the last audited snapshot; read only new snapshots on re-runs.~~ **RETIRED 2026-08-13 — same engine retirement as option 2.**
 
 Option 1 verified end-to-end 2026-08-12: full-run audit of the grown lake (2,529,054 rows / 16 buckets) at parallelism 16 finished in 13 m 01 s (STATUS=OK, union==full, 0 conflicts) vs the serial engine's measured 2.85 MB/min crawl (~2.5 h projected for the same data). Thread dump preserved in `logs/tracker-14/batch-audit-20260812-172651.log`. R2 Phase 6 + box 428 NMT peaks + B8.1 reconciliation evidence: `logs/tracker-14/batch-audit-20260812-183311.log`.
 
@@ -722,13 +737,22 @@ Use the repository’s pinned Flink 2.2.1-compatible embedded RocksDB state back
 
 Do not redesign dedup speculatively. If baseline exceeds memory or latency targets:
 
-- [ ] Compare current `MapState<String, DedupEntry>` + `MapState<Long,List<String>>` with a compact serialized key/value representation.
-- [ ] Compare one timer per fingerprint with a bounded time-bucket timer index.
-- [ ] Compare event-time expiry against an explicitly approved processing-time alternative; do not change semantics silently.
-- [ ] Preserve exact TTL, scope, and duplicate semantics.
-- [ ] Benchmark candidate designs under identical input and checkpoint settings.
-- [ ] Select the lowest-memory design measured to preserve correctness and target latency; record the selected design and rejected alternatives.
-- [ ] Add migration/state serializer compatibility plan before changing state descriptors.
+> **SUPERSEDED (DEC-038, 2026-08-14) — the Flink MapState dedup model these comparisons
+> target no longer exists:** the large durable dedup set moved to the Fluss
+> `fingerprint_dedup` KV state table with a bounded Flink working cache (04-signal-job.md
+> §DEC-038). The equivalent design decisions — cache entry/byte bounds,
+> `DedupExpiry` TTL + bounded grid-aligned cleanup timers, benchmark under identical
+> input and checkpoint settings, serializer-compatibility pinning — were made and
+> evidenced 2026-08-15 (P11; SIG-STATE-001/002/003, SIG-PERF-001). The boxes below are
+> retained as the historical pre-DEC-038 design gate.
+
+- [ ] ~~Compare current `MapState<String, DedupEntry>` + `MapState<Long,List<String>>` with a compact serialized key/value representation.~~ **SUPERSEDED (DEC-038) — MapState model replaced by Fluss-backed store + bounded cache.**
+- [ ] ~~Compare one timer per fingerprint with a bounded time-bucket timer index.~~ **SUPERSEDED (DEC-038) — replaced by grid-aligned `DEDUP_CLEANUP_INTERVAL_MS` cleanup timers on the bounded cache.**
+- [ ] ~~Compare event-time expiry against an explicitly approved processing-time alternative; do not change semantics silently.~~ **SUPERSEDED (DEC-038) — `DedupExpiry` (logical TTL) + watermark-gated deletion are the approved design.**
+- [ ] ~~Preserve exact TTL, scope, and duplicate semantics.~~ **SUPERSEDED (DEC-038) — preserved in the `DedupExpiry`/cache design (DEDUP_TTL_MS=300000 pinned).**
+- [ ] ~~Benchmark candidate designs under identical input and checkpoint settings.~~ **SUPERSEDED (DEC-038) — done via the externalization benchmark (SIG-PERF-001, 2026-08-15).**
+- [ ] ~~Select the lowest-memory design measured to preserve correctness and target latency; record the selected design and rejected alternatives.~~ **SUPERSEDED (DEC-038) — selected design recorded in 04-signal-job.md §DEC-038 (bounded cache + Fluss authority).**
+- [ ] ~~Add migration/state serializer compatibility plan before changing state descriptors.~~ **SUPERSEDED (DEC-038) — serializer compatibility pinned by STATE-COMPAT-001 / `CompatFlinkCheckpointRescaleIntegrationTest`.**
 
 ## P5.3 Hot-path correctness tests
 
@@ -881,7 +905,7 @@ rejected end-to-end (no TOKEN_BAD candle) while its watermark legitimately close
 
 ## P7 — Performance and capacity evidence
 
-**Status (2026-08-13):** Phase 0 baseline DONE; Phases 1–3 + dedup sweep recorded BLOCKED with evidence (plan §14). Throughput gates feed-limited (measured ceiling 58.9–59.7k rows/s vs 50k/90k targets); latency p99 not measurable via exporter; memory + checkpoint gates PASS. Bench surfaced two real findings: (1) Fluss 0.9.1 Flink log-source checkpoint fetch-ahead offsets → restore stall/data-loss risk (`RestoreStallProbe` evidence), (2) safety-write churn → fixed by R-298 write-side dedup (commit `a4c69692`).
+**Status (2026-08-13):** Phase 0 baseline DONE; Phases 1–3 + dedup sweep recorded BLOCKED with evidence (plan §14). Throughput gates feed-limited (measured ceiling 58.9–59.7k rows/s vs 50k/90k targets); latency p99 not measurable via exporter; memory + checkpoint gates PASS. Bench surfaced two real findings: (1) Fluss 0.9.1 Flink log-source checkpoint fetch-ahead offsets → restore stall/data-loss risk (`RestoreStallProbe` evidence), (2) safety-write churn → fixed by R-298 write-side dedup (commit `a4c69692`). **RE-SCHEDULED (2026-08-15): P11 (DEC-038 dedup externalization) landed — the P7.1/P7.2/P7.3 battery re-runs now execute on the post-externalization topology (P11 sequencing note; forming-bar + dedup externalization now in the graph). This is the tracker's current open code/evidence backlog.**
 >
 > **RE-SCOPED (requirement change 2026-08-13):** the bench measured the PRE-change candle
 > LOG+KV dual-sink topology. The measured bottleneck facts (feed/tablet ceiling,
@@ -1400,6 +1424,12 @@ Every evidence row must include:
 ## 6. Final production acceptance checklist
 
 Production status must remain `BLOCKED` until every checkbox below is checked:
+
+> The code-side backlog feeding these gates is **P7** (perf/evidence re-run on the
+> post-externalization topology, re-scheduled 2026-08-15) plus the user-scoped **P8.0**
+> receivers (gRPC log/trace producer, `infrastructure_logs` — future work per the user
+> scope decision 2026-08-11). The remaining boxes are operator/production gates (P10
+> rehearsal/cutover/rollback, production-cluster evidence) — live-money BLOCKED.
 
 - [x] Exact LOG/KV metadata validation is live and fail-closed (`feature_candles_15s` KV, PK `(instrument_token, window_start)`; `Signal_Candidates` LOG; `Signal_Candidates_current` KV PK `instrument_token`). — 2026-08-13 Stage 6: production gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`; live ZK: `Signal_Candidates` id 607 LOG, `Signal_Candidates_current` id 608 KV v2 PK `instrument_token`, both `bucket.key=instrument_token`/16 buckets/7d ttl; legacy KV v2 (PK `candidate_id`) dropped. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`
 - [x] Canonical strategy/rule writer ownership is enforced at the signal KV boundary. — `CanonicalSignalFilterFunction` gates only the KV sink on the canonical signal key; config gate `requireCanonicalVersion` fail-closed at startup; unit suites green (compute 182/0/11 skipped, 2026-08-13)
