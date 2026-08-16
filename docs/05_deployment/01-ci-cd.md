@@ -19,7 +19,7 @@ Every releasable artifact has an immutable identity:
 - Arrow REST/OpenObserve versions
 - Container image digest
 - DDL/schema version
-- Strategy/ranking/configuration hash
+- Strategy/configuration hash (**ranking hash REMOVED 2026-08-15, CHG-005**)
 - State/savepoint compatibility classification
 - Swarm stack and Compose definition version
 
@@ -35,7 +35,7 @@ Validate:
 - Consistent identity/state vocabulary
 - Requirement-to-contract traceability
 - DDL/table names against data requirements
-- No prohibited legacy assumptions such as overloaded `order_id`, broker sequence guarantees, separate Ranking deployment, mutable instructions, or external exactly-once claims
+- No prohibited legacy assumptions such as overloaded `order_id`, broker sequence guarantees, ~~separate Ranking deployment~~ (**REMOVED 2026-08-15, CHG-005**), mutable instructions, or external exactly-once claims
 
 ### 2. Static and supply-chain checks
 
@@ -56,7 +56,7 @@ A release artifact is signed or otherwise provenance-verifiable according to the
 Test each owner boundary:
 
 - Ingestion golden packets, raw-byte hash, normalization, quarantine, reconnect, and bounded buffering
-- Signal job event time, deduplication, final candles, forming bars, ranking, reservation, and deterministic restore
+- Signal job event time, deduplication, final candles, forming bars, and deterministic restore (**ranking/reservation REMOVED 2026-08-15, CHG-005**)
 - Action Capture duplicates, ordering, correlation, projection recovery, and position derivation
 - Babysitter schema/continuity/checkpoint behavior with zero MVP actions
 - Executor gate, attempts, unknown outcomes, mapping, reconciliation, approval, and fencing

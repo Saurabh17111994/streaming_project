@@ -35,8 +35,8 @@ The platform separates the **data path** from the **order path**:
 - Single Arrow Trade account; NSE, NFO, MCX, and INDEX segments
 - Fluss raw and feature LOG tables
 - Flink 2.2.1 deduplication, event-time windows, candle computation
-- Stateful signal detection and in-operator ranking
-- `Signal_Candidates` (+ `Signal_Candidates_current` current-state KV), `Ranking_Results`, and `Trade_Decisions` outputs
+- Stateful signal detection (**in-operator ranking REMOVED 2026-08-15, CHG-005**)
+- `Signal_Candidates` (+ `Signal_Candidates_current` current-state KV) outputs (**`Ranking_Results` and `Trade_Decisions` REMOVED 2026-08-15, CHG-005**)
 - Independent postback capture into `Fills` via `wss://order-updates.arrow.trade`
 - Executor-to-Arrow order handoff (`POST /order/regular`); no OpenAlgo layer
 - Babysitter wiring with no emitted actions
@@ -52,7 +52,7 @@ The platform separates the **data path** from the **order path**:
 - 250+ feature columns and pattern-feature libraries
 - Real-time gap reconciliation
 - Strategy authoring or backtesting
-- ML ranking
+- ML ranking (**REMOVED 2026-08-15, CHG-005**)
 - Business analytics such as P&L and win rate
 - Kubernetes deployment
 

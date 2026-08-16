@@ -14,8 +14,7 @@ Arrow market-data stream
       ├─ candles (keyed by instrument_token)
       ├─ candidates (keyed by instrument_token)
       ├─ repartition by portfolio_id
-      ├─ in-operator ranking and reservations
-      └─ immutable Trade_Decisions
+
           → Executor durable gate
           → Arrow REST (POST /order/regular)
           → broker
@@ -47,14 +46,14 @@ All services → OpenObserve
 | OpenObserve | Logs, metrics, traces, alerts |
 | Operators/reconciliation control | Authenticated gate reconciliation and two-person approval |
 
-The Signal job contains Compute, Business Logic, and Ranking. Ranking is not a service. Babysitter is a separate Flink job and a strict no-op in MVP.
+The Signal job contains Compute and Business Logic. **(Ranking is REMOVED 2026-08-15, CHG-005 — it was never a service.)** Babysitter is a separate Flink job and a strict no-op in MVP.
 
 ## Required logical state
 
 The deployment must provision or reconcile these logical tables before readiness:
 
 - Market: `raw_table_1`, `feature_candles_15s`, `suspected_discontinuities`, `instruments`
-- Strategy: `Signal_Candidates`, `Signal_Candidates_current`, `Ranking_Results`, immutable `Trade_Decisions`, `Portfolio_Reservations`
+- Strategy: `Signal_Candidates`, `Signal_Candidates_current` (**`Ranking_Results`, `Trade_Decisions`, `Portfolio_Reservations` REMOVED 2026-08-15, CHG-005**)
 - Postback/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine`, `Postback_Projection_Ledger`
 - Execution: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`, `Safety_Halt_Requests`
 - EOD: EOD controller durable manifest state

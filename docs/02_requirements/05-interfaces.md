@@ -38,7 +38,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 
 - **Partial cross-table visibility:** A single Flink checkpoint commits source offsets and all sinks, but atomic visibility across multiple LOG and KV tables is not assumed. Consumers downstream of the Signal job tolerate partial visibility and reconcile using stable IDs, versions, and the Executor's duplicate guard.
 - **At-least-once external calls with reconciliation:** Broker REST calls and postback delivery are at-least-once or uncertain. Unknown outcomes are never automatically retried. Reconciliation is mandatory before release or retry.
-- **In-process interfaces are not network contracts:** The Business Logic ↔ Ranking interface and the Compute → forming-bar handoff are typed in-job state/event boundaries, not Fluss round trips. They share the Signal job checkpoint and are not subject to network interface versioning.
+- **In-process interfaces are not network contracts:** The Compute → forming-bar handoff is a typed in-job state/event boundary, not a Fluss round trip. It shares the Signal job checkpoint and is not subject to network interface versioning. (**The Business Logic ↔ Ranking interface is REMOVED 2026-08-15, CHG-005.**)
 - **Broker REST is not exactly-once:** Arrow REST calls are protected by the durable attempt protocol, gate verification, and post-call reconciliation — not by Flink checkpointing semantics.
 - **Trace propagation is capability-gated:** Distributed tracing is used where supported but not required for MVP. Correlation IDs and audit IDs are mandatory on every interface regardless of tracing capability.
 - **Protocol values are now confirmed:** Arrow WS binary format, REST contract, and postback WS format are validated from Go SDK and REST API docs. These are no longer hypotheses.
@@ -50,7 +50,7 @@ The following capabilities are explicitly NOT owned by the Interface Requirement
 
 - **Actual broker protocol field definitions, packet schemas, and decoder versions:** Now confirmed from Arrow Go SDK (`arrow/streams.go`, `arrow/market.go`) and REST API docs.
 - **Arrow REST endpoint, authentication, payload format, and response schema values:** Now confirmed from REST API docs (`orders`, `order-data`). Executor calls Arrow directly; no OpenAlgo.
-- **Candle computation, deduplication, event-time watermarking, signal detection, and ranking logic:** Owned by the Signal Flink job.
+- **Candle computation, deduplication, event-time watermarking, signal detection:** Owned by the Signal Flink job. (**Ranking logic REMOVED 2026-08-15, CHG-005.**)
 - **Broker order execution, gate management, and reconciliation logic:** Owned by the Executor.
 - **Postback capture, fill audit, lifecycle projection, and position projection logic:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission logic:** Owned by the Babysitter Flink job.
@@ -85,16 +85,14 @@ The Signal job writes:
 
 - `feature_candles_15s` final KV upsert rows (PK `(instrument_token, window_start)` — sole candle output, 2026-08-13 conversion)
 - `Signal_Candidates` immutable LOG rows
-- `Ranking_Results` immutable LOG rows
-- Immutable `Trade_Decisions` instruction records
+- ~~`Ranking_Results` immutable LOG rows~~ — **REMOVED 2026-08-15 (CHG-005)**
+- ~~Immutable `Trade_Decisions` instruction records~~ — **REMOVED 2026-08-15 (CHG-005)**
 
 One checkpoint covers the job, but no cross-table atomic visibility is promised without a connector test. Consumers must tolerate partial visibility and use IDs/reconciliation.
 
-## 5.4 In-operator Business Logic ↔ Ranking
+## 5.4 In-operator Business Logic ↔ Ranking — REMOVED (CHG-005, 2026-08-15)
 
-This is an in-process typed state/event interface, not a network or Fluss interface. The contract includes candidate identity, active setup snapshot, normalized score inputs, strategy/configuration version, reservation state/version, evaluation ID, and deterministic tie-break data.
-
-Ranking writes audit and immutable instruction records. Same-winner reevaluation is audit-only; changed parameters create a new immutable instruction.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred).** There is no in-operator ranking interface in the current system.
 
 ## 5.5 Action Capture → audit and projections
 
@@ -115,7 +113,7 @@ Future actions are immutable `Position_Actions` events with `action_id`, `positi
 
 ## 5.7 Instructions/actions → Executor
 
-Executor consumes immutable `Trade_Decisions` and, after MVP, `Position_Actions`. For each event it verifies schema/version, identity, expiry, reservation, gate state, and duplicate request hash.
+Executor consumes ~~immutable `Trade_Decisions`~~ (**REMOVED 2026-08-15, CHG-005**) and, after MVP, `Position_Actions`. For each event it verifies schema/version, identity, expiry, ~~reservation~~ (**REMOVED 2026-08-15, CHG-005**), gate state, and duplicate request hash.
 
 A modified instruction under the same `instruction_id` is a contract violation and causes halt/quarantine. Executor writes only execution-owned state: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`.
 
@@ -141,11 +139,9 @@ All components emit structured logs, metrics, and traces/correlation IDs to Open
 
 Every interface has a schema/protocol version and compatibility test. Tests cover malformed input, unknown versions, duplicate delivery, out-of-order events, partial writes, retries, timeout/unknown outcomes, restart, changelog gaps, authorization failure, supersession races, safety-halt propagation, fencing, and rollback. The exact version matrix is owned by Platform and Execution teams and is a live-money release blocker until pinned.
 
-## 5.12 Portfolio ranking and reservation
+## 5.12 Portfolio ranking and reservation — REMOVED (CHG-005, 2026-08-15)
 
-Candidate detection remains instrument-keyed. Eligible candidates and versioned lifecycle/position/reservation evidence are repartitioned by `portfolio_id` inside the Signal job. One serialized ranking/reservation state owner evaluates capacity for each portfolio scope.
-
-The interface includes candidate/evaluation identity, account/portfolio scope, reservation ID/version, capacity configuration hash, lifecycle/position source versions, freshness, and conflict state. Missing, stale, conflicting, or `UNKNOWN` evidence suppresses new instruction publication.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred).** There is no `portfolio_id` ranking/reservation interface in the current system.
 
 ## 5.13 Safety-halt control
 

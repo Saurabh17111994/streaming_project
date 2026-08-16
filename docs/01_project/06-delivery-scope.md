@@ -12,9 +12,9 @@ The MVP proves the complete path with conservative safety boundaries.
 - Best-effort bounded fingerprint deduplication
 - Event-time 15-second candle computation
 - Forming-bar signal detection
-- In-operator ranking and portfolio constraints
-- Immutable candidate and ranking audit records
-- `Trade_Decisions` winner feed
+- ~~In-operator ranking and portfolio constraints~~ — **REMOVED 2026-08-15 (CHG-005)**
+- Immutable candidate audit records (**ranking audit REMOVED 2026-08-15, CHG-005**)
+- ~~`Trade_Decisions` winner feed~~ — **REMOVED 2026-08-15 (CHG-005)**
 - Durable Executor order gate and attempt ledger
 - Arrow REST order submission adapter
 - Three-ID order correlation and broker reconciliation
@@ -39,7 +39,7 @@ The MVP proves the complete path with conservative safety boundaries.
 
 - Advanced feature columns and pattern features
 - Real babysitter trim, exit, trailing-stop, and re-entry logic
-- Market-context ranking inputs
+- ~~Market-context ranking inputs~~ — **REMOVED 2026-08-15 (CHG-005)**
 - Sector and exposure constraints
 - Current-price input for position management
 
@@ -47,7 +47,7 @@ The MVP proves the complete path with conservative safety boundaries.
 
 - Out-of-band suspected-discontinuity investigation and historical reconciliation
 - Configuration hot reload where operationally justified
-- Ranking experiment support
+- ~~Ranking experiment support~~ — **REMOVED 2026-08-15 (CHG-005)**
 - Mature order/position reconciliation tooling
 
 ## Phase 4.5
@@ -70,7 +70,7 @@ The MVP proves the complete path with conservative safety boundaries.
 - Backtesting
 - P&L, win-rate, slippage, and strategy analytics
 - Lake pruning and compaction policy
-- ML-based ranking
+- ~~ML-based ranking~~ — **REMOVED 2026-08-15 (CHG-005)**
 
 ## Change-control rule
 

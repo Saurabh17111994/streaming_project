@@ -18,7 +18,7 @@ Use the repository authority order defined in [`../01_project/00-index.md`](../0
 
 The requirements in this directory enforce these decisions:
 
-- One signal Flink job performs candle computation, forming-bar detection, in-operator ranking, and immutable instruction publication.
+- One signal Flink job performs candle computation and forming-bar detection. **(In-operator ranking and instruction publication REMOVED 2026-08-15, CHG-005.)**
 - One separate Babysitter Flink job is a checkpointed no-op in MVP.
 - Order correlation uses `instruction_id`, `client_order_ref`, and `broker_order_id`.
 - No broker tick or postback sequence is assumed.
@@ -47,7 +47,7 @@ The requirements in this directory enforce these decisions:
 | 6     | [`06-operational.md`](06-operational.md)             | Deployment, startup, health, recovery, and release gates          |
 | 7     | [`07-requirement-authoring-template.md`](07-requirement-authoring-template.md) | Standard owner/state/failure/acceptance structure for requirements |
 | 8     | [`08-reading-guide.md`](08-reading-guide.md)          | Human/LLM navigation, canonical scope, timestamps, and safety vocabulary |
-| 9     | [`09-acceptance-matrix.md`](09-acceptance-matrix.md)  | Requirement-to-test traceability; 151 acceptance IDs across all domains  |
+| 9     | [`09-acceptance-matrix.md`](09-acceptance-matrix.md)  | Requirement-to-test traceability; 152 acceptance IDs across all domains (corrected 2026-08-16 — was 151)  |
 
 ## Requirement conventions
 

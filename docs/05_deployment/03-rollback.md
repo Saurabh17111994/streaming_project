@@ -12,7 +12,7 @@ Before changing a production deployment:
 
 1. Record the release, image digests, schema versions, job artifacts, checkpoint/savepoint IDs, and active configuration hashes.
 2. Halt new money-moving calls.
-3. Reconcile broker orders, fills, positions, execution attempts, reservations, and identity mappings.
+3. Reconcile broker orders, fills, positions, execution attempts, and identity mappings. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 4. Capture gate epoch, evidence hash, consumer offsets, Flink job/checkpoint status, Fluss quorum, and EOD manifest status.
 5. Confirm the target artifact can read the existing state, or approve a pre-production clean-break reset/replay migration.
 6. Confirm operators have the rollback artifact, runbook, access, and telemetry.
@@ -64,7 +64,7 @@ If a call times out, disconnects, returns malformed/ambiguous data, or the Execu
 2. Halt new calls within five seconds.
 3. Query/reconcile broker orders using approved identity evidence.
 4. Reconcile fills and positions.
-5. Resolve the attempt and reservation; never submit a blind new retry.
+5. Resolve the attempt (**and, pre-2026-08-15, reservation — REMOVED CHG-005**); never submit a blind new retry.
 6. Record immutable reconciliation evidence.
 7. Require two distinct authenticated approvals for the same gate epoch/evidence hash.
 
@@ -124,7 +124,7 @@ The deployment is not recovered until all applicable checks pass:
 - Fluss schemas, quorum, replication, and changelog continuity are healthy.
 - Checkpoint/savepoint restore is verified.
 - Projections are complete or have durable retry state.
-- No unknown attempts, ambiguous mappings, or unresolved reservations remain without approved disposition.
+- No unknown attempts or ambiguous mappings remain without approved disposition. (**Unresolved reservations REMOVED 2026-08-15, CHG-005.**)
 - Metrics, alerts, audit, and operator access work.
 - EOD retention safety is intact.
 - Gate remains `HALTED` until two-person approval enables the verified epoch.

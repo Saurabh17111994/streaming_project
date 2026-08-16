@@ -49,7 +49,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 The following capabilities are explicitly NOT owned by Platform/Runtime:
 
 - **Market data ingestion, broker connection, and packet decoding:** Owned by Ingestion.
-- **Candle computation, signal detection, strategy evaluation, ranking, and instruction publication:** Owned by the Signal Flink job.
+- **Candle computation, signal detection, strategy evaluation:** Owned by the Signal Flink job. **(Ranking and instruction publication REMOVED 2026-08-15, CHG-005.)**
 - **Broker order submission, execution, and gate management:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.

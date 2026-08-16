@@ -7,7 +7,7 @@ Every SLO must report p50, p95, and p99, the workload profile, UTC clock source,
 | Stage | Target | Measurement boundary |
 | --- | ---: | --- |
 | Decode to raw append acknowledgement | < 50 ms target | Broker event received → `raw_table_1` acknowledgement (includes ≤ 20 ms transport linger) |
-| Trigger tick to winner commit | **p99 < 100 ms** (single release target) | Signal-triggering tick consumed by Flink → `Trade_Decisions` commit at 50,000 ticks/s (3,000 instruments) |
+| ~~Trigger tick to winner commit~~ | ~~**p99 < 100 ms**~~ | ~~Signal-triggering tick consumed by Flink → `Trade_Decisions` commit at 50,000 ticks/s~~ — **REMOVED 2026-08-15 (CHG-005 — decision feed out of scope, not deferred)** |
 | Winner commit to Executor receipt | Baseline required | Instruction commit → Executor changelog receipt; set release threshold from the pinned connector benchmark |
 | Broker REST call | Baseline required | Arrow REST request start → verified broker response; separate from stream SLO and evidence-gated |
 | Data-path recovery | < 30 s target | Failure detection → ingestion and Flink processing resumed |
@@ -16,7 +16,7 @@ Every SLO must report p50, p95, and p99, the workload profile, UTC clock source,
 
 The 15-second event-time candle wait is a business/windowing characteristic, not hidden latency. Report it separately as `window_end → candle publication` and `trigger_tick → winner_commit`.
 
-Every latency report MUST include p50, p95, p99, UTC clock source, test duration, instrument count (3,000), the declared workload profile and observed total tick rate, failure/restart inclusion, exact software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, candidate/ranking evaluation, winner commit) are recorded for diagnosis but are not independent release gates — the single 100 ms p99 trigger-to-commit target applies to the 50,000 ticks/s baseline profile.
+Every latency report MUST include p50, p95, p99, UTC clock source, test duration, instrument count (3,000), the declared workload profile and observed total tick rate, failure/restart inclusion, exact software versions, and VM specification. Internal diagnostic timestamps (source receipt, raw visibility, Signal-job consumption, ~~candidate/ranking evaluation, winner commit~~ — REMOVED 2026-08-15 CHG-005) are recorded for diagnosis but are not independent release gates. (**The 100 ms p99 trigger-to-commit target is REMOVED 2026-08-15, CHG-005.**)
 
 ## Workload envelope
 
@@ -100,7 +100,7 @@ Resumption requires:
 2. Open position and fill reconciliation
 3. Changelog offset / consumer-health verification
 4. Confirmation that the signal job and checkpoints are healthy
-5. Resolution of every unknown attempt and reservation
+5. Resolution of every unknown attempt (**and, pre-2026-08-15, reservation — REMOVED CHG-005**)
 6. Two distinct authenticated operators approving the same gate epoch and evidence hash
 
 Existing positions may be monitored during a halt, but no new order is submitted until the gate returns to `ENABLED`.

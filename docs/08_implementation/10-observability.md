@@ -71,7 +71,7 @@ Packet/byte rate, append acknowledgement latency, pending bytes, reconnects, con
 
 #### Signal job
 
-Source lag/rate, watermark lag, idleness, invalid/late/discarded events, dedup hits/state size, candles/forming updates, candidates/rankings/decisions, reservations/conflicts, operator busy/idle/backpressure, sink latency, checkpoints, restores, state compatibility.
+Source lag/rate, watermark lag, idleness, invalid/late/discarded events, dedup hits/state size, candles/forming updates, candidate rates (**ranking/decision rates and reservations/conflicts REMOVED 2026-08-15, CHG-005**), operator busy/idle/backpressure, sink latency, checkpoints, restores, state compatibility.
 
 **DEC-038 state-ownership telemetry (2026-08-14):** prove the Fluss-owns-large-state model is behaving as intended — Flink checkpoint size/duration/failure (existing Flink built-ins); **Fluss dedup-table state size** (entry count + bytes) and **dedup update rate**; **dedup working-cache hit ratio** and cache size; **rehydration latency** and **rehydration failures**; **state compatibility failures** (dedup-table preflight) and **state continuity failures**. Bounded cardinality: per-table gauges and per-reason counters only, never per-key labels.
 
@@ -97,7 +97,7 @@ Show packet/tick and byte throughput; append acknowledgements and p50/p95/p99 wr
 
 #### Compute and decision dashboard
 
-Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate/ranking/reservation/instruction rates; score validation and selection/rejection/churn reasons; trigger-tick-to-instruction p50/p95/p99; operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size (entries + bytes) + update rate, dedup cache size/utilization, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
+Show source throughput/lag; watermarks and allowed lateness; invalid, late, and discarded-after-emission events; candle/forming-bar rates; candidate rates (**ranking/reservation/instruction rates, score-validation reasons, and trigger-tick-to-instruction p50/p95/p99 REMOVED 2026-08-15, CHG-005**); operator busy/idle/backpressure; and checkpoint duration, size, failure, restore, and state recovery. Report window waiting separately from processing latency. **DEC-038 additions:** Fluss dedup-table state size (entries + bytes) + update rate, dedup cache size/utilization, dedup cache hit ratio, and rehydration latency/failures (proof the large state is in Fluss and the checkpoint is small).
 
 #### Dedup state dashboard (DEC-038)
 
@@ -110,7 +110,7 @@ Dedicated panels for the externalized dedup model, with bounded cardinality (per
 
 #### Order safety dashboard
 
-Show gate state/epoch; halt detection-to-block latency; attempts by phase/outcome; request hashes and unknown outcomes; unresolved reservations and duplicate suppression; identity mappings and postback quarantines; reconciliation results; changelog continuity; Executor fencing; Arrow REST latency/status and broker response classification; and two-person approvals, denials, mismatches, and unauthorized attempts. Trading readiness must never be calculated from process liveness alone.
+Show gate state/epoch; halt detection-to-block latency; attempts by phase/outcome; request hashes and unknown outcomes; ~~unresolved reservations~~ (**REMOVED 2026-08-15, CHG-005**) and duplicate suppression; identity mappings and postback quarantines; reconciliation results; changelog continuity; Executor fencing; Arrow REST latency/status and broker response classification; and two-person approvals, denials, mismatches, and unauthorized attempts. Trading readiness must never be calculated from process liveness alone.
 
 #### Storage, EOD, and durability dashboard
 

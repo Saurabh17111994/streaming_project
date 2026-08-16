@@ -11,7 +11,9 @@
 -- Retention: 2 calendar days via table.log.ttl (R-055 — Fluss TTL is
 -- calendar-based; the previous '7 trading days' header was unverifiable and
 -- table.retention.days is not a Fluss option). Extend once EOD offload is
--- verified.
+-- verified. CANDLE-TABLE EXCEPTION (user decision 2026-08-16): the 3-trading-
+-- day floor is the source/event invariant; this derived table stays at 2d
+-- (rebuildable from raw_table_1) — the 'extend' note is superseded.
 -- Lake: EOD Iceberg offload (R-168: datalake options restored — dropped in a
 -- rewrite while the header still claimed offload)
 -- Scope: account_scope_id

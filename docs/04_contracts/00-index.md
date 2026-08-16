@@ -22,21 +22,21 @@ Cross-cutting requirements apply to every contract:
 | Segment | Contract | Mandatory boundary |
 | --- | --- | --- |
 | Ingestion | `01-ingestion.md` | Original packet bytes + typed fields + bounded fingerprint |
-| Storage | `02-storage.md` | Fluss schemas incl. reservations, ledger, halt; EOD controller; retention/offload gate |
+| Storage | `02-storage.md` | Fluss schemas incl. ledger, halt; EOD controller; retention/offload gate (reservations REMOVED 2026-08-15, CHG-005) |
 | Compute | `03-compute.md` | Final candles, dedup horizon, typed handoff, tested checkpoint boundary |
-| Business Logic | `04-business-logic.md` | Instrument-keyed detection → portfolio-keyed ranking/reservation; immutable instructions |
+| Business Logic | `04-business-logic.md` | Instrument-keyed detection → candidate audit (ranking/reservation/instructions REMOVED 2026-08-15, CHG-005) |
 | Babysitter | `05-babysitter.md` | Separate checkpointed no-op in MVP |
 | Action Capture | `06-action-capture.md` | Immutable postbacks, projection ledger recovery, lifecycle and position projections |
 | Executor | `07-executor.md` | Durable gate, attempts, mappings, fencing, halt consumption, reconciliation, Arrow REST |
 | Observability | `openobserve.md` | OpenObserve-backed proof of every safety/release gate |
 | Platform | `09-platform-runtime.md` | Compose local, four-VM Swarm production |
-| Ranking | `10-ranking.md` | Pure in-operator scoring/selection; no separate job |
+| Ranking | `10-ranking.md` | **REMOVED 2026-08-15 (CHG-005 — in-operator scoring/selection out of scope, not deferred); stub retained for cross-reference** |
 
 The identity model is:
 
 - Event/entity identities: `candidate_id`, `instruction_id`, `execution_attempt_id`, `client_order_ref`, `broker_order_id`, `trade_context_id`, `position_id`, `postback_event_id`, and future `action_id`.
-- Scope identities: `account_scope_id` (broker/account isolation), `portfolio_id` (ranking/reservation/capacity boundary), `execution_partition_id` (fenced Executor ownership).
-- Control identities: `reservation_id` (portfolio capacity reservation), `halt_request_id` (durable safety-halt request).
+- Scope identities: `account_scope_id` (broker/account isolation), `execution_partition_id` (fenced Executor ownership). (`portfolio_id` REMOVED 2026-08-15, CHG-005.)
+- Control identities: `halt_request_id` (durable safety-halt request). (`reservation_id` REMOVED 2026-08-15, CHG-005.)
 
 Generic `order_id` is prohibited across domain boundaries.
 

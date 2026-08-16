@@ -30,7 +30,7 @@ Applies to: `02_services/01_ingestion` (Go arrow-bridge → Java `IngestionServi
 3. **Verify schema** (optional, read-only):
    ```
    cd code/02_services/01_ingestion
-   # DdlBootstrap.verifyTables — 21 tables expected, 0 mismatches
+   # DdlBootstrap.verifyTables — 21 tables expected (2026-08-10 era, pre-CHG-003; now 24), 0 mismatches
    ```
 
 4. **Run the full pipeline**:

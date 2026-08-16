@@ -15,7 +15,7 @@ Real position management is Phase 4.3+ and cannot be enabled until the position 
 - Babysitter SHALL NOT treat an order lifecycle row as a position. Position state is the authoritative fill-derived aggregate keyed by `position_id`.
 - Babysitter SHALL NOT create free-form command strings for future actions. All future actions use the versioned structured `Position_Actions` schema.
 - Babysitter SHALL enter NOT_READY and emit no action on state corruption, schema mismatch, or changelog discontinuity.
-- A closed position SHALL NOT create a new action unless an approved re-entry strategy explicitly creates a new instruction/action and reservation.
+- A closed position SHALL NOT create a new action unless an approved re-entry strategy explicitly creates a new action. **(Instruction/reservation clause REMOVED 2026-08-15, CHG-005.)**
 
 ## Assumptions
 
@@ -24,7 +24,7 @@ Real position management is Phase 4.3+ and cannot be enabled until the position 
 | ASM-BB-001 | The `Positions` KV changelog is complete, versioned, and delivers current state with fresh enough latency to inform position-management decisions (post-MVP). | REQ-BB-002 |
 | ASM-BB-002 | Action Capture's fill-derived position projector produces correct, uniquely correlated position aggregates keyed by `position_id` with `trade_context_id` linkage. | REQ-BB-002 |
 | ASM-BB-003 | The versioned `Position_Actions` structured schema will be approved before post-MVP activation. Free-form command strings will not be used. | REQ-BB-004 |
-| ASM-BB-004 | The Executor applies the same durable gate, attempt, correlation, and reconciliation protocol to `Position_Actions` as it does to `Trade_Decisions`. | REQ-BB-004 |
+| ASM-BB-004 | The Executor applies the same durable gate, attempt, correlation, and reconciliation protocol to `Position_Actions` as it does to ~~`Trade_Decisions`~~ **(REMOVED 2026-08-15, CHG-005 — decision feed out of scope; the gate/attempt/correlation protocol itself stands)**. | REQ-BB-004 |
 
 Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
 
@@ -41,7 +41,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 
 The following capabilities are explicitly NOT owned by Babysitter:
 
-- **Candle computation, signal detection, candidate creation, ranking, and entry instruction publication:** Owned by the Signal Flink job.
+- **Candle computation, signal detection, candidate creation:** Owned by the Signal Flink job. **(Ranking and entry-instruction publication REMOVED 2026-08-15, CHG-005.)**
 - **Broker order submission, execution, gate management, and Arrow REST integration:** Owned by the Executor.
 - **Postback capture, fill audit, order lifecycle projection, and position projection:** Owned by Action Capture.
 - **Market data ingestion and broker connection management:** Owned by Ingestion.
@@ -56,7 +56,7 @@ The platform has two Flink jobs:
 
 | Job            | Responsibility                                                                    |
 | -------------- | --------------------------------------------------------------------------------- |
-| Signal job     | Compute, forming-bar detection, in-operator ranking, immutable entry instructions |
+| Signal job     | Compute, forming-bar detection (**in-operator ranking and immutable entry instructions REMOVED 2026-08-15, CHG-005**) |
 | Babysitter job | Post-entry position-management evaluation; no-op in MVP                           |
 
 Babysitter has its own checkpoint/restart boundary so position-management failures cannot corrupt the Signal job.
@@ -100,7 +100,7 @@ Free-form command strings such as `trim:<pct>:<qty>` are prohibited. A changed a
 
 ## REQ-BB-005: Future eligibility
 
-Only an unambiguous `OPEN` position with current correlated state may be evaluated. Missing/stale state, unknown broker outcome, unresolved fill correlation, or order-gate halt suppresses action creation and emits an alert. A closed position cannot create a new action unless an approved re-entry strategy explicitly creates a new instruction/action and reservation.
+Only an unambiguous `OPEN` position with current correlated state may be evaluated. Missing/stale state, unknown broker outcome, unresolved fill correlation, or order-gate halt suppresses action creation and emits an alert. A closed position cannot create a new action unless an approved re-entry strategy explicitly creates a new action. **(Instruction/reservation clause REMOVED 2026-08-15, CHG-005.)**
 
 ## REQ-BB-006: Checkpoint and recovery
 

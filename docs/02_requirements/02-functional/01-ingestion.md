@@ -60,7 +60,7 @@ The following capabilities are explicitly NOT owned by Ingestion:
 
 - **Logical deduplication:** Owned by the Signal Flink job via bounded fingerprint state.
 - **Candle computation and OHLCV aggregation:** Owned by the Signal Flink job.
-- **Signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Signal detection, strategy evaluation:** Owned by the Signal Flink job. **(Ranking REMOVED 2026-08-15, CHG-005.)**
 - **Broker order submission and execution:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.

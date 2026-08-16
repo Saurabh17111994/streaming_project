@@ -2,7 +2,7 @@
 
 ## Authority and status
 
-Physical DDLs must implement the logical model in `../02_requirements/04-data.md`. Existing DDLs are stale if they use `seq_no` as required identity, ordering, deduplication, or gap evidence; use overloaded `order_id`; assign ownership to a separate Ranking deployment; allow Executor/Arrow REST to mutate instructions; or retain raw data for only one day. A nullable broker sequence field may remain only as observational evidence and cannot support a guarantee.
+Physical DDLs must implement the logical model in `../02_requirements/04-data.md`. Existing DDLs are stale if they use `seq_no` as required identity, ordering, deduplication, or gap evidence; use overloaded `order_id`; ~~assign ownership to a separate Ranking deployment~~ (**REMOVED 2026-08-15, CHG-005**); allow Executor/Arrow REST to mutate instructions; or retain raw data for only one day. A nullable broker sequence field may remain only as observational evidence and cannot support a guarantee.
 
 Exact Fluss DDL properties are version-gated; unsupported syntax is not invented in this contract.
 
@@ -14,15 +14,15 @@ Three Fluss replicas/quorum are placed across the three workload VMs with anti-c
 
 Market: `raw_table_1`, `feature_candles_15s` (KV upsert, PK `(instrument_token, window_start)` — sole candle output, 2026-08-13 conversion; authoritative durable candle state under DEC-038), `suspected_discontinuities`, `instruments`. (The pre-conversion `feature_candles_15s_current` KV projection is RETIRED 2026-08-13.)
 
-Strategy: `Signal_Candidates` (immutable append-only LOG — RE-SCOPED 2026-08-13, pending implementation; one row per fired signal), `Signal_Candidates_current` (candidate current-state KV, PK `(instrument_token)`, supersession overwrites — NEW 2026-08-13, pending implementation), `Ranking_Results`, immutable `Trade_Decisions`. `Trade_Decisions` SHALL be an immutable Signal-owned LOG feed with no Executor-assigned fields, execution status, or KV partial-update behavior.
+Strategy: `Signal_Candidates` (immutable append-only LOG — RE-SCOPED 2026-08-13, **implemented 2026-08-13 — LOG v3 id 607**; one row per fired signal), `Signal_Candidates_current` (candidate current-state KV, PK `(instrument_token)`, supersession overwrites — NEW 2026-08-13, **implemented 2026-08-13 — KV companion id 608**). ~~`Ranking_Results`, immutable `Trade_Decisions`~~ — **REMOVED 2026-08-15 (CHG-005 — ranking/decisions out of scope, not deferred).**
 
-Signal state ownership (DEC-038): `feature_candles_15s`, `Signal_Candidates`, and `Signal_Candidates_current` are **Fluss-owned authoritative state**; Flink checkpoints never carry a second full copy of them. A **fingerprint-dedup KV state table** (proposed name `fingerprint_dedup`) is the authoritative dedup set: key `(instrument_token, fingerprint_version, event_fingerprint)`, value `(first_seen_ms, expiry_ms)`, `bucket.key = instrument_token`, owner Signal job, rebuild source `raw_table_1` replay within the dedup TTL, bounded growth via a tested expiry/cleanup mechanism (no per-key TTL in Fluss 0.9.1), and restart behavior = verify Fluss availability, then rehydrate the Flink working cache after a compact checkpoint restore. Design/DDL/tests land in a later stage; the contract fixes ownership, keys, and semantics — the full contract is formalized in [Dedup state table contract](#dedup-state-table-contract-dec-038) below.
+Signal state ownership (DEC-038): `feature_candles_15s`, `Signal_Candidates`, and `Signal_Candidates_current` are **Fluss-owned authoritative state**; Flink checkpoints never carry a second full copy of them. A **fingerprint-dedup KV state table** (proposed name `fingerprint_dedup`) is the authoritative dedup set: key `(instrument_token, fingerprint_version, event_fingerprint)`, value `(first_seen_ms, expiry_ms)`, `bucket.key = instrument_token`, owner Signal job, rebuild source `raw_table_1` replay within the dedup TTL, bounded growth via a tested expiry/cleanup mechanism (no per-key TTL in Fluss 0.9.1), and restart behavior = verify Fluss availability, then rehydrate the Flink working cache after a compact checkpoint restore. Design/DDL/tests land in a later stage — **IMPLEMENTED 2026-08-15 (CHG-003: DDL 24 + manifest + expiry/cleanup + tests + live wiring; DEC-038 completed)**; the contract fixes ownership, keys, and semantics — the full contract is formalized in [Dedup state table contract](#dedup-state-table-contract-dec-038) below.
 
 Order/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Projection_Ledger`, `Postback_Quarantine`.
 
 Execution: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`.
 
-Control: `Safety_Halt_Requests`, `Portfolio_Reservations`.
+Control: `Safety_Halt_Requests`. (`Portfolio_Reservations` REMOVED 2026-08-15, CHG-005.)
 
 Future: `Position_Actions`.
 

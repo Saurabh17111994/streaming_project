@@ -56,7 +56,7 @@ with that contract and this tracker. Do not create a second observability plan.
 
 Deliver a production-ready SignalJob that:
 
-1. preserves `feature_candles_15s` as the **sole candle output** — an immutable append-only LOG (candle [LOG + KV] facility RETIRED by user decision 2026-08-13);
+1. preserves `feature_candles_15s` as the **sole candle output** — a KV upsert table keyed by `(instrument_token, window_start)` (updated 2026-08-13: the candle table is KV-only since the conversion — the candle LOG + candle-KV projection facility was RETIRED by user decision 2026-08-13);
 2. appends every fired trade signal to `Signal_Candidates`, an immutable LOG — one new row per signal found, never updated;
 3. maintains `Signal_Candidates_current`, a KV current-state projection — latest/active candidate per instrument, updated on supersession;
 4. blocks accidental no-restore/full-history starts;
@@ -194,9 +194,9 @@ The coding agent must implement P0–P9 and prepare P10 commands/runbooks. It mu
 - [x] Record the exact current implementation commit for rollback comparison.
   (`e6fec722388decb6257822774063730d45a54a30` — rollback comparison baseline for this tracker-14 pass; tracker-13 re-cutover job artifact `92104dac` is the last deployed SignalJob graph.)
 - [x] Record current values of `CANDLE_TABLE`, `CANDLE_CURRENT_TABLE`, `ALGORITHM_VERSION`, `CONFIGURATION_VERSION`, `STATE_RECOVERY_PATH`, and `ALLOW_FULL_REPLAY` without exposing secrets.
-  (`feature_candles_15s`, `feature_candles_15s_current`, `candle-15s-v1`, `1.0.0`; `STATE_RECOVERY_PATH`/`ALLOW_FULL_REPLAY` are runtime-only, absent from `.env`, no live job at capture — fail-closed A3.3 gate governs both. No secrets recorded.)
+  (`feature_candles_15s`, `feature_candles_15s_current`, `candle-15s-v1`, `1.0.0`; `STATE_RECOVERY_PATH`/`ALLOW_FULL_REPLAY` are runtime-only, absent from `.env`, no live job at capture — fail-closed A3.3 gate governs both. No secrets recorded. **Historical baseline** — captured before the 2026-08-13 deletion of `feature_candles_15s_current` (DDL 22 removed).)
 - [x] Record current DDL manifest checksum for both candle tables.
-  (`03_feature_candles_15s.sql` = `1df858b5b8f75ccd…`, `22_feature_candles_15s_current.sql` = `8e7ccd03761284c2…`, `schema_manifest.json` = `7ab0456c10e261ad…`.)
+  (`03_feature_candles_15s.sql` = `1df858b5b8f75ccd…`, `22_feature_candles_15s_current.sql` = `8e7ccd03761284c2…`, `schema_manifest.json` = `7ab0456c10e261ad…`.) **Historical hashes** — captured before DDL 22 (`22_feature_candles_15s_current.sql`) was deleted 2026-08-13; the manifest no longer lists it.
 - [x] Record current operator/job graph identifiers from the implementation actually deployed in dev.
   (SignalJob not running at capture (rebuilt for the P8 distributed run); lake tiering job `1779f1f2f31f4d0ae6216e891ee39681` (16 readers, 30 s heartbeat); Fluss coordinator :9123/tablet :9124; `raw_table_1` id 387, 16 buckets, iceberg lake.)
 
@@ -226,9 +226,12 @@ Modify or extend:
 
 Implement pure validation of a supplied `TableInfo`/`Schema` object. Do not connect to Fluss in the pure helper.
 
-### LOG contract
+### LOG contract (RE-SCOPED 2026-08-13 — candle LOG checks below RETIRED; new target `Signal_Candidates`)
 
-`feature_candles_15s` must satisfy:
+**Historical (pre-2026-08-13):** `feature_candles_15s` must satisfy — these checks are
+evidence of the retired candle LOG contract (DEC-035: `feature_candles_15s` is now validated
+as KV with exact PK `(instrument_token, window_start)`); the no-PK LOG validation machinery
+is re-targeted to the signal LOG table `Signal_Candidates`:
 
 - [x] `hasPrimaryKey() == false`.
   (`CandleTableContractValidator.validateLogTable` — a LOG that gained a PK is rejected; test `logTableWithPkIsRejected`.)
@@ -1031,7 +1034,7 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] candle LOG writes.
   (feature_candles_15s_sink:_Writer numRecordsIn = 2,950 — P8.1 battery.)
 - [x] candle KV upserts.
-  (feature_candles_15s_current_kv_sink:_Writer numRecordsIn = 2,950 — P8.1 battery.)
+  (feature_candles_15s_current_kv_sink:_Writer numRecordsIn = 2,950 — P8.1 battery.) **Historical** — the `feature_candles_15s_current` sink was removed with the retired candle KV projection (2026-08-13).
 - [x] KV write failures.
   (No failures observed; sink operator healthy with 0 restarts (flink_jobmanager_job_numrestarts=0) and 47/47 completed checkpoints; a failure would surface as sink task errors/restarts in flink_logs + metrics.)
 - [x] checkpoint size/duration/failure.
@@ -1093,7 +1096,7 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] schema-version rejection ratio exceeds threshold.
   (SIGNAL-warn-schema-rejected-rate, compute_invalid_byreason_schema_version > 10; fired via fixture, recovered on benign point. Existing SIGNAL-crit-schema-version-rejected covers any > 0.)
 - [x] dedup state count grows beyond capacity envelope.
-  (SIGNAL-warn-dedup-state (flink_taskmanager_job_task_operator_compute_dedup_state_count > 250000) + SIGNAL-warn-dedup-expiry (flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count > 250000); both fixture-fired + recovered 2026-08-11 on the old emitter-stream series. RETARGETED 2026-08-12 to the live Flink FingerprintDedupFunction gauge series — the ComputeOtlpEmitter streams were dead in the distributed job (client-side emitter dies with the submitting JVM): rules deleted + recreated via o2-provision.py, new alert_ids 3HnOGJxmmUHe9a3J9HOSm8YpevM / 3HnOGF8O5geZOh0LOCXQIU19a05, live-series proof value=2989 each. **DEC-038 re-target (2026-08-14, pending P11):** the Flink dedup gauge series is replaced by the Fluss dedup-table size series (`fingerprint_dedup`) + cache size/hit-ratio series when the dedup store lands — alert re-provisioned in the P8.4 re-target. Evidence: logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt.)
+  (SIGNAL-warn-dedup-state (flink_taskmanager_job_task_operator_compute_dedup_state_count > 250000) + SIGNAL-warn-dedup-expiry (flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count > 250000); both fixture-fired + recovered 2026-08-11 on the old emitter-stream series. RETARGETED 2026-08-12 to the live Flink FingerprintDedupFunction gauge series — the ComputeOtlpEmitter streams were dead in the distributed job (client-side emitter dies with the submitting JVM): rules deleted + recreated via o2-provision.py, new alert_ids 3HnOGJxmmUHe9a3J9HOSm8YpevM / 3HnOGF8O5geZOh0LOCXQIU19a05, live-series proof value=2989 each. **DEC-038 re-target (2026-08-14; P11 landed 2026-08-15):** the Flink dedup gauge series is replaced by the Fluss dedup-table size series (`fingerprint_dedup`) + cache size/hit-ratio series now that the dedup store has landed — alert re-provisioned in the P8.4 re-target. Evidence: logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt.)
 - [x] watermark stalls.
   (NOT directly expressible — O2 v2 conditions compare columns to constants; time-relative "watermark unchanged" cannot be encoded. Coverage: SIGNAL-error-source-stalled + checkpoint liveness; documented in proposal + evidence §5.)
 - [x] source lag exceeds threshold.
@@ -1205,7 +1208,7 @@ Add or expose through the OTel Collector and OpenObserve `metrics` stream:
 - [x] Java/Python/Flink/Fluss versions match the approved matrix.
   (versions.pin: FLINK_VERSION=2.2.1, FLUSS_VERSION=0.9.1-incubating, ZOOKEEPER_VERSION=3.9.2, BROKER_PROTOCOL go-arrow pinned; Java 17.0.19 (P0.1 baseline); `make ddl` version gate fails on absent/latest/placeholder platform pins.)
 - [x] no DDL application occurs during service startup.
-  (DdlBootstrap.ensureTables iterates OWNED_TABLES only — raw_table_1, suspected_discontinuities, ingestion_quarantine (A4.4 test enforces "never bootstrap-create registry-only tables like feature_candles_15s_current"); SignalJob has no DDL path; compute tables are provisioned offline by ddl_apply.py through the version-matrix gate.)
+  (DdlBootstrap.ensureTables iterates OWNED_TABLES only — raw_table_1, suspected_discontinuities, ingestion_quarantine (A4.4 test enforces "never bootstrap-create registry-only tables like feature_candles_15s_current"); SignalJob has no DDL path; compute tables are provisioned offline by ddl_apply.py through the version-matrix gate. The A4.4 mention of `feature_candles_15s_current` is a **historical reference** (table deleted 2026-08-13); the never-bootstrap-registry-only contract stands.)
 
 ---
 
@@ -1264,7 +1267,7 @@ Do not execute until P1–P9 code/evidence gates are complete.
 
 ## P11 — DEC-038 state ownership: dedup externalization
 
-**Status (2026-08-14):** NOT STARTED — design/DDL/code/measurement land in this phase; DEC-038 fixes ownership only. Canonical contract: [`04-signal-job.md`](04-signal-job.md) §DEC-038 State Ownership and Recovery Contract; storage-side contract: [`04_contracts/02-storage.md`](../04_contracts/02-storage.md) §Dedup state table contract. **Ranking/Reservation are explicitly OUT OF SCOPE and unchanged.**
+**Status (2026-08-15):** COMPLETED — design/DDL/pins/code + live wiring landed 2026-08-15, and the live externalization measurement was recorded the same day (SIG-STATE-001/002/003 + SIG-PERF-001 evidence; canonical evidence in [`04-signal-job.md`](04-signal-job.md) §DEC-038 + Design — `fingerprint_dedup` dedup state table (DEC-038)). DEC-038 fixes ownership only. Canonical contract: [`04-signal-job.md`](04-signal-job.md) §DEC-038 State Ownership and Recovery Contract; storage-side contract: [`04_contracts/02-storage.md`](../04_contracts/02-storage.md) §Dedup state table contract. **Ranking/Reservation are explicitly OUT OF SCOPE and unchanged** — **REMOVED 2026-08-15 (CHG-005, not deferred).**
 
 Goal: move the large durable dedup set into a Fluss KV state table (proposed `fingerprint_dedup`), keep only a bounded working cache in Flink, and prove: (1) the checkpoint stays bounded and is not a second copy of Fluss-owned state; (2) restart rehydrates from Fluss without full raw-history replay; (3) Fluss unavailability/incompatibility fails closed (never an empty-set replay).
 
@@ -1272,15 +1275,15 @@ Goal: move the large durable dedup set into a Fluss KV state table (proposed `fi
 
 ### P11.0 Dedup state table DDL + schema contract
 
-- [ ] Design the `fingerprint_dedup` DDL (proposed: KV, PK `(instrument_token, fingerprint_version, event_fingerprint)`, value columns `(first_seen_ms, expiry_ms)`, `bucket.key=instrument_token`, 16 buckets) + `schema_manifest.json` entry — **design draft: [`04-signal-job.md`](04-signal-job.md) §Design — `fingerprint_dedup` dedup state table (DEC-038)** (proposed `24_fingerprint_dedup.sql`, buckets, expiry/cleanup, cache bound + write cadence keys).
-- [ ] Design the expiry/cleanup mechanism — Fluss 0.9.1 has no per-key TTL, so an expiry column + tested cleanup path is required (evidence-gated, measured, not assumed).
-- [ ] Cross-boundary pin: DDL ↔ code column layout ↔ `TableContractValidator` preflight (extended to the dedup table) — one-sided edits fail the gate.
+- [x] Design the `fingerprint_dedup` DDL (proposed: KV, PK `(instrument_token, fingerprint_version, event_fingerprint)`, value columns `(first_seen_ms, expiry_ms)`, `bucket.key=instrument_token`, 16 buckets) + `schema_manifest.json` entry — **design draft: [`04-signal-job.md`](04-signal-job.md) §Design — `fingerprint_dedup` dedup state table (DEC-038)**. **DONE 2026-08-15:** `24_fingerprint_dedup.sql` v1 manifest-listed (24-table manifest, CHG-003/CHG-005) with the 6-column layout, PK `(instrument_token, fingerprint_version, event_fingerprint)`, `bucket.key=instrument_token`, 16 buckets, `kv.format-version=2` (doc 04).
+- [x] Design the expiry/cleanup mechanism — Fluss 0.9.1 has no per-key TTL, so an expiry column + tested cleanup path is required (evidence-gated, measured, not assumed). **DONE 2026-08-15:** `DedupExpiry` (logical TTL + bounded re-entrant cleanup selection) + grid-aligned processing-time cleanup timers driving bounded `scanExpired`+`delete` on `DEDUP_CLEANUP_INTERVAL_MS`; cleanup rate + table-size plateau recorded live in the externalization benchmark (doc 04).
+- [x] Cross-boundary pin: DDL ↔ code column layout ↔ `TableContractValidator` preflight (extended to the dedup table) — one-sided edits fail the gate. **DONE 2026-08-15:** `FingerprintDedupTableColumns` + `FingerprintDedupTableColumnsAgreementTest` pin DDL ↔ code; `validateFingerprintDedupTable` is ALWAYS-ON in `SignalJob.preflightTableContracts` (doc 04).
 
 ### P11.1 Fluss-backed dedup store + bounded cache
 
-- [ ] Implement the Fluss-backed dedup store: first-seen insert/upsert, point lookup on miss, batched/async durable writes (no per-tick Fluss round trip).
-- [ ] Implement the bounded Flink working cache: explicit entry/byte bounds independent of Fluss dedup cardinality, the 5-minute TTL, and instrument count; never authoritative; never a mirror of the table.
-- [ ] Config keys (`DEDUP_STATE_TABLE`, `DEDUP_CACHE_*`) validated at startup by the extended preflight.
+- [x] Implement the Fluss-backed dedup store: first-seen insert/upsert, point lookup on miss, batched/async durable writes (no per-tick Fluss round trip). **DONE 2026-08-15:** `FingerprintDedupStateStore` SPI + in-memory/Fluss twins (raw client works on this table — v2 + single-field-subset bucket key, COMPAT-FLUSS-005); `FingerprintDedupWriterFunction` batches the durable upsert on `DEDUP_WRITE_BATCH_MS`/`DEDUP_WRITE_BATCH_SIZE` (doc 04).
+- [x] Implement the bounded Flink working cache: explicit entry/byte bounds independent of Fluss dedup cardinality, the 5-minute TTL, and instrument count; never authoritative; never a mirror of the table. **DONE 2026-08-15:** bounded cache (`DEDUP_CACHE_MAX_ENTRIES`/`DEDUP_CACHE_MAX_BYTES`, earliest-expiry eviction); `FingerprintDedupFunction` is cache-first with the AUTHORITATIVE store on cache miss (query-on-miss lazy rehydration — a cold restart is correct, never an empty dedup set) (doc 04).
+- [x] Config keys (`DEDUP_STATE_TABLE`, `DEDUP_CACHE_*`) validated at startup by the extended preflight. **DONE 2026-08-15:** `validateFingerprintDedupTable` ALWAYS-ON in the preflight; config keys unit-tested (doc 04).
 
 ### P11.2 Dedup externalized-state test battery
 
@@ -1296,10 +1299,10 @@ Execution classes: unit rows are pure-JVM (compute-pom harness already landed); 
 
 ### P11.3 Measurement (externalization benchmark)
 
-- [ ] Re-run the externalization benchmark (SIG-PERF-001 detail, `11-testing-and-release.md`): checkpoint size/duration before-vs-after, restore duration, hydration latency/failures, cache hit ratio, Fluss dedup-table size/update rate — no invented numbers (DEC-038 §9).
-- [ ] Confirm the checkpoint invariant at the current 1,024-instrument envelope; the 50k baseline re-run stays deferred.
+- [x] Re-run the externalization benchmark (SIG-PERF-001 detail, `11-testing-and-release.md`): checkpoint size/duration before-vs-after, restore duration, hydration latency/failures, cache hit ratio, Fluss dedup-table size/update rate — no invented numbers (DEC-038 §9). **DONE 2026-08-15:** `FingerprintDedupExternalizationBenchmarkIT` (env-gated `COMPUTE_INT_TEST_DEDUP_EXT`) against the live dev cluster — durable write throughput (~9 upserts/s shared writer, ~325 ms/row `putFirstSeen`), cold-restart hydration (15/15 sampled lookups SEEN_LIVE from Fluss authority), bounded cleanup (15/15 stale rows deleted, plateau = live set); surfaced + fixed two evidence-gated cleanup bugs (`DedupBucketAssigner`, `UpsertWriter.delete` full-row contract) (doc 04).
+- [x] Confirm the checkpoint invariant at the current 1,024-instrument envelope; the 50k baseline re-run stays deferred. **DONE 2026-08-15:** `SignalJobCompactCheckpointRestoreIntegrationTest` (env-gated `COMPUTE_INT_TEST_SIG_STATE_RESTORE`) — checkpoint bounded across 5x dedup cardinality (54465 vs 54482 bytes, ratio 1.00); strict restore resumes in ~870 ms with no full replay (doc 04).
 
-**Pass gate:** `DEDUP-STATE-001` to `DEDUP-FAILCLOSED-001` green at module/IT level + externalization benchmark recorded; P7/P10 re-runs scheduled on the post-externalization topology.
+**Pass gate (MET 2026-08-15):** `DEDUP-STATE-001` to `DEDUP-FAILCLOSED-001` green at module/IT level (SIG-STATE-001/002/003, PASSED live 2026-08-15) + externalization benchmark recorded; P7/P10 re-runs scheduled on the post-externalization topology.
 
 ---
 
@@ -1315,7 +1318,8 @@ Execution classes: unit rows are pure-JVM (compute-pom harness already landed); 
 > FAILOVER-FLUSS-001 and OBSERVABILITY-002 re-targeted to the signal sinks.
 >
 > Register status 2026-08-14 (DEC-038): `DEDUP-STATE-001` / `DEDUP-REHYDRATE-001` /
-> `DEDUP-FAILCLOSED-001` added for the dedup externalization phase (P11);
+> `DEDUP-FAILCLOSED-001` added for the dedup externalization phase (P11).
+> **Status 2026-08-15: all three PASSED live — see rows below (SIG-STATE-001/002/003).**
 > `DEDUP-MEMORY-001` re-targets to the post-externalization envelope (Fluss dedup-table
 > size + bounded cache size), measured in the externalization benchmark.
 
@@ -1329,16 +1333,16 @@ Execution classes: unit rows are pure-JVM (compute-pom harness already landed); 
 | `CHECKPOINT-RESTORE-002` | Dual-sink graph restore with default strict state matching | `[x]` 2026-08-11 — HISTORICAL (candle dual-sink); RE-RUN required against the signal dual-sink after implementation (restore asserts signal LOG/KV counts) |
 | `STARTUP-GATE-001` | No accidental full replay — startup gate fail-closed | `[x]` 2026-08-12 — unchanged (gate protects the signal LOG too) |
 | `SIGNAL-DUAL-SINK-001` | Signal LOG+KV dual-sink topology: LOG appends one row per signal, KV current-state per instrument | `[x]` 2026-08-13 — topology implemented (Stage 4) + contract verification green (Stage 5): graph replay re-scope proved signal LOG grows while `Signal_Candidates_current` key count stays frozen across two replays (gated 3/3 in-container); KV idempotency convergence live-proved (gated 1/1: same-instrument upserts → one row, last-write-wins); scratch tables dropped (ZK table list clean); 9 operators UID-pinned (`SignalJobOperatorUidTest`, gated green). Stage 6 (live DDL) executed 2026-08-13: legacy `Signal_Candidates` KV v2 dropped, LOG v3 created (id 607, `bucket.key=instrument_token`), KV companion created (id 608, `kv.format-version=2`, PK `instrument_token`); production fail-closed gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
-| `SIGNAL-SCHEMA-001` | Exact live preflight for `feature_candles_15s` (LOG) + `Signal_Candidates` (LOG) + `Signal_Candidates_current` (KV, PK `instrument_token`) | `[x]` 2026-08-13 — `TableContractValidator` 22 unit cases green; DDL contract pinned from both sides (common `SignalCurrentDdlContractTest` 3/3, ingestion `SchemaAgreementTest`); live positive-path proof on scratch tables (gated); strict validator proven fail-closed against the legacy `Signal_Candidates` KV v2 (PK `candidate_id`). Stage 6 removed the legacy drift: live ZK metadata now matches the contracts exactly — `Signal_Candidates` id 607 LOG (no `kv.format-version`, `bucket_key=["instrument_token"]`, 16 buckets, 7d ttl, lake keys = live `raw_table_1` ground truth), `Signal_Candidates_current` id 608 KV v2 (same routing, PK `instrument_token`), `feature_candles_15s` id 90 LOG unchanged. Platform-table preflight PASS via the job's own gate (same-package probe `PreflightSignalTables`, no test scaffolding). Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
+| `SIGNAL-SCHEMA-001` | Exact live preflight for `feature_candles_15s` (KV, PK `(instrument_token, window_start)`) + `Signal_Candidates` (LOG) + `Signal_Candidates_current` (KV, PK `instrument_token`) | `[x]` 2026-08-13 — `TableContractValidator` 22 unit cases green; DDL contract pinned from both sides (common `SignalCurrentDdlContractTest` 3/3, ingestion `SchemaAgreementTest`); live positive-path proof on scratch tables (gated); strict validator proven fail-closed against the legacy `Signal_Candidates` KV v2 (PK `candidate_id`). Stage 6 removed the legacy drift: live ZK metadata now matches the contracts exactly — `Signal_Candidates` id 607 LOG (no `kv.format-version`, `bucket_key=["instrument_token"]`, 16 buckets, 7d ttl, lake keys = live `raw_table_1` ground truth), `Signal_Candidates_current` id 608 KV v2 (same routing, PK `instrument_token`), `feature_candles_15s` id 90 LOG → id 693 KV → id 697 KV (2d ttl, datalake disabled — LiveSync recreation 2026-08-13). Platform-table preflight PASS via the job's own gate (same-package probe `PreflightSignalTables`, no test scaffolding). Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md` |
 | `DEDUP-MEMORY-001` | Bounded memory and expiry proof at target cardinality | `[ ]` NOT RUN — config-pinned `DEDUP_TTL_MS=300000` (`SignalJobConfig` L229-241 throws on any other value); sweep (30/60/120 s) needs deliberate unpin decision. Phase 0 evidence recorded instead: RocksDB total state 1.74 GB / block_cache 377.5 MB at 1024 tokens under 53k/s load, no unbounded growth observed. Plan §14.5. DEC-038 re-target (2026-08-14): post-externalization envelope = Fluss dedup-table size + bounded cache size, measured in the externalization benchmark (SIG-PERF-001 detail). |
 | `PERF-THROUGHPUT-001` | 50k sustained / 90k peak benchmark | `[ ]` NOT ACHIEVED (2026-08-13) — measured feed/tablet shared write-path ceiling 58.9–59.7k rows/s (CountRows 58,889/s + Phase 0 59.7k appends, two independent methods); 50k gate feed-limited by design, 90k unreachable (1.5× ceiling). Bottleneck recorded, no config inflation (plan §12). Phase 0 achieved source rate 53,052/s mean. RE-SCOPE: re-run against the signal dual-sink topology after implementation; the ceiling finding itself stands. Evidence: plan §14 + `logs/tracker-14/p7-bench-evidence-20260812-phase0.md`, `p7-r298-verification-20260813.md`. |
 | `PERF-LATENCY-001` | p99 latency evidence | `[ ]` NOT MEASURABLE (2026-08-13) — flink-metrics-prometheus exporter drops histogram buckets (count+sum only), p99 not derivable; operator latency mean 152.6 ms recorded (n=4,614). Fix = O2-side histogram ingestion or flink prometheus bucket config (out of bench scope). Evidence: plan §14.5 + Phase 0 evidence file. |
 | `FAILOVER-FLUSS-001` | Fluss/sink/checkpoint failure injection | `[x]` all legs proven 2026-08-11 + terminal-failure upgrade 2026-08-12 — checkpoint-failure → configured restart → FAILED + KV-write shared-fate now reaches terminal FAILED via the `StallGuardedSink` watchdog (`CandleFailureInjectionIntegrationTest` 3/3, gate `COMPUTE_INT_TEST_P6=true`; kv-drop leg `seen=[RUNNING, FAILED, FAILING]`, `cause=… sink write-path stall: flush exceeded 15000 ms`, LOG frozen, no hang — evidence `logs/tracker-14/p6-2-stall-guard-terminal-failed-2026-08-12.txt`, `gated-run-20260812-nonroot-fullsuite.log`); live timeout (checkpoint 506 expired at 30 s → global restart → restore from chk-505, no data loss), live tablet leader change, live coordinator restart (dev bench job `a05c101f`; evidence `logs/tracker-14/p6-3-failover-injection-2026-08-11.md`) | **HISTORICAL (candle sinks; annotated 2026-08-13): RE-RUN required against the signal dual-sink — shared-fate legs (LOG frozen + KV write-path stall → terminal FAILED) re-verified on the `Signal_Candidates` / `Signal_Candidates_current` sinks.** |
 | `OBSERVABILITY-002` | OpenObserve metrics, logs, traces, alerts, dashboards, retention, and runbooks | `[x]` 2026-08-11 — P8.0/P8.2 delivery proofs complete (unit payload/auth 9/9; live OTLP/HTTP delivery + O2 PromQL verification incl. labels/units; collector-outage non-blocking integration test; two O2 outages: in-window retry with zero loss (1000-point burst, accepted==sent==1106) and terminal failure (send_failed=38) with ING-crit-telemetry-delivery-failed alert → webhook HTTP 200; flink_logs live from the distributed job; **P8.3 alerts DONE**: 14 SIGNAL rules provisioned idempotently via o2-provision.py (label-condition support, 23 total), 14/14 fired via OTLP fixtures + 12/14 recovered, storm test PASS (204,800-tick full replay + collector outage → zero unintended fires; evidence `logs/tracker-14/p8-3-alerts-2026-08-11.txt`); **P8.4 dashboards/runbooks + retention pending**; emitver enabled for ingestion JSON logs, queryable in `platform_logs`; traces negative; image digests recorded). Evidence: `logs/tracker-14/p8-2-otel-live-2026-08-11.txt`. Pending: distributed TaskManager metrics (P8.2 box 830) — DONE 2026-08-11 (distributed Flink metrics live: PrometheusReporter JM :9249/TM :9250 → collector scrape → remote-write → O2 PromQL battery, accepted==sent==48,569; `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`); `flink_logs` live structured logs — DONE 2026-08-11 (docs 463→1,924 from the distributed SignalJob, checkpoint lines queryable; `logs/tracker-14/p8-2-flink-logs-live-2026-08-11.txt`); **P8.3 alerts DONE**: 15 SIGNAL rules + 8 ING rules provisioned idempotently via o2-provision.py (24 total; SIGNAL-warn-source-lag added 2026-08-11 on the now-live operator event-time-lag metric, fired live via webhook); **P8.4 DONE**: 5 COMPUTE dashboards provisioned + panel queries validated live; retention contract applied per-stream (logs 30 / metrics 90 / traces 14 via provision_retention(), idempotent, 335 metric streams verified) with alerts-180d mapped to the metadata.sqlite meta store; operator-metric discovery closed P8.1 854/882 + P8.3 931 (Fluss client + operator metrics live: 78 streams); runbooks (SignalJob ops, replay, checkpoint, Fluss failure, schema-preflight, migration conflict, rollback with exact chk registry + cutoff chk-1539, alert catalogue, retention lifecycle) in docs/06_operations/01-runbooks.md; evidence: p8-1-flink-distributed-metrics (correction §7), p8-2-flink-logs-live, p8-3-alert-proposal, p8-3-alerts, p8-4-retention (all logs/tracker-14/, 2026-08-11) | **HISTORICAL (annotated 2026-08-13): delivery proofs are topology-independent and stand; RE-SCOPE — LOG:KV panels/dashboard labels and runbook entries re-targeted from candle to signal tables.** |
 | `MIGRATION-CONFLICT-002` | 25 historical conflicts reconciled with hashes/approvals | `[x]` 2026-08-11 — HISTORICAL, RETIRED (no candle conflict reconciliation per requirement change) |
-| `DEDUP-STATE-001` | DEC-038: Fluss dedup table holds the accepted set; Flink checkpoint bounded and not duplicating it (SIG-STATE-001) | `[ ]` pending — P11.2 compact-checkpoint-restore row; size re-measured in the externalization benchmark |
-| `DEDUP-REHYDRATE-001` | DEC-038: restart restores the compact checkpoint and rehydrates the dedup cache from Fluss; a re-sent fingerprint inside the TTL still dedupes (SIG-STATE-002) | `[ ]` pending — P11.2 rehydration row (env-gated live) |
-| `DEDUP-FAILCLOSED-001` | DEC-038: Fluss dedup-table unavailability/incompatibility fails the job closed / degraded — no silent replay with an empty set (SIG-STATE-003) | `[ ]` pending — P11.2 fail-closed row |
+| `DEDUP-STATE-001` | DEC-038: Fluss dedup table holds the accepted set; Flink checkpoint bounded and not duplicating it (SIG-STATE-001) | `[x]` 2026-08-15 — SIG-STATE-001: `SignalJobCompactCheckpointRestoreIntegrationTest` (env-gated, host-runnable) proved the checkpoint is bounded across 5x dedup cardinality (54465 vs 54482 bytes, ratio 1.00) and a strict restore resumes with no full replay in ~870 ms; surfaced + fixed the orphaned eviction-timer violation (without the fix the checkpoint grew ratio 2.70); externalization benchmark recorded (doc 04) |
+| `DEDUP-REHYDRATE-001` | DEC-038: restart restores the compact checkpoint and rehydrates the dedup cache from Fluss; a re-sent fingerprint inside the TTL still dedupes (SIG-STATE-002) | `[x]` 2026-08-15 — SIG-STATE-002: `SigState002RehydrationRestoreIntegrationTest` (env-gated `COMPUTE_INT_TEST_SIG_STATE_REHYDRATE`) PASSED live; externalization benchmark cold-restart hydration 15/15 sampled lookups SEEN_LIVE from Fluss authority (doc 04) |
+| `DEDUP-FAILCLOSED-001` | DEC-038: Fluss dedup-table unavailability/incompatibility fails the job closed / degraded — no silent replay with an empty set (SIG-STATE-003) | `[x]` 2026-08-15 — SIG-STATE-003: `SigState003FailClosedPreflightIntegrationTest` (env-gated `COMPUTE_INT_TEST_SIG_STATE_PREFLIGHT`) PASSED live; query-on-miss rehydration means a cold restart is correct, never an empty dedup set (doc 04) |
 
 Delivered pieces (evidence rows must still gain the full register fields below before P10):
 
@@ -1371,7 +1375,7 @@ Every evidence row must include:
 | Candle LOG-only output | P1/P2 | candle LOG sink only; candle KV projection RETIRED (2026-08-13) | CANDLE-SCHEMA-002 `[x]` (historical) |
 | Signal LOG append per signal | P1/P2 | `Signal_Candidates` LOG sink — one row per fired signal, never updated | SIGNAL-DUAL-SINK-001 |
 | Signal KV current-state | P1/P2 | `Signal_Candidates_current` KV upsert — latest/active per instrument | SIGNAL-DUAL-SINK-001 |
-| Only canonical versions write signal KV | P2 | policy re-targeted to signal current-state boundary | CANDLE-CANONICAL-001 `[x]` (historical) → re-scope pending |
+| Only canonical versions write signal KV | P2 | policy re-targeted to signal current-state boundary | CANDLE-CANONICAL-001 `[x]` (historical) → **re-scope LANDED 2026-08-13 — `CanonicalSignalFilterFunction` gates the signal KV sink (Section 6 checklist `[x]`, code operator `canonical-signal-filter`); this matrix cell was not updated when the re-scope landed** |
 | Complete history migration | P3 | RETIRED — no candle migration/audit per requirement change | CANDLE-MIGRATION-002 `[x]` (historical) |
 | No unresolved conflicts | P3 | RETIRED — no conflict reconciliation | MIGRATION-CONFLICT-002 `[x]` (historical) |
 | No accidental full replay | existing startup gate | config tests + launcher audit | STARTUP-GATE-001 |
@@ -1379,7 +1383,7 @@ Every evidence row must include:
 | Durable checkpoints | P4 | S3 write/read/restore | CHECKPOINT-DURABILITY-001 |
 | Graph restore | P6/P10 | copied checkpoint strict restore (re-run on signal dual-sink) | CHECKPOINT-RESTORE-002 |
 | Bounded memory | P5/P7 | target-load time series | DEDUP-MEMORY-001 |
-| Dedup state externalized to Fluss (DEC-038) | P11 | dedup KV state table + bounded cache test battery (cache hit/miss, duplicate race/retry, fail-closed, rehydration, compact-checkpoint restore) | DEDUP-STATE-001 / DEDUP-REHYDRATE-001 / DEDUP-FAILCLOSED-001 |
+| Dedup state externalized to Fluss (DEC-038) | P11 | dedup KV state table + bounded cache test battery (cache hit/miss, duplicate race/retry, fail-closed, rehydration, compact-checkpoint restore) | DEDUP-STATE-001 / DEDUP-REHYDRATE-001 / DEDUP-FAILCLOSED-001 (all `[x]` 2026-08-15) |
 | Throughput/latency | P7 | benchmark report (re-run on signal dual-sink topology) | PERF-* |
 | Failure safety | P6/P10 | injection and recovery report (re-run on signal sinks) | FAILOVER-FLUSS-001 |
 | OpenObserve observability | P8/P9 | collector delivery queries, payload tests, dashboards, alerts, retention, outage/recovery evidence | OBSERVABILITY-002 |
@@ -1390,7 +1394,7 @@ Every evidence row must include:
 
 Production status must remain `BLOCKED` until every checkbox below is checked:
 
-- [x] Exact LOG/KV metadata validation is live and fail-closed (`feature_candles_15s` LOG, `Signal_Candidates` LOG, `Signal_Candidates_current` KV PK `instrument_token`). — 2026-08-13 Stage 6: production gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`; live ZK: `Signal_Candidates` id 607 LOG, `Signal_Candidates_current` id 608 KV v2 PK `instrument_token`, both `bucket.key=instrument_token`/16 buckets/7d ttl; legacy KV v2 (PK `candidate_id`) dropped. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`
+- [x] Exact LOG/KV metadata validation is live and fail-closed (`feature_candles_15s` KV, PK `(instrument_token, window_start)`; `Signal_Candidates` LOG; `Signal_Candidates_current` KV PK `instrument_token`). — 2026-08-13 Stage 6: production gate `SignalJob.preflightTableContracts` ran against the platform tables → `PREFLIGHT_STATUS=PASS`; live ZK: `Signal_Candidates` id 607 LOG, `Signal_Candidates_current` id 608 KV v2 PK `instrument_token`, both `bucket.key=instrument_token`/16 buckets/7d ttl; legacy KV v2 (PK `candidate_id`) dropped. Evidence: `logs/tracker-14/p6-stage6-live-ddl-evidence-20260813.md`
 - [x] Canonical strategy/rule writer ownership is enforced at the signal KV boundary. — `CanonicalSignalFilterFunction` gates only the KV sink on the canonical signal key; config gate `requireCanonicalVersion` fail-closed at startup; unit suites green (compute 182/0/11 skipped, 2026-08-13)
 - [ ] ~~No unresolved business conflicts remain in the migration interval~~ (RETIRED — no candle migration).
 - [ ] ~~Complete lake+log history has been read and independently reconciled~~ (RETIRED — no candle audit).

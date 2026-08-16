@@ -103,7 +103,7 @@ No source day expires until its manifest is verified, and at least three complet
 
 ## 6.7 Gate halt and resume runbook
 
-Halt records reason, detection timestamp, scope, epoch, affected attempts/reservations, and evidence. Reconciliation checks broker orders, Arrow REST responses, mappings, fills/positions, changelog continuity, Signal job/checkpoints, and every unknown attempt.
+Halt records reason, detection timestamp, scope, epoch, affected attempts (and, pre-2026-08-15, reservations — REMOVED with CHG-005), and evidence. Reconciliation checks broker orders, Arrow REST responses, mappings, fills/positions, changelog continuity, Signal job/checkpoints, and every unknown attempt.
 
 Resume requires two distinct authenticated authorized operators approving the same evidence hash and epoch. Unauthorized or mismatched approvals are rejected, audited, and alerted. Automatic resume is prohibited.
 

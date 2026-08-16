@@ -25,7 +25,9 @@ code/01_platform/01_docker/.env
 # Runtime logs / evidence artifacts (R-051: log4j2 JSON journals, dated gz
 # rolls, and soak TSVs are generated per run and must never be committed —
 # they contain host paths, endpoints, and account identifiers).
-logs/
+logs
+# (plain `logs`, no slash: also matches the `logs -> <main project>/logs` symlink
+# that Freebuff worktrees use for evidence — `logs/` alone leaves it untracked)
 **/logs/*.json
 **/logs/*.json.gz
 **/logs/soak/

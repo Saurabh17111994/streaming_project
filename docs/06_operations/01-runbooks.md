@@ -35,12 +35,12 @@ Commands and API paths are version-specific implementation details. Validate the
 
 ### Triggers
 
-Halt for unknown broker outcome, duplicate-order risk, missing/ambiguous identity, stale instruction/reservation state, changelog discontinuity, checkpoint failure affecting order correctness, missing fill, failed reconciliation, unauthorized action, security incident, or unverifiable Executor state.
+Halt for unknown broker outcome, duplicate-order risk, missing/ambiguous identity, ~~stale instruction/reservation state~~ (**REMOVED 2026-08-15, CHG-005**), changelog discontinuity, checkpoint failure affecting order correctness, missing fill, failed reconciliation, unauthorized action, security incident, or unverifiable Executor state.
 
 ### Procedure
 
 1. Transition the affected gate scope to `HALTED` and increment/record the gate epoch.
-2. Record reason, detection timestamp, affected attempts/reservations, actor/service, and evidence reference.
+2. Record reason, detection timestamp, affected attempts, actor/service, and evidence reference. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 3. Confirm new money-moving calls stop within five seconds.
 4. Preserve attempts, request hashes, mappings, responses, offsets, fills, and logs.
 5. Alert the owner and begin the matching reconciliation runbook.
@@ -52,7 +52,7 @@ Existing positions may remain monitored, but no new money-moving call is permitt
 1. Reconcile broker orders and Arrow REST responses.
 2. Reconcile fills, order lifecycle, and positions.
 3. Verify `instruction_id` ↔ `execution_attempt_id` ↔ `client_order_ref` ↔ `broker_order_id` mappings.
-4. Resolve every `UNKNOWN` attempt and reservation through evidence-backed disposition.
+4. Resolve every `UNKNOWN` attempt through evidence-backed disposition. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 5. Verify Executor fencing and durable state.
 6. Verify Fluss changelog offsets/continuity.
 7. Verify Signal job and checkpoint health.
@@ -70,7 +70,7 @@ Automatic resume and approval reuse across epochs are prohibited.
 3. Query the broker through the evidence-approved reconciliation method using the durable client/broker reference.
 4. If acceptance is proven, persist the `broker_order_id` mapping and reconcile fills/positions.
 5. If non-acceptance is proven, record terminal evidence before retry/release according to policy.
-6. If neither is proven, require manual disposition and retain reservation capacity.
+6. If neither is proven, require manual disposition. (**Reservation-capacity clause REMOVED 2026-08-15, CHG-005.**)
 7. Record immutable execution audit and follow the resume runbook.
 
 ## Broker market-data disconnect
@@ -89,7 +89,7 @@ Automatic resume and approval reuse across epochs are prohibited.
 2. Halt the order path if state continuity or instruction correctness is uncertain.
 3. Restore the compact checkpoint from the tested encrypted S3 checkpoint/savepoint (DEC-038: the checkpoint holds source offsets, watermarks, timers, in-flight windows, and working-cache metadata — not the full dedup set).
 4. Verify Fluss authoritative-state availability and compatibility (dedup state table, candle/signal tables); rehydrate the dedup working cache from Fluss.
-5. Verify window, forming-bar, ranking, and source state consistency; verify the Fluss dedup table holds the accepted set (checkpoint did not duplicate it).
+5. Verify window, forming-bar, and source state consistency; verify the Fluss dedup table holds the accepted set (checkpoint did not duplicate it). (**Ranking state REMOVED 2026-08-15, CHG-005.**)
 6. Verify no duplicate immutable instruction and no unaccounted partial sink visibility.
 7. If restoration or Fluss-state verification cannot be proven, remain not ready and execute the approved reset/replay procedure.
 8. Reconcile before any gate resume.
@@ -111,7 +111,7 @@ Automatic resume and approval reuse across epochs are prohibited.
 4. Inspect durable projection pending/completion state.
 5. Retry lifecycle and position projections idempotently using source event/version.
 6. Reject regressive terminal-state updates; conflicting evidence becomes `UNKNOWN`.
-7. Verify `Order_Lifecycle`, `Positions`, mappings, and reservation impact before closure.
+7. Verify `Order_Lifecycle`, `Positions`, and mappings before closure. (**Reservation impact REMOVED 2026-08-15, CHG-005.**)
 
 ## EOD offload failure
 

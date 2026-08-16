@@ -17,10 +17,10 @@ This guide makes the requirements easier to review. It is a navigation aid, not 
 ## Project-wide scopes
 
 - `account_scope_id`: broker/account isolation boundary.
-- `portfolio_id`: ranking, reservation, and capacity boundary.
+- ~~`portfolio_id`: ranking, reservation, and capacity boundary~~ — **REMOVED 2026-08-15 (CHG-005).**
 - `execution_partition_id`: Executor ownership/fencing boundary when account scope is subdivided.
 
-These scopes must be carried consistently through instructions, reservations, attempts, mappings, lifecycle, positions, gates, and audit.
+These scopes must be carried consistently through attempts, mappings, lifecycle, positions, gates, and audit. (**Instructions and reservations REMOVED 2026-08-15, CHG-005.**)
 
 ## Project-wide timestamp vocabulary
 
@@ -36,7 +36,7 @@ Do not use `commit` without naming which boundary it means.
 
 ## Canonical ownership
 
-- Signal job: compute, candidates, ranking, reservations, immutable instructions.
+- Signal job: compute, candidates. **(Ranking/reservations/instructions REMOVED 2026-08-15, CHG-005.)**
 - Action Capture: postback audit, order lifecycle, position projection, quarantine, projection recovery.
 - Executor: gate, attempts, fencing, correlation, reconciliation, execution audit, Arrow REST calls.
 - Babysitter: position observation; zero actions in MVP.

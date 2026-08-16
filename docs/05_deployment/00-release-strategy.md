@@ -31,8 +31,8 @@ MVP Phase 4.2 includes:
 - Bounded best-effort fingerprint deduplication
 - Event-time 15-second OHLCV candles and final-on-emission behavior
 - Forming-bar Business Logic and immutable candidate audit
-- In-operator Ranking and immutable ranking audit
-- Portfolio reservation gates and immutable `Trade_Decisions`
+- ~~In-operator Ranking and immutable ranking audit~~ — **REMOVED 2026-08-15 (CHG-005)**
+- ~~Portfolio reservation gates and immutable `Trade_Decisions`~~ — **REMOVED 2026-08-15 (CHG-005)**
 - Durable Executor gate, attempts, mappings, reconciliation, fencing, and Arrow REST handoff
 - Independent postback capture, `Fills`, `Order_Lifecycle`, and fill-derived `Positions`
 - Checkpointed Babysitter job that emits zero actions
@@ -40,7 +40,7 @@ MVP Phase 4.2 includes:
 - Verified EOD Iceberg/S3 offload with retention safety buffer
 - Local Compose and production four-VM Swarm definitions
 
-Deferred capabilities include real Babysitter actions, advanced features, market-context ranking, multi-broker support, BSE/currency derivatives, Kubernetes, automatic live gap backfill, ML ranking, backtesting, and business analytics.
+Deferred capabilities include real Babysitter actions, advanced features, multi-broker support, BSE/currency derivatives, Kubernetes, automatic live gap backfill, backtesting, and business analytics. (**Market-context and ML ranking REMOVED 2026-08-15, CHG-005.**)
 
 ## Release stages
 
@@ -84,7 +84,7 @@ Use the four-VM Swarm topology to validate:
 Production begins with:
 
 1. Gate `HALTED`.
-2. Reconciled broker orders, fills, positions, attempts, and reservations.
+2. Reconciled broker orders, fills, positions, and attempts. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 3. Verified changelog continuity and checkpoint health.
 4. Verified observability and alert ownership.
 5. Two distinct authenticated operators approving the same gate epoch/evidence hash.

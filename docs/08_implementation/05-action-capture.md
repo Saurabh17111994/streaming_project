@@ -16,7 +16,7 @@ Build this phase, then implement the tests in the second section before moving o
 | Requirements | `REQ-AC-001`–`REQ-AC-013` → `AC-AC-001`–`AC-AC-017` |
 | Contract | `docs/04_contracts/06-action-capture.md` |
 | Writes | `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine` |
-| Must not own | Strategy, ranking, order submission, gate approval |
+| Must not own | Strategy, order submission, gate approval (**ranking REMOVED 2026-08-15, CHG-005**) |
 
 ### Processing topology
 
@@ -138,9 +138,9 @@ State vocabulary: `FLAT`, `OPEN`, `REDUCING`, `CLOSED`, `UNKNOWN`.
 
 Order completion is not position closure. Conflicting fills, ambiguous side, quantity underflow, or missing correlation produces `UNKNOWN` and halts affected position actions.
 
-### Reservation interaction
+### Reservation interaction — REMOVED (CHG-005, 2026-08-15)
 
-Rejected/cancelled orders release capacity only after unique correlation and terminal reconciliation. Unknown state continues consuming capacity. Action Capture reports lifecycle evidence; the reservation owner applies the release according to the versioned policy.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred) with the reservation model.** Rejected/cancelled orders are recorded in immutable audit and lifecycle state; the capacity-release policy is out of scope.
 
 ### Backpressure/readiness
 

@@ -62,12 +62,12 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-FLS-008` | REQ-FLS-014 | Full | — | Projection ledger recovery | `Postback_Projection_Ledger` resumes incomplete records idempotently after restart | `test/storage/projection-ledger/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-009` | REQ-FLS-016 | Full | — | Cross-scope write attempt | Rejected; audit captured | `test/storage/scope-isolation/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-010` | REQ-FLS-013 | Full | — | 7-year encrypted audit retrieval | Record reconstructable from cold storage | `test/storage/audit-retrieval/` report | `NOT_IMPLEMENTED` |
-| `AC-FLS-011` | REQ-FLS-003 | Full | — | DDL → requirement parity scan for all 21 tables | Every table has DECIDED, EVIDENCE-GATED, or NOT APPLICABLE type status; DDL matches declared type and owner | `test/storage/table-type-decision/` report | `NOT_IMPLEMENTED` |
-| `AC-FLS-012` | REQ-FLS-014 | Full | — | `Portfolio_Reservations` + `Safety_Halt_Requests` state lifecycle | Reservation transitions legal; halt idempotent and scoped; DDL keys/columns match contract | `test/storage/reservation-halt-state/` report | `NOT_IMPLEMENTED` |
+| `AC-FLS-011` | REQ-FLS-003 | Full | — | DDL → requirement parity scan for all 21 tables (plan-time count, 2026-08-10 — now 24) | Every table has DECIDED, EVIDENCE-GATED, or NOT APPLICABLE type status; DDL matches declared type and owner | `test/storage/table-type-decision/` report | `NOT_IMPLEMENTED` |
+| `AC-FLS-012` | REQ-FLS-014 | Full | — | ~~`Portfolio_Reservations`~~ + `Safety_Halt_Requests` state lifecycle (**reservation half REMOVED 2026-08-15, CHG-005**) | ~~Reservation transitions legal~~ (**REMOVED 2026-08-15, CHG-005**); halt idempotent and scoped; DDL keys/columns match contract | `test/storage/reservation-halt-state/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-013` | REQ-FLS-002 | Indirect | — | Covered by AC-FLS-011 (DDL parity scan validates LOG/KV/audit class assignment) | Table class assignment matches declared guarantee | `test/storage/table-type-decision/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-014` | REQ-FLS-004 | Full | — | Cross-domain identity fixture: each table with its declared identity fields | No `order_id` in any table; each domain uses correct identity set; schema version present on every table | `test/storage/identity-fields/` report | `NOT_IMPLEMENTED` |
-| `AC-FLS-015` | REQ-FLS-006 | Full | — | Normal candle session; CANDLE_WINDOW_MS=15000 | Append-only output; OHLCV fields match aggregation; no late corrections written; retention ≥3 days | `test/storage/candle-log/` report | `NOT_IMPLEMENTED` |
-| `AC-FLS-016` | REQ-FLS-007 | Full | — | Candidate + ranking event stream | `Signal_Candidates` and `Ranking_Results` immutable; strategy/ranking version fields present; single writer (Signal job) for ranking | `test/storage/strategy-ranking-audit/` report | `NOT_IMPLEMENTED` |
+| `AC-FLS-015` | REQ-FLS-006 | Full | — | Normal candle session; CANDLE_WINDOW_MS=15000 | KV upsert output (last-write-wins, no row growth); OHLCV fields match aggregation; no late corrections written; retention 2 calendar days (candle-table exception, user decision 2026-08-16) | `test/storage/candle-log/` report | `NOT_IMPLEMENTED` |
+| `AC-FLS-016` | REQ-FLS-007 | Full | — | Candidate event stream (**ranking stream REMOVED 2026-08-15, CHG-005**) | `Signal_Candidates` immutable; ~~`Ranking_Results` and strategy/ranking version fields~~ (**REMOVED 2026-08-15, CHG-005**) | `test/storage/strategy-ranking-audit/` report | `NOT_IMPLEMENTED` |
 | `AC-FLS-017` | REQ-FLS-017 | Full | — | DEC-038 state-ownership contract per Fluss-owned Signal table (dedup, candle, forming bar, current signal state) | Each Fluss-owned table defines owner, keys/bucket.key, update semantics, TTL/cleanup mechanism (no per-key TTL in Fluss 0.9.1), rebuild source, versioning, restart/rehydration, and consistency/fail-closed rule; Flink checkpoints are not a duplicate copy of Fluss-owned state | `test/storage/dec038-state-ownership/` report | `NOT_IMPLEMENTED` |
 
 ### Compute
@@ -99,28 +99,30 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-SS-002` | REQ-SS-002, REQ-SS-007 | Full | — | Identical input snapshot | Same pattern detection result; deterministic replay | `test/signal/deterministic-replay/` report | `NOT_IMPLEMENTED` |
 | `AC-SS-003` | REQ-SS-003 | Full | — | All candidate evaluations | Candidate audit record written for every evaluation (selected or rejected) | `test/signal/candidate-audit/` report | `NOT_IMPLEMENTED` |
 | `AC-SS-004` | REQ-SS-004 | Full | — | Changed winning parameters | New instruction_id created; prior instruction superseded/cancelled | `test/signal/instruction-lifecycle/` report | `NOT_IMPLEMENTED` |
-| `AC-SS-005` | REQ-SS-005, REQ-SS-010 | Full | — | Reservation transition sequence | Legal transitions accepted; illegal transitions rejected; stale version rejected | `test/signal/reservation-transitions/` report | `NOT_IMPLEMENTED` |
+| `AC-SS-005` | REQ-SS-005, REQ-SS-010 | Full | — | ~~Reservation transition sequence~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Legal transitions accepted; illegal transitions rejected; stale version rejected~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
 | `AC-SS-006` | REQ-SS-009, REQ-RNK-008 | Full | — | Concurrent candidates across instruments | Global capacity limit enforced; no overbooking | `test/signal/global-capacity/` report | `NOT_IMPLEMENTED` |
-| `AC-SS-007` | REQ-SS-001 | Full | — | Missing/stale lifecycle or reservation state | Instruction publication suppressed; reason exposed | `test/signal/missing-state/` report | `NOT_IMPLEMENTED` |
-| `AC-SS-008` | REQ-SS-001, REQ-FC-008 | Full | — | Signal job restart | Candidate, reservation, and instruction state restored consistently | `test/signal/restart-restore/` report | `NOT_IMPLEMENTED` |
+| `AC-SS-007` | REQ-SS-001 | Full | — | ~~Missing/stale lifecycle or reservation state~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Instruction publication suppressed~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-SS-008` | REQ-SS-001, REQ-FC-008 | Full | — | Signal job restart | Candidate state restored consistently (**reservation/instruction state REMOVED 2026-08-15, CHG-005**) | `test/signal/restart-restore/` report | `NOT_IMPLEMENTED` |
 | `AC-SS-009` | REQ-SS-010 | Full | — | Replacement instruction with unresolved predecessor | Executor rejects/holds replacement; predecessor disposal required first | `test/signal/supersession/` report | `NOT_IMPLEMENTED` |
 | `AC-SS-010` | REQ-SS-011 | Full | — | Max active candidates exceeded | Oldest/invalid candidates cleaned up; new evaluation bounded | `test/signal/candidate-bounds/` report | `NOT_IMPLEMENTED` |
-| `AC-SS-011` | REQ-SS-006 | Full | — | Code + topology verification scan | No Fluss source on `Signal_Candidates` in ranking code; no separate ranking deployment; no separate checkpoint boundary | `test/signal/topology/` report | `NOT_IMPLEMENTED` |
-| `AC-SS-012` | REQ-SS-008 | Indirect | — | Covered by AC-SS-001 through AC-SS-011 above | All acceptance criteria: patterns, replay, audit, lifecycle, reservation, capacity, restore, bounds | `test/signal/acceptance-summary/` report | `NOT_IMPLEMENTED` |
+| `AC-SS-011` | REQ-SS-006 | Full | — | ~~Code + topology verification scan~~ (**REMOVED 2026-08-15, CHG-005 — ranking out of scope**) | ~~No Fluss source on `Signal_Candidates` in ranking code; no separate ranking deployment~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-SS-012` | REQ-SS-008 | Indirect | — | Covered by AC-SS-001 through AC-SS-011 above | All acceptance criteria: patterns, replay, audit, lifecycle, restore, bounds (**reservation/capacity REMOVED 2026-08-15, CHG-005**) | `test/signal/acceptance-summary/` report | `NOT_IMPLEMENTED` |
 
 ### Ranking
 
+> **REMOVED 2026-08-15 (CHG-005, not deferred):** ranking is out of scope; the AC-RNK rows below are retained for cross-reference with REMOVED annotations on each row.
+
 | Acceptance ID | Requirement | Coverage type | Uncovered criteria | Fixture / Workload | Threshold | Evidence Artifact | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `AC-RNK-001` | REQ-RNK-002 | Full | — | Null/NaN/non-finite score input | Candidate rejected with reason; no NaN ordering | `test/signal/ranking-score/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-002` | REQ-RNK-003 | Full | — | Identical composite score | Deterministic tie-break; stable identity used | `test/signal/ranking-ties/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-003` | REQ-RNK-004 | Full | — | Same winner, unchanged parameters | Audit-only reevaluation; no new instruction | `test/signal/ranking-reeval/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-004` | REQ-RNK-004 | Full | — | Different winner | Reservation transition; new instruction if capacity available | `test/signal/ranking-winner-change/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-005` | REQ-RNK-005, REQ-SS-010 | Full | — | Stale reservation state | Instruction publication suppressed | `test/signal/ranking-stale-reservation/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-006` | REQ-RNK-006 | Full | — | variable 50,000 ticks/s average baseline full session (≈16.7 ticks/s/instrument average; 90,000 ticks/s peak retired, DEC-036) | Decision p99 <100 ms; report includes p50/p95/p99 with workload | `test/signal/ranking-latency/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-007` | REQ-RNK-009 | Full | — | Every evaluation | Ranking evidence record includes portfolio_id, capacity hash, tie-break data | `test/signal/ranking-evidence/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-008` | REQ-RNK-001 | Full | — | No separate ranking deployment | Verified within Signal job checkpoint; no separate Fluss round trip | `test/signal/topology/` report | `NOT_IMPLEMENTED` |
-| `AC-RNK-009` | REQ-RNK-007, REQ-RNK-008 | Full | — | Repartition + serialization verification; full acceptance checklist | Candidates repartitioned by portfolio_id; single serialized scope per portfolio; all acceptance criteria from REQ-RNK-007 covered by AC-RNK-001 through AC-RNK-008 | `test/signal/ranking-acceptance/` report | `NOT_IMPLEMENTED` |
+| `AC-RNK-001` | REQ-RNK-002 | Full | — | ~~Null/NaN/non-finite score input~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Candidate rejected with reason~~ (**REMOVED 2026-08-15, CHG-005 — ranking/decisions out of scope, not deferred**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-002` | REQ-RNK-003 | Full | — | ~~Identical composite score~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Deterministic tie-break~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-003` | REQ-RNK-004 | Full | — | ~~Same winner, unchanged parameters~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Audit-only reevaluation~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-004` | REQ-RNK-004 | Full | — | ~~Different winner~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Reservation transition~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-005` | REQ-RNK-005, REQ-SS-010 | Full | — | ~~Stale reservation state~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Instruction publication suppressed~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-006` | REQ-RNK-006 | Full | — | ~~variable 50,000 ticks/s baseline~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Decision p99 <100 ms~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-007` | REQ-RNK-009 | Full | — | ~~Every evaluation~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Ranking evidence record~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-008` | REQ-RNK-001 | Full | — | ~~No separate ranking deployment~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Verified within Signal job~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
+| `AC-RNK-009` | REQ-RNK-007, REQ-RNK-008 | Full | — | ~~Repartition + serialization verification~~ (**REMOVED 2026-08-15, CHG-005**) | ~~Candidates repartitioned by portfolio_id~~ (**REMOVED 2026-08-15, CHG-005**) | — | `NOT_IMPLEMENTED` |
 
 ### Action Capture
 
@@ -132,7 +134,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-AC-004` | REQ-AC-005 | Full | — | Terminal-state regression attempt (CANCELLED → FILLED) | Rejected; order moved to UNKNOWN; alert raised | `test/action-capture/terminal-regression/` report | `NOT_IMPLEMENTED` |
 | `AC-AC-005` | REQ-AC-006 | Full | — | Crash between audit append and lifecycle projection | Restart resumes; projection completed idempotently | `test/action-capture/independent-write-crash/` report | `NOT_IMPLEMENTED` |
 | `AC-AC-006` | REQ-AC-011 | Full | — | Restart with incomplete ledger records | All non-complete records resumed idempotently | `test/action-capture/projection-recovery/` report | `NOT_IMPLEMENTED` |
-| `AC-AC-007` | REQ-AC-008 | Full | — | Rejected broker order | Terminal lifecycle state; reservation released only after correlation and reconciliation | `test/action-capture/rejected-order/` report | `NOT_IMPLEMENTED` |
+| `AC-AC-007` | REQ-AC-008 | Full | — | Rejected broker order | Terminal lifecycle state (**reservation-release clause REMOVED 2026-08-15, CHG-005**) | `test/action-capture/rejected-order/` report | `NOT_IMPLEMENTED` |
 | `AC-AC-008` | REQ-AC-007 | Full | — | First correlated fill | position_id minted; position state OPEN | `test/action-capture/position-creation/` report | `NOT_IMPLEMENTED` |
 | `AC-AC-009` | REQ-AC-007 | Full | — | Partial fills on same position | Cumulative quantity correct; average fill price correct | `test/action-capture/partial-fills/` report | `NOT_IMPLEMENTED` |
 | `AC-AC-010` | REQ-AC-007 | Full | — | Multi-order trade_context | trade_context_id groups correctly across orders | `test/action-capture/trade-context/` report | `NOT_IMPLEMENTED` |
@@ -158,7 +160,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-EXE-008` | REQ-EXE-011 | Full | — | Cross-scope halt request | Rejected; audit captured | `test/executor/safety-halt-scope/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-009` | REQ-EXE-006 | Full | — | Missing correlation | Quarantined; halts affected flow; no inferred mapping | `test/executor/correlation-quarantine/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-010` | REQ-EXE-004 | Full | — | Modified instruction row under existing instruction_id | Contract violation; halt, quarantine, alert | `test/executor/instruction-mutation/` report | `NOT_IMPLEMENTED` |
-| `AC-EXE-011` | REQ-EXE-005 | Full | — | Broker rejection | Terminal failure; reservation released per policy | `test/executor/broker-rejection/` report | `NOT_IMPLEMENTED` |
+| `AC-EXE-011` | REQ-EXE-005 | Full | — | Broker rejection | Terminal failure (**reservation-release clause REMOVED 2026-08-15, CHG-005**) | `test/executor/broker-rejection/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-012` | REQ-EXE-013 | Full | — | Arrow REST reconciliation query | List recent orders, fills, positions with defined consistency delay | `test/executor/reconciliation-capability/` report | `EVIDENCE_BLOCKED` |
 | `AC-EXE-013` | REQ-EXE-010 | Full | — | 7-year audit reconstruction | Every money-moving call reconstructable from immutable audit | `test/executor/audit-reconstruction/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-014` | REQ-EXE-010 | Full | — | NotImplementedError scaffold replaced | All gates pass | Code review + test suite | `NOT_IMPLEMENTED` |

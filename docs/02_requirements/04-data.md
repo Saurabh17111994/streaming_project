@@ -54,7 +54,7 @@ The following capabilities are explicitly NOT owned by the Data Requirements lay
 
 - **Physical DDL generation, application, and schema lifecycle management:** Owned by the schema lifecycle process (`docs/08_implementation/01-foundation.md`). This document defines the logical contract; tooling applies it.
 - **Actual broker protocol field definitions, packet schemas, and decoder versions:** Evidence-gated. Owned by the broker protocol evidence and the Ingestion implementation dossier.
-- **Candle computation, signal detection, strategy evaluation, and ranking logic:** Owned by the Signal Flink job.
+- **Candle computation, signal detection, strategy evaluation:** Owned by the Signal Flink job. (**Ranking logic REMOVED 2026-08-15, CHG-005.**)
 - **Broker order submission, execution, gate management, and reconciliation:** Owned by the Executor.
 - **Postback capture, fill lifecycle, position projection logic, and quarantine disposition:** Owned by Action Capture.
 - **EOD controller orchestration and manifest creation:** Owned by the EOD controller. This document defines retention and expiry requirements; the controller drives the process.
@@ -75,9 +75,9 @@ The following capabilities are explicitly NOT owned by the Data Requirements lay
 | `postback_event_id`    | One platform-captured delivery              | May be logically duplicate by fingerprint                  |
 | `action_id`            | One immutable structured position action    | Future phase; maps to attempts like an instruction         |
 | `account_scope_id`     | Broker/account isolation boundary            | Scopes gates, mappings, positions, attempts, and audit     |
-| `portfolio_id`         | Ranking and capacity boundary                 | Scopes reservations and portfolio limits                   |
+| ~~`portfolio_id`~~         | ~~Ranking and capacity boundary~~                 | ~~Scopes reservations~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `execution_partition_id` | Fenced Executor ownership boundary          | Scopes one active Executor owner and fencing token          |
-| `reservation_id`       | One portfolio capacity reservation            | Maps candidate/instruction to a versioned reservation      |
+| ~~`reservation_id`~~       | ~~One portfolio capacity reservation~~            | ~~Maps candidate/instruction to a versioned reservation~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `halt_request_id`      | One durable safety-halt request               | Idempotently maps detected uncertainty to a gate action    |
 
 An overloaded `order_id` is prohibited.
@@ -91,8 +91,8 @@ An overloaded `order_id` is prohibited.
 | `forming_bar`               | KV (PK `instrument_token`) | Signal job           | Current state only (Slice 2.2 consumer — DEC-038 durable home) | Rebuilt from raw_table_1 replay        |
 | `Signal_Candidates`         | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |
 | `Signal_Candidates_current` | KV             | Signal job           | Current state plus rebuild window                         | Rebuilt from LOG audit                |
-| `Ranking_Results`           | LOG            | Signal job           | ≤7 complete trading days                                  | EOD Iceberg                            |
-| `Trade_Decisions`           | immutable feed | Signal job           | Until consumed plus replay/reconciliation buffer          | Execution audit links retained 7 years |
+| `Ranking_Results`           | ~~LOG~~            | ~~Signal job~~           | ~~≤7 complete trading days~~                                  | ~~EOD Iceberg~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Trade_Decisions`           | ~~immutable feed~~ | ~~Signal job~~           | ~~Until consumed plus replay buffer~~          | ~~Execution audit links~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Fills`               | LOG            | Action Capture       | ≥3 complete trading days                                  | Encrypted 7-year audit                 |
 | `Order_Lifecycle`           | KV             | Action Capture       | Current state plus rebuild window                         | Rebuilt from audit                     |
 | `Positions`                 | KV             | Position projector   | Current state plus rebuild window                         | Rebuilt from audit                     |
@@ -102,7 +102,7 @@ An overloaded `order_id` is prohibited.
 | `Execution_Audit`           | LOG            | Executor             | ≥3 complete trading days                                  | Encrypted 7-year audit                 |
 | `Position_Actions`          | LOG            | Babysitter after MVP | Replay/reconciliation buffer                              | Encrypted 7-year audit                 |
 | `Postback_Quarantine`       | LOG            | Action Capture       | Until disposition plus buffer                             | Encrypted evidence per policy          |
-| `Portfolio_Reservations`    | KV/logical state | Signal job          | Active plus rebuild/reconciliation window                 | Reservation audit/rebuild evidence     |
+| `Portfolio_Reservations`    | ~~KV/logical state~~ | ~~Signal job~~          | ~~Active plus rebuild window~~                 | ~~Reservation audit/rebuild evidence~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Postback_Projection_Ledger` | KV            | Action Capture       | Incomplete plus recovery/disposition window                | Rebuilt/reconciled from postback audit |
 | `Safety_Halt_Requests`      | KV              | Authorized components | Safety/reconciliation window                             | Execution audit retained 7 years       |
 | `suspected_discontinuities` | LOG            | Ingestion            | Operational investigation window                          | Optional operational lake retention    |
@@ -111,7 +111,7 @@ An overloaded `order_id` is prohibited.
 
 ### 4.3.1 Naming convention
 
-Logical table names use Pascal_Snake_Case (e.g. `Trade_Decisions`, `Order_Lifecycle`, `Postback_Projection_Ledger`). The following legacy names are excepted because they serve as stable identifiers for early-stage tooling and cross-document references: `raw_table_1`, `suspected_discontinuities`, `instruments`. These exceptions are deliberate and may only be renamed through an approved schema migration with full consumer impact analysis.
+Logical table names use Pascal_Snake_Case (e.g. ~~`Trade_Decisions`~~ — REMOVED 2026-08-15 CHG-005, `Order_Lifecycle`, `Postback_Projection_Ledger`). The following legacy names are excepted because they serve as stable identifiers for early-stage tooling and cross-document references: `raw_table_1`, `suspected_discontinuities`, `instruments`. These exceptions are deliberate and may only be renamed through an approved schema migration with full consumer impact analysis.
 
 ## 4.4 Core logical schemas
 
@@ -131,13 +131,13 @@ Required fields: `candidate_id`, nullable `instruction_id`, nullable `trade_cont
 
 Current-state KV projection of the signal stream, keyed by `(instrument_token)`: one row per instrument holding the latest/active candidate (same field set as the LOG row, plus supersession relation); supersession overwrites in place. Rebuildable from the immutable `Signal_Candidates` LOG.
 
-### `Ranking_Results`
+### `Ranking_Results` — REMOVED (CHG-005, 2026-08-15)
 
-Required fields: evaluation ID, candidate/instruction identity, ranking model/configuration version, normalized score inputs/weights/result, rank, selected flag, rejection reason, reservation snapshot/version, timestamp, and schema version.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred).** No ranking evidence records in the current system.
 
-### `Trade_Decisions`
+### `Trade_Decisions` — REMOVED (CHG-005, 2026-08-15)
 
-Required fields: immutable `instruction_id`, `candidate_id`, `trade_context_id`, instrument/symbol/exchange, side, quantity, order/product type, optional limit price, strategy/rule/configuration version, score/evaluation identity, reservation ID/version, creation/expiry timestamps, supersedes relation, and schema version. Execution-owned status does not mutate this record.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred).** No immutable instruction feed in the current system.
 
 ### `Fills`
 
@@ -157,7 +157,7 @@ Key: `position_id`. Fields: `trade_context_id`, instrument, side, open/closed/cu
 - `Execution_Attempts`: attempt/instruction/action IDs, immutable request hash, client reference, gate epoch, phase/outcome, timestamps, retry eligibility, broker response summary, schema version.
 - `Order_Correlation`: instruction/attempt/client/broker/trade/position IDs, verification state/evidence, timestamps, schema version.
 - `Execution_Audit`: immutable event ID/type, all relevant IDs, gate epoch, actor/service identity, evidence hash/summary, timestamp, schema version.
-- `Portfolio_Reservations`: reservation ID, account/portfolio scope, candidate/instruction IDs, capacity class, state, transition version, source evidence, expiry, timestamps, schema version.
+- ~~`Portfolio_Reservations`: reservation ID, account/portfolio scope, candidate/instruction IDs, capacity class, state, transition version, source evidence, expiry, timestamps, schema version~~ — **REMOVED 2026-08-15 (CHG-005).**
 - `Postback_Projection_Ledger`: postback event ID, projection state, expected prior state, retry/error/disposition, step timestamps, schema version.
 - `Safety_Halt_Requests`: halt request ID, account/portfolio/execution scope, source, reason, detection time, source epoch/version, evidence hash, application result, schema version.
 

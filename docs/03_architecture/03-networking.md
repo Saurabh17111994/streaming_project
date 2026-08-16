@@ -45,7 +45,7 @@ The observability VM cannot authorize orders, change the Executor gate, or erase
 ## Identity and authorization boundaries
 
 - Ingestion can append to market-data tables and write discontinuity/quarantine evidence.
-- Signal jobs can write signal/candle/ranking/instruction outputs and their checkpoint state.
+- Signal jobs can write signal/candle outputs and their checkpoint state. (**Ranking/instruction outputs REMOVED 2026-08-15, CHG-005.**)
 - Action Capture can append postback audit, update lifecycle/position projections, and write quarantine.
 - Executor can read immutable instructions, consume safety-halt requests, and write only execution-owned state.
 - EOD controller owns manifest creation/verification and retention extension.

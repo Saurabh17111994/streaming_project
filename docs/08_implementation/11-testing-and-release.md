@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill) — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/268); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus, CHG-008/009/010; +4 M2 hardening 2026-08-15 — ING-UNIT-018 Java↔Go config parity, CHG-012; +13 M3 hardening 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 READY gating matrix, CHG-017; +7 M4 hardening 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003, CHG-018; +3 M5 hardening 2026-08-15 — ING-UNIT-021/022 telemetry scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint bash harness, CHG-019), 0 failures, 8 env-gated skips (ingestion; common 340/0/1-skip; the 11 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker, SCH-20 Positions-store drill — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..006`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill) — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/325 (compute count corrected 2026-08-16, was 268)); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus, CHG-008/009/010; +4 M2 hardening 2026-08-15 — ING-UNIT-018 Java↔Go config parity, CHG-012; +13 M3 hardening 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 READY gating matrix, CHG-017; +7 M4 hardening 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003, CHG-018; +3 M5 hardening 2026-08-15 — ING-UNIT-021/022 telemetry scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint bash harness, CHG-019), 0 failures, 8 env-gated skips (ingestion; common 340/0/1-skip; the 11 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker, SCH-20 Positions-store drill — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..006`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -118,7 +118,7 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `InstrumentManifestWriterTest` | 4 | `ING-SCHEMA-002` (DDL-order row mapping, entry validation R-115/R-116/R-193, empty/duplicate-composite-key refusal) |
 | `InstrumentManifestWriterIntegrationTest` | 1 | `ING-INT-004` (first production composite-PK raw-client writer — live upserts into an `instruments`-shaped scratch table, version retention, idempotent re-load; env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`) |
 
-Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15 — **superseded**: that run predates the SCH-15/SCH-20/SCH-24 additions, and the current default-run totals are 340 common / 0 failures / 1 skip (CHG-003/005/006/007; docs-audit C6 line 340/211/268); the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
+Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15 — **superseded**: that run predates the SCH-15/SCH-20/SCH-24 additions, and the current default-run totals are 340 common / 0 failures / 1 skip (CHG-003/005/006/007; docs-audit C6 line 340/234/325 (counts corrected 2026-08-16 — were 211/268)); the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
 
 ### Ingestion
 
@@ -217,7 +217,7 @@ The tool discovers the tablet container + data volume, scans every segment with 
 
 | Test IDs | What is tested | Pass result |
 | --- | --- | --- |
-| `SIG-UNIT-001` to `SIG-UNIT-006` | Tie ordering, candles, 300000 ms dedup TTL, candidate identity, ranking, and reservations | Output is deterministic for fixed input and clock. |
+| `SIG-UNIT-001` to `SIG-UNIT-006` | Tie ordering, candles, 300000 ms dedup TTL, candidate identity (~~ranking and reservations~~ — **REMOVED 2026-08-15, CHG-005**) | Output is deterministic for fixed input and clock. |
 | `SIG-UNIT-007` | Dependency scan | No `flink-cep` dependency or CEP import exists. |
 | `SIG-UNIT-008` to `SIG-UNIT-009` | Dedup and candle state contents | State stays compact; no raw packet/event collection or tick list is stored (DEC-038: the dedup set lives in the Fluss dedup table; the Flink side holds only the bounded working cache). |
 | `SIG-STATE-001` | DEC-038: large durable dedup state is observable in Fluss and the Flink checkpoint is bounded | The Fluss dedup table holds the accepted set; checkpoint size stays bounded and does not duplicate the full durable state. |
@@ -227,7 +227,7 @@ The tool discovers the tablet container + data volume, scans every segment with 
 | `SIG-HARNESS-002` | Late before-final versus after-final event | Only the permitted update/discard behavior occurs. |
 | `SIG-HARNESS-003` | Checkpoint then restore and replay | Recovered output equals the expected deterministic output. |
 | `SIG-HARNESS-004` | Two identical-looking events: one broker duplicate and one legitimate identical event | The documented fingerprint limitation is applied consistently and its metric/audit evidence is emitted. |
-| `SIG-HARNESS-005` | Checkpoint/restore while a reservation and ranking result are active | Recovery preserves the correct reservation and ranking outcome without a duplicate decision. |
+| `SIG-HARNESS-005` | ~~Checkpoint/restore while a reservation and ranking result are active~~ | ~~Recovery preserves the correct reservation and ranking outcome~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `STATE-COMPAT-001` | Approved serializer and savepoint version change | State/savepoint restore succeeds through the approved compatibility path, or startup blocks before unsafe use. |
 | `SIG-INT-001` | Pinned Fluss source/sink boundary | Source/sink semantics work with approved versions. |
 | `COMPAT-FLINK-001` | Source/sink checkpoint, restore, and rescale on the pinned Flink/connector versions | Restored processing and state remain within the approved consistency boundary. |
@@ -246,7 +246,7 @@ Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoi
 | `SignalJobConfigTest` | 7 | `SIG-UNIT-003` core (pinned values + rejection of deviations) |
 | `FingerprintDedupFunctionTest` | 6 | `SIG-UNIT-008`/`SIG-UNIT-009` dedup half — Flink 2.2.1 operator harness (`KeyedOneInputStreamOperatorTestHarness`, no cluster): first occurrence passes / duplicate within TTL dropped; state stays exactly two rows per active key (dedup map + expiry index) regardless of fingerprint count; expiry timer deletes entries at watermark ≥ `first_seen + TTL` (never early), re-arriving expired fingerprint re-admitted; state key scoped by `version\|token\|fingerprint`; shared-expiry timer clears every listed key |
 
-**Pending (no implementing test yet):** `SIG-UNIT-004..006` (candidate/ranking/reservation — Slice 3), `SIG-UNIT-007` (dependency scan), `SIG-UNIT-008/009` emit half (`CandleEmitFunction` state-content assertions), `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001/002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001`. The full required set is `SIG-UNIT-001..009`, `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (reconciled with [`04-signal-job.md`](./04-signal-job.md) §Verification mapping). Solving method, prerequisites, and pass gates for each pending item: [`04-signal-job.md`](./04-signal-job.md) §Pending work items: resolution plan. Harness infra (compute-pom test-scope `flink-streaming-java` test-jar + `flink-test-utils`) landed 2026-08-10 — the pure-JVM rows need only test code from here on.
+**Pending (no implementing test yet):** ~~`SIG-UNIT-004..006` (candidate/ranking/reservation — Slice 3)~~ (**REMOVED 2026-08-15, CHG-005 — ranking/reservation out of scope**), `SIG-UNIT-007` (dependency scan), `SIG-UNIT-008/009` emit half (`CandleEmitFunction` state-content assertions), `SIG-HARNESS-001..005` (~~005 REMOVED 2026-08-15, CHG-005~~), `STATE-COMPAT-001`, `SIG-INT-001/002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001`. The full required set is `SIG-UNIT-001..009`, `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (reconciled with [`04-signal-job.md`](./04-signal-job.md) §Verification mapping; ranking/reservation rows now REMOVED per CHG-005). Solving method, prerequisites, and pass gates for each pending item: [`04-signal-job.md`](./04-signal-job.md) §Pending work items: resolution plan. Harness infra (compute-pom test-scope `flink-streaming-java` test-jar + `flink-test-utils`) landed 2026-08-10 — the pure-JVM rows need only test code from here on.
 
 ### Action Capture
 
@@ -292,7 +292,7 @@ Evidence: input fixture, output capture proving zero actions, checkpoint/restore
 | Test ID | What is tested | Pass result |
 | --- | --- | --- |
 | `EXE-UNIT-001` | Gate transition and epoch | Invalid transition/epoch is refused and audited. |
-| `EXE-UNIT-002` | Decision hash, expiry, reservation | Mutated, expired, or unreserved decision is refused. |
+| `EXE-UNIT-002` | ~~Decision hash, expiry, reservation~~ | ~~Mutated, expired, or unreserved decision is refused~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `EXE-UNIT-003` | Client reference canonicalization | Reference is stable and conforms to broker constraints. |
 | `EXE-UNIT-004` | Broker result classification | Success, failure, and unknown are classified safely. |
 | `EXE-UNIT-005` | Two-person approval identity/epoch/evidence | One person or mismatched approval cannot resume trading. |
@@ -391,7 +391,7 @@ owner/date
 
 | Level | Purpose | Environment |
 | --- | --- | --- |
-| Unit | Pure decode, canonicalization, transition, ranking, and validation logic | Build runner |
+| Unit | Pure decode, canonicalization, transition, and validation logic (**ranking REMOVED 2026-08-15, CHG-005**) | Build runner |
 | Flink harness/state | Event time, operators, timers/state, checkpoint/replay | Test JVM |
 | Component integration | Fluss client, schema, persistence, service boundary | Pinned local stack |
 | End-to-end | Tick → decision → sandbox order → postback → position | Acceptance environment |
@@ -425,7 +425,7 @@ Unknown endpoint paths, fields, limits, status values, timestamps, identity beha
 | Test family | Required behavior |
 | --- | --- |
 | `ING-UNIT-*` | Decode, bytes/hash, normalization, fingerprint, invalid/quarantine |
-| `SIG-UNIT-*` | Dedup TTL, tie ordering, candles, candidates, ranking, reservation |
+| `SIG-UNIT-*` | Dedup TTL, tie ordering, candles, candidates (**ranking/reservation REMOVED 2026-08-15, CHG-005**) |
 | `AC-UNIT-*` | Postback identity, correlation, status precedence, positions |
 | `BAB-UNIT-*` | Strict no-op and action-enable fail-closed |
 | `EXE-UNIT-*` | Gate, immutability, attempts, references, approvals, classification |
@@ -439,7 +439,7 @@ Deterministic tests use fixed clocks, versioned fixtures, stable IDs/seeds, and 
 - `SIG-HARNESS-002`: late-before-final versus discard-after-final.
 - `SIG-HARNESS-003`: deterministic checkpoint/restore replay.
 - `SIG-HARNESS-004`: identical legitimate event versus duplicate fingerprint limitation.
-- `SIG-HARNESS-005`: reservation and ranking recovery.
+- ~~`SIG-HARNESS-005`: reservation and ranking recovery~~ — **REMOVED 2026-08-15 (CHG-005).**
 - `BAB-HARNESS-001`: position changelog/offset restore with zero action output.
 - `STATE-COMPAT-001`: serializer/savepoint compatibility for every version change.
 
@@ -506,7 +506,7 @@ The expected result is always: data-path recovery is measured and only claimed b
 
 ### Data quality and replay rules
 
-Test raw byte/hash preservation; decoder/schema version and unknown-version quarantine; manifest completeness/types/active state/checksum; timestamp UTC conversion/clock offset/missing time; fingerprint and duplicate behavior; trade/quote/depth classification; candle correctness and late-event handling; candidate/ranking/decision identity and score provenance; postback correlation/lifecycle/position behavior; attempt/request hash/client-reference/mapping consistency; and audit redaction/reconstruction.
+Test raw byte/hash preservation; decoder/schema version and unknown-version quarantine; manifest completeness/types/active state/checksum; timestamp UTC conversion/clock offset/missing time; fingerprint and duplicate behavior; trade/quote/depth classification; candle correctness and late-event handling; candidate identity (**ranking/decision identity and score provenance REMOVED 2026-08-15, CHG-005**); postback correlation/lifecycle/position behavior; attempt/request hash/client-reference/mapping consistency; and audit redaction/reconstruction.
 
 | Replay | Expected result |
 | --- | --- |
@@ -514,7 +514,7 @@ Test raw byte/hash preservation; decoder/schema version and unknown-version quar
 | Raw duplicate delivery | One compute effect; raw audit remains at-least-once. |
 | Legitimate identical event | Bounded documented collapse may occur; metric is emitted. |
 | Changed decoder/schema version | Reject or use an explicit compatibility path; never silently reinterpret. |
-| Reordered input within lateness | Deterministic final candle/ranking result. |
+| Reordered input within lateness | Deterministic final candle result. (**Ranking REMOVED 2026-08-15, CHG-005.**) |
 | Replayed postback | Immutable duplicate evidence and idempotent projection. |
 | Replayed decision | No second active attempt for the same request hash. |
 | Changed immutable content | Contract violation, quarantine, and safety halt where relevant. |
@@ -656,7 +656,7 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 | P0-1 | `07-executor.md` | `EXE-*`, `REL-EXE-*`, `REL-CRASH-*`, `REL-HALT-*` |
 | P0-2 | All component dossiers | `ING-*`, `SIG-*`, `AC-*`, `BAB-*`, `EXE-*` |
 | P0-3 | `04-signal-job.md` | Job submission/readiness integration tests |
-| P0-003 | `15_portfolio_reservations.sql`, `17_postback_projection_ledger.sql`, `18_safety_halt_requests.sql`, `02-schema-storage.md` | DDL-INV-*, DDL-SCHEMA-*, DDL-APPLY-*, DDL-META-*, DDL-REPLAY-* |
+| P0-003 | ~~`15_portfolio_reservations.sql`~~ (**REMOVED 2026-08-15, CHG-005**), `17_postback_projection_ledger.sql`, `18_safety_halt_requests.sql`, `02-schema-storage.md` | DDL-INV-*, DDL-SCHEMA-*, DDL-APPLY-*, DDL-META-*, DDL-REPLAY-* |
 | P0-4 | `01-foundation.md` (§Documentation status and evidence rules), ingestion/action dossiers | `BROKER-MD-*`, `BROKER-PB-*`, stale-term CI gate |
 | P1-1 | Component dossiers, `12-version-compatibility-evidence.md` (+ `01-foundation.md` §Software versions and compatibility) | Build entry-point and artifact tests |
 | P1-2 | Governance and cross-cutting invariants | Stale-term CI gate |
@@ -730,7 +730,7 @@ Every acceptance-test row in the [acceptance matrix](../02_requirements/09-accep
 | `AC-FLS-*` | `AC-FLS-001`–`AC-FLS-017` | [`02-schema-storage.md`](./02-schema-storage.md) | `SCHEMA-*`, `COMPAT-FLUSS-*`, `COMPAT-FLINK-001`, `DDL-*` |
 | `AC-FC-*` | `AC-FC-001`–`AC-FC-016` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*`, `STATE-CANDLE-001`, `STATE-COMPAT-001`, `SAFETY-INT-001` |
 | `AC-SS-*` | `AC-SS-001`–`AC-SS-012` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (slot-scoped safety consumer), `SAFETY-INT-001` |
-| `AC-RNK-*` | `AC-RNK-001`–`AC-RNK-009` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (in-operator ranking) |
+| `AC-RNK-*` | `AC-RNK-001`–`AC-RNK-009` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (in-operator ranking) — **REMOVED 2026-08-15 (CHG-005)** |
 | `AC-AC-*` | `AC-AC-001`–`AC-AC-017` | [`05-action-capture.md`](./05-action-capture.md) | `AC-UNIT-*`, `AC-INT-001`, `AC-FAIL-*`, `AC-REC-001`, `BROKER-PB-001` |
 | `AC-BB-*` | `AC-BB-001`–`AC-BB-009` | [`06-babysitter.md`](./06-babysitter.md) | `BAB-*`, `BABYSITTER-001` |
 | `AC-EXE-*` | `AC-EXE-001`–`AC-EXE-016` | [`07-executor.md`](./07-executor.md) | `EXE-*`, `ARROW-REST-*` |
@@ -781,7 +781,7 @@ The dossiers specify implementation behavior but do not prove that code, DDL, de
 | Protocol | EVIDENCE-GATED | `REL-PROTO-*` | Ingestion + Action Capture + Executor | 2026-07-23 | Live-money | DATA-GAP-005 | Broker/Arrow REST fields, identities, status, response, and limits proven at Level 3+ |
 | Schema | NOT_PASSED | `REL-SCHEMA-*` | Storage | 2026-07-23 | Implementation | — | DDL parses/applies/parity/replay/retention tests pass |
 | Ingestion | NOT_PASSED | `REL-ING-*` | Ingestion | 2026-07-23 | Implementation | DATA-GAP-001 | Golden packets, raw bytes, fingerprint limits, backpressure, subscription completeness pass |
-| Signal job | NOT_PASSED | `REL-SIG-*` | Compute | 2026-07-23 | Implementation | — | Event time, dedup, candles, ranking, reservations, restore pass |
+| Signal job | NOT_PASSED | `REL-SIG-*` | Compute | 2026-07-23 | Implementation | — | Event time, dedup, candles, restore pass (**ranking/reservations REMOVED 2026-08-15, CHG-005**) |
 | Action Capture | NOT_PASSED | `REL-AC-*` | Action Capture | 2026-07-23 | Implementation | DATA-GAP-005 | Correlation/quarantine/lifecycle/positions/partial writes/rebuild pass |
 | Babysitter | NOT_PASSED | `REL-BAB-*` | Compute | 2026-07-23 | Implementation | — | Separate job checkpoints and emits zero MVP actions |
 | Executor | NOT_PASSED | `REL-EXE-*` | Executor | 2026-07-23 | Implementation | DATA-GAP-005 | Durable gate/attempt/mapping/audit/fencing/reconciliation pass; safety-halt control evidenced |
@@ -817,7 +817,7 @@ The release process must fail closed for:
 - Unknown version/protocol behavior.
 - Missing or stale evidence.
 - Failed/skipped mandatory test.
-- Unresolved attempt or reservation.
+- Unresolved attempt (**or pre-2026-08-15 reservation — REMOVED CHG-005**).
 - Unknown gate state.
 - Lost fencing/durable state/changelog continuity.
 - Unverified offload/retention.

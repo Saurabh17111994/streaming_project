@@ -11,7 +11,7 @@ Local Compose maintenance is not production procedure or HA evidence.
 1. Create a change record with scope, affected components, requirements/contracts/DDL/interfaces, versions, state impact, risk, rollback, and acceptance checks. Records are filed in [`../05_deployment/change-records/`](../05_deployment/change-records/_template.md) as `CHG-<N>.md` using the template, and must name the six fields validated by docs-audit C14.
 2. Schedule outside critical workload windows where possible and verify EOD retention margin.
 3. Confirm backup/checkpoint/savepoint and audit availability.
-4. Halt new money-moving calls and reconcile attempts, orders, fills, positions, reservations, mappings, and projections.
+4. Halt new money-moving calls and reconcile attempts, orders, fills, positions, mappings, and projections. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 5. Verify the target artifact/configuration is immutable and compatibility-tested.
 6. Apply the change with controlled Swarm update, restart, DDL, secret, network, or capacity procedure.
 7. Monitor the required health, dashboard, and alert views in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md).
@@ -28,7 +28,7 @@ Requires immutable image digest, exact dependency/version matrix, unit/integrati
 
 ### Flink job update
 
-Verify serializer/state compatibility, checkpoint/savepoint restore, source offsets, dedup/window/forming-bar/ranking state, sink behavior, and instruction duplication risk. Under DEC-038 also verify the Fluss dedup state-table schema/serialization compatibility and the rehydration path (restart must rehydrate the dedup working cache from Fluss; Fluss unavailability/incompatibility keeps the job fail-closed). Any uncertainty keeps the affected path not ready and the gate halted.
+Verify serializer/state compatibility, checkpoint/savepoint restore, source offsets, dedup/window/forming-bar state, and sink behavior. (**Ranking state and instruction-duplication risk REMOVED 2026-08-15, CHG-005.**) Under DEC-038 also verify the Fluss dedup state-table schema/serialization compatibility and the rehydration path (restart must rehydrate the dedup working cache from Fluss; Fluss unavailability/incompatibility keeps the job fail-closed). Any uncertainty keeps the affected path not ready and the gate halted.
 
 ### Fluss schema or DDL change
 

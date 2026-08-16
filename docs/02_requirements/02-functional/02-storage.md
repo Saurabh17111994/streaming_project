@@ -40,7 +40,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Pre-production clean break:** All physical DDLs may be replaced. Stale schemas, incompatible old consumer compatibility, and untested table definitions are not preserved.
 - **At-least-once LOG delivery:** LOG tables guarantee at-least-once append. Duplicate event rows may exist. Stronger deduplication is owned by the specific producer, not the storage layer.
 - **Late candles are discarded in MVP:** `feature_candles_15s` emits one final row per non-empty window. Records arriving after `window_end + allowed_lateness` are discarded and measured. Corrections to already-emitted candles are not written.
-- **Immutable instruction feed is Signal-owned:** `Trade_Decisions` contains no Executor-assigned fields, no mutable execution status, and no `broker_order_id`. Executor-owned state (`Execution_Attempts`, `Order_Correlation`) is separate.
+- ~~**Immutable instruction feed is Signal-owned:** `Trade_Decisions`…~~ — **REMOVED 2026-08-15 (CHG-005 — decision feed out of scope).** Executor-owned state (`Execution_Attempts`, `Order_Correlation`) is separate.
 - **Operational projections are rebuildable, not permanently retained:** `Order_Lifecycle`, `Positions`, and other KV operational projections may have shorter live retention than their source audit logs, provided the source audit (`Fills`, `Execution_Audit`) enables complete rebuild.
 - **Partial-update KV is writer-colocated:** KV tables using `partial_update` assign every column group to one declared writer. Cross-writer, untested updates are rejected by stale-version guards.
 - **EOD offload blocks expiry:** Source retention for a trading day is extended automatically while the corresponding Iceberg manifest is unverified or retryable. The minimum live buffer is three complete trading days even after successful offload.
@@ -50,7 +50,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 The following capabilities are explicitly NOT owned by Storage:
 
 - **Market data ingestion and broker connection management:** Owned by Ingestion.
-- **Candle computation, signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Candle computation, signal detection, strategy evaluation:** Owned by the Signal Flink job. (**Ranking REMOVED 2026-08-15, CHG-005.**)
 - **Broker order submission, execution, and Arrow REST integration:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection logic:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
@@ -84,8 +84,8 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | `feature_candles_15s_current` | KV (RETIRED 2026-08-13)            | Signal job                  | Was canonical candle projection PK `(instrument_token, window_start)`; `feature_candles_15s` is now the sole KV-only candle output (2026-08-13), projection dropped, live-table teardown pending |
 | `Signal_Candidates`         | LOG (v3; KV v2 R-084 reversed)       | Business Logic              | Immutable append-only candidate audit; one row per fired signal |
 | `Signal_Candidates_current` | KV                                    | Business Logic              | Current-state projection, PK `(instrument_token)`; latest/active candidate per instrument, supersession overwrites in place |
-| `Ranking_Results`           | LOG                                   | Signal job ranking operator | Immutable score/selection audit              |
-| `Trade_Decisions`           | LOG (DECIDED)                         | Signal job                  | Immutable instructions; no Executor fields    |
+| `Ranking_Results`           | ~~LOG~~                                   | ~~Signal job ranking operator~~ | ~~Immutable score/selection audit~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Trade_Decisions`           | ~~LOG (DECIDED)~~                         | ~~Signal job~~                  | ~~Immutable instructions~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Order_Lifecycle`           | KV                                    | Action Capture              | Broker-order lifecycle projection            |
 | `Positions`                 | KV                                    | Fill-derived projector      | Position lifecycle aggregate                 |
 | `Fills`               | LOG                                   | Action Capture              | Immutable postback/fill audit                |
@@ -95,7 +95,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | `Execution_Audit`           | LOG                                   | Executor                    | Immutable execution and gate audit           |
 | `Position_Actions`          | LOG                                   | Babysitter after MVP        | Structured future position actions; no DDL yet — not in the 24-table manifest |
 | `Postback_Quarantine`       | LOG                                   | Action Capture              | Uncorrelated/invalid postbacks               |
-| `Portfolio_Reservations`    | KV (EVIDENCE-GATED)                   | Signal job ranking operator | Reservation state per portfolio + instrument  |
+| `Portfolio_Reservations`    | ~~KV (EVIDENCE-GATED)~~                   | ~~Signal job ranking operator~~ | ~~Reservation state per portfolio + instrument~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Postback_Projection_Ledger`| KV (EVIDENCE-GATED)                   | Action Capture              | Durable projection completion tracking        |
 | `Safety_Halt_Requests`      | KV (v3, R-089)                        | Authorized components        | Durable safety-control events; PK `halt_request_id` dedups re-delivery |
 | `suspected_discontinuities` | LOG                                   | Ingestion                   | Non-sequence discontinuity evidence          |
@@ -125,23 +125,17 @@ Distribution SHALL preserve per-instrument affinity using tested Fluss bucketing
 
 ## REQ-FLS-006: Candle state
 
-`feature_candles_15s` is **KV** current-state candle output (PK `(instrument_token, window_start)`, upsert last-write-wins — 2026-08-13 user requirement; the older LOG-only wording is superseded). It contains instrument, UTC window boundaries, OHLCV, tick count, source/algorithm version, and output timestamp. Late corrections are not written in MVP. Upsert makes replay converge (re-upserting the same key replaces the row; no row growth). Retention is at least three complete trading days plus offload safety extension.
+`feature_candles_15s` is **KV** current-state candle output (PK `(instrument_token, window_start)`, upsert last-write-wins — 2026-08-13 user requirement; the older LOG-only wording is superseded). It contains instrument, UTC window boundaries, OHLCV, tick count, source/algorithm version, and output timestamp. Late corrections are not written in MVP. Upsert makes replay converge (re-upserting the same key replaces the row; no row growth). Retention is at least three complete trading days plus offload safety extension. **Candle-table exception (user decision 2026-08-16):** the 3-trading-day floor is the source/event-table invariant; `feature_candles_15s` itself is derived data kept **2 calendar days** (`table.log.ttl='2d'`) — it is rebuildable from `raw_table_1` replay (which keeps the floor), and the lake-off dev deviation means no offload extension applies to it.
 
 As the durable candle state, `feature_candles_15s` is an **authoritative Fluss state table under DEC-038**: Flink computes each final row from its small in-flight window accumulator and writes the row to Fluss; the Flink checkpoint never carries a second full copy of candle history. The `feature_candles_15s_current` KV projection, its dual sink, and the offline `CandleMigrationTool` historical load are RETIRED (2026-08-13 re-scope); replay/duplicate handling is derived from the KV upsert itself. The current-state projection requirement for signals moves to `Signal_Candidates_current` under REQ-FLS-007. The candle-KV replay-safety line (CANDLE-KV-REPLAY-001) is decommissioned — see tracker `14-candle-log-kv-replay-safety_2.md` for the measured close-out.
 
 ## REQ-FLS-007: Strategy and ranking audit
 
-`Signal_Candidates` is an immutable append-only LOG table (v3, re-scoped 2026-08-13 — the R-084 KV conversion is reversed, resolving the dead-supersede-chain problem): one new row per fired signal, routed by `instrument_token`, never updated; corrections are new rows with an explicit supersession relation. `Signal_Candidates_current` is the companion KV current-state projection keyed by `(instrument_token)`: one row per instrument holding the latest/active candidate, where supersession overwrites in place and the table rebuilds from the LOG. `Ranking_Results` is an immutable LOG table. All three include candidate/evaluation/instruction identity, strategy/rule/configuration versions, score inputs, normalized components, ranking model version, selection/rank/rejection reason, and timestamps.
+`Signal_Candidates` is an immutable append-only LOG table (v3, re-scoped 2026-08-13 — the R-084 KV conversion is reversed, resolving the dead-supersede-chain problem): one new row per fired signal, routed by `instrument_token`, never updated; corrections are new rows with an explicit supersession relation. `Signal_Candidates_current` is the companion KV current-state projection keyed by `(instrument_token)`: one row per instrument holding the latest/active candidate, where supersession overwrites in place and the table rebuilds from the LOG. ~~`Ranking_Results` is an immutable LOG table.~~ **(REMOVED 2026-08-15, CHG-005 — ranking out of scope, not deferred.)** The tables are EOD-tiered and retained in encrypted lake storage for the approved analytics/audit period.
 
-Ranking is written by the Signal job operator, not a separate Ranking job. The tables are EOD-tiered and retained in encrypted lake storage for the approved analytics/audit period.
+## REQ-FLS-008: Immutable instruction feed — REMOVED (CHG-005, 2026-08-15)
 
-## REQ-FLS-008: Immutable instruction feed
-
-`Trade_Decisions` SHALL be an immutable LOG table keyed by `instruction_id`. It SHALL contain the complete execution request: instrument, action, price, quantity, product, order type, strategy provenance, ranking provenance, reservation state/version, expiry, and correlation fields needed for intake.
-
-`Trade_Decisions` SHALL NOT contain `client_order_ref`, `broker_order_id`, mutable execution status, or any Executor-assigned field. Executor-owned attempt, reference, and mapping state belongs in `Execution_Attempts` and `Order_Correlation`. Executor SHALL NOT mutate any `Trade_Decisions` column.
-
-A repeated `instruction_id` with identical canonical content is duplicate evidence. The same identity with different content is a contract violation and SHALL be quarantined and audited (see REQ-FLS-015).
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred).** The `Trade_Decisions` immutable instruction feed (decisions half of Slice 3) is out of scope; the decision dual-sink machinery is gated off (`TRADE_DECISIONS_ENABLED=false`, no producer in scope).
 
 ## REQ-FLS-009: Lifecycle, positions, and execution state
 
@@ -178,7 +172,7 @@ Pre-production clean break allows replacing stale schemas without preserving inc
 
 The logical model SHALL include the following additional state contracts before physical DDL is finalized:
 
-- `Portfolio_Reservations`: authoritative reservation state keyed by `portfolio_id` and `reservation_id`, with transition version, instruction/candidate identity, capacity class, state, expiry, and source evidence.
+- ~~`Portfolio_Reservations`: authoritative reservation state keyed by `portfolio_id`~~ — **REMOVED 2026-08-15 (CHG-005 — reservations out of scope, not deferred).**
 - `Postback_Projection_Ledger`: durable projection workflow keyed by `postback_event_id`, with audit/lifecycle/position completion states, retries, errors, and disposition.
 - `Safety_Halt_Requests`: durable safety-control events keyed by `halt_request_id`, with scope, source, reason, detection time, evidence hash, and application status.
 
@@ -186,15 +180,13 @@ The physical table kind, merge engine, changelog image, bucket configuration, an
 
 Each state contract SHALL define one writer owner, readers, key, bounded growth, cleanup, retention, rebuild source, stale-update behavior, and acceptance tests.
 
-## REQ-FLS-015: Instruction feed enforcement
+## REQ-FLS-015: Instruction feed enforcement — REMOVED (CHG-005, 2026-08-15)
 
-A `Trade_Decisions` row with a repeated `instruction_id` but different canonical content is a schema contract violation. The offending row SHALL be identifiably quarantined as a separate enforcement event with source identity, content hash, and timestamp. The original immutable row is never mutated.
-
-Executor SHALL verify that every consumed `Trade_Decisions` row carries no Executor-assigned fields and SHALL halt the affected order flow on violation. The enforcement contract SHALL be tested with a pinned Fluss source replay (see AC-FLS-002).
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred) with the `Trade_Decisions` feed (REQ-FLS-008).**
 
 ## REQ-FLS-016: Position and reservation scope
 
-`Positions`, `Portfolio_Reservations`, `Order_Lifecycle`, `Execution_Gate`, and `Execution_Attempts` SHALL carry `account_scope_id` and the applicable `portfolio_id` or `execution_partition_id`. Cross-scope reads/writes are prohibited unless an explicit reconciliation contract authorizes them.
+`Positions`, ~~`Portfolio_Reservations`~~, `Order_Lifecycle`, `Execution_Gate`, and `Execution_Attempts` SHALL carry `account_scope_id` and the applicable ~~`portfolio_id`~~ or `execution_partition_id`. Cross-scope reads/writes are prohibited unless an explicit reconciliation contract authorizes them. **(The `Portfolio_Reservations` / `portfolio_id` reservation-scope half is REMOVED 2026-08-15, CHG-005.)**
 
 ## REQ-FLS-017: Authoritative Signal hot state (DEC-038)
 
@@ -211,7 +203,7 @@ For each Fluss-owned Signal state table/domain, the design SHALL define, before 
 7. **Restart behavior** — how Flink restores its compact checkpoint, verifies Fluss state availability/compatibility, and rehydrates only the working state it needs.
 8. **Consistency requirements** — what a bounded Flink working cache may hold vs the Fluss authoritative copy, and the fail-closed rule when Fluss state is unavailable or incompatible.
 
-Flink checkpoints SHALL NOT become a duplicate full copy of Fluss-owned Signal business state. This requirement does not create ranking/reservation tables or requirements.
+Flink checkpoints SHALL NOT become a duplicate full copy of Fluss-owned Signal business state. This requirement does not create ranking/reservation tables or requirements. **(Ranking/reservation/decision state is REMOVED from scope 2026-08-15, CHG-005.)**
 
 ## REQ-FLS-013: Acceptance
 

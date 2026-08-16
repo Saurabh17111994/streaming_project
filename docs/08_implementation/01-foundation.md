@@ -58,10 +58,10 @@ Per the `00-start-here.md` conflict rule (`docs/08_implementation/00-start-here.
 | Per-instrument rate | Expected baseline average ≈16.7 ticks/second at the 50k gate (generator retains 20 ticks/s capability, MOCK-UNIT-002); hard maximum 30 ticks/second |
 | Active instrument count | **3,000 instruments** (fixed per trading session; runtime changes require controlled restart) |
 | Total rate | **50,000 ticks/second average baseline** (≈ 3,000 × 16.7); **90,000 ticks/second theoretical cap ceiling** (= 3,000 × 30; peak campaign retired, DEC-036) |
-| Architecture | `Arrow → Ingestion → Fluss raw_table_1 → one Signal Flink job → Trade_Decisions`; `Positions → separate Babysitter Flink job` |
+| Architecture | `Arrow → Ingestion → Fluss raw_table_1 → one Signal Flink job` (**→ `Trade_Decisions` REMOVED 2026-08-15, CHG-005**); `Positions → separate Babysitter Flink job` |
 | MVP CEP | Disabled. No CEP operator, CEP job, or CEP dependency permitted |
 | Raw data | Every accepted tick appended to `raw_table_1`; no accepted tick silently dropped |
-| Signal path | Feature calculation, business rules, candidate filtering, ranking, reservation, and decision publication inside one Signal Flink job |
+| Signal path | Feature calculation, business rules, candidate filtering inside one Signal Flink job (**ranking/reservation/decision publication REMOVED 2026-08-15, CHG-005**) |
 | Fluss round trips | Flink must not write a temporary feature/candidate record to Fluss and read it back |
 
 ### Required configuration constants
@@ -110,7 +110,7 @@ Tasks must be completed in this sequence. Do not begin a later task until all ac
 | 1 | Make the mock broker per-instrument, variable, and deterministic | [`11-testing-and-release.md`](./11-testing-and-release.md#performance-benchmark-procedure) | Seeded variable profile averages ≈16.7 ticks/s/instrument at the 50k-gate baseline, caps every instrument at 30 ticks/s, and supports the 90,000 ticks/s theoretical cap ceiling (generator stress bound; peak campaign retired, DEC-036) |
 | 2 | Implement immediate, bounded ingestion writes | `docs/08_implementation/03-ingestion.md` | No batching; 80%/100% backpressure; per-tick append latency tracking |
 | 3 | Implement compact, bounded Signal-job state | `docs/08_implementation/04-signal-job.md` | Flink state stays compact and bounded: dedup set externalized to a Fluss KV state table (DEC-038) with a bounded Flink working cache; candle state contains OHLCV fields only; Flink checkpoint is small and not a second copy of Fluss business state; no CEP |
-| 4 | Bound candidate work and preserve in-job ranking | `docs/08_implementation/04-signal-job.md` (Ranking section) | MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; rejection codes; no Fluss round trip for ranking |
+| 4 | ~~Bound candidate work and preserve in-job ranking~~ | `docs/08_implementation/04-signal-job.md` (Ranking section) | ~~MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; rejection codes; no Fluss round trip for ranking~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | 5 | Pin job recovery and container-memory settings | `docs/08_implementation/09-production-swarm.md` | Checkpoint 10s/30s/1; JVM 65%/35%; S3 checkpoint storage |
 | 6 | Keep Babysitter state minimal | `docs/08_implementation/06-babysitter.md` | POSITION_ACTIONS_ENABLED=false; only latest position version, offset, freshness, schema version, no-op counters |
 | 7 | Implement required alerts and safe-stop conditions | `docs/08_implementation/10-observability.md` | 8 alert thresholds with 60s consecutive breach; idempotent Safety_Halt_Request; no auto-resume |
@@ -687,10 +687,10 @@ Proposed routing review:
 | `raw_table_1` | `instrument_token` after validation | Per-instrument processing order |
 | `feature_candles_15s` | `instrument_token` | Per-instrument window history |
 | `Signal_Candidates` | `candidate_id` (KV primary key, R-084 — was LOG) → **RE-SCOPED 2026-08-13: back to LOG, routing key `instrument_token`** (immutable candidate audit; new `Signal_Candidates_current` KV takes PK `(instrument_token)` for latest/active per instrument) | Strategy locality |
-| `Ranking_Results` | `evaluation_id` (R-136 — was `candidate_id`) | Avoid cross-instrument/null ambiguity |
+| `Ranking_Results` | ~~`evaluation_id`~~ (R-136 — was `candidate_id`) — **REMOVED 2026-08-15 (CHG-005)** | ~~Avoid cross-instrument/null ambiguity~~ |
 | `Fills` | `postback_event_id` when broker ID may be absent | Every delivery is routable |
 | `Execution_Audit` | `audit_event_id` | Gate-only events may lack instruction ID |
-| `Portfolio_Reservations` | `reservation_id` | Authoritative reservation state |
+| `Portfolio_Reservations` | ~~`reservation_id`~~ — **REMOVED 2026-08-15 (CHG-005)** | ~~Authoritative reservation state~~ |
 | `Postback_Projection_Ledger` | `postback_event_id` | Recovery workflow state |
 
 > Live in dev: `Postback_Projection_Ledger 705` (Fluss table id 705, 2026-08-13 dev cluster — see `02-schema-storage.md` lake-state note).
@@ -850,7 +850,7 @@ Short operational Fluss TTL and seven-year audit retention are separate contract
 - [x] Schema manifest format is implemented.
 - [x] All DDLs have checksums and compatibility classes. ✓ 21/21 manifest entries carry `ddl_sha256` + `compatibility_class=UNKNOWN` + `validated_matrix` (candle/signal → VM-FLUSS-CONN-007, else VM-FLUSS-SRV-005); emitted by `ddl_apply.py` (single writer, `matrix_boundary()` helper), enforced by its post-write contract check (exit 2 on stale manifest) + `SchemaComplianceFullSuiteTest.committedManifestCarriesChecksumsAndCompatibilityClasses` (common suite 112 tests, 2026-08-13). UNKNOWN is honest: the matrix is PINNED_AWAITING_EVIDENCE — dev-live ≠ production-proven.
 - [x] Stale DDL paths are removed from application workflow.
-- [x] Pinned dialect tests pass. ✓ dialect-pinned harnesses green on the pinned versions (unit suites 156/193/188 — re-measured 2026-08-15 (common 156 after the audit-core additions, the SCHEMA-AUDIT-001 reconstruction-simulation tests, the COMPAT-FLUSS-005 composite-PK matrix test, and the `DdlApplyToolStatusTest` apply-status/limitation-prediction tests; ingestion 193 after the Standard-feed deletion + the instrument-manifest-writer tests — ING-SCHEMA-002 unit + ING-INT-004 live composite-PK proof; compute 188 after the BAB-UNIT-001/002 tests; gated battery 10/10)); COMPAT-FLUSS-001/003 + COMPAT-FLINK-002 + COMPAT-FLUSS-005 live-evidence integration tests added 2026-08-15 (env-gated on `FLUSS_BOOTSTRAP`; live run 168 tests / 0 failures / 1 skip — the skip is the tiered-storage half of SCHEMA-AUDIT-001); missing savepoint/restore/rescale capability now covered — `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state); pins enforced by pin-check [3/4] external-SNAPSHOT ban + [4/4] FLINK_VERSION/FLUSS_VERSION.
+- [x] Pinned dialect tests pass. ✓ dialect-pinned harnesses green on the pinned versions (unit suites 156/193/188 — re-measured 2026-08-15 (common 156 after the audit-core additions, the SCHEMA-AUDIT-001 reconstruction-simulation tests, the COMPAT-FLUSS-005 composite-PK matrix test, and the `DdlApplyToolStatusTest` apply-status/limitation-prediction tests; ingestion 193 at 2026-08-15 — now 234 after the M1–M5 hardening batches; the instrument-manifest-writer tests — ING-SCHEMA-002 unit + ING-INT-004 live composite-PK proof; compute 188 at 2026-08-15 — now 325 after the forming-bar test batches; gated battery 10/10)); COMPAT-FLUSS-001/003 + COMPAT-FLINK-002 + COMPAT-FLUSS-005 live-evidence integration tests added 2026-08-15 (env-gated on `FLUSS_BOOTSTRAP`; live run 168 tests / 0 failures / 1 skip — the skip is the tiered-storage half of SCHEMA-AUDIT-001); missing savepoint/restore/rescale capability now covered — `SignalJobSavepointRestoreIntegrationTest` green (strict restore + 2× rescale, real dedup state); pins enforced by pin-check [3/4] external-SNAPSHOT ban + [4/4] FLINK_VERSION/FLUSS_VERSION.
 - [x] Every table has a non-null routing strategy.
 - [x] Immutability and stale-update protocols are implemented and tested. ✓ code `code/common/.../schema/ImmutabilityProtocol.java` + `KvStateUpdateProtocol.java` (library contracts, unit-tested: `ImmutabilityProtocolTest`, `KvStateUpdateProtocolTest`, `SchemaComplianceFullSuiteTest`). Candle KV stays LWW upsert by design (replay converges — no version column); runtime consultation wires in with the Executor-era writers (Phase 5).
 - [ ] Retention extension is executable, not just documented — VERIFIED BOUNDARY (2026-08-13): NOT live-alterable in Fluss 0.9.1. `Admin.alterTable` rejects `table.log.ttl` ("The option 'table.log.ttl' is not supported to alter yet"); `log.retention.ms` and `comment` alters pass validation but are silent no-ops (`getLogTTLMs()` unchanged 604,800,000 across 8 s of polling); only `table.datalake.enabled` verifiably applies (matches the LakeDisable 2026-08-12 precedent). TTL is set at CREATE time only — DEC-018 "extends while EOD unverified" needs a table rewrite (new TTL + migrate/backfill) or a Fluss upgrade. Evidence: `logs/tracker-14/retention-l853-verification-20260813.md` + `RetentionAlterProbe.java` / `AlterWhitelistProbe.java`.
@@ -879,7 +879,7 @@ Short operational Fluss TTL and seven-year audit retention are separate contract
 
 #### Implementation checklist
 
-- [x] Typed identity model implemented (candidate_id, instruction_id, execution_attempt_id, client_order_ref, broker_order_id, trade_context_id, position_id, postback_event_id, action_id, reservation_id, halt_request_id); generic order_id prohibited. Scope identities (account_scope_id, portfolio_id, execution_partition_id) enforced with isolation tests.
+- [x] Typed identity model implemented (candidate_id, instruction_id, execution_attempt_id, client_order_ref, broker_order_id, trade_context_id, position_id, postback_event_id, action_id, halt_request_id; ~~reservation_id~~ — **REMOVED 2026-08-15, CHG-005**); generic order_id prohibited. Scope identities (account_scope_id, ~~portfolio_id~~ — REMOVED 2026-08-15 CHG-005, execution_partition_id) enforced with isolation tests.
   - Source: 01-foundation.md -> "Identity invariant" (orig L587)
   - Design: Design-ready | Implementation: Implemented | Evidence: Untested | Live-money: Blocked
   - Location: code/common/src/main/java/com/trading/common/identity/IdentityModel.java
@@ -897,7 +897,7 @@ The following identities are never interchangeable:
 | `position_id` | Position projector | Fill-derived exposure aggregate |
 | `postback_event_id` | Action Capture | One received postback delivery |
 | `action_id` | Future Babysitter | One immutable position action |
-| `reservation_id` | Signal job | Portfolio capacity reservation |
+| ~~`reservation_id`~~ | ~~Signal job~~ | ~~Portfolio capacity reservation~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `halt_request_id` | Authorized component | Durable safety-halt request |
 
 #### Scope identities
@@ -905,7 +905,7 @@ The following identities are never interchangeable:
 | Scope | Purpose | Carried by |
 | --- | --- | --- |
 | `account_scope_id` | Broker/account isolation boundary | Gates, attempts, mappings, positions, lifecycle, halt requests, audit |
-| `portfolio_id` | Ranking/reservation/capacity boundary | Reservations, candidate evaluation, instruction context |
+| ~~`portfolio_id`~~ | ~~Ranking/reservation/capacity boundary~~ | ~~Reservations, candidate evaluation, instruction context~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `execution_partition_id` | Fenced Executor ownership boundary | Execution gate, fencing token, attempt state |
 
 A generic `order_id` is prohibited in new requirements, DDL, code, logs, and tests.
@@ -922,13 +922,13 @@ A generic `order_id` is prohibited in new requirements, DDL, code, logs, and tes
 | Data/behavior | Sole owner | Readers | Prohibited owners |
 | --- | --- | --- | --- |
 | Raw packet/decode | Ingestion | Signal, audit/offload | Strategy, Executor |
-| Candle/forming-bar state | Signal job | Business Logic/ranking | Ingestion, Executor |
-| Candidates/ranking/decisions | Signal job | Executor, audit | Action Capture |
+| Candle/forming-bar state | Signal job | Business Logic (**/ranking REMOVED 2026-08-15, CHG-005**) | Ingestion, Executor |
+| Candidates | Signal job | Audit | Action Capture |
 | Order lifecycle | Action Capture | Executor, operations | Signal, Babysitter |
 | Position aggregate | Position projector | Babysitter, Executor | Strategy, raw ingestion |
 | Order gate/attempt/mapping/audit | Executor | Action Capture/operations as needed | Signal, Executor |
 | Postback audit/lifecycle | Action Capture | Executor, operations | Signal, Babysitter |
-| Portfolio reservations | Signal job | Executor, reconciliation | N/A |
+| ~~Portfolio reservations~~ | ~~Signal job~~ | ~~Executor, reconciliation~~ — **REMOVED 2026-08-15 (CHG-005)** | ~~N/A~~ |
 | Projection ledger | Action Capture | Recovery scanner | N/A |
 | Safety halt requests | Authorized components | Executor | N/A |
 | Broker REST call | Executor via Arrow REST | Broker | Every other component |

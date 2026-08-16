@@ -19,14 +19,14 @@ Build this phase, then implement the tests in the second section before moving o
 
 ### Process boundary
 
-The Executor consumes immutable `Trade_Decisions`, durable `Safety_Halt_Requests`, and future structured `Position_Actions`. It owns and writes `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`. It does not mutate strategy/candidate/ranking fields and does not capture authoritative fills. It calls Arrow's REST API directly — there is no intermediate broker adapter layer.
+The Executor consumes ~~immutable `Trade_Decisions`~~ **(REMOVED 2026-08-15, CHG-005 — decision feed out of scope)** and durable `Safety_Halt_Requests`, and future structured `Position_Actions`. It owns and writes `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`. It does not mutate strategy/candidate fields and does not capture authoritative fills. It calls Arrow's REST API directly — there is no intermediate broker adapter layer.
 
 ### Internal modules
 
 | Module | Responsibility |
 | --- | --- |
 | `decision-consumer` | Changelog tail, schema/version, continuity, duplicate intake |
-| `validator` | Immutability, expiry, reservation, action/config compatibility |
+| `validator` | Immutability, expiry, action/config compatibility (**reservation REMOVED 2026-08-15, CHG-005**) |
 | `gate-store` | Epoch/state CAS, halt reasons, approvals |
 | `attempt-store` | Prepare/submit/unknown/resolved phases |
 | `reference` | Deterministic broker-facing reference after evidence |
@@ -82,7 +82,7 @@ Every broker call performs an atomic or serialized current-state/epoch check imm
 5. Acquire/fence the `execution_partition_id` lease.
 6. Start or restore gate as `HALTED` if any state is uncertain.
 7. Validate Arrow REST contract/reachability without placing a live order.
-8. Reconcile unknown attempts, broker orders, fills, positions, and reservations.
+8. Reconcile unknown attempts, broker orders, fills, and positions. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 9. Enter `APPROVAL_PENDING` only after reconciliation passes.
 10. Require two distinct authenticated approvals for the same epoch/evidence hash.
 
@@ -97,7 +97,7 @@ read event
 → validate schema/version
 → validate canonical identity/content hash
 → validate expiry and freshness
-→ validate reservation/capacity
+→ ~~validate reservation/capacity~~ (**REMOVED 2026-08-15, CHG-005**)
 → check supersession/cancellation
 → check no unresolved attempt/request-hash conflict
 → enqueue only if gate and fencing permit
@@ -160,7 +160,7 @@ Resume evidence must cover:
 4. Correlation mappings.
 5. Changelog offsets/continuity.
 6. Signal job/checkpoint health.
-7. Reservations and stale instructions.
+7. ~~Reservations and stale instructions~~ — **REMOVED 2026-08-15 (CHG-005).**
 8. No unresolved safety invariant.
 
 Two distinct authorized operators approve the same gate epoch/evidence hash. Automatic resume is prohibited.
@@ -191,7 +191,7 @@ Readiness is false for missing durable state, unknown gate, lost fencing, change
 ### Required tests
 
 - `EXE-UNIT-001` gate transition/epoch validation.
-- `EXE-UNIT-002` immutable decision hash/expiry/reservation checks.
+- ~~`EXE-UNIT-002` immutable decision hash/expiry/reservation checks~~ — **REMOVED 2026-08-15 (CHG-005).**
 - `EXE-UNIT-003` client reference canonicalization.
 - `EXE-UNIT-004` result classification.
 - `EXE-UNIT-005` approval identity/epoch/evidence rules.
@@ -233,8 +233,8 @@ The result is a reusable Java 17 library with in-memory state adapters and a
 safe local Java entry point. It must never submit an order, consume a Fluss
 changelog, or claim production readiness. Production adapters remain a later
 integration phase owned by the Executor maintainer after the
-`Trade_Decisions`, Fluss, fencing, reconciliation, and broker evidence gates
-are complete.
+~~`Trade_Decisions`,~~ Fluss, fencing, reconciliation, and broker evidence gates
+are complete. **(The `Trade_Decisions` feed is REMOVED 2026-08-15, CHG-005.)**
 
 ### Acceptance criteria
 
@@ -326,9 +326,9 @@ coordinator instead.
 - Selected package: offline Executor Safety Core.
 - Independence definition: no runtime connection to an earlier phase, no
   Flink/Fluss dependency, no broker/API call, no shared-source edit, and no
-  dependency on a final upstream `Trade_Decisions` producer.
+  dependency on a final upstream `Trade_Decisions` producer. **(REMOVED 2026-08-15, CHG-005 — no decision feed in scope.)**
 - The core accepts a local immutable `Decision` value object for tests. It does
-  not consume the eventual Fluss `Trade_Decisions` table.
+  not consume the eventual Fluss `Trade_Decisions` table. **(REMOVED 2026-08-15, CHG-005 — decision feed out of scope.)**
 - Production integration is deliberately not part of this plan.
 - Hidden context: none; this plan is self-contained for a fresh executor.
 
@@ -372,9 +372,9 @@ Use the following identities exactly. Never introduce a generic `order_id`:
 | `client_order_ref` | Deterministic broker-facing attempt reference |
 | `broker_order_id` | Broker-authoritative order identity; absent in this offline package |
 | `account_scope_id` | Account isolation scope |
-| `portfolio_id` | Portfolio capacity scope |
+| ~~`portfolio_id`~~ | ~~Portfolio capacity scope~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `execution_partition_id` | Fencing and gate ownership scope |
-| `reservation_id` | Upstream capacity reservation identity |
+| ~~`reservation_id`~~ | ~~Upstream capacity reservation identity~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `gate_epoch` | Monotonic execution safety epoch |
 | `fencing_epoch` | Monotonic ownership epoch |
 
@@ -473,8 +473,8 @@ strategy_version: str
 configuration_version: str
 evaluation_id: str
 composite_score: float | None
-reservation_id: str
-reservation_version: str
+~~reservation_id: str~~
+~~reservation_version: str~~
 created_ts: int
 expiry_ts: int | None
 supersedes_instruction_id: str | None
@@ -502,13 +502,8 @@ Rules:
 - `schema_version` must equal the literal `"2"`. The configured client
   reference format version must equal the literal `"v1"`.
 - A decision is executable only when `now_ts < expiry_ts` if expiry exists.
-- A reservation must be present, nonblank, and marked `ACTIVE` by the supplied
-  local reservation lookup. The lookup is an in-memory mapping, not Fluss.
-- Define a frozen local `Reservation` with exactly:
-  `reservation_id`, `portfolio_id`, `account_scope_id`, `instruction_id`,
-  `reservation_version`, `state`, and `expiry_ts`. Validation requires exact
-  ID/version/account/portfolio/instruction matches, `state == "ACTIVE"`, and
-  `now_ts < expiry_ts`.
+- ~~A reservation must be present, nonblank, and marked `ACTIVE` by the supplied
+  local reservation lookup~~ — **REMOVED 2026-08-15 (CHG-005 — reservation validation out of scope).**
 - `ExecutorSafetyCore` is constructed for exactly one nonblank
   `account_scope_id`, `portfolio_id`, and `execution_partition_id`. A decision
   outside the configured account or portfolio is rejected. The local caller
@@ -688,7 +683,7 @@ approval_service
 attempt_store
 fence_store
 audit_sink
-reservation_lookup
+~~reservation_lookup~~ (**REMOVED 2026-08-15, CHG-005**)
 next_audit_id
 ```
 
@@ -873,7 +868,7 @@ uncertainty into a blocked state before a future broker adapter exists.
 - Create: `code/02_services/04_executor/src/test/java/com/trading/executor/core/InMemoryAttemptStoreTest.java`
 - Create: `code/02_services/04_executor/src/test/java/com/trading/executor/core/DecisionValidatorTest.java`
 
-- [ ] Implement the exact decision validation rules, including reservation
+- [ ] ~~Implement the exact decision validation rules, including reservation~~ — **REMOVED 2026-08-15 (CHG-005).**
   lookup, expiry, schema version, scope, exchange, quantity, and price.
 - [x] Implement `AttemptStore.prepare()` with instruction/content-hash replay
   behavior and deterministic `execution_attempt_id` supplied by the caller.
@@ -1024,7 +1019,7 @@ leave generated artifacts in the owned module.
 The following remain later integration work and must not be stubbed as if
 complete in this plan:
 
-- Fluss `Trade_Decisions` changelog consumer.
+- ~~Fluss `Trade_Decisions` changelog consumer~~ — **REMOVED 2026-08-15 (CHG-005).**
 - Fluss writes to `Execution_Gate`, `Execution_Attempts`,
   `Order_Correlation`, `Execution_Audit`, or `Safety_Halt_Requests`.
 - Arrow REST request construction, authentication, timeout configuration, or
@@ -1035,7 +1030,7 @@ complete in this plan:
 - Postback consumption, fill capture, order lifecycle, and positions. Those
   belong to Action Capture.
 - Babysitter integration and `Position_Actions`.
-- Signal Job ranking, reservation, and `Trade_Decisions` production.
+- ~~Signal Job ranking, reservation, and `Trade_Decisions` production~~ — **REMOVED 2026-08-15 (CHG-005).**
 - Docker image or Compose/Swarm deployment changes.
 - Shared Java identity or schema changes.
 - Live-money readiness, automatic resume, or production release evidence.
@@ -1083,7 +1078,7 @@ order:
 
 ```text
 local Decision adapter
--> Fluss Trade_Decisions reader
+-> ~~Fluss Trade_Decisions reader~~ (**REMOVED 2026-08-15, CHG-005**)
 -> Fluss-owned Executor state stores
 -> authenticated control/safety-halt reader
 -> distributed fencing provider

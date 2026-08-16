@@ -7,7 +7,7 @@ Executor is the only platform component permitted to initiate money-moving calls
 ## Constraints
 
 - Executor SHALL be the only platform component permitted to initiate money-moving Arrow REST calls. No other component may submit broker orders.
-- Executor SHALL NOT mutate strategy, candidate, ranking, or instruction fields in any table. Execution status goes in execution-owned state only.
+- Executor SHALL NOT mutate strategy, candidate, ~~ranking,~~ or ~~instruction~~ fields in any table. Execution status goes in execution-owned state only. **(Ranking/instruction feed REMOVED 2026-08-15, CHG-005.)**
 - Every money-moving call SHALL pass through the durable gate. A gate check that is skipped, stale, or bypassed is a release-blocking defect.
 - An unknown broker outcome SHALL halt the gate within five seconds of detection. Automatic retry of an unknown attempt is prohibited.
 - A repeated `instruction_id` with different content is a contract violation. Executor SHALL halt, quarantine, and alert; it SHALL NOT submit the modified instruction.
@@ -39,7 +39,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Conditional Executor auto-resume:** Executor MAY auto-resume after a restart ONLY when durable evidence proves all seven conditions: known gate state/epoch, valid fencing owner, no UNKNOWN attempts, no unresolved correlations, healthy changelog continuity, healthy Signal-job/checkpoint evidence, and fresh mandatory health signals. If ANY proof is missing, the Executor remains HALTED and the two-person reconciliation/resume path applies. Every auto-resume SHALL produce an immutable audit event and OpenObserve notification.
 - **Unknown outcomes halt the order path:** Timeout, disconnect, crash window, or ambiguous broker response does not retry automatically. The attempt is marked `UNKNOWN`, the gate halts, and reconciliation is mandatory before any retry or new order.
 - **Two-person resume with matching evidence:** Gate resume requires two distinct operators approving the same gate epoch and evidence hash. This prevents a single compromised operator from enabling money-moving flow.
-- **Immutable instructions are never modified by Executor:** If a downstream component needs execution status, it reads from `Execution_Attempts` or `Execution_Audit`, not a mutated `Trade_Decisions`.
+- ~~**Immutable instructions are never modified by Executor:**~~ — **REMOVED 2026-08-15 (CHG-005 — `Trade_Decisions` decision feed out of scope, not deferred).**
 - **Reconciliation is mandatory, not optional:** Unknown attempts and unresolved correlations block new orders until explicitly reconciled. The platform will not silently resolve ambiguity.
 - **Position actions follow the same safety protocol:** Post-MVP, Babysitter-emitted `Position_Actions` pass through the identical gate, attempt, correlation, and reconciliation pipeline as entry instructions.
 
@@ -50,7 +50,7 @@ The following capabilities are explicitly NOT owned by Executor:
 - **Market data ingestion, broker connection, and packet decoding:** Owned by Ingestion.
 - **Candle computation, deduplication, event-time watermarking:** Owned by Compute within the Signal Flink job.
 - **Signal detection, candidate creation, strategy evaluation:** Owned by Business Logic within the Signal Flink job.
-- **Ranking, portfolio reservation, and winner selection:** Owned by the Ranking/Reservation operator within the Signal Flink job.
+- ~~**Ranking, portfolio reservation, and winner selection:**~~ — **REMOVED 2026-08-15 (CHG-005).**
 - **Postback capture, fill audit, order lifecycle projection, and position projection:** Owned by Action Capture.
 - **Position monitoring and position-action emission:** Owned by the Babysitter Flink job.
 - **EOD offload to Iceberg/S3:** Owned by the EOD controller.
@@ -68,7 +68,7 @@ Executor SHALL own dedicated Fluss state with exact physical DDLs for:
 - `Order_Correlation` KV: `instruction_id` ↔ `client_order_ref` ↔ `broker_order_id` mapping and verification state
 - `Execution_Audit` LOG: immutable gate transitions, attempt events, reconciliation evidence, approval events, and broker response summaries
 
-Executor SHALL not mutate strategy/candidate/ranking fields. `Trade_Decisions` contains no execution status, `client_order_ref`, `broker_order_id`, or Executor-assigned fields. Execution state is tracked exclusively in `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`.
+Executor SHALL not mutate strategy/candidate/~~ranking~~ fields. ~~`Trade_Decisions` contains no execution status~~ — **REMOVED 2026-08-15 (CHG-005 — decision feed out of scope).** Execution state is tracked exclusively in `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`.
 
 ## REQ-EXE-002: Gate state machine
 
@@ -79,7 +79,7 @@ ENABLED → HALTED
 
 A fresh installation and any restart with unverifiable durable state begin `HALTED`. Every money-moving call SHALL atomically verify the current gate epoch/state before submission.
 
-The gate enters `HALTED` for unknown submission outcome, duplicate risk, missing/ambiguous correlation, stale instruction/reservation state, changelog discontinuity, checkpoint failure affecting order correctness, missing fill, failed reconciliation, unauthorized action, or security incident.
+The gate enters `HALTED` for unknown submission outcome, duplicate risk, missing/ambiguous correlation, ~~stale instruction/reservation state~~, changelog discontinuity, checkpoint failure affecting order correctness, missing fill, failed reconciliation, unauthorized action, or security incident. **(Instruction/reservation state clause REMOVED 2026-08-15, CHG-005.)**
 
 Safe-halt SHALL block new calls within five seconds of detection.
 
@@ -91,16 +91,14 @@ Resume requires:
 2. Open position/fill reconciliation.
 3. Consumer offset/changelog continuity verification.
 4. Signal job/checkpoint health verification.
-5. Resolution of every unknown attempt and reservation.
+5. Resolution of every unknown attempt (and, pre-2026-08-15, reservation — REMOVED CHG-005).
 6. Two distinct authenticated authorized operators approving the same gate epoch and evidence hash.
 
 The second approval transitions `APPROVAL_PENDING` to `ENABLED`. Automatic resume is prohibited. Approvals and denied/unauthorized attempts are immutable audit events.
 
-## REQ-EXE-004: Immutable instruction intake
+## REQ-EXE-004: Immutable instruction intake — REMOVED (CHG-005, 2026-08-15)
 
-Executor consumes new immutable `instruction_id` records. It verifies schema version, reservation, expiry/freshness, action fields, configuration compatibility, and that no attempt exists for the same instruction/request hash.
-
-A modified row under an existing `instruction_id` is a contract violation: halt, quarantine, and alert. A superseded/cancelled instruction is not submitted.
+**REMOVED from scope 2026-08-15 (CHG-005, not deferred) with the `Trade_Decisions` decision feed (REQ-FLS-008).** Executor no longer consumes immutable instruction records in the current scope.
 
 ## REQ-EXE-005: Attempt protocol
 
@@ -108,7 +106,7 @@ Before a broker call Executor SHALL durably create `execution_attempt_id`, deter
 
 Outcomes:
 
-- Verified rejection/no acceptance: terminal failure; reconcile and release reservation according to policy.
+- Verified rejection/no acceptance: terminal failure; reconcile according to policy. **(Reservation-release clause REMOVED 2026-08-15, CHG-005.)**
 - Verified broker acknowledgement: persist `broker_order_id` mapping and terminal accepted state.
 - **Timeout, disconnect, malformed response, process crash window, or ambiguous status:** mark `UNKNOWN`, halt, and reconcile before any retry.
 

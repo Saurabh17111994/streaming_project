@@ -44,7 +44,7 @@ HALTED
 
 Every call validates the current gate epoch. Before a call, the Executor durably records `execution_attempt_id`, request hash, `client_order_ref`, gate epoch, and prepared state. An ambiguous outcome becomes `UNKNOWN`, halts the gate, and cannot be retried automatically as a new order.
 
-Resumption requires broker order reconciliation, fill/position reconciliation, changelog continuity, signal/checkpoint health, resolution of unknown attempts and reservations, and two distinct authenticated operators approving the same epoch and evidence hash. Automatic resume and unaudited bypass are prohibited.
+Resumption requires broker order reconciliation, fill/position reconciliation, changelog continuity, signal/checkpoint health, resolution of unknown attempts (and, pre-2026-08-15, reservations — REMOVED CHG-005), and two distinct authenticated operators approving the same epoch and evidence hash. Automatic resume and unaudited bypass are prohibited.
 
 One fenced Executor owns each `execution_partition_id`. Leadership loss, durable-state loss, fencing-token mismatch, network partition, or stale ownership halts submissions.
 
@@ -64,7 +64,7 @@ The exact encryption modes, keys, rotation cadence, and legal retention/deletion
 | Principal | Allowed responsibility | Prohibited responsibility |
 | --- | --- | --- |
 | Ingestion | Append raw market events and discontinuity evidence | Strategy or order placement |
-| Signal job | Write candles, candidates, rankings, immutable instructions | Broker calls or fill authority |
+| Signal job | Write candles, candidates (**rankings and immutable instructions REMOVED 2026-08-15, CHG-005**) | Broker calls or fill authority |
 | Action Capture | Append postback audit; project lifecycle/positions | Strategy or order submission |
 | Babysitter | Read positions; emit zero actions in MVP | Direct broker calls or lifecycle mutation |
 | Executor | Gate, attempts, mappings, reconciliation, safety-halt consumption, fencing, Arrow REST | Strategy mutation or authoritative fill capture |

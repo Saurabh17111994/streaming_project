@@ -6,7 +6,7 @@ Executor is the only component allowed to initiate money-moving calls. It calls 
 
 ## Inputs and owned state
 
-Inputs: immutable `Trade_Decisions`; durable `Safety_Halt_Requests`; future immutable `Position_Actions`; lifecycle/position/changelog health for validation.
+Inputs: ~~immutable `Trade_Decisions`~~ **(REMOVED 2026-08-15, CHG-005 — decision feed out of scope)**; durable `Safety_Halt_Requests`; future immutable `Position_Actions`; lifecycle/position/changelog health for validation.
 
 Owned Fluss state: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and immutable `Execution_Audit`. Executor never mutates strategy fields.
 

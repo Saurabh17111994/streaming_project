@@ -21,12 +21,8 @@ Arrow market-data stream
       ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
       ├─ Signal_Candidates_current KV
-      ├─ in-operator Ranking (repartitioned by portfolio_id; single partition with MVP's one portfolio)
-      ├─ Portfolio_Reservations management
-      ├─ Ranking_Results LOG
-      └─ immutable Trade_Decisions
   → Executor
-      ├─ verify immutable instruction and reservation
+      ├─ verify durable gate state/epoch
       ├─ verify durable gate state/epoch
       ├─ persist execution_attempt_id, request hash, client_order_ref
       ├─ fence one active owner per execution_partition_id
@@ -37,7 +33,7 @@ Arrow market-data stream
 
 **State boundary (DEC-038, 2026-08-14):** the Signal Flink job computes; Fluss owns the authoritative durable hot state. Fluss: fingerprint-dedup KV state table (new, when implemented), `feature_candles_15s` KV (durable candles), `Signal_Candidates` LOG + `Signal_Candidates_current` KV (durable signals). Flink: source offsets, watermarks, window/lateness timers, in-flight accumulators, dedup working cache, signal ring buffers. Flink checkpoints are small and are not a second copy of the Fluss-owned business state.
 
-Ranking consumes typed in-process candidate/state snapshots. It does not read `Signal_Candidates` from Fluss, create a second evaluation window, or run as a separate job.
+~~Ranking consumes typed in-process candidate/state snapshots. It does not read `Signal_Candidates` from Fluss, create a second evaluation window, or run as a separate job~~ — **REMOVED 2026-08-15 (CHG-005).**
 
 ## Event-time and deduplication
 
@@ -79,21 +75,9 @@ Fluss state missing / corrupt / incompatible / unavailable
 
 The rebuild is exceptional recovery, not a normal restart path; it is governed by the approved replay plan (`../05_deployment/03-rollback.md`), not by routine job-restart automation.
 
-## Candidate, ranking, and instruction flow
+## Candidate flow
 
-Business Logic appends an immutable `Signal_Candidates` event for every detected candidate. Ranking writes an immutable result for every evaluated active candidate, including score inputs, normalization, weights, rank, selection, rejection reason, reservation snapshot, and configuration version.
-
-MVP reservation defaults are:
-
-- At most one reserved/open trade per instrument
-- At most three total reserved/open positions
-- At most one per strategy
-
-`RESERVED`, `SUBMITTING`, `PENDING`, `OPEN`, `RELEASE_PENDING`, and `UNKNOWN` consume capacity. `RELEASED` does not.
-
-A same winner with unchanged executable parameters creates audit only. Changed parameters create a new immutable `instruction_id` after prior disposition. Uncertain lifecycle or reservation state suppresses publication.
-
-`Trade_Decisions` is an immutable LOG table (DECIDED). Executor never mutates strategy fields. Execution state belongs in `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit`.
+Business Logic appends an immutable `Signal_Candidates` event for every detected candidate. **(Ranking, reservation capacity, and instruction publication REMOVED 2026-08-15, CHG-005 — the ranking/instruction flow below is historical only.)**
 
 ## Broker postback and position path
 
@@ -139,9 +123,9 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `forming_bar` | KV (PK `instrument_token`) | Signal job | Business Logic (Slice 2.2) / reconciliation | Current state; rebuildable from raw_table_1 replay |
 | `Signal_Candidates` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
 | `Signal_Candidates_current` | KV | Signal job | Current-state readers/reconciliation | Current state; rebuildable from LOG |
-| `Ranking_Results` | LOG | Signal job | Audit/lake | Immutable; EOD Iceberg |
-| `Trade_Decisions` | Immutable feed | Signal job | Executor | Replay/reconciliation buffer; audit-linked |
-| `Portfolio_Reservations` | KV/logical state | Signal job | Executor/reconciliation | Active + rebuild window |
+| `Ranking_Results` | ~~LOG~~ | ~~Signal job~~ | ~~Audit/lake~~ | ~~Immutable; EOD Iceberg~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Trade_Decisions` | ~~Immutable feed~~ | ~~Signal job~~ | ~~Executor~~ | ~~Replay/reconciliation buffer~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Portfolio_Reservations` | ~~KV/logical state~~ | ~~Signal job~~ | ~~Executor/reconciliation~~ | ~~Active + rebuild window~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Postback_Projection_Ledger` | KV | Action Capture | Recovery scanner | Incomplete + recovery window |
 | `Safety_Halt_Requests` | KV | Authorized components | Executor | Safety/reconciliation window |
 | `Fills` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
@@ -182,11 +166,11 @@ A source day cannot expire while its manifest is unverified, retryable, or under
 
 The Signal job, Action Capture, projections, and observability do not place orders directly. They publish durable `Safety_Halt_Requests` to the Executor, which consumes them idempotently, validates scope/source/version, applies or rejects the halt, increments the gate epoch, and writes immutable audit evidence.
 
-Unknown broker outcome, duplicate risk, stale reservation, missing correlation, changelog discontinuity, checkpoint failure affecting order correctness, unresolved fill, failed reconciliation, unauthorized action, or security incident transitions the gate to `HALTED` and blocks new calls within five seconds. Executor also independently detects stale mandatory health if the halt-request stream is unavailable.
+Unknown broker outcome, duplicate risk, ~~stale reservation~~, missing correlation, changelog discontinuity, checkpoint failure affecting order correctness, unresolved fill, failed reconciliation, unauthorized action, or security incident transitions the gate to `HALTED` and blocks new calls within five seconds. **(Stale-reservation clause REMOVED 2026-08-15, CHG-005.)** Executor also independently detects stale mandatory health if the halt-request stream is unavailable.
 
 ## References
 
-- Compute, ranking, and execution requirements: `../02_requirements/02-functional/03-compute.md`, `../02_requirements/02-functional/10-ranking.md`, `../02_requirements/02-functional/07-executor.md`
+- Compute and execution requirements: `../02_requirements/02-functional/03-compute.md`, `../02_requirements/02-functional/07-executor.md` (ranking requirement REMOVED 2026-08-15, CHG-005)
 - Data model: `../02_requirements/04-data.md`
 - Interface semantics: `../02_requirements/05-interfaces.md`
 - Segment contracts: `../04_contracts/`

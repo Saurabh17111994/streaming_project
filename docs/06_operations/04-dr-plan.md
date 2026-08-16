@@ -33,7 +33,7 @@ Restart from the approved immutable artifact and tested checkpoint/savepoint. Ve
 
 ### Flink JobManager/TaskManager or checkpoint-store failure
 
-Keep the order gate halted if signal, ranking, instruction, or changelog continuity is uncertain. Restore the compact Flink checkpoint from S3, verify Fluss authoritative-state availability and compatibility (dedup state table, candle/signal tables), rehydrate the dedup working cache from Fluss, verify dedup/window/forming-bar/ranking state and sink visibility, then reconcile before resume. (DEC-038, 2026-08-14: the Flink checkpoint is not a second complete copy of the durable Signal business state.)
+Keep the order gate halted if signal or changelog continuity is uncertain. Restore the compact Flink checkpoint from S3, verify Fluss authoritative-state availability and compatibility (dedup state table, candle/signal tables), rehydrate the dedup working cache from Fluss, verify dedup/window/forming-bar state and sink visibility, then reconcile before resume. (**Ranking/instruction continuity REMOVED 2026-08-15, CHG-005.**) (DEC-038, 2026-08-14: the Flink checkpoint is not a second complete copy of the durable Signal business state.)
 
 ### Fluss tablet, quorum, or workload VM loss
 
@@ -63,7 +63,7 @@ Halt affected order flow, preserve evidence, revoke/rotate credentials, verify l
 4. Stabilize quorum, storage, network, credentials, and deployment ownership.
 5. Restore jobs/services from approved artifacts and compatible state.
 6. Verify schemas, replication, checkpointing, changelog continuity, projections, and telemetry.
-7. Reconcile broker orders, fills, positions, attempts, mappings, and reservations.
+7. Reconcile broker orders, fills, positions, attempts, and mappings. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 8. Verify EOD retention/offload safety.
 9. Produce evidence hash for the current gate epoch.
 10. Require two distinct authenticated approvals before enabling the gate.

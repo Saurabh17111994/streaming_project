@@ -33,7 +33,7 @@ Services may start concurrently. Readiness is dependency-driven, not determined 
 5. Verify Ingestion protocol/decoder compatibility, instrument manifest, required subscriptions, append acknowledgements, clock offset, and telemetry.
 6. Verify Action Capture postback schema/protocol, correlation dependencies, projection readiness, and telemetry.
 7. Start Executor with gate `HALTED`; verify durable execution state, identity mappings, changelog continuity, Arrow REST contract/readiness, fencing, and telemetry.
-8. Reconcile broker orders, fills, positions, attempts, reservations, and incomplete projections.
+8. Reconcile broker orders, fills, positions, attempts, and incomplete projections. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 9. Require two distinct authenticated operators to approve the same gate epoch/evidence hash before `ENABLED`.
 
 A process may be live while not ready. Startup never automatically enables order placement.
@@ -47,7 +47,7 @@ Use the health dimensions and dashboard/alert definitions in [`../08_implementat
 | Operational area | Owner | Required behavior |
 | --- | --- | --- |
 | Market ingress | Ingestion | Preserve raw packets, bounded memory, protocol/quarantine evidence |
-| Stream compute | Signal job | Dedup, event-time candles, forming bars, ranking, immutable instructions |
+| Stream compute | Signal job | Dedup, event-time candles, forming bars (**ranking/instructions REMOVED 2026-08-15, CHG-005**) |
 | Postbacks | Action Capture | Preserve evidence, correlate, project lifecycle/positions, quarantine ambiguity |
 | Position observation | Babysitter | Consume `Positions`; emit zero actions in MVP |
 | Money-moving calls | Executor | Enforce gate, attempts, mappings, reconciliation, fencing |
@@ -69,7 +69,7 @@ Use the health dimensions and dashboard/alert definitions in [`../08_implementat
 Planned maintenance:
 
 1. Halt new money-moving calls and record gate epoch/reason.
-2. Drain or reconcile in-flight attempts, reservations, and projections.
+2. Drain or reconcile in-flight attempts and projections. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 3. Checkpoint Flink jobs and verify durable state.
 4. Drain accepted ingestion/postback work within bounded deadlines.
 5. Stop or update services according to the approved change plan.

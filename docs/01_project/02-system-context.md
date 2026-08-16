@@ -10,10 +10,8 @@ Arrow HFT market-data WebSocket (wss://socket.arrow.trade, binary; Standard feed
       ├─ bounded fingerprint deduplication
       ├─ event-time candle state
       ├─ forming-bar signal detection
-      ├─ in-operator ranking and portfolio gates
       ├─ Signal_Candidates LOG
-      ├─ Ranking_Results LOG
-      └─ Trade_Decisions immutable feed
+      ├─ Signal_Candidates_current KV
           → Executor / durable order gate
           → Arrow REST (POST /order/regular)
           → Arrow broker
@@ -39,10 +37,10 @@ All services → OpenObserve
 | --- | --- | --- |
 | Ingestion | Decode, normalize, fingerprint, append raw ticks, report suspected discontinuities | Business enrichment, candle aggregation, order placement |
 | Fluss storage | Table schemas, distribution, retention, changelog and lake tiering | Strategy rules or broker calls |
-| Signal Flink job | Dedup, candles, forming-bar detection, candidate audit, ranking, winner output | Broker REST side effects, fill lifecycle |
+| Signal Flink job | Dedup, candles, forming-bar detection, candidate audit (**ranking/winner output REMOVED 2026-08-15, CHG-005**) | Broker REST side effects, fill lifecycle |
 | Action Capture | Broker postback ingestion, immutable fill log, order lifecycle updates | Strategy, position decisions, order submission |
 | Babysitter Flink job | Post-entry position-management decisions | New entry signals, authoritative order lifecycle |
-| Executor | Changelog consumption, durable order gate, idempotency, reconciliation, Arrow REST calls (`POST /order/regular`) | Strategy ranking, fill-state authority |
+| Executor | Changelog consumption, durable order gate, idempotency, reconciliation, Arrow REST calls (`POST /order/regular`) | Strategy, fill-state authority |
 | Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Logs, metrics, traces, operational alerting | Trading decisions |
 

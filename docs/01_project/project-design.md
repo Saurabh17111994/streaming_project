@@ -17,7 +17,7 @@ Start with [Project Layer Index](./00-index.md).
 
 ## Key changes from version 1.3
 
-- Ranking is in the signal Flink operator; it is not a separate deployment.
+- ~~Ranking is in the signal Flink operator; it is not a separate deployment~~ — **REMOVED 2026-08-15 (CHG-005).**
 - The Executor consumes Fluss and owns the durable order gate; Arrow REST is the direct broker integration — there is no intermediate adapter layer.
 - `instruction_id`, `client_order_ref`, and `broker_order_id` are distinct identities.
 - Tick deduplication is bounded best-effort fingerprinting because no broker sequence/event ID is assumed.

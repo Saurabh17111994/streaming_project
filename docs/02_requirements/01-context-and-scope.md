@@ -15,8 +15,8 @@ The system has two distinct safety postures:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | Ingestion            | Broker connection, protocol decoding, normalized typed tick placement, original packet preservation, bounded fingerprinting, suspected discontinuity records | Candle computation, strategy, order placement                |
 | Fluss storage        | Tables, DDL, distribution, retention, changelog, replication, lake tiering                                                                                   | Strategy or broker calls                                     |
-| Signal Flink job     | Computes/operates: dedup, event-time candles, forming-bar detection, candidates, scoring, ranking, portfolio reservations, immutable instructions — durable dedup/candle/signal state is Fluss-authoritative (DEC-038); Flink keeps bounded working + recovery state | Broker REST calls, authoritative fill capture                |
-| Action Capture       | Broker postback intake, immutable postback audit, order-lifecycle projection, identity correlation quarantine                                                | Strategy, ranking, broker submission                         |
+| Signal Flink job     | Computes/operates: dedup, event-time candles, forming-bar detection, candidates — durable dedup/candle/signal state is Fluss-authoritative (DEC-038); Flink keeps bounded working + recovery state. **Ranking/Reservations/Decisions REMOVED 2026-08-15 (CHG-005)** | Broker REST calls, authoritative fill capture                |
+| Action Capture       | Broker postback intake, immutable postback audit, order-lifecycle projection, identity correlation quarantine                                                | Strategy, broker submission                         |
 | Babysitter Flink job | Position-management evaluation; no-op in MVP; future structured actions                                                                                      | New entry strategy, lifecycle authority, direct broker calls |
 | Executor             | Changelog intake, durable order gate, attempt ledger, ID mapping, reconciliation, controlled execution state, Arrow REST calls                             | Strategy scoring, authoritative fill capture                 |
 | Position state       | Correlated fill-derived position aggregate                                                                                                                   | Raw order lifecycle authority                                |
@@ -32,9 +32,6 @@ Arrow market-data stream
       ├─ bounded fingerprint deduplication
       ├─ event-time candle and forming-bar state
       ├─ candidate audit
-      ├─ in-operator scoring and ranking
-      ├─ portfolio reservation gate
-      └─ immutable Trade_Decisions instruction
           → Executor durable order gate
           → Arrow REST
           → broker
@@ -54,7 +51,7 @@ Eligible immutable events → EOD Iceberg/S3
 All components → OpenObserve
 ```
 
-There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. Ranking is not a deployment or Fluss round trip.
+There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. **(Ranking was never a deployment — it is REMOVED from scope 2026-08-15, CHG-005.)**
 
 ## 1.4 Identity model
 
@@ -80,8 +77,8 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 - Original broker packet preservation and normalized raw tick log
 - Bounded best-effort tick fingerprint deduplication
 - Event-time 15-second candles with configurable watermark and allowed lateness
-- Forming-bar signal detection and in-operator ranking
-- Immutable candidate, ranking, and instruction records
+- Forming-bar signal detection
+- Immutable candidate records **(ranking and instruction records REMOVED 2026-08-15, CHG-005)**
 - Durable Executor gate, attempt ledger, identity mapping, reconciliation, and Arrow REST handoff
 - Independent postback capture and order-lifecycle projection
 - Separate position projection
@@ -94,8 +91,7 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 
 - Multi-broker support
 - BSE and currency derivatives
-- Strategy authoring, backtesting, ML ranking, P&L, win-rate, or business analytics
-- Advanced feature libraries and market-context ranking
+- Strategy authoring, backtesting, P&L, win-rate, or business analytics (ML ranking REMOVED 2026-08-15, CHG-005)
 - Real Babysitter actions; they are Phase 4.3+ after the structured action contract is proven
 - Kubernetes
 - Automatic gap backfill during live ingestion
@@ -103,13 +99,13 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 
 ## 1.7 Implementation clarification: scope identities
 
-Every instruction, reservation, attempt, correlation mapping, lifecycle record, position, gate, and audit event SHALL carry the applicable scope:
+Every attempt, correlation mapping, lifecycle record, position, gate, and audit event SHALL carry the applicable scope: (**Instructions and reservations REMOVED 2026-08-15, CHG-005.**)
 
 - `account_scope_id`: broker/account isolation boundary.
-- `portfolio_id`: ranking, reservation, and capacity boundary.
+- ~~`portfolio_id`: ranking, reservation, and capacity boundary~~ — **REMOVED 2026-08-15 (CHG-005).**
 - `execution_partition_id`: Executor fencing boundary when one account has multiple execution partitions.
 
-A missing or mismatched scope is a contract violation. Scope isolation SHALL be tested so that a halt, reservation, mapping, or fence in one scope cannot affect another.
+A missing or mismatched scope is a contract violation. Scope isolation SHALL be tested so that a halt, mapping, or fence in one scope cannot affect another. (**Reservation-scope clause REMOVED 2026-08-15, CHG-005.**)
 
 ## 1.8 Implementation clarification: safety posture
 

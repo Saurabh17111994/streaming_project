@@ -40,7 +40,7 @@ Compute SHALL expose both typed closed-candle events and typed forming-bar event
 - Typed in-job forming-bar events to Business Logic
 - Invalid, duplicate, late, watermark, checkpoint, and backpressure metrics
 
-`Trade_Decisions` are immutable instruction records published by the Signal job; Compute and Ranking do not expose a Fluss round trip between forming-bar updates and Business Logic evaluation.
+~~`Trade_Decisions` are immutable instruction records published by the Signal job~~ — **REMOVED 2026-08-15 (CHG-005 — decisions out of scope, not deferred).**
 
 ## Guarantees
 

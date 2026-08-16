@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
+.PHONY: help env ddl up down logs build clean cep-check test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables pin-check ddl-apply-smoke ddl-image evidence-ownership-check
 
 help:
 	@echo "Targets:"
@@ -21,7 +21,7 @@ help:
 	@echo "         acknowledged-auto) + a containerized bad-ownership drill (pre-seeded 644 record"
 	@echo "         -> apply exit 1 + EVIDENCE OWNERSHIP CHECK FAILED) when docker + the ddl-apply"
 	@echo "         image are available; env-gated on FLUSS_BOOTSTRAP, wired into make gate"
-	@echo "  ddl-image  build the ddl-apply contract image (one-shot container on trading-net;
+	@echo "  ddl-image  build the ddl-apply contract image (one-shot container on trading-net;"
 	@echo "         run: docker compose -f code/01_platform/01_docker/docker-compose.yml run"
 	@echo "         --rm ddl-apply {validate|apply|smoke|self-test}) — FLUSS_BOOTSTRAP resolves"
 	@echo "         via compose DNS, no host /etc/hosts aliases"
@@ -43,6 +43,16 @@ help:
 	@echo "  static-check  bash -n + shellcheck every repo shell script"
 	@echo "  docs-audit  doc-vs-code truth gate (foundation L388): manifest, ownership matrix,"
 	@echo "              schema-state diagram, compat vocabulary, stale phrases, test counts, version pins"
+	@echo "  stale-tables  doc truth scan (dossiers + upstream layers: decisions,"
+	@echo "              requirements, architecture, contracts, deployment minus change-records):"
+	@echo "              fail when a line reads feature_candles_15s as LOG,"
+	@echo "              Signal_Candidates as KV, or feature_candles_15s_current as live"
+	@echo "              without a historical/superseded annotation (2026-08-13 re-scope),"
+	@echo "              a stale phase-status claim, or a drifted count (21 tables vs 24,"
+	@echo "              151 acceptance IDs vs 152, common/ingestion/compute test counts"
+	@echo "              and docs-audit C6 line N/N/N citations vs the truth 340/234/325)"
+	@echo "              (forming-bar postponed, ranking/reservation postponed,"
+	@echo "              Trade_Decisions active) without a status marker"
 	@echo "  pin-check   pin discipline (foundation L548/553/554): matrix shape, corpus integrity,"
 	@echo "              external-SNAPSHOT ban, platform version pins"
 
@@ -138,8 +148,23 @@ static-check:
 
 # Foundation L388: docs must not silently contradict code. Runs the machine-
 # verifiable invariant set established by the 2026-08-13 ground-truth audit.
+# Freebuff-worktree bootstrap for docs-audit: C6 (test counts) reads
+# module target/surefire-reports and C14 resolves evidence artifacts under
+# logs/ — both gitignored, so a fresh worktree must symlink logs/ to the main
+# project folder (repo convention; see CLAUDE.md symlinks) and copy the
+# surefire reports from the main project's target/ dirs before this gate.
 docs-audit:
 	@python3 code/01_platform/04_scripts/docs_audit.py
+
+# Doc truth scan (2026-08-13 re-scope + phase status): fail when any line in the
+# implementation dossiers or the authoritative upstream layers (decisions,
+# requirements, architecture, contracts) reads feature_candles_15s as a LOG,
+# Signal_Candidates as a KV table, or feature_candles_15s_current as live — or
+# claims forming-bar postponed / ranking-reservation postponed / Trade_Decisions
+# active — unless the claim is annotated historical/superseded (or carries a
+# current-status marker). Exit 1 on un-annotated hits.
+stale-tables:
+	@python3 code/01_platform/04_scripts/stale_table_kind_scan.py --upstream
 
 # Foundation L548/553/554: pin discipline — matrix shape, corpus integrity,
 # external-SNAPSHOT ban, platform version pins. CI SHALL run this.

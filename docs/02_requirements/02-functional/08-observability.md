@@ -40,7 +40,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 
 The following capabilities are explicitly NOT owned by Observability:
 
-- **Candle computation, signal detection, strategy evaluation, and ranking:** Owned by the Signal Flink job.
+- **Candle computation, signal detection, strategy evaluation:** Owned by the Signal Flink job. **(Ranking REMOVED 2026-08-15, CHG-005.)**
 - **Broker order submission, execution, and gate management:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Market data ingestion and broker connection management:** Owned by Ingestion.
@@ -64,7 +64,7 @@ Required common fields: `timestamp` UTC RFC3339, `service`, `instance_id`, `leve
 - fingerprint candidates/dedup hits and state size
 - invalid/quarantined/late events by reason
 - watermark and source lag
-- candle/forming-bar/candidate/ranking/instruction rates
+- candle/forming-bar/candidate rates **(ranking/instruction rates REMOVED 2026-08-15, CHG-005)**
 - operator busy/idle and backpressure
 - checkpoint duration/size/failure/restart/restore
 
@@ -72,7 +72,7 @@ Required common fields: `timestamp` UTC RFC3339, `service`, `instance_id`, `leve
 
 - gate state/epoch and halt latency
 - attempt counts by phase/outcome
-- unknown outcomes and unresolved reservations
+- unknown outcomes (and, pre-2026-08-15, unresolved reservations — REMOVED CHG-005)
 - duplicate suppression
 - identity mappings and postback quarantines
 - reconciliation duration/result

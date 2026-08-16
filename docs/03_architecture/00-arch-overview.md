@@ -25,9 +25,9 @@ The platform has two safety postures:
 
 ## Scope and non-goals
 
-MVP includes one evidence-approved broker integration, the supported NSE/MCX instrument manifest, raw packet preservation, bounded best-effort fingerprinting, event-time candles, forming-bar detection, in-operator ranking, immutable candidates/ranking/instructions, durable execution state, independent postback capture, fill-derived positions, Babysitter no-op wiring, operational observability, and verified EOD offload.
+MVP includes one evidence-approved broker integration, the supported NSE/MCX instrument manifest, raw packet preservation, bounded best-effort fingerprinting, event-time candles, forming-bar detection, immutable candidates, durable execution state, independent postback capture, fill-derived positions, Babysitter no-op wiring, operational observability, and verified EOD offload. **(In-operator ranking and immutable ranking/instruction records REMOVED 2026-08-15, CHG-005.)**
 
-MVP does not include multi-broker support, BSE/currency derivatives, strategy authoring, backtesting, ML ranking, business analytics, Kubernetes, automatic live gap backfill, or automatic order-path resume. Real Babysitter actions are deferred until the structured action contract and safety tests are approved.
+MVP does not include multi-broker support, BSE/currency derivatives, strategy authoring, backtesting, business analytics, Kubernetes, automatic live gap backfill, or automatic order-path resume. Real Babysitter actions are deferred until the structured action contract and safety tests are approved. **(ML ranking REMOVED 2026-08-15, CHG-005.)**
 
 ## System at a glance
 
@@ -40,12 +40,8 @@ Arrow market-data WebSocket
       ├─ event-time 15-second candle state
       ├─ forming-bar detection
       ├─ candidate audit
-      ├─ in-operator ranking by portfolio_id
-      ├─ Portfolio_Reservations management
       ├─ Signal_Candidates LOG
       ├─ Signal_Candidates_current KV
-      ├─ Ranking_Results LOG
-      └─ immutable Trade_Decisions
           → Executor durable order gate
           → Arrow REST (POST /order/regular)
           → broker
@@ -71,7 +67,7 @@ Eligible immutable events → EOD controller → verified Iceberg/S3 manifest
 All components → OpenObserve plus local durable execution audit
 ```
 
-There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. Ranking is an in-process function/operator boundary, not a deployment or Fluss round trip.
+There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. **(Ranking was never a deployment — REMOVED 2026-08-15, CHG-005.)**
 
 ## Component ownership
 
@@ -79,11 +75,11 @@ There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. 
 | --- | --- | --- |
 | Ingestion | Broker connection, decode, normalization, packet preservation, fingerprinting, discontinuity evidence | Candles, strategy, broker orders |
 | Fluss | Tables, DDL, distribution, replication, retention, changelog, lake tiering | Strategy rules and broker calls |
-| Signal Flink job | Computes/operates: dedup, candles, forming bars, candidates, ranking, reservations, immutable instructions — durable dedup/candle/signal state is Fluss-owned (DEC-038); Flink keeps only bounded working + recovery state | Arrow REST calls and authoritative fills |
+| Signal Flink job | Computes/operates: dedup, candles, forming bars, candidates — durable dedup/candle/signal state is Fluss-owned (DEC-038); Flink keeps only bounded working + recovery state (**ranking/reservations/instructions REMOVED 2026-08-15, CHG-005**) | Arrow REST calls and authoritative fills |
 | Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine. Position projector runs in-process | Strategy and order submission |
 | Position projector | Fill-derived `Positions` aggregate (runs inside Action Capture process for MVP) | Raw order lifecycle authority |
 | Babysitter | Position observation; no-op in MVP; future structured actions | New entry signals, lifecycle authority, direct broker calls |
-| Executor | Durable gate, attempts, identity mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls | Strategy, ranking, authoritative fill capture |
+| Executor | Durable gate, attempts, identity mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls | Strategy, authoritative fill capture |
 | EOD controller | Manifest creation, verification, retry/backoff, retention extension, expiry protection. NSE offload after 4 PM IST, MCX after 11:30 PM IST | Broker connection or strategy decisions |
 | Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Operational telemetry and alert delivery | Trading decisions or durable execution evidence |
@@ -101,7 +97,7 @@ The following identities remain distinct:
 - `position_id`: fill-derived exposure aggregate
 - `postback_event_id`: platform-captured postback delivery
 - `action_id`: future immutable structured position action
-- `reservation_id`: portfolio capacity reservation
+- ~~`reservation_id`: portfolio capacity reservation~~ — **REMOVED 2026-08-15 (CHG-005)**
 - `halt_request_id`: durable safety-halt request
 
 ### Scope identities and isolation
@@ -111,12 +107,12 @@ Three canonical scope identities enforce isolation across accounts, portfolios, 
 | Scope | Purpose | Carried by |
 | --- | --- | --- |
 | `account_scope_id` | Broker/account isolation boundary | Gates, attempts, mappings, positions, lifecycle, halt requests, audit |
-| `portfolio_id` | Ranking, reservation, and capacity boundary | Reservations, candidate evaluation, instruction context |
+| ~~`portfolio_id`~~ | ~~Ranking, reservation, and capacity boundary~~ | ~~Reservations, candidate evaluation, instruction context~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `execution_partition_id` | Fenced Executor ownership boundary | Execution gate, fencing token, attempt state |
 
-A missing, mismatched, stale, or unauthorized cross-scope operation fails closed and is audited. Scope isolation tests must prove that a halt, reservation, mapping, or fence in one scope cannot affect another.
+A missing, mismatched, stale, or unauthorized cross-scope operation fails closed and is audited. Scope isolation tests must prove that a halt, mapping, or fence in one scope cannot affect another. **(Reservation-scope clause REMOVED 2026-08-15, CHG-005.)**
 
-- **MVP (2026-07-23):** `portfolio_id` is singular (single account, one strategy). Candidates are repartitioned by `portfolio_id` before ranking; with one portfolio this produces a single partition operationally. Scope IDs remain in schema for future multi-portfolio use.
+- ~~**MVP (2026-07-23):** `portfolio_id` is singular…~~ — **REMOVED 2026-08-15 (CHG-005).**
 
 `Order_Lifecycle` is keyed by `broker_order_id`. `Positions` is keyed by `position_id`. `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and `Execution_Audit` are separate Executor-owned state. A generic `order_id` is prohibited across domains.
 
@@ -179,7 +175,7 @@ Every managed and durable state category must have a defined capacity budget for
 | Fingerprint dedup | entries = rate × dedup_horizon | ~64 B fingerprint + metadata | **Not a full copy** — Flink keeps only a bounded working cache; the authoritative set is a Fluss KV state table (DEC-038) | Fluss KV (authoritative) + Flink cache; expiry column/cleanup path (no per-key TTL in Fluss 0.9.1 — mechanism must be tested) |
 | Candle/forming-bar windows | instruments × (allowed_lateness + window_size) / window_size | Per-instrument window accumulator | Small in-flight accumulator + `emitted` flag; final rows already Fluss KV | Flink (transient) + `feature_candles_15s` KV (durable) |
 | Active candidates | configurable max per instrument × instruments | Per-candidate record ~1 KB | Small; output already Fluss LOG/KV | Flink (working) + `Signal_Candidates`/`_current` (durable) |
-| Portfolio reservations | max concurrent × portfolios | Per-reservation record ~512 B | Included in Signal checkpoint | Out of scope (unchanged) |
+| ~~Portfolio reservations~~ | ~~max concurrent × portfolios~~ | ~~Per-reservation record ~512 B~~ | ~~Included in Signal checkpoint~~ | **REMOVED 2026-08-15 (CHG-005)** |
 | Execution attempts | active + reconciliation window | Per-attempt record ~1 KB | N/A (KV durable state) | Fluss KV durable state |
 | Projection ledger | incomplete records | Per-ledger entry ~256 B | N/A (KV durable state) | Fluss KV durable state |
 | Postback quarantine | unresolved records | Per-quarantine entry ~2 KB | N/A (LOG durable state) | Fluss LOG durable state |
@@ -198,9 +194,9 @@ The architecture mandates these logical tables before physical DDL generation:
 | `forming_bar` | KV (PK `instrument_token`) | Signal job |
 | `Signal_Candidates` | LOG | Signal job |
 | `Signal_Candidates_current` | KV | Signal job |
-| `Ranking_Results` | LOG | Signal job |
-| `Trade_Decisions` | Immutable feed | Signal job |
-| `Portfolio_Reservations` | KV/logical state | Signal job ranking/reservation operator |
+| `Ranking_Results` | ~~LOG~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Trade_Decisions` | ~~Immutable feed~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Portfolio_Reservations` | ~~KV/logical state~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Fills` | LOG | Action Capture |
 | `Order_Lifecycle` | KV | Action Capture |
 | `Positions` | KV | Position projector |
@@ -221,14 +217,14 @@ The architecture mandates these logical tables before physical DDL generation:
 Before architecture is considered implementation-ready:
 
 - [ ] All required tables appear in state inventory, pipeline diagrams, and ownership matrices.
-- [ ] `Portfolio_Reservations`, `Postback_Projection_Ledger`, and `Safety_Halt_Requests` appear consistently.
+- [ ] `Postback_Projection_Ledger` and `Safety_Halt_Requests` appear consistently. (`Portfolio_Reservations` REMOVED 2026-08-15, CHG-005.)
 - [ ] `account_scope_id`, `portfolio_id`, and `execution_partition_id` are defined and consistently used.
 - [ ] EOD controller has a named owner and durable restart behavior.
 - [ ] RPO is defined per boundary; failure timeline includes detection delay.
 - [ ] State capacity budgets exist or are evidence-gated for every category.
 - [ ] Seven-year audit controls are described or explicitly evidence-gated.
 - [ ] Transport encryption is mandatory for all sensitive paths.
-- [ ] No stale name (separate Ranking job, generic `order_id`, TLS "where supported") remains.
+- [ ] No stale name (separate Ranking job — REMOVED 2026-08-15 CHG-005, generic `order_id`, TLS "where supported") remains.
 - [ ] All relative Markdown links resolve.
 - [ ] MVP alert groups are owned and have defined response lifecycle.
 - [ ] Requirements-to-architecture traceability matrix is current.

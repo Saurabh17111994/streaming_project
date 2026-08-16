@@ -43,7 +43,7 @@ The previous monolithic design is retained as a compatibility redirect: [project
 This project layer standardizes the following decisions:
 
 - Docker Compose for local development and Docker Swarm for production
-- In-operator ranking in the signal Flink job; no separate Ranking deployment
+- ~~In-operator ranking in the signal Flink job~~ — **REMOVED 2026-08-15 (CHG-005); no separate Ranking deployment**
 - Three order identities: `instruction_id`, `client_order_ref`, and `broker_order_id`
 - Best-effort bounded tick deduplication using an event fingerprint when no broker sequence is available
 - Explicit order-gate safe-halt and broker reconciliation

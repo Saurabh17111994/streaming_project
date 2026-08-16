@@ -57,7 +57,7 @@ The production stack must define:
 4. Deploy Signal and Babysitter artifacts; verify running/checkpointing.
 5. Verify Ingestion manifest/subscriptions and Action Capture protocol readiness.
 6. Start Executor `HALTED`; verify state, mappings, continuity, Arrow REST contract, fencing, and telemetry.
-7. Complete broker/order/fill/position/attempt/reservation reconciliation.
+7. Complete broker/order/fill/position/attempt reconciliation. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 8. Require two distinct approvals for the same gate epoch/evidence hash.
 9. Enable only the approved gate epoch.
 
@@ -153,7 +153,7 @@ Derived for a Flink TaskManager on a 48 GB VM. All numbers are starting points �
 | GC | `-XX:+UseG1GC -XX:MaxGCPauseMillis=20` | Protect p99 <100 ms decision SLO |
 | Container memory alert at 85% | ~40.8 GB | Critical alert when hit for 60 consecutive seconds |
 
-For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source (pre-DEC-038): dedup state budget ~1 GB, window + candidate + ranking state <10 MB, leaving substantial headroom for RocksDB block cache, write buffers, and network memory — the dedup term moves to Fluss under DEC-038 and this rationale is re-derived.
+For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 65%/35% formula above. The Flink TaskManager split is different because RocksDB uses direct memory for its block cache and SST buffers. Source (pre-DEC-038): dedup state budget ~1 GB, window + candidate state <10 MB (**ranking state REMOVED 2026-08-15, CHG-005**), leaving substantial headroom for RocksDB block cache, write buffers, and network memory — the dedup term moves to Fluss under DEC-038 and this rationale is re-derived.
 
 ### Acceptance checklist
 

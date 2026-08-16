@@ -42,7 +42,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Late events are discarded:** Events arriving after finalization are counted and measured but do not produce a new or updated row. This limitation remains visible in metrics and documentation.
 - **Empty windows produce no row:** A 15-second window with zero eligible trades emits no candle. Downstream consumers must not assume a row exists for every window.
 - **Deterministic replay is input-bound:** Replay determinism is relative to an identical ordered input snapshot, fingerprint algorithm/version, and configuration version. Different arrival order, fingerprint collisions, missing external state, or changed configuration may produce different results.
-- **Checkpoint restore is compact + rehydrated or safe-degraded (DEC-038):** Flink restores only its small checkpoint (source offsets, watermarks, window/lateness timers, in-flight accumulators, working-cache metadata); large durable Signal business state is verified against and rehydrated from Fluss. If Fluss state is unavailable or incompatible, the job enters a safe degraded state (or fails closed at startup) and prevents new instructions. Ranking/reservation restore semantics are unchanged and out of scope here.
+- **Checkpoint restore is compact + rehydrated or safe-degraded (DEC-038):** Flink restores only its small checkpoint (source offsets, watermarks, window/lateness timers, in-flight accumulators, working-cache metadata); large durable Signal business state is verified against and rehydrated from Fluss. If Fluss state is unavailable or incompatible, the job enters a safe degraded state (or fails closed at startup). **(Ranking/reservation restore semantics REMOVED 2026-08-15, CHG-005 — out of scope, not deferred.)**
 
 ## Out of Scope
 
@@ -54,7 +54,7 @@ The following capabilities are explicitly NOT owned by Compute:
 - **Feature columns beyond OHLCV candles (250+ features, market context, pattern-feature libraries):** Deferred; not in MVP scope.
 - **CEP (Complex Event Processing):** MVP SHALL NOT use CEP. No `flink-cep` dependency, CEP operator, CEP job, CEP table, or `org.apache.flink.cep` import is permitted in MVP.
 - **Signal detection, strategy evaluation, and candidate creation:** Owned by Business Logic within the same Signal job.
-- **Ranking, portfolio reservation, and instruction publication:** Owned by the Ranking/Reservation operator within the same Signal job.
+- ~~**Ranking, portfolio reservation, and instruction publication:**~~ — **REMOVED 2026-08-15 (CHG-005).**
 - **Broker order submission, execution, and Arrow REST integration:** Owned by the Executor.
 - **Postback capture, fill lifecycle, and position projection:** Owned by Action Capture.
 - **Babysitter position monitoring and action emission:** Owned by the Babysitter Flink job.
@@ -123,7 +123,7 @@ The discard metric SHALL include instrument, window, lateness, and reason. A fut
 
 Within the same Signal Flink job, Compute SHALL expose a typed in-job event to Business Logic whenever an eligible trade updates the current forming bar. The event includes instrument, window boundaries, current OHLCV accumulator, event timestamp, fingerprint, and source metadata.
 
-Business Logic SHALL consume this state directly. It SHALL NOT wait for `feature_candles_15s` or perform a Fluss round trip for ranking.
+Business Logic SHALL consume this state directly. It SHALL NOT wait for `feature_candles_15s`. **(The no-Fluss-round-trip ranking clause is REMOVED 2026-08-15, CHG-005.)**
 
 ## REQ-FC-008: Checkpoint boundary and state ownership (DEC-038)
 

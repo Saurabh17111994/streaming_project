@@ -18,7 +18,7 @@
     {
       "table_name": "feature_candles_15s",
       "ddl_path": "03_feature_candles_15s.sql",
-      "ddl_sha256": "91deef11b9c7673f89ce3223d85cdbfe3f14f1b47b74ccf958ac14c4a4705034",
+      "ddl_sha256": "b02bc99a29ef9ba4370867ac94eeee2b720b248376e909590518196581f52ae6",
       "table_kind": "KV",
       "primary_key": "instrument_token, window_start",
       "bucket_key": null,

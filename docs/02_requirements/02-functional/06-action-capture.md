@@ -73,7 +73,7 @@ Order lifecycle and position lifecycle remain separate aggregates.
 
 ## REQ-AC-008: Rejected/cancelled/unknown behavior
 
-Rejected and cancelled broker orders are recorded in immutable audit and lifecycle state. They participate in reservation release only after unique correlation and terminal-state reconciliation. Unknown/unrecognized states remain `UNKNOWN`; they do not silently release risk capacity.
+Rejected and cancelled broker orders are recorded in immutable audit and lifecycle state. (Pre-2026-08-15 they also participated in reservation release — REMOVED CHG-005.) Unknown/unrecognized states remain `UNKNOWN`; they do not silently release risk capacity.
 
 ## REQ-AC-009: Backpressure and readiness
 
