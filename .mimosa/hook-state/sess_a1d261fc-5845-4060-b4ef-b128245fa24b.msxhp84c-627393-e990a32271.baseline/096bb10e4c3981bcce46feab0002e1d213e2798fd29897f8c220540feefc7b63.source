@@ -1,0 +1,21 @@
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
+
+/** Scratch: print raw_table_1_bench row count + log stats (P7 feed verification). */
+public final class CountRows {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String table = System.getenv().getOrDefault("FLUSS_TABLE", "raw_table_1_bench");
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (Connection connection = ConnectionFactory.createConnection(conf)) {
+            TableStats stats = connection.getAdmin().getTableStats(TablePath.of("default", table)).get();
+            System.out.println("TABLE=" + table);
+            System.out.println("ROW_COUNT=" + stats.getRowCount());
+            System.out.println("COUNT_STATUS=OK");
+        }
+    }
+}

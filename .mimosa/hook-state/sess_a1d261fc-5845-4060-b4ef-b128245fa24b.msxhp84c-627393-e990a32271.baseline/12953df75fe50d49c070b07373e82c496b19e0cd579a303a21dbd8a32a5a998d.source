@@ -1,0 +1,63 @@
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Scratch: append candle-shaped rows to default.paimon_probe (paimon lake
+ * tiering test). Rows are harmless synthetic candles; only count matters.
+ * Run: java -cp /probe/classes:/compute.jar CandleFeed <nBatches> <rowsPerBatch>
+ */
+public final class CandleFeed {
+
+    public static void main(String[] args) throws Exception {
+        int batches = args.length > 0 ? Integer.parseInt(args[0]) : 20;
+        int per = args.length > 1 ? Integer.parseInt(args[1]) : 250;
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        long total = 0;
+        long start = System.currentTimeMillis();
+        try (Connection conn = ConnectionFactory.createConnection(conf)) {
+            Table table = conn.getTable(TablePath.of("default",
+                    System.getenv().getOrDefault("FLUSS_TABLE", "paimon_probe")));
+            AppendWriter writer = table.newAppend().createWriter();
+            for (int b = 0; b < batches; b++) {
+                List<GenericRow> batch = new ArrayList<>();
+                long now = System.currentTimeMillis() / 1000L;
+                for (int i = 0; i < per; i++) {
+                    long token = 10000 + (b * per + i) % 97;
+                    long price = 10000 + (b * per + i) % 401;
+                    batch.add(GenericRow.of(
+                            token, bs("NSE"), bs("SYM" + (b * per + i) % 97),
+                            now * 1000L, now * 1000L + 14999L,
+                            price, price + 5L, price - 5L, price + 1L,
+                            100L, 1, bs("paimon-probe"), bs("v1"), now * 1000L, bs("2")));
+                }
+                for (GenericRow r : batch) {
+                    writer.append(r).get(5, TimeUnit.SECONDS);
+                }
+                writer.flush();
+                total += per;
+                if ((b + 1) % 5 == 0) {
+                    long elapsed = Math.max(1, System.currentTimeMillis() - start);
+                    System.out.println("feed: appended=" + total + " rate=" + (total * 1000 / elapsed) + "/s");
+                }
+            }
+            try { writer.flush(); } catch (Exception ignore) { }
+        }
+        System.out.println("CANDFEED_DONE total=" + total);
+    }
+
+    static BinaryString bs(String s) {
+        return s != null ? BinaryString.fromString(s) : BinaryString.EMPTY_UTF8;
+    }
+}

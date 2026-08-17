@@ -1,0 +1,27 @@
+import com.trading.compute.signaljob.TableContractValidator;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+
+/**
+ * LiveSync verification: run the SignalJob preflight candle check
+ * (TableContractValidator.validateCandleKvTable) against the LIVE
+ * feature_candles_15s table (id 693, KV) on the dev cluster.
+ */
+public final class LiveCandleKvPreflight {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (Connection connection = ConnectionFactory.createConnection(conf)) {
+            TableInfo info = connection.getAdmin()
+                    .getTableInfo(TablePath.of("default", "feature_candles_15s")).get();
+            System.out.println("PREFLIGHT tableId=" + info.getTableId()
+                    + " kind=" + (info.hasPrimaryKey() ? "KV" : "LOG"));
+            TableContractValidator.validateCandleKvTable(info);
+            System.out.println("CANDLE_KV_PREFLIGHT=PASS live table=" + info.getTableId());
+        }
+    }
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260817T185501002Z-706387-ab7bf7a36d96",
+  "runId": "20260817T185501002Z-706387-ab7bf7a36d96",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "d548dd0b50b3a2d6dac8785c28849995fa75df32",
+  "diffHash": "cc2c40a31158a030a3963da701e0b36cd0e36ac84360bcf1d8c55628e07d6caf",
+  "rulesVersion": "unavailable",
+  "sessionHash": "ea41b51e83225a2c9211973e3301206d0239823dd961188be7b138589b5dce71",
+  "reportRef": ".mimosa/reports/task-review-sess_575966bf-e7de-4e7a-bf94-1548d3973e57-20260817T185501002Z-706387-ab7bf7a36d96.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "logs/tracker-14/P10RehearsalSmoke.java",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "logs/tracker-14/P10RehearsalRestore.java",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "logs/tracker-14/P10ExposureProbe.java",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-17T18:55:01.302Z"
+}

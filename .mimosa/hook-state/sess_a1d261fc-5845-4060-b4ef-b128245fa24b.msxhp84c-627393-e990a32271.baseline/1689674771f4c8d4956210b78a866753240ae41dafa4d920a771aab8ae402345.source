@@ -1,0 +1,47 @@
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataTypes;
+
+/**
+ * Applies DDL 04 (04_forming_bar.sql v1) as the KV current-state table
+ * (forming-bar persistence LiveSync, 2026-08-16): 11-column v1 schema, PK
+ * exactly (instrument_token), bucket.key=instrument_token, 16 buckets, no
+ * datalake (transient current-state; no EOD/audit value), no TTL. Descriptor
+ * pattern copied from CreateCandleKv (proven on the dev cluster 2026-08-13).
+ */
+public class CreateFormingBarKv {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String db = System.getenv().getOrDefault("FLUSS_DATABASE", "default");
+        String table = System.getenv().getOrDefault("FLUSS_TABLE", "forming_bar");
+        Schema schema = Schema.newBuilder()
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("window_start", DataTypes.BIGINT())
+                .column("open_paise", DataTypes.BIGINT())
+                .column("high_paise", DataTypes.BIGINT())
+                .column("low_paise", DataTypes.BIGINT())
+                .column("close_paise", DataTypes.BIGINT())
+                .column("volume", DataTypes.BIGINT())
+                .column("tick_count", DataTypes.INT())
+                .column("last_event_time", DataTypes.BIGINT())
+                .column("last_event_fingerprint", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING())
+                .primaryKey("instrument_token")
+                .build();
+        TableDescriptor desc = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(16, "instrument_token")
+                .build();
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (Connection conn = ConnectionFactory.createConnection(conf)) {
+            conn.getAdmin().createTable(TablePath.of(db, table), desc, true).get();
+            System.out.println("CREATE_STATUS=OK table=" + db + "." + table
+                    + " (KV, PK (instrument_token), 16 buckets)");
+        }
+    }
+}

@@ -1,0 +1,44 @@
+package com.trading.compute.signaljob;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Stage 6 live proof (DEC-035): runs the SignalJob production preflight
+ * ({@link SignalJob#preflightTableContracts}) against the PLATFORM tables of
+ * the dev Fluss cluster — {@code feature_candles_15s} (LOG),
+ * {@code Signal_Candidates} (LOG v3), {@code Signal_Candidates_current}
+ * (KV, PK instrument_token) — the exact fail-closed gate the real job runs
+ * at startup.
+ *
+ * <p>Same package so it can invoke the package-private static gate. Exit 0 +
+ * "PREFLIGHT_STATUS=PASS" means the 3-table DEC-035 contract now holds
+ * live; any ContractViolation exits non-zero with the violation text.
+ */
+public class PreflightSignalTables {
+
+    public static void main(String[] args) {
+        Map<String, String> cfg = new HashMap<>();
+        cfg.put("FLUSS_BOOTSTRAP_SERVERS", env("FLUSS_BOOTSTRAP_SERVERS", "fluss-coordinator:9123"));
+        cfg.put("RAW_TABLE", env("RAW_TABLE", "raw_table_1"));
+        cfg.put("CANDLE_TABLE", env("CANDLE_TABLE", "feature_candles_15s"));
+        cfg.put("SIGNAL_CANDIDATES_TABLE", env("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates"));
+        cfg.put("SIGNAL_CURRENT_TABLE", env("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current"));
+        cfg.put("DEDUP_TTL_MS", "300000");
+        cfg.put("CANDLE_WINDOW_MS", "15000");
+        cfg.put("CHECKPOINT_INTERVAL_MS", "10000");
+        cfg.put("CHECKPOINT_TIMEOUT_MS", "30000");
+        cfg.put("MAX_CONCURRENT_CHECKPOINTS", "1");
+        cfg.put("ALLOW_FULL_REPLAY", "true");
+        SignalJobConfig config = SignalJobConfig.from(cfg);
+        SignalJob.preflightTableContracts(config);
+        System.out.println("PREFLIGHT_STATUS=PASS tables="
+                + config.candleTable() + "," + config.signalCandidatesTable()
+                + "," + config.signalCurrentTable());
+    }
+
+    private static String env(String key, String def) {
+        String v = System.getenv(key);
+        return (v == null || v.isBlank()) ? def : v;
+    }
+}

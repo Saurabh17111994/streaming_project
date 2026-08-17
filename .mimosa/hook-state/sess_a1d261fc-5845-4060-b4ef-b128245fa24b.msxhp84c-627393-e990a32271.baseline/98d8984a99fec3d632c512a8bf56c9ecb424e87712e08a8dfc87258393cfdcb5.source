@@ -1,0 +1,101 @@
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataTypes;
+
+/**
+ * Applies the DEC-035 signal table DDLs to a live Fluss cluster:
+ *
+ * <ul>
+ *   <li>{@code Signal_Candidates} — 22-column LOG v3 (DDL 05), no PK,
+ *       bucket.key=instrument_token, 16 buckets, 7d TTL, lake enabled.</li>
+ *   <li>{@code Signal_Candidates_current} — 22-column KV (DDL 23),
+ *       PK instrument_token, bucket.key=instrument_token, 16 buckets,
+ *       7d TTL, lake enabled.</li>
+ * </ul>
+ *
+ * <p>Stage 6 (live dev-cluster apply). The datalake property keys are copied
+ * from the live {@code raw_table_1} ZooKeeper metadata (the only
+ * lake-enabled table on the dev cluster), which is the ground truth for
+ * keys the 0.9.1 coordinator accepts:
+ * {@code table.datalake.enabled}, {@code table.datalake.format},
+ * {@code table.datalake.freshness}, {@code table.datalake.auto-compaction}.
+ *
+ * <p>Columns/types mirror {@code ScratchTables#signalColumns} (compute test
+ * utility), which the Stage 5 contract tests proved identical to DDL 05 v3
+ * and DDL 23 col-for-col.
+ */
+public class ApplySignalDdl {
+
+    private static Schema.Builder signalColumns(Schema.Builder b) {
+        return b.column("candidate_id", DataTypes.STRING())
+                .column("instruction_id", DataTypes.STRING())
+                .column("trade_context_id", DataTypes.STRING())
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("exchange", DataTypes.STRING())
+                .column("symbol", DataTypes.STRING())
+                .column("strategy_id", DataTypes.STRING())
+                .column("strategy_version", DataTypes.STRING())
+                .column("rule_id", DataTypes.STRING())
+                .column("detection_ts", DataTypes.BIGINT())
+                .column("evaluation_ts", DataTypes.BIGINT())
+                .column("action", DataTypes.STRING())
+                .column("side", DataTypes.STRING())
+                .column("quantity", DataTypes.BIGINT())
+                .column("order_type", DataTypes.STRING())
+                .column("limit_price_paise", DataTypes.BIGINT())
+                .column("score_inputs", DataTypes.STRING())
+                .column("formation_snapshot_ref", DataTypes.STRING())
+                .column("validity_reason", DataTypes.STRING())
+                .column("supersedes_candidate_id", DataTypes.STRING())
+                .column("superseded_by_candidate_id", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING());
+    }
+
+    private static TableDescriptor logTable() {
+        return TableDescriptor.builder()
+                .schema(signalColumns(Schema.newBuilder()).build())
+                .distributedBy(16, "instrument_token")
+                .property("table.log.ttl", "7d")
+                .property("table.datalake.enabled", "true")
+                .property("table.datalake.format", "iceberg")
+                .property("table.datalake.freshness", "5min")
+                .property("table.datalake.auto-compaction", "true")
+                .build();
+    }
+
+    private static TableDescriptor kvTable() {
+        return TableDescriptor.builder()
+                .schema(signalColumns(Schema.newBuilder())
+                        .primaryKey("instrument_token")
+                        .build())
+                .distributedBy(16, "instrument_token")
+                .property("table.log.ttl", "7d")
+                .property("table.datalake.enabled", "true")
+                .property("table.datalake.format", "iceberg")
+                .property("table.datalake.freshness", "5min")
+                .property("table.datalake.auto-compaction", "true")
+                .build();
+    }
+
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String db = System.getenv().getOrDefault("FLUSS_DATABASE", "default");
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (Connection conn = ConnectionFactory.createConnection(conf)) {
+            conn.getAdmin()
+                    .createTable(TablePath.of(db, "Signal_Candidates"), logTable(), true)
+                    .get();
+            System.out.println("CREATE_STATUS=OK table=" + db + ".Signal_Candidates (LOG v3)");
+            conn.getAdmin()
+                    .createTable(TablePath.of(db, "Signal_Candidates_current"), kvTable(), true)
+                    .get();
+            System.out.println(
+                    "CREATE_STATUS=OK table=" + db + ".Signal_Candidates_current (KV, PK instrument_token)");
+        }
+    }
+}

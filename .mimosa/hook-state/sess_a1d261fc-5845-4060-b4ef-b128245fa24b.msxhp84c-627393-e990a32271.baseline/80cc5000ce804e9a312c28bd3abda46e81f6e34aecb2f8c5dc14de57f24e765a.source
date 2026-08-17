@@ -1,0 +1,46 @@
+// FlussDropTables — DEV-ONLY schema reconciliation helper for the unattended
+// full-suite run. Drops owned tables whose column count does not match the
+// authoritative DDL so the create-only DdlBootstrap can rebuild them.
+// Usage: FlussDropTables [--probe] table:expectedCols ...
+public final class FlussDropTables {
+    public static void main(String[] args) throws Exception {
+        boolean probe = false;
+        int i = 0;
+        if (args.length > 0 && args[0].equals("--probe")) {
+            probe = true;
+            i = 1;
+        }
+        if (args.length - i < 1) {
+            System.err.println("usage: FlussDropTables [--probe] table:expectedCols ...");
+            System.exit(2);
+        }
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP_SERVERS", "localhost:9123");
+        org.apache.fluss.config.Configuration conf = new org.apache.fluss.config.Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (org.apache.fluss.client.Connection c =
+                        org.apache.fluss.client.ConnectionFactory.createConnection(conf);
+                org.apache.fluss.client.admin.Admin admin = c.getAdmin()) {
+            for (; i < args.length; i++) {
+                String[] parts = args[i].split(":");
+                String table = parts[0];
+                int expected = Integer.parseInt(parts[1]);
+                org.apache.fluss.metadata.TablePath path =
+                        org.apache.fluss.metadata.TablePath.of("default", table);
+                if (!admin.tableExists(path).get()) {
+                    System.out.println(table + ": absent (nothing to do)");
+                    continue;
+                }
+                int actual = admin.getTableSchema(path).get().getSchema().getColumns().size();
+                if (actual == expected) {
+                    System.out.println(table + ": ok (" + actual + " cols, matches DDL)");
+                } else if (probe) {
+                    System.out.println(table + ": MISMATCH would-drop actual=" + actual
+                            + " expected=" + expected);
+                } else {
+                    admin.dropTable(path, false).get();
+                    System.out.println(table + ": DROPPED actual=" + actual + " expected=" + expected);
+                }
+            }
+        }
+    }
+}

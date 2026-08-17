@@ -1,0 +1,33 @@
+import java.util.Map;
+import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ExecutionOptions;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.Table;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.fluss.flink.catalog.FlinkCatalog;
+
+/** Scratch: does tEnv.from(resolve existing candle_scale_log) work like main()? */
+public final class TEnvProbe {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        Configuration flinkConf = new Configuration();
+        flinkConf.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(flinkConf);
+        env.setParallelism(1);
+        StreamTableEnvironment tEnv = StreamTableEnvironment.create(env);
+        tEnv.registerCatalog("fluss", new FlinkCatalog(
+                "fluss", "default", bootstrap, TEnvProbe.class.getClassLoader(),
+                Map.of(), Map::of));
+        tEnv.useCatalog("fluss");
+        tEnv.useDatabase("default");
+        try {
+            Table t = tEnv.from("candle_scale_log");
+            System.out.println("FROM_OK columns=" + t.getResolvedSchema().getColumns().size());
+        } catch (Throwable t) {
+            System.out.println("FROM_FAIL " + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.out);
+        }
+    }
+}

@@ -1,0 +1,45 @@
+import java.util.List;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+
+/**
+ * Scratch helper (tracker 14 P3.3 box 419): enable the Iceberg lake tier on a
+ * dev LOG table so the bounded Flink Table-API source (FlinkTableSource with
+ * streaming=false) has a snapshot boundary to read. Idempotent: re-setting the
+ * same options is a no-op alter.
+ */
+public final class LakeEnable {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String table = System.getenv().getOrDefault("FLUSS_TABLE", "candle_scale_log");
+        String freshness = System.getenv().getOrDefault("LAKE_FRESHNESS", "5min");
+        try (Connection connection = ConnectionFactory.createConnection(conf(bootstrap))) {
+            TablePath path = TablePath.of("default", table);
+            TableInfo before = connection.getAdmin().getTableInfo(path).get();
+            System.out.println("LAKE_BEFORE table=" + table
+                    + " buckets=" + before.getNumBuckets()
+                    + " datalakeEnabled=" + before.getTableConfig().isDataLakeEnabled()
+                    + " datalakeFormat=" + before.getTableConfig().getDataLakeFormat()
+                    + " freshness=" + before.getTableConfig().getDataLakeFreshness());
+            connection.getAdmin().alterTable(path, List.of(
+                    TableChange.set("table.datalake.enabled", "true")), false).get();
+            TableInfo after = connection.getAdmin().getTableInfo(path).get();
+            System.out.println("LAKE_AFTER table=" + table
+                    + " buckets=" + after.getNumBuckets()
+                    + " datalakeEnabled=" + after.getTableConfig().isDataLakeEnabled()
+                    + " datalakeFormat=" + after.getTableConfig().getDataLakeFormat()
+                    + " freshness=" + after.getTableConfig().getDataLakeFreshness());
+            System.out.println("LAKE_STATUS=OK");
+        }
+    }
+
+    private static Configuration conf(String bootstrap) {
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        return conf;
+    }
+}

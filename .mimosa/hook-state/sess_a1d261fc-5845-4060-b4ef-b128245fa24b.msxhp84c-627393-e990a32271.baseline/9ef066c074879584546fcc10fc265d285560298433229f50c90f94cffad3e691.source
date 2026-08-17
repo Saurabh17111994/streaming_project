@@ -1,0 +1,31 @@
+import java.util.Map;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
+
+/** Scratch: print candle_scale_log table options with credential values redacted. */
+public final class ShowTable {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String table = System.getenv().getOrDefault("FLUSS_TABLE", "candle_scale_log");
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        try (Connection connection = ConnectionFactory.createConnection(conf)) {
+            TablePath path = TablePath.of("default", table);
+            Map<String, String> options = connection.getAdmin().getTableInfo(path).get()
+                    .getProperties().toMap();
+            for (Map.Entry<String, String> e : options.entrySet()) {
+                String v = e.getValue();
+                if (e.getKey().toLowerCase().contains("key")
+                        || e.getKey().toLowerCase().contains("secret")
+                        || e.getKey().toLowerCase().contains("token")
+                        || e.getKey().toLowerCase().contains("credential")) {
+                    v = "<redacted>";
+                }
+                System.out.println("OPT " + e.getKey() + "=" + v);
+            }
+            System.out.println("SHOW_STATUS=OK");
+        }
+    }
+}

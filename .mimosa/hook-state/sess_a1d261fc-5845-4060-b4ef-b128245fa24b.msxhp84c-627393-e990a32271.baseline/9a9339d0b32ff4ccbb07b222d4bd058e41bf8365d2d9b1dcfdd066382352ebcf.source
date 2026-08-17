@@ -1,0 +1,59 @@
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
+
+import java.time.Duration;
+
+/** P7 restore-stall probe: LogScanner subscribe at restored vs zero offset. */
+public class RestoreStallProbe {
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "localhost:9123"));
+        String tableName = System.getenv().getOrDefault("FLUSS_TABLE", "raw_table_1_bench");
+        int bucket = Integer.parseInt(System.getenv().getOrDefault("PROBE_BUCKET", "4"));
+        long offset = Long.parseLong(System.getenv().getOrDefault("PROBE_OFFSET", "676344"));
+
+        try (Connection conn = ConnectionFactory.createConnection(conf)) {
+            Table table = conn.getTable(TablePath.of("default", tableName));
+            // control: subscribe at offset 0, count records
+            try (LogScanner s0 = table.newScan().createLogScanner()) {
+                s0.subscribe(bucket, 0L);
+                long n0 = 0;
+                long lastOff = -1;
+                long t0 = System.currentTimeMillis();
+                while (System.currentTimeMillis() - t0 < 3000) {
+                    ScanRecords recs = s0.poll(Duration.ofMillis(500));
+                    n0 += recs.count();
+                    var it = recs.iterator();
+                    while (it.hasNext()) {
+                        var r = it.next();
+                        lastOff = Math.max(lastOff, r.logOffset());
+                    }
+                    if (lastOff > 0 && recs.count() == 0) break;
+                }
+                System.out.println("CONTROL bucket=" + bucket + " offset=0 records=" + n0 + " lastOffset=" + lastOff);
+            }
+            // test: subscribe at the restored offset
+            try (LogScanner s1 = table.newScan().createLogScanner()) {
+                s1.subscribe(bucket, offset);
+                long n1 = 0;
+                long lastOff1 = -1;
+                long t1 = System.currentTimeMillis();
+                while (System.currentTimeMillis() - t1 < 8000) {
+                    ScanRecords recs = s1.poll(Duration.ofMillis(1000));
+                    n1 += recs.count();
+                    var it = recs.iterator();
+                    while (it.hasNext()) {
+                        var r = it.next();
+                        lastOff1 = Math.max(lastOff1, r.logOffset());
+                    }
+                }
+                System.out.println("TEST bucket=" + bucket + " offset=" + offset + " records=" + n1 + " lastOffset=" + lastOff1);
+            }
+        }
+    }
+}

@@ -1,0 +1,69 @@
+import org.apache.paimon.catalog.CatalogContext;
+import org.apache.paimon.fs.FileIO;
+import org.apache.paimon.fs.FileStatus;
+import org.apache.paimon.fs.Path;
+import org.apache.paimon.options.Options;
+
+/**
+ * Scratch: does Paimon 1.3.1's S3FileIO (hadoop S3A wrapper, bundled hadoop-aws
+ * >= 2.10 + AWS SDK v1) read Cloudflare R2 without the hang that blocks the
+ * iceberg audit client (hadoop 2.8.5 S3A + SDK v1)? Tests exists/read/list on
+ * the LIVE iceberg warehouse files — no cluster state is touched.
+ * Run: java -cp paimon-bundle:paimon-s3:flink-shaded-hadoop:compute.jar PaimonS3Probe
+ */
+public final class PaimonS3Probe {
+    public static void main(String[] args) throws Exception {
+        String base = System.getenv().getOrDefault("R2_PROBE_PATH",
+                "s3://tradingticks-aug-2026/lake/default/candle_scale_log/metadata");
+        String endpoint = System.getenv("R2_ENDPOINT");
+        String accessKey = System.getenv("AWS_ACCESS_KEY_ID");
+        String secretKey = System.getenv("AWS_SECRET_ACCESS_KEY");
+        Options opts = new Options();
+        if (endpoint != null && !endpoint.isEmpty()) {
+            opts.set("s3.endpoint", endpoint);
+            opts.set("s3.endpoint.region", System.getenv().getOrDefault("AWS_REGION", "auto"));
+            opts.set("s3.path.style.access", "true");
+        }
+        if (accessKey != null && secretKey != null) {
+            // S3Loader.requiredOptions() demands these (mirrored to fs.s3a.*).
+            opts.set("s3.access-key", accessKey);
+            opts.set("s3.secret-key", secretKey);
+        }
+        CatalogContext ctx = CatalogContext.create(opts, (org.apache.paimon.fs.FileIOLoader) null);
+
+        Path hint = new Path(base + "/version-hint.text");
+        long t0 = System.currentTimeMillis();
+        FileIO io = FileIO.get(hint, ctx);
+        long t1 = System.currentTimeMillis();
+        System.out.println("FILEIO_LOAD_MS=" + (t1 - t0) + " class=" + io.getClass().getName());
+
+        boolean exists;
+        try {
+            exists = io.exists(hint);
+        } catch (Throwable t) {
+            System.out.println("EXISTS_THREW " + t.getClass().getName() + ": " + t.getMessage());
+            exists = false;
+        }
+        long t2 = System.currentTimeMillis();
+        System.out.println("EXISTS=" + exists + " ms=" + (t2 - t1));
+
+        String content = null;
+        try {
+            content = io.readFileUtf8(hint);
+        } catch (Throwable t) {
+            System.out.println("READ_THREW " + t.getClass().getName() + ": " + t.getMessage());
+        }
+        long t3 = System.currentTimeMillis();
+        System.out.println("READ=" + (content == null ? "null" : content.trim()) + " ms=" + (t3 - t2));
+
+        FileStatus[] st = null;
+        try {
+            st = io.listStatus(new Path(base + "/"));
+        } catch (Throwable t) {
+            System.out.println("LIST_THREW " + t.getClass().getName() + ": " + t.getMessage());
+        }
+        long t4 = System.currentTimeMillis();
+        System.out.println("LIST_COUNT=" + (st == null ? -1 : st.length) + " ms=" + (t4 - t3));
+        System.out.println("PAIMON_S3_PROBE_DONE");
+    }
+}

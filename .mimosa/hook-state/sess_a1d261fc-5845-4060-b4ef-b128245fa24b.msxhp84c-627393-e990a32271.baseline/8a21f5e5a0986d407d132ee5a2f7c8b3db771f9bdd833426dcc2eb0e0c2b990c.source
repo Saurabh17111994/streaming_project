@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "context7",
+    "filesystem",
+    "headroom",
+    "pgr",
+    "token-savior",
+    "codebase-memory-mcp"
+  ]
+}

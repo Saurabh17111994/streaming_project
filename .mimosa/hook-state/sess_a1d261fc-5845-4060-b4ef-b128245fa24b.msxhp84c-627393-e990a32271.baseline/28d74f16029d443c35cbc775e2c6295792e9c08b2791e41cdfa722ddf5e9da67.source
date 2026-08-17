@@ -1,0 +1,41 @@
+import java.util.List;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+
+/**
+ * Scratch helper (tracker 14 P3.3 box 427, 2026-08-12): TEMPORARILY disable the
+ * Iceberg lake tier on candle_scale_log so the batch audit's union read skips
+ * the R2 leg (blocked by the S3A/AWS-SDK-v1 client stall) and completes
+ * log-only for the NMT measurement. Operator MUST re-enable afterwards
+ * (LakeEnable.java, table.datalake.enabled=true).
+ */
+public final class LakeDisable {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        String table = System.getenv().getOrDefault("FLUSS_TABLE", "candle_scale_log");
+        try (Connection connection = ConnectionFactory.createConnection(conf(bootstrap))) {
+            TablePath path = TablePath.of("default", table);
+            TableInfo before = connection.getAdmin().getTableInfo(path).get();
+            System.out.println("LAKE_BEFORE table=" + table
+                    + " datalakeEnabled=" + before.getTableConfig().isDataLakeEnabled()
+                    + " datalakeFormat=" + before.getTableConfig().getDataLakeFormat());
+            connection.getAdmin().alterTable(path, List.of(
+                    TableChange.set("table.datalake.enabled", "false")), false).get();
+            TableInfo after = connection.getAdmin().getTableInfo(path).get();
+            System.out.println("LAKE_AFTER table=" + table
+                    + " datalakeEnabled=" + after.getTableConfig().isDataLakeEnabled()
+                    + " datalakeFormat=" + after.getTableConfig().getDataLakeFormat());
+            System.out.println("LAKE_STATUS=OK");
+        }
+    }
+
+    private static Configuration conf(String bootstrap) {
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", bootstrap);
+        return conf;
+    }
+}

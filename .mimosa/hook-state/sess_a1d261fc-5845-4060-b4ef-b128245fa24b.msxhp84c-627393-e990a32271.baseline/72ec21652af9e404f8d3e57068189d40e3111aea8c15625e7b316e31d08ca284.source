@@ -1,0 +1,169 @@
+package com.trading.compute.signaljob;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.graph.StreamGraph;
+import org.apache.flink.streaming.api.graph.StreamNode;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.Configuration;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+
+/**
+ * Operator-identity pin for checkpoint-restore (CHECKPOINT-RESTORE-001,
+ * DEC-035): every operator in {@link SignalJob#buildTopology} carries an
+ * explicit transformation UID, so Flink derives the restore anchor from the
+ * UID instead of the transitive topology hash.
+ *
+ * <p>Why this test exists: the 2026-08-13 rescope JobGraphDump proved that
+ * hash-derived operator IDs drift whenever a chained operator is added or
+ * removed (baseline {@code candle-15s -> canonical-candle-filter} chaining,
+ * then {@code signal-detection -> canonical-signal-filter} chaining) — and
+ * the drift propagates downstream transitively. Only explicit UIDs make the
+ * stateful anchors durable across such topology changes. Removing a
+ * {@code .uid(...)} from the graph — or renaming one — must fail here.
+ */
+@Tag("integration")
+@EnabledIfEnvironmentVariable(named = "COMPUTE_INT_TEST_P6", matches = "true")
+@DisplayName("SignalJob operator UIDs (CHECKPOINT-RESTORE-001, DEC-035)")
+class SignalJobOperatorUidTest {
+
+    /**
+     * operator uid -> expected vertex-name prefix. Covers the whole graph:
+     * the source (offset state), every stateful processor (dedup TTL state,
+     * window state, signal keyed state), the filter, and all sinks.
+     */
+    private static final Map<String, String> EXPECTED_OPERATORS = new LinkedHashMap<>();
+    static {
+        EXPECTED_OPERATORS.put("raw-table-1", "Source: raw-table-1");
+        EXPECTED_OPERATORS.put("raw-validation", "raw-validation");
+        EXPECTED_OPERATORS.put("fingerprint-dedup", "fingerprint-dedup");
+        // The DEC-038 dedup writer/sink branch was removed with design B
+        // (2026-08-16) — the dedup operator's uid is untouched, the writer +
+        // sink uids no longer exist.
+        EXPECTED_OPERATORS.put("candle-15s", "candle-15s");
+        EXPECTED_OPERATORS.put("candle-late-drop-counter", "candle-late-drop-counter");
+        EXPECTED_OPERATORS.put("feature-candles-15s-sink", "feature-candles-15s-sink");
+        EXPECTED_OPERATORS.put("signal-detection", "signal-detection");
+        EXPECTED_OPERATORS.put("signal-candidates-sink", "signal-candidates-sink");
+        EXPECTED_OPERATORS.put("canonical-signal-filter", "canonical-signal-filter");
+        EXPECTED_OPERATORS.put("signal-candidates-current-sink", "signal-candidates-current-sink");
+    }
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+
+    private static String bootstrap;
+    private static Connection connection;
+    private static Admin admin;
+
+    @BeforeAll
+    static void connect() throws Exception {
+        bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "localhost:9123");
+        try {
+            Configuration conf = new Configuration();
+            conf.setString("bootstrap.servers", bootstrap);
+            connection = ConnectionFactory.createConnection(conf);
+            admin = connection.getAdmin();
+        } catch (Exception e) {
+            assumeTrue(false, "Fluss cluster not available at " + bootstrap);
+        }
+    }
+
+    @AfterAll
+    static void cleanup() throws Exception {
+        if (admin != null) {
+            ScratchTables.dropCreated(admin, TIMEOUT);
+            admin.close();
+        }
+        if (connection != null) {
+            connection.close();
+        }
+    }
+
+    @Test
+    @DisplayName("every operator carries its pinned UID; UID set equals the contract exactly")
+    void everyOperatorCarriesPinnedUid() throws Exception {
+        String suffix = String.valueOf(System.nanoTime());
+        String candleName = "p6_uid_" + suffix + "_candle";
+        String signalName = "p6_uid_" + suffix + "_sig";
+        String currentName = "p6_uid_" + suffix + "_cur";
+        ScratchTables.create(connection, admin, candleName, ScratchTables.candleSchema(),
+                List.of("instrument_token", "window_start"), 16, "candle KV", TIMEOUT);
+        ScratchTables.create(connection, admin, signalName, ScratchTables.signalLogSchema(), null,
+                16, "signal LOG", TIMEOUT);
+        ScratchTables.create(connection, admin, currentName,
+                ScratchTables.signalCurrentSchema(), List.of("instrument_token"), 16,
+                "signal current KV", TIMEOUT);
+        // buildTopology preflights the 3-table contract against live metadata.
+        // The scratch tables carry the DEC-035 contracts that the dev cluster's
+        // legacy tables only gain in Stage 6 (live DDL application), so the
+        // UID assertions never depend on Stage 6 having landed.
+        Map<String, String> cfg = env();
+        cfg.put("CANDLE_TABLE", candleName);
+        cfg.put("SIGNAL_CANDIDATES_TABLE", signalName);
+        cfg.put("SIGNAL_CURRENT_TABLE", currentName);
+        StreamExecutionEnvironment senv = SignalJob.buildTopology(SignalJobConfig.from(cfg));
+        StreamGraph graph = senv.getStreamGraph();
+
+        Map<String, String> uidToName = new HashMap<>();
+        for (StreamNode node : graph.getStreamNodes()) {
+            String uid = node.getTransformationUID();
+            assertNotNull(uid,
+                    "operator '" + node.getOperatorName() + "' has NO explicit UID — "
+                            + "its checkpoint-restore anchor would drift with topology changes "
+                            + "(CHECKPOINT-RESTORE-001)");
+            String previous = uidToName.put(uid, node.getOperatorName());
+            assertTrue(previous == null,
+                    "duplicate UID '" + uid + "' on '" + previous + "' and '"
+                            + node.getOperatorName() + "'");
+        }
+
+        for (Map.Entry<String, String> expected : EXPECTED_OPERATORS.entrySet()) {
+            String actualName = uidToName.get(expected.getKey());
+            assertNotNull(actualName,
+                    "UID '" + expected.getKey() + "' is missing from the graph");
+            assertTrue(actualName.startsWith(expected.getValue()),
+                    "UID '" + expected.getKey() + "' is on unexpected operator '"
+                            + actualName + "'");
+        }
+        assertEquals(EXPECTED_OPERATORS.size(), uidToName.size(),
+                "graph carries operators outside the pinned UID set");
+    }
+
+    private static Map<String, String> env() {
+        // Gated runner (P6 recipe, inside 01_docker_trading-net) overrides the
+        // cluster + scratch tables via the process env; plain `mvn test` skips
+        // this class entirely (@EnabledIfEnvironmentVariable).
+        Map<String, String> env = new HashMap<>();
+        env.put("FLUSS_BOOTSTRAP_SERVERS",
+                System.getenv().getOrDefault("FLUSS_BOOTSTRAP_SERVERS", "localhost:9123"));
+        env.put("RAW_TABLE", System.getenv().getOrDefault("RAW_TABLE", "raw_table_1"));
+        env.put("CANDLE_TABLE",
+                System.getenv().getOrDefault("CANDLE_TABLE", "feature_candles_15s"));
+        env.put("SIGNAL_CANDIDATES_TABLE",
+                System.getenv().getOrDefault("SIGNAL_CANDIDATES_TABLE", "Signal_Candidates"));
+        env.put("SIGNAL_CURRENT_TABLE",
+                System.getenv().getOrDefault("SIGNAL_CURRENT_TABLE", "Signal_Candidates_current"));
+        env.put("DEDUP_TTL_MS", "300000");
+        env.put("CANDLE_WINDOW_MS", "15000");
+        env.put("CHECKPOINT_INTERVAL_MS", "10000");
+        env.put("CHECKPOINT_TIMEOUT_MS", "30000");
+        env.put("MAX_CONCURRENT_CHECKPOINTS", "1");
+        env.put("ALLOW_FULL_REPLAY", "true");
+        return env;
+    }
+}

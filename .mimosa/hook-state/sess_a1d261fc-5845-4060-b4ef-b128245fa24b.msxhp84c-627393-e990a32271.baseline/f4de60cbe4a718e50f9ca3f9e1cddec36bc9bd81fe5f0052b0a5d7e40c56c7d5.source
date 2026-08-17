@@ -1,0 +1,27 @@
+import java.util.Map;
+import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.fluss.flink.catalog.FlinkCatalog;
+
+/** Scratch: does FlinkCatalog.getTable resolve the live candle_scale_log? */
+public final class CatalogProbe {
+    public static void main(String[] args) throws Exception {
+        String bootstrap = System.getenv().getOrDefault("FLUSS_BOOTSTRAP", "fluss-coordinator:9123");
+        FlinkCatalog catalog = new FlinkCatalog(
+                "fluss", "default", bootstrap, CatalogProbe.class.getClassLoader(),
+                Map.of(), Map::of);
+        try {
+            var table = catalog.getTable(new ObjectPath("default", "candle_scale_log"));
+            System.out.println("GETTABLE_OK kind=" + table.getTableKind()
+                    + " schemaFields=" + table.getUnresolvedSchema().getColumns().size()
+                    + " options=" + table.getOptions().keySet());
+        } catch (Throwable t) {
+            System.out.println("GETTABLE_FAIL " + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.out);
+        }
+        try {
+            System.out.println("TABLE_EXISTS=" + catalog.tableExists(new ObjectPath("default", "candle_scale_log")));
+        } catch (Throwable t) {
+            System.out.println("TABLEEXISTS_FAIL " + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+}

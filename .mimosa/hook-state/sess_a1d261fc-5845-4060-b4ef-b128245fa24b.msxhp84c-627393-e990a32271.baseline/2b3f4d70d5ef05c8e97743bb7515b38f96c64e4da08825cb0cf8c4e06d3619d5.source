@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.trading</groupId>
+  <artifactId>trading-platform</artifactId>
+  <version>0.1.0</version>
+  <packaging>pom</packaging>
+
+  <name>Trading Platform — Parent</name>
+  <description>Streaming Trading Data Platform — parent POM with shared dependency versions</description>
+
+  <modules>
+    <!-- Ingestion-only reactor scope (R-272): 02_services/02_compute,
+         03_action_capture, and 05_mock_arrow declare this parent but are not
+         built yet — their source trees are scaffolds. Add them to the reactor
+         when their owning phase builds them. -->
+    <module>common</module>
+    <module>02_services/01_ingestion</module>
+  </modules>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Evidence-gated: pin exact versions before production -->
+    <flink.version>2.2.1</flink.version>
+    <fluss.version>0.9.1-incubating</fluss.version>
+
+    <slf4j.version>2.0.9</slf4j.version>
+    <logback.version>1.4.14</logback.version>
+    <jackson.version>2.16.1</jackson.version>
+    <junit.version>5.10.1</junit.version>
+    <assertj.version>3.25.3</assertj.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Flink (provided scope — runtime provides these; R-270: declared so
+           children inheriting the managed version do not bundle Flink into
+           fat jars and hit classloader conflicts at runtime) -->
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-streaming-java</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-clients</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-table-api-java-bridge</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+
+      <!-- Fluss -->
+      <dependency>
+        <groupId>org.apache.fluss</groupId>
+        <artifactId>fluss-client</artifactId>
+        <version>${fluss.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.fluss</groupId>
+        <artifactId>fluss-flink-2.2</artifactId>
+        <version>${fluss.version}</version>
+      </dependency>
+
+      <!-- Internal -->
+      <dependency>
+        <groupId>com.trading</groupId>
+        <artifactId>common</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <!-- Logging -->
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>${logback.version}</version>
+      </dependency>
+
+      <!-- JSON -->
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+
+      <!-- HTTP client (Executor → Arrow REST) -->
+      <dependency>
+        <groupId>org.apache.httpcomponents.client5</groupId>
+        <artifactId>httpclient5</artifactId>
+        <version>5.3.1</version>
+      </dependency>
+
+      <!-- Compression — zstd-jni for Arrow HFT decompression -->
+      <dependency>
+        <groupId>com.github.luben</groupId>
+        <artifactId>zstd-jni</artifactId>
+        <version>1.5.6-9</version>
+      </dependency>
+
+      <!-- Test -->
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-core</artifactId>
+        <version>${assertj.version}</version>
+        <scope>test</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.5.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.12.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.2.5</version>
+          <configuration>
+            <!-- Arrow MemoryUtil (transitively required by the Fluss client
+                 for KV/table operations) needs java.nio opened on JDK 17+. -->
+            <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

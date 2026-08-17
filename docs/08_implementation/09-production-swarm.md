@@ -177,7 +177,7 @@ The required behavior above is verified by the canonical [Production Swarm test 
 
 ### P10 — Signal LOG/KV Dual-Sink Rehearsal & Cutover Runbook (tracker 14)
 
-**Status:** `RE-SCOPED 2026-08-13 — previously PLANNED (not yet executed) as a candle KV migration rehearsal; target changed to the SIGNAL dual-sink per requirement change. Phase 0 isolation groundwork (overlay compose, empty rehearsal trio) remains valid; no data copy was ever performed.`
+**Status:** `EXECUTED 2026-08-17 on the Design-B topology (all 10 re-scoped P10.1 boxes PASS — evidence logs/tracker-14/p10-rehearsal-design-b-20260817.md; P10.2/P10.3 delivered as the ready-runbook in §13; production execution stays deferred — no production exists). RE-SCOPED 2026-08-13 — previously PLANNED (not yet executed) as a candle KV migration rehearsal; target changed to the SIGNAL dual-sink per requirement change. Phase 0 isolation groundwork (overlay compose, empty rehearsal trio) remains valid; no data copy was ever performed.`
 \*\*Location:\*\* `docs/08_implementation/09-production-swarm.md`
 **Tracker:** the master dossier `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17 consolidation; the tracker substance moved there — `14-candle-log-kv-replay-safety_2.md` was deleted; the `## P10 — Operator-only migration and cutover` (RE-SCOPED), `## P10.1 Isolated rehearsal`, `## P10.2 Production blue-green cutover`, `## P10.3 Rollback` records live in git history).
 **Sequencing gate:** the tracker says "Do not execute until P1–P9 code/evidence gates are complete" — this plan starts strictly AFTER (a) the signal dual-sink implementation (candle **KV-only** sink + `Signal_Candidates` LOG + `Signal_Candidates_current` KV) and (b) the P7.2/P7.3 battery re-run on the new topology (`docs/08_implementation/11-testing-and-release.md`).
@@ -296,4 +296,53 @@ Any box failing mid-rehearsal: record the failure + root cause in the evidence f
 
 ## 12. Execution results
 
-*(to be appended after each phase run — date, commands, raw numbers, pass/fail, bottleneck notes. The 2026-08-13 Phase 0 record is `logs/tracker-14/p10-rehearsal-20260813.md`.)*
+- **2026-08-13 Phase 0 (isolation groundwork):** `logs/tracker-14/p10-rehearsal-20260813.md` (divergences D1–D6; overlay compose + empty rehearsal trio; data copy never performed).
+- **2026-08-17 Design-B re-run (P10.1 boxes 1–10):** `logs/tracker-14/p10-rehearsal-design-b-20260817.md` — Phase 0 rebuilt on live-data byte-copy (deviations DB1–DB6), boxes 4–7 PASS (archived chk-179 strict restore → RUNNING in 13.9 s; KV frozen at 1,025 keys; LOG +42 monotone; first checkpoint 6 s ≤ 30 s target; 19 steady-state completions), boxes 8–9 (bounded replay ×2) + box 10 (rollback/re-cutover per DB2 disposition) recorded there.
+
+## 13. P10.2 + P10.3 ready-runbook (production blue-green cutover + rollback)
+
+**Status:** READY-RUNBOOK — delivered 2026-08-17 per the re-scoped plan §8.2. Execution is DEFERRED until a real production deployment exists (dev cluster = qualification target; the rehearsal evidence above is the qualification). Command shapes use the future Swarm stack (`<stack>` = production stack name); the rehearsed dev equivalents are noted per step. Design-B annotations (DB) reference the deviations table in the 2026-08-17 evidence file.
+
+### 13.1 P10.2 — Production blue-green cutover (10 boxes)
+
+Precondition: the dual-sink artifact is the ONLY Design-B artifact (DB2) — there is no pre-dual-sink signal build; "cutover" here means cutting the running job over to a restored-from-checkpoint dual-sink deployment (e.g. new image, new cluster, or post-incident recovery), not introducing the KV sink for the first time.
+
+1. **Stop SignalJob using the approved operator procedure.**
+   Swarm: `docker service scale <stack>_signaljob=0` (graceful; wait for task exit: `docker service ps <stack>_signaljob --no-trunc`). Dev-rehearsed equivalent: cancel the in-process job (`client.cancel()` — RETAIN_ON_CANCELLATION keeps the checkpoints; rehearsed runs 1–4).
+2. **Record the last successful durable checkpoint.**
+   Identify the max `chk-N/_metadata` under the production checkpoint prefix (Swarm: `s3a://<bucket>/<checkpoint-prefix>/<jobId>/`; dev: `ls <CHECKPOINT_DIR>/<jobId>/chk-*/_metadata`). Record `chk-N`, its completion timestamp, and the checkpoint counter. Production s3a checkpoints are self-contained (object-store handles resolve by key at restore time — the file:// byte-copy non-relocatability finding DB5 does NOT apply to s3a).
+3. **Create/verify `Signal_Candidates` + `Signal_Candidates_current`.**
+   Verify via the job's own fail-closed gate — `SignalJob.preflightTableContracts` runs at startup (SIGNAL-SCHEMA-001 machinery: `Signal_Candidates` LOG no-PK, `Signal_Candidates_current` KV PK `instrument_token`, 16 buckets, `bucket.key=instrument_token`). If provisioning is needed, use the gated DDL path (`ddl_apply.py` + version-matrix gate) — never bootstrap-at-startup. Rehearsed: tables verified present via preflight (DB3).
+4. **Start the dual-sink SignalJob in RESTORE mode.**
+   Set `STATE_RECOVERY_PATH=<archive-or-production chk-N _metadata>` and DO NOT set `ALLOW_FULL_REPLAY` (startup-mode gate fails closed on neither/both/blank — STARTUP-GATE-001). Swarm: `docker service update --env-add STATE_RECOVERY_PATH=… <stack>_signaljob` (or the deploy manifest). Dev-rehearsed equivalent: the env map in `P10RehearsalRestore` (RESTORE mode, archived chk-179).
+5. **Verify table preflight and startup mode.**
+   Job log must show preflight PASS and RESTORE (not FULL_REPLAY); `allowNonRestoredState` is never set anywhere in the Design-B artifact (strict state matching — a state mismatch fails the restore loudly, which is the intended behavior).
+6. **Verify checkpoints.**
+   First checkpoint completes ≤ 30 s (the pinned `CHECKPOINT_TIMEOUT_MS`); the checkpoint counter CONTINUES from the restored id (evidence that coordinator state restored — rehearsed: 179 → 180 in 6 s). Monitor via O2 (`flink_job_last_checkpoint_duration` / completed-checkpoint count) or the checkpoint prefix.
+7. **Point current-state consumers to `Signal_Candidates_current`.**
+   **VACUOUS today — no consumers exist** (locked spec §2.1). Runbook step for when the downstream pipeline lands: consumers wanting latest/active-candidate-per-instrument read the KV table (PK lookup / changelog scan); never rebuild current-state by scanning the LOG.
+8. **Keep LOG consumers only where append/history semantics are intended.**
+   Also VACUOUS today; the rule: the `Signal_Candidates` LOG is the append-only evidence stream (one row per fired signal, never updated) — history/audit consumers read it, current-state consumers must not.
+9. **Run the bounded replay acceptance test.**
+   Restore a second instance from the SAME recorded checkpoint against an isolated copy of the production data (Phase 0 isolation mechanics: second compose project / byte-copy / warehouse prefix), run bounded, assert: signal LOG appends (replay rows retained as evidence — duplicates after deliberate replay are never silently deleted) while `Signal_Candidates_current` key count stays frozen == active-instrument count. Rehearsed twice on Design-B (runs 2–3, 2026-08-17).
+10. **Record final evidence.**
+    Per §9 template: date, commit/image IDs, exact commands, checkpoint ids, LOG/KV counts before/after, pass/fail per box, operator/approver line. File under `logs/tracker-14/` (or the production evidence location when it exists).
+
+### 13.2 P10.3 — Rollback (8 boxes)
+
+**Rollback triggers** (any one): dual-sink job repeatedly fails checkpoint/restore in production; `Signal_Candidates_current` sink wedges (StallGuardedSink terminal FAILED — FAILOVER-FLUSS-001 shared-fate) and current-state consumers degrade; a production incident where the restored dual-sink state is suspect and the last-known-good pre-incident checkpoint must be re-established.
+
+**Design-B rollback reality (DB2):** the Design-B artifact has only ever existed as dual-sink, so "reconstruct the single-LOG artifact" is VACUOUS — a production rollback restores the pre-incident checkpoint WITH THE CURRENT dual-sink artifact (checkpoint-compatible by construction: same artifact wrote it). The rehearsed rollback = restore an earlier checkpoint with the current artifact and verify clean resume + KV frozen / LOG grows. Rolling back to a hypothetical pre-dual-sink artifact is impossible (it never ran Design-B state) and must never be attempted with `allowNonRestoredState=true`.
+
+1. **Stop the dual-sink job.** Approved operator procedure (13.1 step 1).
+2. **Preserve `Signal_Candidates` LOG and `Signal_Candidates_current` KV tables.** Never drop/truncate either table during rollback — the LOG is append-only evidence (replay appends retained), the KV is last-write-wins current state. No destructive operation on either is part of any rollback path.
+3. **Restore the previous application artifact/checkpoint only if compatible.** Restore the last-known-good checkpoint with the CURRENT artifact (DB2). Compatibility = the checkpoint was written by the same dual-sink topology (strict state matching verifies this at restore — a mismatch fails loudly; never force it).
+4. **Do not use `allowNonRestoredState=true` as an emergency shortcut.** The Design-B artifact never sets it; if a restore fails on unmatched state, that is a real incompatibility to investigate, not a gate to bypass (STARTUP-GATE-001 / P10.3 contract).
+5. **Do not automatically full replay.** `ALLOW_FULL_REPLAY=true` is an explicit, separately-approved dev-only gate — never a rollback action in production (it would re-emit the entire raw history into the signal LOG).
+6. **Repoint consumers if necessary.** VACUOUS today (no consumers); when they exist: current-state consumers stay on `Signal_Candidates_current` (the KV resumes from the restored checkpoint); no repoint is needed for a same-artifact rollback.
+7. **Record the affected interval and duplicate exposure.** Exposure record format: (a) interval = [last-good checkpoint completion ts → rollback-restore ts]; (b) LOG rows appended during the interval (end-offset sum delta on `Signal_Candidates`); (c) KV upserts during the interval (keys touched); (d) sampled keys (≥10 instrument tokens with their LOG row offsets). This is the data a production rollback exposes as possible duplicates downstream.
+8. **Define remediation before resuming production.** Downstream consumers of the LOG must be told the exposure record (duplicates in the interval are possible and retained); current-state consumers need no remediation (KV last-write-wins converges). Resume only after the restored job checkpoints cleanly (≤ 30 s) and the exposure record is filed.
+
+### 13.3 Rehearsal qualification
+
+Every machinery step above was rehearsed on the Design-B topology against the isolated p10 environment (2026-08-17): strict archived-checkpoint restore (boxes 4–7), bounded-replay idempotency twice (boxes 8–9: LOG re-appends retained, KV key count frozen at the active-instrument count), and rollback + re-cutover with the current artifact (box 10, DB2 disposition). Evidence: `logs/tracker-14/p10-rehearsal-design-b-20260817.md`. The two VACUOUS steps (consumer repoint, single-LOG artifact) are recorded as such in the locked spec §2.1 + DB2 and become live steps only when their preconditions exist.
