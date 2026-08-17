@@ -7,7 +7,7 @@ import java.util.Set;
  * Immutable Execution_Attempts row
  * ({@code code/01_platform/02_sql/ddl/12_execution_attempts.sql} v2), in DDL
  * column order — the executor attempt protocol's durable record
- * (docs/08_implementation/07-executor.md &rarr; "Attempt rules").
+ * (docs/08_implementation/05-execution-core.md &rarr; "Attempt protocol").
  *
  * <p>Identity columns are fixed at minting and never rewritten: an attempt's
  * {@code execution_attempt_id}, scope, {@code request_hash}, and

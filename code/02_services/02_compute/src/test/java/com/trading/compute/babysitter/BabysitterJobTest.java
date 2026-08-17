@@ -14,7 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * BAB-UNIT-001 / BAB-UNIT-002 (docs/08_implementation/06-babysitter.md,
+ * BAB-UNIT-001 / BAB-UNIT-002 (docs/08_implementation/05-execution-core.md — Babysitter section,
  * BABYSITTER-001) — the MVP Babysitter contract (DEC-017): a strict no-op
  * that emits zero {@code Position_Actions} for every input and fails closed
  * at startup if {@code POSITION_ACTIONS_ENABLED} is anything but {@code
@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
  * {@link BabysitterJob#validateActionFlag} directly with every env-var
  * variant. BAB-INT-001, BAB-HARNESS-001, BAB-FAIL-001/002, and BAB-OPS-001
  * stay pending until the real Positions-changelog source and observation
- * state land (06-babysitter.md).
+ * state land (05-execution-core.md).
  */
 @DisplayName("BAB-UNIT-001/002: MVP Babysitter strict no-op and action-enable fail-closed")
 class BabysitterJobTest {

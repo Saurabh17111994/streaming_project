@@ -13,7 +13,7 @@ package com.trading.common.schema.position;
  *
  * <p>{@code position_id} is NOT part of this context — it is minted by
  * {@link PositionProjectorDriver} on the first uniquely correlated fill that
- * creates exposure (05-action-capture.md &rarr; "Position projection protocol")
+ * creates exposure (05-execution-core.md &rarr; "Position states")
  * and passed to {@link FillEventMapper#mapIfFill} separately.
  */
 public record FillContext(

@@ -1,7 +1,7 @@
 package com.trading.common.schema.execution;
 
 /**
- * Attempt lifecycle store (docs/08_implementation/07-executor.md &rarr;
+ * Attempt lifecycle store (docs/08_implementation/05-execution-core.md &rarr;
  * "Attempt rules"): mints exactly one PREPARED attempt per
  * (instruction_id, request_hash), refuses to rewrite an attempt's identity,
  * and applies only legal phase transitions with a monotonic {@code phase_epoch}.

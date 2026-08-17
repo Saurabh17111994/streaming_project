@@ -16,7 +16,8 @@ import org.slf4j.LoggerFactory;
  * <p>Safety rule: the Babysitter never calls the Arrow REST API or any broker
  * endpoint directly. Babysitter health never implies Executor trading readiness.
  *
- * <p>See docs/08_implementation/06-babysitter.md for the full implementation
+ * <p>See docs/08_implementation/05-execution-core.md (Babysitter — position observation) for the
+ * full implementation
  * contract.
  */
 public final class BabysitterJob {
@@ -93,7 +94,7 @@ public final class BabysitterJob {
 
         // TODO: wire Positions changelog source, observation state,
         //   checkpointing, and zero-action emission per the implementation
-        //   dossier (docs/08_implementation/06-babysitter.md).
+        //   dossier (docs/08_implementation/05-execution-core.md — Babysitter section).
 
         return env;
     }

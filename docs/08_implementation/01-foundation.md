@@ -112,7 +112,7 @@ Tasks must be completed in this sequence. Do not begin a later task until all ac
 | 3 | Implement compact, bounded Signal-job state | `docs/08_implementation/04-signal-job.md` | Flink state stays compact and bounded: dedup set externalized to a Fluss KV state table (DEC-038) with a bounded Flink working cache; candle state contains OHLCV fields only; Flink checkpoint is small and not a second copy of Fluss business state; no CEP |
 | 4 | ~~Bound candidate work and preserve in-job ranking~~ | `docs/08_implementation/04-signal-job.md` (Ranking section) | ~~MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT=1; rejection codes; no Fluss round trip for ranking~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | 5 | Pin job recovery and container-memory settings | `docs/08_implementation/09-production-swarm.md` | Checkpoint 10s/30s/1; JVM 65%/35%; S3 checkpoint storage |
-| 6 | Keep Babysitter state minimal | `docs/08_implementation/06-babysitter.md` | POSITION_ACTIONS_ENABLED=false; only latest position version, offset, freshness, schema version, no-op counters |
+| 6 | Keep Babysitter state minimal | `docs/08_implementation/05-execution-core.md` (Babysitter — position observation) | POSITION_ACTIONS_ENABLED=false; only latest position version, offset, freshness, schema version, no-op counters |
 | 7 | Implement required alerts and safe-stop conditions | `docs/08_implementation/10-observability.md` | 8 alert thresholds with 60s consecutive breach; idempotent Safety_Halt_Request; no auto-resume |
 
 ## Verification mapping
@@ -148,7 +148,7 @@ Implementation is complete only when all conditions below are true:
 
 - Ingestion: [`03-ingestion.md`](./03-ingestion.md)
 - Signal job: [`04-signal-job.md`](./04-signal-job.md)
-- Babysitter: [`06-babysitter.md`](./06-babysitter.md)
+- Execution Core (Action Capture + Babysitter + Executor): [`05-execution-core.md`](./05-execution-core.md)
 - Production deployment: [`09-production-swarm.md`](./09-production-swarm.md)
 - Observability: [`10-observability.md`](./10-observability.md)
 - Test catalog: [`11-testing-and-release.md`](./11-testing-and-release.md)

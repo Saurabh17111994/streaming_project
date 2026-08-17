@@ -13,8 +13,8 @@ import org.apache.fluss.row.GenericRow;
  * memory, mints {@code position_id}s, and projects fills through the pure
  * {@link PositionProjector} with version gating.
  *
- * <p>Position identity (05-action-capture.md &rarr; "Position projection
- * protocol"): account/instrument/side uniqueness; {@code position_id} is minted
+ * <p>Position identity (05-execution-core.md &rarr; "Position states"): account/instrument/side
+ * uniqueness; {@code position_id} is minted
  * on the first uniquely correlated fill that creates exposure; a re-entry after
  * a full close (CLOSED) mints a NEW position_id. Minted ids are deterministic
  * ({@code pos-<account>-<instrumentToken>-<side>-<cycle>}) so a clean replay

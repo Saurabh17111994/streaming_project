@@ -2,7 +2,7 @@
 
 > **ROLE — WORKING DOSSIER (2026-08-18):** this is the single integrated implementation dossier for
 > the execution half of the platform. It replaces `05-action-capture.md`, `06-babysitter.md`, and
-> `07-executor.md` (each SUPERSEDED — stub retained, full history in git). Architecture per the
+> `07-executor.md` (each SUPERSEDED and deleted 2026-08-18; full history in git at `74f3d89`). Architecture per the
 > 2026-08-18 user decision: **Nautilus** (Rust-native trading engine) is the execution/position
 > core; a **go-arrow bridge** (localhost) is the ONLY component that talks to Arrow; the Fluss
 > trade-row reader and the two-person gate are custom glue. The upstream layer is reconciled to

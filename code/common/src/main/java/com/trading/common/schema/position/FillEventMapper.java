@@ -16,7 +16,7 @@ import org.apache.fluss.row.GenericRow;
  *       fill identity used for duplicate/conflict content checks;</li>
  *   <li>{@code sourceVersion} = {@code receive_time} — platform receive time as
  *       the documented non-authoritative monotone sequence
- *       (05-action-capture.md: "platform receive time as non-authoritative
+ *       (05-execution-core.md: "platform receive time as non-authoritative
  *       evidence"); a future reading layer may supply log offsets instead, but
  *       the pure core pins receive_time;</li>
  *   <li>{@code eventTimeMs} = {@code broker_event_time} when present, else

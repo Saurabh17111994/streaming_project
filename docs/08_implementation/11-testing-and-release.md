@@ -287,7 +287,7 @@ Evidence: input fixture, output capture proving zero actions, checkpoint/restore
 
 | Implementing test class | Tests | Covers BAB-* |
 | --- | --- | --- |
-| `BabysitterJobTest` | 3 | `BAB-UNIT-001` (MVP topology emits zero `Position_Actions` — cluster-free StreamGraph inspection of `BabysitterJob.buildTopology()`: no operator produces `Position_Actions`, only the pinned marker → discard topology, every node UID-pinned per CHECKPOINT-RESTORE-001/DEC-035) and `BAB-UNIT-002` (action-enable fails closed: any `POSITION_ACTIONS_ENABLED` value other than `false` — trimmed, case-insensitive — is rejected at startup with `IllegalStateException` naming the flag; unset/`false` accepted). `BAB-INT-001`, `BAB-HARNESS-001`, `BAB-FAIL-001`, `BAB-FAIL-002`, `BAB-OPS-001` pending until the Positions-changelog source and observation state land (06-babysitter.md) |
+| `BabysitterJobTest` | 3 | `BAB-UNIT-001` (MVP topology emits zero `Position_Actions` — cluster-free StreamGraph inspection of `BabysitterJob.buildTopology()`: no operator produces `Position_Actions`, only the pinned marker → discard topology, every node UID-pinned per CHECKPOINT-RESTORE-001/DEC-035) and `BAB-UNIT-002` (action-enable fails closed: any `POSITION_ACTIONS_ENABLED` value other than `false` — trimmed, case-insensitive — is rejected at startup with `IllegalStateException` naming the flag; unset/`false` accepted). `BAB-INT-001`, `BAB-HARNESS-001`, `BAB-FAIL-001`, `BAB-FAIL-002`, `BAB-OPS-001` pending until the Positions-changelog source and observation state land (05-execution-core.md) |
 
 ### Executor
 
@@ -655,7 +655,7 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 
 | Audit issues | Primary dossier | Test/evidence families |
 | --- | --- | --- |
-| P0-1 | `07-executor.md` | `EXE-*`, `REL-EXE-*`, `REL-CRASH-*`, `REL-HALT-*` |
+| P0-1 | `05-execution-core.md` | `EXE-*`, `REL-EXE-*`, `REL-CRASH-*`, `REL-HALT-*` |
 | P0-2 | All component dossiers | `ING-*`, `SIG-*`, `AC-*`, `BAB-*`, `EXE-*` |
 | P0-3 | `04-signal-job.md` | Job submission/readiness integration tests |
 | P0-003 | ~~`15_portfolio_reservations.sql`~~ (**REMOVED 2026-08-15, CHG-005**), `17_postback_projection_ledger.sql`, `18_safety_halt_requests.sql`, `02-schema-storage.md` | DDL-INV-*, DDL-SCHEMA-*, DDL-APPLY-*, DDL-META-*, DDL-REPLAY-* |
@@ -699,8 +699,7 @@ This matrix maps audit findings and `01_plan.md` task sequence to the implementa
 | 3 Data model | `02-schema-storage.md`, `01-foundation.md` (§Shared safety rules) |
 | 4 Ingestion | `03-ingestion.md` |
 | 5 Signal job | `04-signal-job.md` |
-| 6 Action/Babysitter | `05-action-capture.md`, `06-babysitter.md` |
-| 7 Executor | `07-executor.md` |
+| 6 Execution Core (Action Capture + Babysitter + Executor) | `05-execution-core.md` |
 | 8 Local runtime | `08-local-compose.md` |
 | 9 Production runtime | `09-production-swarm.md` |
 | 10 Observability | `10-observability.md` |

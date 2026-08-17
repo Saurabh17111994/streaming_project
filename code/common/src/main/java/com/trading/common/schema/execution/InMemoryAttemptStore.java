@@ -11,7 +11,7 @@ import java.util.Set;
 
 /**
  * In-memory {@link AttemptStore} — the pure-JVM core of the executor attempt
- * lifecycle (docs/08_implementation/07-executor.md &rarr; Task 5), and the
+ * lifecycle (docs/08_implementation/05-execution-core.md &rarr; attempt protocol), and the
  * first production consumer of the SCH-15 column-ownership guard
  * ({@link ColumnOwnership#checkWrite}).
  *
