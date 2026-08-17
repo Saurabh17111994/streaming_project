@@ -47,8 +47,9 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  * <p>What this proves, with runtime artifacts (not config assertions):
  * <ul>
  *   <li><b>Savepoint production</b> — phase 1 (parallelism 2) runs the actual
- *       {@link FingerprintDedupFunction} (MapState fingerprint-dedup +
- *       expiry-index + event-time timers) over real {@link TestRawRows} rows;
+ *       {@link FingerprintDedupFunction} (MapState fingerprint-dedup with
+ *       native StateTtlConfig expiry — CHG-023 item 2 removed the expiry
+ *       index + event-time timers) over real {@link TestRawRows} rows;
  *       {@code stopWithSavepoint} returns a path on the local filesystem and
  *       the job reaches CANCELED with that savepoint on disk.</li>
  *   <li><b>State continuity across a job upgrade</b> — phase 2 runs on a brand

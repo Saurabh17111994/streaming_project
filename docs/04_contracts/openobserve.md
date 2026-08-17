@@ -97,9 +97,10 @@ already emits all required fields plus optional `symbol/strategy/exception`.
   seven-year audit-retention requirement remains a separate S3/object-store
   control and must not be marked complete from OpenObserve evidence.
 - The corrective implementation/evidence tracker for the candle replay and
-  production-readiness work is
-  `docs/08_implementation/14-candle-log-kv-replay-safety_2.md`; it operationalizes
-  this contract without replacing it.
+  production-readiness work is the master dossier
+  `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17
+  consolidation — tracker `14-candle-log-kv-replay-safety_2.md` was deleted); it operationalizes this contract without
+  replacing it.
 
 ## N. Platform observability requirements
 
@@ -160,7 +161,8 @@ signal.
   4.3–4.7; `05-interfaces.md` §§5.9–5.11; `06-operational.md` §§6.3,
   6.5–6.10.
 - Implementation and evidence tracker:
-  `docs/08_implementation/14-candle-log-kv-replay-safety_2.md`.
+  `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17
+  consolidation; `14-candle-log-kv-replay-safety_2.md` was deleted).
 
 ## Matrix status
 

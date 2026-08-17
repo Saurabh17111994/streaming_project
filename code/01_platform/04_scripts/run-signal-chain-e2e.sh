@@ -3,7 +3,7 @@
 # run-signal-chain-e2e.sh (DRAFT)
 #
 # Full-chain live E2E: broker -> raw_table_1 -> SignalJob -> feature_candles_15s
-# for E2E_RUN_MINUTES (default 5). See the SignalChainLiveE2ETest javadoc for
+# for E2E_RUN_MINUTES (default 30). See the SignalChainLiveE2ETest javadoc for
 # the full env contract. This script builds the bridge/faketool binaries and
 # the ingestion classpath, then runs the env-gated test module-locally
 # (R-272: compute is excluded from the root reactor).
@@ -32,15 +32,51 @@ PROJ_ROOT="$(cd "$CODE_ROOT/.." && pwd)"
 : "${E2E_CHECKPOINT_DIR:=file:///tmp/signal-chain-e2e-checkpoints}"
 # RocksDB managed-memory budget for the embedded job (E2E root cause
 # 2026-08-17): local execution defaults taskmanager.memory.managed.size to
-# 128 MB TOTAL, which starves the block cache for the ~628 MB dedup envelope
-# and throttles the job to ≈ the feed rate — the backlog never drains and the
-# tail is never reached. 2048m gives RocksDB a real cache (probe-verified:
-# 128m → ~30k/s, 2048m → ~49k/s; the passing DedupRocksDbThroughputMemoryIT
-# uses process.size=1024m + managed.fraction=0.4 ≈ 400 MB).
+# 128 MB TOTAL, which starves the RocksDB block cache and throttles the job
+# to ≈ the feed rate — the backlog never drains and the tail is never
+# reached. 2048m gives RocksDB a real cache (probe-verified: 128m → ~30k/s,
+# 2048m → ~49k/s throughput on the same topology).
 : "${TASK_MANAGER_MEMORY_MANAGED_SIZE:=2048m}"
+# The E2E must exercise the production state backend (RocksDB), not the dev
+# hashmap default — the job's RocksDB state is what the managed-memory budget
+# above feeds. STATE_BACKEND_LOCAL_DIRS stays caller-optional (default tmp).
+: "${STATE_BACKEND:=rocksdb}"
+# E2E topology parallelism (investigation acceptance 2026-08-17 §7a): p8 +
+# RocksDB + 2048m managed is the proven checkpoint-stable config (88/88
+# checkpoints, 0 restarts, feature +124 855 rows in the first fixed run). The
+# job's own default is p1 — a bare run then loads the whole 20 480 t/s
+# envelope into ONE slot and the checkpoint barrier exceeds the 30 s pin
+# (observed 2026-08-17: "Checkpoint expired before completing" → global
+# restart at ~50 s). Callers may override.
+: "${PARALLELISM:=8}"
+# Network-memory pool for the embedded job (investigation §7c fix, 2026-08-17):
+# local MiniCluster defaults to 64 MB (2048 × 32 KB buffers) — the checkpoint
+# barrier across 8 subtasks + 6 Fluss sinks needs more (observed 2026-08-17:
+# "Memory usage [172%] ... requestedMemory=110.5mb" → barrier starves →
+# checkpoint 1 expires → restart). SignalJob pins network.min=max to this.
+: "${TASK_MANAGER_NETWORK_MEMORY_MAX:=256m}"
+# Native flink-metrics-otel reporter endpoint (CHG-023 item 1 gap fix
+# 2026-08-17): the job's SignalJobConfig default is otel-collector:4318 — the
+# docker-compose service name, resolvable only inside trading-net. Host E2E
+# runs (this script's primary mode) must point at the published host port;
+# in-container callers override to otel-collector:4318. The var carries
+# HOST:PORT (SignalJobConfig builds the endpoint verbatim) — a bare hostname
+# sends the reporter to :80 (observed 2026-08-17).
+: "${OTEL_COLLECTOR_HOST:=localhost:4318}"
 : "${INGESTION_JAR_DIR:=$CODE_ROOT/02_services/01_ingestion/target}"
-MANIFEST_DEFAULT="$PROJ_ROOT/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv"
+# The instrument manifest lives OUTSIDE the repo, one level above PROJ_ROOT
+# (Flink_Fluss_Infrastructure/Arrow_broker/...), not inside it. The pre-fix
+# $PROJ_ROOT/Arrow_broker default exported a nonexistent path that overrode
+# the test's correct relative default; the bridge then exited FATAL ("no
+# instrument tokens") and the 90 s warmup timed out (investigation §7b root
+# cause 2, 2026-08-17).
+MANIFEST_DEFAULT="$(dirname "$PROJ_ROOT")/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv"
 : "${INSTRUMENT_MANIFEST_PATH:=$MANIFEST_DEFAULT}"
+if [ ! -f "$INSTRUMENT_MANIFEST_PATH" ]; then
+	echo "chain-e2e: FATAL — INSTRUMENT_MANIFEST_PATH not found: $INSTRUMENT_MANIFEST_PATH" >&2
+	echo "chain-e2e: expected at Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv" >&2
+	exit 2
+fi
 
 case "$E2E_BROKER" in
 faketool | arrow-hft) ;;
@@ -76,10 +112,9 @@ fi
 
 # The E2E spawns the REAL IngestionService as a subprocess with
 # INGESTION_CLASSPATH; the compute surefire classpath does NOT contain the
-# ingestion module, so the classpath must be computed here (the original
-# script computed it into INGESTION_CP but exported INGESTION_CLASSPATH — a
-# name mismatch that shipped an empty classpath and silently killed the
-# ingestion subprocess, failing the warmup await).
+# ingestion module, so the classpath must be computed here (previously the
+# script exported INGESTION_CLASSPATH unset — an empty classpath silently
+# killed the ingestion subprocess, failing the warmup await).
 # mvn -q suppresses the classpath stdout (dependency:build-classpath prints it
 # at INFO level), so the cp must be captured via -Dmdep.outputFile — a stdout
 # capture yields an empty deps list and the ingestion subprocess dies instantly
@@ -100,7 +135,7 @@ export INGESTION_CLASSPATH="$INGESTION_CP"
 echo "=== chain-e2e: run (E2E_BROKER=$E2E_BROKER, ${E2E_RUN_MINUTES} min, Fluss $FLUSS_BOOTSTRAP)"
 export SIGNAL_CHAIN_E2E=true
 export E2E_BROKER E2E_RUN_MINUTES FLUSS_BOOTSTRAP E2E_CHECKPOINT_DIR
-export TASK_MANAGER_MEMORY_MANAGED_SIZE
+export TASK_MANAGER_MEMORY_MANAGED_SIZE STATE_BACKEND PARALLELISM TASK_MANAGER_NETWORK_MEMORY_MAX OTEL_COLLECTOR_HOST
 export INSTRUMENT_MANIFEST_PATH
 export ARROW_BRIDGE_BIN FAKETOOL_BIN
 # arrow modes: pass the credentials through untouched

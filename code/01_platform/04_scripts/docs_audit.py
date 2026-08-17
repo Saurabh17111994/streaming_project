@@ -37,7 +37,8 @@ Checks:
       matrix AC domain with an owning dossier and ranges equal to the matrix;
       dossier status rows (02-10) cite only real, owned AC ids; every matrix
       AC id is covered by a dossier or the coverage table; REQ13-* ids appear
-      only in dossier 13 and are all defined in its requirement traceability.
+      only in the master signal-job dossier (04) and are all defined in its
+      requirement traceability section.
   C11 Verification mapping: every functional dossier (01-10) has a
       "## Verification mapping" section, and every link in those sections to
       11-testing-and-release.md#anchor resolves (GitHub-slugged) to a heading
@@ -640,9 +641,10 @@ def c9_dec039_invariants():
 
 IMPLEMENTATION_DIR = os.path.join(DOCS_DIR, "08_implementation")
 DOSSIER_TRACE_PATH = os.path.join(IMPLEMENTATION_DIR, "11-testing-and-release.md")
-DOSSIER13_PATH = os.path.join(
-    IMPLEMENTATION_DIR, "13-candle-log-kv-replay-safety.md"
-)
+# REQ13-* ids are scoped to the master signal-job dossier (04); the retired
+# candle-era dossier (13) was deleted 2026-08-17 with its traceability table
+# absorbed into 04 §5.1.
+REQ13_HOME_PATH = os.path.join(IMPLEMENTATION_DIR, "04-signal-job.md")
 
 # Functional dossiers whose status tables carry Requirements/Acceptance rows.
 COVERAGE_DOSSIERS = [
@@ -788,28 +790,28 @@ def c10_dossier_traceability():
     orphan = sorted(all_matrix_ids - covered)
     check("C10 no orphan AC id", not orphan, f"{orphan}")
 
-    # --- REQ13-* ids are scoped to dossier 13 and defined there ---
+    # --- REQ13-* ids are scoped to the master dossier (04) and defined there ---
     leaks = []
     for root, _, files in os.walk(DOCS_DIR):
         for f in files:
             if not f.endswith(".md"):
                 continue
             path = os.path.join(root, f)
-            if os.path.abspath(path) == os.path.abspath(DOSSIER13_PATH):
+            if os.path.abspath(path) == os.path.abspath(REQ13_HOME_PATH):
                 continue
             if REQ13_RE.search(safe_read(path) or ""):
                 leaks.append(os.path.relpath(path, ROOT))
-    check("C10 REQ13 ids stay in dossier 13", not leaks, f"{leaks}")
+    check("C10 REQ13 ids stay in the master dossier 04", not leaks, f"{leaks}")
 
-    d13 = safe_read(DOSSIER13_PATH) or ""
+    d04 = safe_read(REQ13_HOME_PATH) or ""
     m13 = re.search(
-        r"^## 5\.1 Requirement traceability\s*\n(.*?)(?=\n## 5\.2|\Z)",
-        d13,
+        r"^## 5\.1 Requirement traceability[^\n]*\n(.*?)(?=\n## |\Z)",
+        d04,
         flags=re.M | re.S,
     )
     defined13 = set(REQ13_RE.findall(m13.group(1) if m13 else ""))
-    undefined13 = sorted(set(REQ13_RE.findall(d13)) - defined13)
-    check("C10 REQ13 ids defined in 13", not undefined13, f"{undefined13}")
+    undefined13 = sorted(set(REQ13_RE.findall(d04)) - defined13)
+    check("C10 REQ13 ids defined in 04", not undefined13, f"{undefined13}")
 
 
 # ---------------------------------------------------------------------------

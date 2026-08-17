@@ -119,6 +119,21 @@
       <groupId>org.apache.fluss</groupId>
       <artifactId>fluss-flink-2.2</artifactId>
     </dependency>
+    <!-- Native OpenTelemetry metric reporter (CHG-023 item 1, 2026-08-17):
+         replaces the hand-rolled ComputeOtlpEmitter metric half. The 2.2.1
+         artifact is a SHADED fat jar (the OTel SDK 1.30.1 + OTLP exporters are
+         bundled inside — verified in flink-metrics-otel-2.2.1.jar, 984
+         io/opentelemetry classes; the published pom declares no OTel deps).
+         Compile scope: the shaded compute.jar carries it on the embedded /
+         dev / MiniCluster classpath so ServiceLoader discovers
+         OpenTelemetryMetricReporterFactory from the job's own jar; the
+         distributed dist still needs the jar under /opt/flink/plugins/ (see
+         CHG-023 deployment note) for the TaskManager metric registry. -->
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-metrics-otel</artifactId>
+      <version>${flink.version}</version>
+    </dependency>
     <dependency>
       <groupId>com.trading</groupId>
       <artifactId>common</artifactId>

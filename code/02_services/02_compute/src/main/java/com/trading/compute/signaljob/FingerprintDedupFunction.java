@@ -1,13 +1,13 @@
 package com.trading.compute.signaljob;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.StateTtlConfig;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.Gauge;
@@ -26,21 +26,34 @@ import org.apache.flink.util.Collector;
  *
  * <p>Keyed by {@code instrument_token}; per key the state is a map whose key
  * is {@code fingerprint_version + scope + event_fingerprint} and whose value
- * is {@code (first_seen, expiry)} — no raw bytes, no decoded fields, no
- * candle or candidate values, no event objects (dossier state contract). A
+ * is {@code (first_seen, nominal_expiry)} — no raw bytes, no decoded fields,
+ * no candle or candidate values, no event objects (dossier state contract). A
  * fingerprint seen again before its expiry is counted as a duplicate and
  * dropped; the first occurrence passes downstream. Once expired, a
- * re-arriving fingerprint is eligible again — expiry is exactly
- * {@code first_seen + DEDUP_TTL_MS} in event time.
+ * re-arriving fingerprint is eligible again.
  *
- * <p><b>State shape (unchanged from the DEC-038 build, so existing
- * checkpoints stay readable):</b> the {@code fingerprint-dedup} MapState
- * ({@code String → DedupEntry}) and the {@code fingerprint-dedup-expiry}
- * MapState ({@code Long → List<String>}, index {@code expiry -> state keys}).
- * Flink 2.2.1 has only processing-time state TTL, so entries expire via
- * explicit event-time timers (one per expiry bucket at
- * {@code first_seen + TTL}); the timer fires when the watermark reaches the
- * bucket's timestamp and deletes the bucket's entries from both maps.
+ * <p><b>Expiry (native, CHG-023 item 2, 2026-08-17):</b> the MapState is
+ * enabled with {@link StateTtlConfig} — TTL {@code DEDUP_TTL_MS},
+ * {@code OnCreateAndWrite} (the dedup never rewrites a value, so the TTL
+ * stays anchored at first-seen) and {@code NeverReturnExpired} (an expired
+ * entry reads as absent — the re-arrival is re-admitted, never
+ * double-accepted). Flink's only TTL time characteristic is ProcessingTime
+ * (wall clock) — the correct semantics for a 5-minute real-time dedup rule.
+ * The previous build's hand-rolled expiry index
+ * ({@code Long → List<String>} MapState) and per-entry event-time timers are
+ * REMOVED: they replaced native TTL, added +100–150% state, and carried the
+ * orphaned-timer bug class. Background physical cleanup is native too —
+ * RocksDB runs the TTL compaction filter by default
+ * ({@code state.backend.rocksdb.compaction.filter.query-time-after-num-entries}
+ * = 1000; compatible with this job's incremental checkpoints), heap runs
+ * incremental cleanup; no configuration needed.
+ *
+ * <p><b>Restart semantics (native migration):</b> Flink 2.2.0+ migrates state
+ * between TTL and non-TTL layouts seamlessly — a pre-CHG-023 checkpoint's
+ * plain {@code DedupEntry} values are wrapped at restore with the current
+ * processing time as their TTL anchor, so restored fingerprints stay
+ * deduplicated for one more full TTL from the restore moment (never an empty
+ * set, never instant expiry).
  *
  * <p><b>Boundedness by construction, not by eviction:</b> entries = accepted
  * rate × TTL horizon. The DEC-038 bounded-cache machinery (eviction to
@@ -53,40 +66,50 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * Gauge resync cadence per instrument. TTL entries expire invisibly
+     * (NeverReturnExpired — the operator is never told), so the pure
+     * insertion-side count would drift upward forever; every this-many rows
+     * per instrument the operator re-scans the CURRENT key's map ({@code
+     * MapState.entries()} skips expired entries) and folds the actual live
+     * count in. The per-token scan is small (steady state ≈ 6k entries per
+     * instrument at 20 480 t/s) and runs ≈ 2×/s across all instruments —
+     * negligible, and it keeps {@code compute.dedup.state.count} honest
+     * between restores. Package-visible test seam: expiry-leg tests lower it
+     * to force an immediate resync.
+     */
+    static long GAUGE_RESYNC_INTERVAL_ROWS = 10_000L;
+
     private final SignalJobConfig config;
 
     private transient MapState<String, DedupEntry> dedup;
-    private transient MapState<Long, List<String>> expiryIndex;
     private transient Counter firstEvents;
     private transient Counter duplicates;
 
     /**
-     * Gauge state (tracker 14 P5.1): live sizes of the two MapStates plus a
+     * Gauge state (tracker 14 P5.1): live sizes of the MapState plus a
      * conservative bytes estimate. Keyed {@code MapState} cannot be iterated
      * in {@code open()} (no key namespace — verified: the harness throws "No
      * key set" on {@code entries()} outside a keyed callback), so each token's
      * restored size is folded in EXACTLY on its first post-restore row.
      */
     private transient long dedupCount;
-    private transient long expiryIndexCount;
     private transient long bytesEstimate;
 
-    /** Per-token tracked dedup size; replace-with-actual on first row per token. */
+    /** Per-token tracked dedup size; replace-with-actual on resync. */
     private final Map<Long, Long> tokenStateCount = new java.util.HashMap<>();
 
-    /** Per-token tracked expiry-bucket count; same replace semantics. */
-    private final Map<Long, Long> tokenExpiryCount = new java.util.HashMap<>();
+    /** Per-token rows since the last gauge resync (TTL-drift correction). */
+    private final Map<Long, Long> tokenRowsSinceResync = new java.util.HashMap<>();
 
     /**
      * Upper-bound per-entry estimate: state key ({@code version|token|fingerprint},
      * ~40 chars UTF-16 = 80 B) + {@link DedupEntry} (2 longs = 16 B) + MapState
-     * overhead (~32 B). Measured upper bound — see
-     * {@code DedupStateSizeTest} for the serialized-size check.
+     * overhead (~32 B) + TTL timestamp (RocksDB adds 8 B per map entry — Flink
+     * TTL docs). Measured upper bound — see {@code DedupStateSizeTest} for the
+     * serialized-size check.
      */
-    static final long PER_ENTRY_ESTIMATE_BYTES = 128L;
-
-    /** Upper-bound per-expiry-bucket estimate: Long key + List<String> + overhead. */
-    static final long PER_BUCKET_ESTIMATE_BYTES = 64L;
+    static final long PER_ENTRY_ESTIMATE_BYTES = 136L;
 
     public FingerprintDedupFunction(SignalJobConfig config) {
         this.config = config;
@@ -94,51 +117,45 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
 
     @Override
     public void open(OpenContext openContext) throws Exception {
-        dedup = getRuntimeContext().getMapState(
-                new MapStateDescriptor<>("fingerprint-dedup", Types.STRING,
-                        org.apache.flink.api.common.typeinfo.TypeInformation.of(DedupEntry.class)));
-        expiryIndex = getRuntimeContext().getMapState(
-                new MapStateDescriptor<>("fingerprint-dedup-expiry", Types.LONG, Types.LIST(Types.STRING)));
+        StateTtlConfig ttlConfig = StateTtlConfig.newBuilder(
+                        Duration.ofMillis(config.dedupTtlMs()))
+                .updateTtlOnCreateAndWrite()
+                .neverReturnExpired()
+                .build();
+        MapStateDescriptor<String, DedupEntry> descriptor = new MapStateDescriptor<>(
+                "fingerprint-dedup", Types.STRING,
+                TypeInformation.of(DedupEntry.class));
+        descriptor.enableTimeToLive(ttlConfig);
+        dedup = getRuntimeContext().getMapState(descriptor);
 
         firstEvents = getRuntimeContext().getMetricGroup().counter("compute.dedup.first");
         duplicates = getRuntimeContext().getMetricGroup().counter("compute.dedup.duplicates");
 
         getRuntimeContext().getMetricGroup().gauge("compute.dedup.state.count",
                 (Gauge<Long>) () -> dedupCount);
-        getRuntimeContext().getMetricGroup().gauge("compute.dedup.expiry.index.count",
-                (Gauge<Long>) () -> expiryIndexCount);
         getRuntimeContext().getMetricGroup().gauge("compute.dedup.state.bytes.estimate",
                 (Gauge<Long>) () -> bytesEstimate);
     }
 
+    /**
+     * Fold the current key's ACTUAL live count into the gauges. TTL-aware:
+     * {@code MapState.entries()} skips (and lazily removes) expired entries,
+     * so the scan returns the true live set — the resync corrects both the
+     * restore case (fresh gauge fields vs restored state) and the TTL-drift
+     * case (entries that expired invisibly since the last resync).
+     */
     private void resyncTokenGauges(long token) throws Exception {
         long tracked = tokenStateCount.getOrDefault(token, 0L);
         long actual = 0;
-        for (java.util.Map.Entry<String, DedupEntry> ignored : dedup.entries()) {
+        for (Map.Entry<String, DedupEntry> ignored : dedup.entries()) {
             actual++;
         }
         long delta = actual - tracked;
         if (delta != 0) {
             dedupCount += delta;
             bytesEstimate += delta * PER_ENTRY_ESTIMATE_BYTES;
-            ComputeOtlpEmitter.recordDedupStateDelta(delta);
-            ComputeOtlpEmitter.recordDedupBytesDelta(delta * PER_ENTRY_ESTIMATE_BYTES);
         }
         tokenStateCount.put(token, actual);
-
-        long trackedExp = tokenExpiryCount.getOrDefault(token, 0L);
-        long actualExp = 0;
-        for (java.util.Map.Entry<Long, List<String>> ignored : expiryIndex.entries()) {
-            actualExp++;
-        }
-        long deltaExp = actualExp - trackedExp;
-        if (deltaExp != 0) {
-            expiryIndexCount += deltaExp;
-            bytesEstimate += deltaExp * PER_BUCKET_ESTIMATE_BYTES;
-            ComputeOtlpEmitter.recordDedupExpiryIndexDelta(deltaExp);
-            ComputeOtlpEmitter.recordDedupBytesDelta(deltaExp * PER_BUCKET_ESTIMATE_BYTES);
-        }
-        tokenExpiryCount.put(token, actualExp);
     }
 
     @Override
@@ -151,16 +168,12 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
         // self-contained rather than relying on the Flink key namespace alone.
         String stateKey = version + "|" + token + "|" + fingerprint;
 
-        if (!tokenStateCount.containsKey(token)) {
+        // Gauge resync: first row per token (restore correction) + every
+        // GAUGE_RESYNC_INTERVAL_ROWS per token (TTL-drift correction).
+        long rows = tokenRowsSinceResync.merge(token, 1L, Long::sum);
+        if (!tokenStateCount.containsKey(token) || rows >= GAUGE_RESYNC_INTERVAL_ROWS) {
             resyncTokenGauges(token);
-        }
-
-        long eventTime = row.getLong(RawTableColumns.EVENT_TIME);
-        long expiry = DedupExpiry.expiryMs(eventTime, config.dedupTtlMs());
-        if (expiry < eventTime) {
-            // Event-time overflow boundary (P5.3): clamp to MAX_VALUE — the
-            // fingerprint stays deduplicated for the whole runtime.
-            expiry = Long.MAX_VALUE;
+            tokenRowsSinceResync.put(token, 0L);
         }
 
         if (dedup.contains(stateKey)) {
@@ -168,79 +181,42 @@ public class FingerprintDedupFunction extends KeyedProcessFunction<Long, RowData
             return;
         }
 
-        // First occurrence (or expired) — accept and record. The state IS the
-        // authority; there is no eviction and no external store to consult.
-        cachePut(stateKey, eventTime, expiry, ctx);
+        // First occurrence (or expired — NeverReturnExpired reads it absent) —
+        // accept and record. The state IS the authority; there is no eviction
+        // and no external store to consult. The stored value is informational:
+        // the AUTHORITATIVE expiry is the native TTL on the map entry.
+        long eventTime = row.getLong(RawTableColumns.EVENT_TIME);
+        long nominalExpiry = DedupExpiry.expiryMs(eventTime, config.dedupTtlMs());
+        if (nominalExpiry < eventTime) {
+            // Event-time overflow boundary (P5.3): clamp the NOMINAL value to
+            // MAX_VALUE — the fingerprint stays deduplicated for the whole
+            // runtime (the native TTL is unaffected; no timer is registered).
+            nominalExpiry = Long.MAX_VALUE;
+        }
+        dedup.put(stateKey, new DedupEntry(eventTime, nominalExpiry));
+
         firstEvents.inc();
+        dedupCount++;
+        bytesEstimate += PER_ENTRY_ESTIMATE_BYTES;
+        tokenStateCount.merge(token, 1L, Long::sum);
         out.collect(row);
     }
 
-    /** Insert into the authoritative state + expiry index; register the expiry timer. */
-    private void cachePut(String stateKey, long eventTime, long expiry, Context ctx)
-            throws Exception {
-        dedup.put(stateKey, new DedupEntry(eventTime, expiry));
-
-        List<String> keys = expiryIndex.get(expiry);
-        if (keys == null) {
-            keys = new ArrayList<>(1);
-            expiryIndexCount++;
-            bytesEstimate += PER_BUCKET_ESTIMATE_BYTES;
-            ComputeOtlpEmitter.recordDedupExpiryIndexDelta(1L);
-            ComputeOtlpEmitter.recordDedupBytesDelta(PER_BUCKET_ESTIMATE_BYTES);
-        }
-        keys.add(stateKey);
-        // Put back explicitly — RocksDB-backed MapState returns a copy from
-        // get(), so in-place mutation would be lost.
-        expiryIndex.put(expiry, keys);
-        ctx.timerService().registerEventTimeTimer(expiry);
-
-        dedupCount++;
-        bytesEstimate += PER_ENTRY_ESTIMATE_BYTES;
-        ComputeOtlpEmitter.recordDedupStateDelta(1L);
-        ComputeOtlpEmitter.recordDedupBytesDelta(PER_ENTRY_ESTIMATE_BYTES);
-    }
-
-    @Override
-    public void onTimer(long timestamp, OnTimerContext ctx, Collector<RowData> out)
-            throws Exception {
-        long token = ctx.getCurrentKey();
-        if (!tokenStateCount.containsKey(token)) {
-            resyncTokenGauges(token);
-        }
-        // Event-time expiry: the timer fires when the watermark reached the
-        // bucket's timestamp — delete the bucket's entries from both maps.
-        if (ctx.timerService().currentWatermark() >= timestamp) {
-            expireCacheBucket(timestamp, token);
-        }
-    }
-
     /**
-     * Delete the state entry at {@code expiry} (its timer fired): the expiry
-     * index entry and the dedup entry itself. With no eviction the bucket is
-     * never empty when the timer fires (the timer is registered exactly when
-     * the first key of a bucket is inserted and deleted exactly when the last
-     * is removed), so this is a plain delete.
+     * Gauge-source accessors (tests): the exact values the {@code MetricGroup}
+     * gauges registered in {@link #open} export. The fields are the gauges'
+     * source — no separate mirror (CHG-023 item 1 removed the client-side
+     * ComputeOtlpEmitter mirror; the native reporter reads the MetricGroup
+     * gauges directly).
      */
-    private void expireCacheBucket(long timestamp, long token) throws Exception {
-        List<String> keys = expiryIndex.get(timestamp);
-        if (keys == null) {
-            return;
-        }
-        for (String stateKey : keys) {
-            dedup.remove(stateKey);
-        }
-        expiryIndex.remove(timestamp);
-        dedupCount -= keys.size();
-        expiryIndexCount--;
-        bytesEstimate -= keys.size() * PER_ENTRY_ESTIMATE_BYTES + PER_BUCKET_ESTIMATE_BYTES;
-        tokenStateCount.merge(token, -(long) keys.size(), Long::sum);
-        tokenExpiryCount.merge(token, -1L, Long::sum);
-        ComputeOtlpEmitter.recordDedupStateDelta(-keys.size());
-        ComputeOtlpEmitter.recordDedupExpiryIndexDelta(-1L);
-        ComputeOtlpEmitter.recordDedupBytesDelta(
-                -(keys.size() * PER_ENTRY_ESTIMATE_BYTES + PER_BUCKET_ESTIMATE_BYTES));
+    long dedupStateCountForTest() {
+        return dedupCount;
     }
 
-    /** Compact value: {@code (first_seen, expiry)} in event-time milliseconds. */
+    long bytesEstimateForTest() {
+        return bytesEstimate;
+    }
+
+    /** Compact value: {@code (first_seen, nominal_expiry)} — the TTL is the expiry authority. */
     public record DedupEntry(long firstSeenMs, long expiryMs) implements Serializable {}
 }

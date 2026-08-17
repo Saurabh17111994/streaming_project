@@ -41,12 +41,12 @@ that time" (e.g. "(2026-08-10: ... 21 tables ...)") — a distant date on the
 same line does NOT hide a stale code description.
 
 Test-count drift claims (same tiers, truth from the docs-audit C6 line,
-01-foundation.md L42 — common 340 / ingestion 234 / compute 330):
+01-foundation.md L42 — common 340 / ingestion 234 / compute 302):
 
   * test-count-stale -> "common N" / "ingestion N" / "compute N" (or
                         "N common/ingestion/compute tests") claims where N
                         differs from the C6 truth. The correct values
-                        (340/234/330) are filtered in code.
+                        (340/234/291) are filtered in code.
   * c6-triple-stale   -> "docs-audit C6 line N/N/N" citations where any of
                         the three counts (common/ingestion/compute) differs
                         from the C6 truth.
@@ -182,9 +182,16 @@ NUMERIC_CLAIM_TYPES = (
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
 # current docs-audit C6 truth (01-foundation.md L42: unit suites green
-# 340/234/330 — common/ingestion/compute). The correct values (340/234/330)
-# are filtered in code, so only stale counts fire.
-TEST_COUNT_TRUTH = {"common": 340, "ingestion": 234, "compute": 330}
+# 340/234/291 — common/ingestion/compute; compute −19 DEC-038-era tests
+# 2026-08-17 Design-B merge 34af190, then −10 CHG-023 item-1 2026-08-17
+# native-reporter swap, then −2 CHG-023 item-2 2026-08-17 native-TTL expiry
+# swap — the expiry-index bucket test + the shared-expiry-timer test, then
+# −11 CHG-023 item-4 2026-08-17 StallGuardedSink removal — the watchdog
+# class + StallGuardedSinkTest (11) deleted; sinks are plain FlussSinks
+# with the Fluss client's own client.request-timeout as the stall bound).
+# The correct values (340/234/291) are filtered in code, so only stale
+# counts fire.
+TEST_COUNT_TRUTH = {"common": 340, "ingestion": 234, "compute": 291}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",
@@ -200,7 +207,7 @@ TEST_COUNT_CLAIM_TYPES = (
 # counts (common/ingestion/compute) differ from the current C6 truth. The
 # truth-filter compares every component in code, so a citation only fires when
 # at least one count has drifted.
-C6_TRIPLE_TRUTH = (340, 234, 330)
+C6_TRIPLE_TRUTH = (340, 234, 302)
 C6_TRIPLE_CLAIM_TYPES = (
     (
         "c6-triple-stale",
@@ -575,7 +582,7 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                     continue
                 seen.add(key)
                 hits.append((TIER_RANK[tier], i + 1, claim_type, line.strip(),
-                             "truth: 340/234/330 common/ingestion/compute (docs-audit C6)"))
+                             "truth: 340/234/291 common/ingestion/compute (docs-audit C6)"))
 
     # Section-heading kind assertions: "### LOG/KV contract" headings that
     # introduce a now-contradictory table within the following few lines.

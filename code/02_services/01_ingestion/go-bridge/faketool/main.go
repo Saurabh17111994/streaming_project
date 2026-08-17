@@ -227,8 +227,15 @@ func main() {
 								p += (anchor - p) / 20 // pull back toward the anchor
 								p += int32(rand.IntN(21) - 10) // ±10 paise noise
 								prices[tok] = p
+								// Every frame carries a real traded quantity: LTQ (12:16)
+								// and Volume (64:72). Without it every tick arrives as a
+								// TRADE with last_qty=0 and the candle's tick_count/volume
+								// stay zero (E2E assertion 2026-08-17).
+								qty := uint32(1 + rand.IntN(50))
 								binary.LittleEndian.PutUint32(frame[4:8], tok)
 								binary.LittleEndian.PutUint32(frame[8:12], uint32(p))
+								binary.LittleEndian.PutUint32(frame[12:16], qty)
+								binary.LittleEndian.PutUint64(frame[64:72], uint64(qty))
 								binary.LittleEndian.PutUint64(frame[180:188], uint64(time.Now().UnixNano()))
 								if err := send(frame); err != nil {
 									logf("real-rate send failed: %v", err)
@@ -244,6 +251,9 @@ func main() {
 					tickerFrame[2] = hftPktFull
 					binary.LittleEndian.PutUint32(tickerFrame[4:8], 757614)
 					binary.LittleEndian.PutUint32(tickerFrame[8:12], 15050)
+					// Traded quantity so candles carry real volume/tick_count.
+					binary.LittleEndian.PutUint32(tickerFrame[12:16], 25)
+					binary.LittleEndian.PutUint64(tickerFrame[64:72], 25)
 					go func() {
 						t := time.NewTicker(time.Duration(*tickInterval) * time.Millisecond)
 						defer t.Stop()
@@ -295,6 +305,9 @@ func main() {
 					full[2] = hftPktFull
 					binary.LittleEndian.PutUint32(full[4:8], 757614) // token present in approved CSV
 					binary.LittleEndian.PutUint32(full[8:12], 15050)
+					// Traded quantity so candles carry real volume/tick_count.
+					binary.LittleEndian.PutUint32(full[12:16], 25)
+					binary.LittleEndian.PutUint64(full[64:72], 25)
 					// A real broker stamps every frame with send-time nanoseconds
 					// (bridge ts_ms = ts/1e6). Without it ts_ms=0 and the
 					// ingestion freshness gate quarantines every tick as
@@ -312,6 +325,10 @@ func main() {
 						}
 						time.Sleep(300 * time.Millisecond)
 						binary.LittleEndian.PutUint32(full[4:8], uint32(int64(tok)))
+						// Per-token qty so every burst frame carries real volume.
+						qty := uint32(1 + rand.IntN(50))
+						binary.LittleEndian.PutUint32(full[12:16], qty)
+						binary.LittleEndian.PutUint64(full[64:72], uint64(qty))
 						binary.LittleEndian.PutUint64(full[180:188], uint64(time.Now().UnixNano()))
 						if err := send(full); err != nil {
 							logf("send snapshot tick failed at %d: %v", snapshotSent, err)

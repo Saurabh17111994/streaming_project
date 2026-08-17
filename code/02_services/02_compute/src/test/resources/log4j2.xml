@@ -27,6 +27,28 @@
          P4.2 checkpoint proof surfaces real errors, not noise. -->
     <Logger name="org.apache.hadoop.fs.s3a" level="WARN"/>
     <Logger name="org.apache.flink" level="INFO"/>
+    <!-- TEMP DEBUG PROBE (smoke-8, checkpoint-1 zero-ack diagnosis 2026-08-17):
+         per-task ack/decline lines, task-side trigger handling, source
+         coordinator handshake, StreamTask checkpoint entry. Revert after. -->
+    <Logger name="org.apache.flink.runtime.checkpoint.CheckpointCoordinator" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.checkpoint.CheckpointFailureManager" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.checkpoint.CheckpointRequestDecider" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.checkpoint.CheckpointPlanCalculator" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.taskmanager.Task" level="DEBUG"/>
+    <Logger name="org.apache.flink.streaming.runtime.tasks.StreamTask" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.source.coordinator.SourceCoordinator" level="DEBUG"/>
+    <Logger name="org.apache.flink.runtime.operators.coordination.OperatorCoordinatorHolder" level="DEBUG"/>
+    <!-- TEMP DEBUG PROBE (smoke-10, fluss-client connection lifecycle 2026-08-17):
+         NettyClient/ServerConnection state transitions, lookup sender, write
+         sender, metadata leader resolution. Revert after. -->
+    <Logger name="org.apache.fluss.rpc.netty.client" level="DEBUG"/>
+    <Logger name="org.apache.fluss.client.lookup" level="DEBUG"/>
+    <Logger name="org.apache.fluss.client.write" level="DEBUG"/>
+    <Logger name="org.apache.fluss.client.metadata" level="DEBUG"/>
+    <Logger name="org.apache.fluss.client.table.scanner.log" level="DEBUG"/>
+    <!-- TEMP DEBUG PROBE (smoke-15, netty channel read/write events 2026-08-17):
+         proves whether lookup responses arrive at the job's netty. Revert after. -->
+    <Logger name="org.apache.fluss.shaded.netty4.io.netty.channel" level="DEBUG"/>
     <Logger name="com.trading" level="INFO"/>
     <Root level="INFO">
       <AppenderRef ref="CONSOLE"/>

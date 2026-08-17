@@ -2,7 +2,6 @@ package com.trading.compute.signaljob;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -15,18 +14,19 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
  * {@link FingerprintDedupFunction} driven through the Flink 2.2.1 operator
  * harness (KeyedOneInputStreamOperatorTestHarness — no cluster). Covers the
- * dedup half of SIG-UNIT-008/009 (state content/compactness + expiry deletion)
- * under design B (state-authoritative, no external store, no eviction): first
- * occurrence passes, duplicate within TTL is dropped, state holds exactly the
- * compact (fingerprint → first_seen/expiry) entries plus the expiry index, and
- * the expiry timer deletes entries at watermark ≥ first_seen + TTL — never
- * early, with a re-arriving fingerprint after expiry eligible again.
+ * dedup half of SIG-UNIT-008/009 (state content/compactness + expiry) under
+ * design B (state-authoritative, no external store, no eviction) with NATIVE
+ * TTL expiry (CHG-023 item 2, 2026-08-17): first occurrence passes,
+ * duplicate within TTL is dropped, state holds exactly the compact
+ * (fingerprint → first_seen/nominal_expiry) map, and expiry is the native
+ * {@code StateTtlConfig} on the map — advance the harness TTL processing time
+ * past {@code first_seen + TTL} (wall clock, {@code NeverReturnExpired}) and a
+ * re-arriving fingerprint is eligible again, never double-accepted.
  */
 class FingerprintDedupFunctionTest {
 
@@ -35,18 +35,29 @@ class FingerprintDedupFunctionTest {
 
     private KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> harness;
 
+    /**
+     * The function under test — gauge assertions read its fields (the exact
+     * values the {@code MetricGroup} gauges export; CHG-023 item 1 removed
+     * the client-side ComputeOtlpEmitter mirror). Fresh per {@link #openHarness}.
+     */
+    private FingerprintDedupFunction function;
+
     @AfterEach
     void tearDown() throws Exception {
         if (harness != null) {
             harness.close();
             harness = null;
         }
+        // Test seam reset: expiry/gauge legs lower the resync interval to
+        // force an immediate gauge resync; restore the production cadence.
+        FingerprintDedupFunction.GAUGE_RESYNC_INTERVAL_ROWS = 10_000L;
     }
 
     private void openHarness() throws Exception {
         SignalJobConfig config = SignalJobConfig.from(env());
+        function = new FingerprintDedupFunction(config);
         harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
-                new FingerprintDedupFunction(config),
+                function,
                 row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
                 Types.LONG);
         harness.open();
@@ -79,41 +90,43 @@ class FingerprintDedupFunctionTest {
         process(TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
 
         assertEquals(1, emittedCount(harness), "duplicate within TTL must be dropped");
-        // State layout contract (SIG-UNIT-008): per active key exactly two
-        // state rows — the fingerprint-dedup map and the expiry-index map.
-        // Fingerprint count adds map ENTRIES, never new rows: no raw payload,
-        // decoded field, or event object is stored per fingerprint.
-        assertEquals(2, harness.numKeyedStateEntries(), "one dedup row + one expiry-index row per active key");
-        assertEquals(1, harness.numEventTimeTimers(), "one expiry timer per live fingerprint");
+        // State layout contract (SIG-UNIT-008): per active key exactly ONE
+        // state row — the fingerprint-dedup map (the expiry index is gone,
+        // CHG-023 item 2). Fingerprint count adds map ENTRIES, never new
+        // rows: no raw payload, decoded field, or event object is stored per
+        // fingerprint.
+        assertEquals(1, harness.numKeyedStateEntries(), "one dedup row per active key");
+        assertEquals(0, harness.numEventTimeTimers(), "no hand-rolled timers — native TTL expires entries");
     }
 
     @Test
-    void expiredFingerprintReAdmittedAfterExpiryTimer() throws Exception {
+    void expiredFingerprintReAdmittedAfterTtlElapses() throws Exception {
         openHarness();
         process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
         process(TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
         assertEquals(1, emittedCount(harness));
 
-        // Timer registered at first_seen + TTL fires when the watermark reaches it.
-        harness.processWatermark(T0 + TTL_MS);
-        assertEquals(0, harness.numKeyedStateEntries(), "expiry timer must delete the entry (absent after timer runs)");
-        assertEquals(0, harness.numEventTimeTimers());
+        // Native TTL (processing time): advance the harness TTL clock past
+        // first-seen + TTL. The entry was anchored at the write-time clock
+        // (provider starts at 0), so TTL + 1 expires it.
+        harness.setStateTtlProcessingTime(TTL_MS + 1L);
 
         // Re-arriving fingerprint after expiry is eligible again (SIG-UNIT-009).
         process(TestRawRows.row(1L, T0 + TTL_MS + 10_000L, "fp-1", "TRADE", 200, 5));
         assertEquals(2, emittedCount(harness));
+        assertEquals(1, harness.numKeyedStateEntries(),
+                "the re-admitted entry is the only state — the expired entry was read as absent and replaced");
     }
 
     @Test
-    void entryNeverDeletedBeforeWatermarkReachesExpiry() throws Exception {
+    void duplicateStillDroppedBeforeTtlElapses() throws Exception {
         openHarness();
         process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
 
-        // Watermark still below nominal expiry: entry must exist and still dedupe.
-        harness.processWatermark(T0 + TTL_MS - 1L);
-        assertEquals(2, harness.numKeyedStateEntries(), "never deleted early");
-        process(TestRawRows.row(1L, T0 + TTL_MS - 1L, "fp-1", "TRADE", 101, 2));
+        // TTL still far ahead: entry must exist and still dedupe.
+        process(TestRawRows.row(1L, T0 + TTL_MS - 1_000L, "fp-1", "TRADE", 101, 2));
         assertEquals(1, emittedCount(harness), "duplicate still dropped while unexpired");
+        assertEquals(1, harness.numKeyedStateEntries(), "never deleted early");
     }
 
     @Test
@@ -125,8 +138,8 @@ class FingerprintDedupFunctionTest {
         process(TestRawRows.row(2L, T0, "fp-1", "TRADE", 100, 1));
 
         assertEquals(2, emittedCount(harness));
-        // Two active keys → 2 rows × 2 state maps = 4.
-        assertEquals(4, harness.numKeyedStateEntries(), "2 dedup + 2 expiry-index rows");
+        // Two active keys → 2 rows (one dedup map entry each).
+        assertEquals(2, harness.numKeyedStateEntries(), "one dedup row per active key");
     }
 
     @Test
@@ -137,23 +150,8 @@ class FingerprintDedupFunctionTest {
 
         assertEquals(2, emittedCount(harness));
         // One active key: two fingerprints add map entries, NOT state rows —
-        // still exactly 2 rows (compactness: no per-fingerprint storage).
-        assertEquals(2, harness.numKeyedStateEntries(), "fingerprint count never grows state rows");
-        assertEquals(2, harness.numEventTimeTimers(), "timer per fingerprint, row per key");
-    }
-
-    @Test
-    void oneTimerAtSharedExpiryClearsAllEntries() throws Exception {
-        openHarness();
-        process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
-        process(TestRawRows.row(1L, T0, "fp-2", "TRADE", 101, 1));
-        assertEquals(2, harness.numKeyedStateEntries(), "one key, two fingerprints → two rows");
-        // Same event time → same expiry instant → one deduplicated timer; the
-        // expiry-index list is what lets that single timer clear both keys.
-        assertEquals(1, harness.numEventTimeTimers(), "same expiry instant dedupes to one timer");
-
-        harness.processWatermark(T0 + TTL_MS);
-        assertEquals(0, harness.numKeyedStateEntries(), "shared expiry timer must clear every listed key");
+        // still exactly 1 row (compactness: no per-fingerprint storage).
+        assertEquals(1, harness.numKeyedStateEntries(), "fingerprint count never grows state rows");
         assertEquals(0, harness.numEventTimeTimers());
     }
 
@@ -179,9 +177,9 @@ class FingerprintDedupFunctionTest {
         for (int i = 0; i < 10_000; i++) {
             process(TestRawRows.row(1L, T0 + i, "fp-1", "TRADE", 100 + i, i));
         }
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(1, function.dedupStateCountForTest(),
                 "10k duplicates of one fingerprint must not grow state");
-        assertEquals(1, harness.numEventTimeTimers());
+        assertEquals(0, harness.numEventTimeTimers());
     }
 
     @Test
@@ -201,7 +199,7 @@ class FingerprintDedupFunctionTest {
             process(TestRawRows.row(1L, T0 + i, "fp-hc-" + i, "TRADE", 100 + i, i));
         }
         assertEquals(n, emittedCount(harness), "every distinct fingerprint passes");
-        assertEquals(n, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(n, function.dedupStateCountForTest(),
                 "state holds exactly one entry per live fingerprint");
     }
 
@@ -213,11 +211,11 @@ class FingerprintDedupFunctionTest {
 
         assertEquals(1, emittedCount(harness),
                 "empty fingerprint is a valid (if malformed) state key — first passes, duplicate drops");
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
+        assertEquals(1, function.dedupStateCountForTest());
     }
 
     @Test
-    void eventTimeOverflowExpiryClampsToMaxValue() throws Exception {
+    void eventTimeNearMaxValueAcceptedAndDeduped() throws Exception {
         openHarness();
         long nearMax = Long.MAX_VALUE - 1_000L;
         GenericRowData row = TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1);
@@ -225,14 +223,14 @@ class FingerprintDedupFunctionTest {
         process(row); // nominal expiry would wrap negative — must clamp, not crash
 
         assertEquals(1, emittedCount(harness));
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
-        assertEquals(1, harness.numEventTimeTimers(),
-                "clamped MAX_VALUE timer registered once");
-        // Advance the watermark beyond the clamped instant — the timer fires,
-        // the entry is cleared (a negative expiry would have fired immediately
-        // at open and dropped the entry before the watermark ever moved).
-        harness.processWatermark(Long.MAX_VALUE);
-        assertEquals(0, ComputeOtlpEmitter.dedupStateCount());
+        assertEquals(1, function.dedupStateCountForTest());
+        // Duplicate of the same near-max row: still deduped (no overflow
+        // crash; the native TTL is unaffected by the event-time value).
+        GenericRowData dup = TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2);
+        dup.setField(RawTableColumns.EVENT_TIME, nearMax + 1_000L);
+        process(dup);
+        assertEquals(1, emittedCount(harness), "near-max event time still dedupes within TTL");
+        assertEquals(1, function.dedupStateCountForTest());
     }
 
     // ── design B: no eviction — the state IS the authoritative full set ────
@@ -240,18 +238,14 @@ class FingerprintDedupFunctionTest {
     @Test
     void noEvictionStateHoldsFullLiveSet() throws Exception {
         openHarness();
-        // 100 distinct fingerprints with distinct event times — far beyond the
-        // retired DEC-038 cache cap (250k entries / 32 MB min). Design B keeps
-        // EVERY live fingerprint in keyed state: no eviction, no timer deletion,
-        // no external store to re-decide against.
+        // 100 distinct fingerprints — far beyond the retired DEC-038 cache cap
+        // (250k entries / 32 MB min). Design B keeps EVERY live fingerprint in
+        // keyed state: no eviction, no external store to re-decide against.
         for (int i = 0; i < 100; i++) {
             process(TestRawRows.row(1L, T0 + i * 1_000L, "fp-full-" + i, "TRADE", 100 + i, i));
         }
-        assertEquals(100, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(100, function.dedupStateCountForTest(),
                 "state holds the full live set — eviction must not occur");
-        assertEquals(100, ComputeOtlpEmitter.dedupExpiryIndexCount());
-        assertEquals(100, harness.numEventTimeTimers(),
-                "one timer per live fingerprint — no timer deletion without eviction");
 
         // An early in-TTL fingerprint re-arrives: still deduped directly from
         // state — no rehydration, no store round trip.
@@ -259,73 +253,72 @@ class FingerprintDedupFunctionTest {
         process(TestRawRows.row(1L, T0, "fp-full-0", "TRADE", 200, 1000));
         assertEquals(emittedBefore, emittedCount(harness),
                 "re-delivery of an in-TTL fingerprint must still be dropped from state alone");
-        assertEquals(100, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(100, function.dedupStateCountForTest(),
                 "the re-delivery adds no state");
 
-        // Watermark past the last expiry: the full set clears to zero.
-        harness.processWatermark(T0 + 99_000L + TTL_MS);
-        assertEquals(0, ComputeOtlpEmitter.dedupStateCount(),
-                "expiry timers clear the full set when the watermark passes");
-        assertEquals(0, harness.numEventTimeTimers());
+        // TTL expiry clears the full set (native): advance the TTL clock past
+        // every entry's anchor and force a gauge resync — entries() skips the
+        // expired set, so the count falls to the single fresh row.
+        FingerprintDedupFunction.GAUGE_RESYNC_INTERVAL_ROWS = 1L;
+        harness.setStateTtlProcessingTime(TTL_MS + 1L);
+        process(TestRawRows.row(1L, T0 + TTL_MS + 10_000L, "fp-after-expiry", "TRADE", 300, 2000));
+        assertEquals(1, function.dedupStateCountForTest(),
+                "the 100 expired entries are gone from the gauge — only the fresh row is live");
     }
 
-    // ── tracker 14 P5.1 gauge mirrors ─────────────────────────────────────
-
-    @BeforeEach
-    void resetGaugeMirrors() {
-        // JVM-wide statics — every test starts from a clean mirror.
-        ComputeOtlpEmitter.resetDedupGaugesForTest();
-        ComputeOtlpEmitter.resetDedupTelemetryForTest();
-    }
+    // ── tracker 14 P5.1 gauge sources (the MetricGroup gauges' fields) ────
 
     @Test
     void dedupGaugesTrackInsertAndExpiry() throws Exception {
-        openHarness(); // gauges register at open; mirrors start at zero
-        assertEquals(0, ComputeOtlpEmitter.dedupStateCount());
-        assertEquals(0, ComputeOtlpEmitter.dedupExpiryIndexCount());
-        assertEquals(0, ComputeOtlpEmitter.dedupBytesEstimate());
+        openHarness(); // gauge fields start at zero; the MetricGroup gauges read them
+        FingerprintDedupFunction.GAUGE_RESYNC_INTERVAL_ROWS = 1L; // immediate resync
+        assertEquals(0, function.dedupStateCountForTest());
+        assertEquals(0, function.bytesEstimateForTest());
 
         process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
         process(TestRawRows.row(1L, T0 + 1_000L, "fp-2", "TRADE", 101, 2));
         process(TestRawRows.row(1L, T0 + 2_000L, "fp-1", "TRADE", 102, 3)); // duplicate
 
-        assertEquals(2, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(2, function.dedupStateCountForTest(),
                 "two live fingerprints, duplicate adds nothing");
-        assertEquals(2, ComputeOtlpEmitter.dedupExpiryIndexCount());
-        assertEquals(2 * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES
-                        + 2 * FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES,
-                ComputeOtlpEmitter.dedupBytesEstimate());
+        assertEquals(2 * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES,
+                function.bytesEstimateForTest());
 
-        harness.processWatermark(T0 + TTL_MS);
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
-                "first expiry removes fp-1; fp-2's timer is later");
-        assertEquals(1, ComputeOtlpEmitter.dedupExpiryIndexCount());
+        // Native TTL expiry: advance the TTL clock past both anchors. The
+        // gauge still shows 2 (insertion-side) until the next resync folds the
+        // actual live set in.
+        harness.setStateTtlProcessingTime(TTL_MS + 1L);
+        assertEquals(2, function.dedupStateCountForTest(),
+                "gauge is an insertion ledger until the next resync");
 
-        harness.processWatermark(T0 + 1_000L + TTL_MS);
-        assertEquals(0, ComputeOtlpEmitter.dedupStateCount(), "expiry clears the mirrors too");
-        assertEquals(0, ComputeOtlpEmitter.dedupExpiryIndexCount());
-        assertEquals(0, ComputeOtlpEmitter.dedupBytesEstimate());
+        process(TestRawRows.row(1L, T0 + TTL_MS + 10_000L, "fp-3", "TRADE", 200, 4));
+        assertEquals(1, function.dedupStateCountForTest(),
+                "resync folds the actual live set — both expired entries dropped, fp-3 live");
+        assertEquals(1 * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES,
+                function.bytesEstimateForTest());
     }
 
     @Test
     void dedupGaugesFoldRestoredStateExactly() throws Exception {
         openHarness();
         process(TestRawRows.row(1L, T0, "fp-1", "TRADE", 100, 1));
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount());
+        assertEquals(1, function.dedupStateCountForTest());
 
         // Checkpoint the harness, then restore it into a NEW operator — the
-        // restored MapState holds fp-1 but the fresh mirrors start at zero.
+        // restored MapState holds fp-1 but the fresh gauge fields start at zero.
         OperatorSubtaskState state = harness.snapshot(0L, 0L);
         harness.close();
-        ComputeOtlpEmitter.resetDedupGaugesForTest();
 
         // forKeyedProcessFunction already initializes the harness (empty) —
         // a RESTORE needs a manually constructed harness: initializeState
-        // must run before open.
+        // must run before open. The fresh function starts its gauge fields at
+        // zero; the first row per token folds the restored size in exactly.
+        FingerprintDedupFunction restoredFunction =
+                new FingerprintDedupFunction(SignalJobConfig.from(env()));
+        function = restoredFunction; // subsequent gauge asserts read the restored instance
         KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> restored =
                 new KeyedOneInputStreamOperatorTestHarness<>(
-                        new KeyedProcessOperator<>(
-                                new FingerprintDedupFunction(SignalJobConfig.from(env()))),
+                        new KeyedProcessOperator<>(restoredFunction),
                         row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
                         Types.LONG);
         restored.initializeState(state);
@@ -333,16 +326,16 @@ class FingerprintDedupFunctionTest {
         try {
             // First row for token 1: replace-tracked(0) with actual-restored(1).
             processOn(restored, TestRawRows.row(1L, T0 + 1_000L, "fp-1", "TRADE", 101, 2));
-            assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+            assertEquals(1, function.dedupStateCountForTest(),
                     "restored fp-1 folded in exactly (replace, not add)");
 
             // A brand-new fingerprint adds one.
             processOn(restored, TestRawRows.row(1L, T0 + 2_000L, "fp-2", "TRADE", 102, 3));
-            assertEquals(2, ComputeOtlpEmitter.dedupStateCount());
+            assertEquals(2, function.dedupStateCountForTest());
 
             // Restored fp-1 is still deduplicated.
             processOn(restored, TestRawRows.row(1L, T0 + 3_000L, "fp-1", "TRADE", 103, 4));
-            assertEquals(2, ComputeOtlpEmitter.dedupStateCount());
+            assertEquals(2, function.dedupStateCountForTest());
         } finally {
             restored.close();
         }
@@ -370,7 +363,7 @@ class FingerprintDedupFunctionTest {
 
         assertEquals(1, emittedCount(harness),
                 "the identical legitimate event is collapsed, never double-accepted");
-        assertEquals(1, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(1, function.dedupStateCountForTest(),
                 "one accepted fingerprint in state, not two");
     }
 }

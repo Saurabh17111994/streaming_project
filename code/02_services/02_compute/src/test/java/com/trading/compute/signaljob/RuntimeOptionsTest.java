@@ -114,6 +114,53 @@ class RuntimeOptionsTest {
     }
 
     @Test
+    @DisplayName("native flink-metrics-otel reporter wired from OTEL_COLLECTOR_HOST (CHG-023 item 1)")
+    void nativeOtelReporterWiredFromCollectorHost() {
+        Map<String, String> env = env();
+        env.put("OTEL_COLLECTOR_HOST", "otel-collector:4318");
+        SignalJobConfig config = SignalJobConfig.from(env);
+        Configuration flinkConfig = new Configuration();
+        SignalJob.applyRuntimeOptions(config, flinkConfig);
+
+        // The reporter replaces the hand-rolled ComputeOtlpEmitter metric half:
+        // every Signal-job MetricGroup counter/gauge is exported natively. Keys
+        // verified against OpenTelemetryReporterOptions + MetricOptions in the
+        // pinned 2.2.1 dist.
+        assertEquals("org.apache.flink.metrics.otel.OpenTelemetryMetricReporterFactory",
+                flinkConfig.getString("metrics.reporter.otel.factory.class", null));
+        // The /v1/metrics path is REQUIRED — the shaded OTel SDK (2.2.1
+        // flink-metrics-otel) passes the configured endpoint VERBATIM to the
+        // HTTP sender (its own default is http://localhost:4318/v1/metrics); a
+        // bare host:port makes the reporter POST to the root, which the otelcol
+        // OTLP receiver 404s (verified live 2026-08-17, o2-native-reporter
+        // investigation). SignalJob appends the signal path.
+        assertEquals("http://otel-collector:4318/v1/metrics",
+                flinkConfig.getString("metrics.reporter.otel.exporter.endpoint", null),
+                "endpoint = http://<OTEL_COLLECTOR_HOST>/v1/metrics — the HTTP OTLP port + signal path, protocol http");
+        assertEquals("http", flinkConfig.getString("metrics.reporter.otel.exporter.protocol", null),
+                "gRPC (4317) is the reporter default — the collector here listens on 4318 HTTP");
+        assertEquals("compute", flinkConfig.getString("metrics.reporter.otel.service.name", null));
+        assertEquals(config.configurationVersion(),
+                flinkConfig.getString("metrics.reporter.otel.service.version", null));
+        assertEquals("10s", flinkConfig.getString("metrics.reporter.otel.interval", null),
+                "10 s cadence pinned — the old emitter's flush interval, the DELTA poll");
+    }
+
+    @Test
+    @DisplayName("reporter endpoint honors a custom OTEL_COLLECTOR_HOST (dev/embedded override)")
+    void otelHostPassthroughApplied() {
+        Map<String, String> env = env();
+        env.put("OTEL_COLLECTOR_HOST", "192.168.1.10:4318");
+        SignalJobConfig config = SignalJobConfig.from(env);
+        Configuration flinkConfig = new Configuration();
+        SignalJob.applyRuntimeOptions(config, flinkConfig);
+
+        assertEquals("http://192.168.1.10:4318/v1/metrics",
+                flinkConfig.getString("metrics.reporter.otel.exporter.endpoint", null),
+                "SignalJob appends /v1/metrics (the OTLP signal path — required, see the nativeOtelReporter test)");
+    }
+
+    @Test
     @DisplayName("rocksdb dev → incremental, managed memory stays default true")
     void rocksdbDevDefaults() {
         Map<String, String> env = env();

@@ -179,9 +179,9 @@ The required behavior above is verified by the canonical [Production Swarm test 
 
 **Status:** `RE-SCOPED 2026-08-13 — previously PLANNED (not yet executed) as a candle KV migration rehearsal; target changed to the SIGNAL dual-sink per requirement change. Phase 0 isolation groundwork (overlay compose, empty rehearsal trio) remains valid; no data copy was ever performed.`
 \*\*Location:\*\* `docs/08_implementation/09-production-swarm.md`
-**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P10 — Operator-only migration and cutover` (RE-SCOPED), `## P10.1 Isolated rehearsal`, `## P10.2 Production blue-green cutover`, `## P10.3 Rollback`.
+**Tracker:** the master dossier `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17 consolidation; the tracker substance moved there — `14-candle-log-kv-replay-safety_2.md` was deleted; the `## P10 — Operator-only migration and cutover` (RE-SCOPED), `## P10.1 Isolated rehearsal`, `## P10.2 Production blue-green cutover`, `## P10.3 Rollback` records live in git history).
 **Sequencing gate:** the tracker says "Do not execute until P1–P9 code/evidence gates are complete" — this plan starts strictly AFTER (a) the signal dual-sink implementation (candle **KV-only** sink + `Signal_Candidates` LOG + `Signal_Candidates_current` KV) and (b) the P7.2/P7.3 battery re-run on the new topology (`docs/08_implementation/11-testing-and-release.md`).
-**Recipe source:** `skill://candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover procedure pattern) + `candle-failure-injection-tests` (state-restore verification patterns) + `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)` (R2 containment).
+**Recipe source:** `skill://candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover procedure pattern) + `candle-failure-injection-tests` (state-restore verification patterns) + `§P3.5 — R2 lake-read stall containment` (absorbed into `04-signal-job.md` §Absorbed documents; plan file never persisted) (R2 containment).
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13):** the candle [LOG + KV] facility is
 > RETIRED (no per-stock candle audit). The [LOG + KV] facility moves to the trade-signal
@@ -286,11 +286,11 @@ Any box failing mid-rehearsal: record the failure + root cause in the evidence f
 
 ## 11. Cross-references
 
-- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P10 (RE-SCOPED), §4 register (`SIGNAL-DUAL-SINK-001`, `SIGNAL-SCHEMA-001`), §6 acceptance.
-- Requirement change + retired candle machinery: tracker 14 header banner; `13-candle-log-kv-replay-safety.md` banner (SUPERSEDED scope); tracker 14 §4 register HISTORICAL rows.
+- Tracker: master `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17 consolidation); tracker `14-candle-log-kv-replay-safety_2.md` (deleted 2026-08-17) P10 (RE-SCOPED), §4 register (`SIGNAL-DUAL-SINK-001`, `SIGNAL-SCHEMA-001`), §6 acceptance records live in git history.
+- Requirement change + retired candle machinery: `04-signal-job.md` §Absorbed documents — retired candle era (`CANDLE [LOG + KV] RETIRED` banner) + §5.1 REQ13 traceability; tracker 14 §4 register HISTORICAL rows (git history).
 - Recipe skills: `candle-kv-rollback-rehearsal` (B8.7 rollback/re-cutover pattern), `candle-failure-injection-tests` (state-restore verification patterns), `fluss-tablet-crash-loop-repair` (segment integrity).
 - P7 bench: `docs/08_implementation/11-testing-and-release.md` (topology re-scope banner; sequencing gate).
-- R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
+- R2 fix + containment: `§P3.5 — R2 lake-read stall containment` (absorbed into `04-signal-job.md` §Absorbed documents; plan file never persisted).
 - Prior Phase 0 evidence: `logs/tracker-14/p10-rehearsal-20260813.md` (divergences D1–D6; overlay compose + empty rehearsal trio; data copy never performed).
 - Production target (future): `docs/08_implementation/09-production-swarm.md`, `docs/05_deployment/06-swarm-secrets.md` (P9 open review).
 

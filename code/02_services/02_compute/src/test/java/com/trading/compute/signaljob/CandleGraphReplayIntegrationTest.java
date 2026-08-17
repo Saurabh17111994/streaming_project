@@ -57,7 +57,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracker 14 P6 (docs/08_implementation/14-candle-log-kv-replay-safety_2.md) —
+ * Tracker 14 P6 (docs/08_implementation/04-signal-job.md §Absorbed documents) —
  * end-to-end harness for the replay contract, re-scoped 2026-08-13 (DEC-035 +
  * user requirement: candle tables are KV-only): candle KV + signal LOG/KV.
  *

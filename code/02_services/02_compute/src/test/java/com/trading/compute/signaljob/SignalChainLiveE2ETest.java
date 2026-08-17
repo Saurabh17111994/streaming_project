@@ -93,6 +93,8 @@ import org.slf4j.LoggerFactory;
  * E2E_FRESH_WARMUP_S                         default 90 (arrow modes: wait for first raw growth)
  * E2E_CHECKPOINT_DIR                         default file:///tmp/signal-chain-e2e-checkpoints
  * INGESTION_CLASSPATH                        ingestion module test/runtime classpath (runner computes it)
+ * E2E_DRAIN_LOG                              optional — append subprocess stdout/stderr to this file
+ *                                             instead of discarding it (diagnosis; unset = discard)
  * ARROW_BRIDGE_BIN                           default go-bridge/arrow-bridge
  * FAKETOOL_BIN                               default go-bridge/faketool/faketool
  * INSTRUMENT_MANIFEST_PATH                   NSE_CM_EQUITY (1024).csv
@@ -156,6 +158,10 @@ class SignalChainLiveE2ETest {
 
             long lastFeature = featStart;
             long samples = 0;
+            // SIG-PERF-001 envelope measurement: raw/feature counts per sample
+            // (15 s apart) → rows/s throughput + candle emit rate over the run.
+            List<long[]> perfSamples = new java.util.ArrayList<>();
+            long sampleStart = System.currentTimeMillis();
             while (System.currentTimeMillis() - runStartMillis < runMillis) {
                 Thread.sleep(15_000L);
                 samples++;
@@ -168,6 +174,7 @@ class SignalChainLiveE2ETest {
                         "feature_candles_15s must not shrink (sample " + samples
                                 + "): " + lastFeature + " → " + featNow);
                 lastFeature = featNow;
+                perfSamples.add(new long[] {System.currentTimeMillis() - sampleStart, rawNow, featNow});
                 LOG.info("chain-e2e sample {}: raw={} feature={}", samples, rawNow, featNow);
             }
 
@@ -191,7 +198,18 @@ class SignalChainLiveE2ETest {
             assertTrue(instruments.size() >= 1,
                     "new feature rows must cover ≥1 instrument, got " + instruments.size());
 
-            assertCompletedCheckpoint();
+            long[] ckpt = assertCompletedCheckpoint();
+            long runMs = System.currentTimeMillis() - runStartMillis;
+            double rawPerSec = (rawEnd - rawStart) * 1000.0 / runMs;
+            double featPerSec = (featEnd - featStart) * 1000.0 / runMs;
+            System.out.println("DESIGN-PERF[envelope] SIG-PERF-001: raw=" + rawEnd + " (+"
+                    + (rawEnd - rawStart) + " rows), feature=" + featEnd + " (+"
+                    + (featEnd - featStart) + " rows), instruments=" + instruments.size()
+                    + ", rawRowsPerSec=" + String.format("%.0f", rawPerSec)
+                    + ", candleRowsPerSec=" + String.format("%.0f", featPerSec)
+                    + ", checkpoints=" + ckpt[0] + ", checkpointBytes=" + ckpt[1]
+                    + ", runMs=" + runMs + ", samples=" + samples
+                    + " (envelope 1 024 instruments / 20 480 t/s)");
             LOG.info("chain-e2e PASS: raw {}→{} rows, feature {}→{} rows, {} instruments, {} samples",
                     rawStart, rawEnd, featStart, featEnd, instruments.size(), samples);
         } finally {
@@ -250,6 +268,13 @@ class SignalChainLiveE2ETest {
         e.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", env("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000"));
         e.put("READINESS_FILE_PATH",
                 Path.of(System.getProperty("java.io.tmpdir"), "signal-chain-e2e-ready").toString());
+        // log4j2's JSON_FILE appender (ingestion log4j2.xml) needs a writable
+        // LOG_DIR; without one it fails to create /data/ingestion/logs and the
+        // structured JSON evidence stream is lost (same trap FullStackE2ETest
+        // documents). Shared tmp path is fine for the single subprocess.
+        Path subLogDir = Path.of(System.getProperty("java.io.tmpdir"), "signal-chain-e2e-logs");
+        java.nio.file.Files.createDirectories(subLogDir);
+        e.put("LOG_DIR", subLogDir.toString());
 
         if ("faketool".equals(broker)) {
             e.put("ARROW_HFT_URL", "ws://127.0.0.1:" + faketoolPort());
@@ -312,7 +337,14 @@ class SignalChainLiveE2ETest {
         // managed-memory budget (e.g. 2048m) for the E2E to reach the tail.
         for (String k : new String[] {"STATE_BACKEND", "STATE_BACKEND_LOCAL_DIRS",
                 "STATE_BACKEND_MANAGED_MEMORY", "TASK_MANAGER_MEMORY_MANAGED_SIZE",
-                "TASK_MANAGER_NETWORK_MEMORY_MAX", "PARALLELISM"}) {
+                "TASK_MANAGER_NETWORK_MEMORY_MAX", "PARALLELISM",
+                // CHG-023 item-1 gap fix 2026-08-17: the native reporter's
+                // endpoint is wired from OTEL_COLLECTOR_HOST, but the E2E env
+                // map was explicit and never passed it — every host run fell
+                // back to the container-network default otel-collector:4318
+                // (UnknownHostException on every 10 s flush; O2 got nothing).
+                // The runner script now defaults OTEL_COLLECTOR_HOST=localhost:4318.
+                "OTEL_COLLECTOR_HOST"}) {
             String v = System.getenv().get(k);
             if (v != null && !v.isBlank()) {
                 e.put(k, v);
@@ -485,14 +517,28 @@ class SignalChainLiveE2ETest {
         // own emit path; a non-canonical row here would fail CanonicalCandlePolicy.
     }
 
-    private void assertCompletedCheckpoint() throws Exception {
+    /**
+     * Asserts ≥1 completed checkpoint and returns {@code [count, bytes]} — the
+     * SIG-PERF-001 checkpoint-size evidence (bytes = summed checkpoint dir).
+     */
+    private long[] assertCompletedCheckpoint() throws Exception {
         String dir = env("E2E_CHECKPOINT_DIR", "file:///tmp/signal-chain-e2e-checkpoints");
         Path root = Path.of(dir.replaceFirst("^file://", ""));
         try (Stream<Path> walk = Files.walk(root)) {
-            long completed = walk.filter(p -> p.getFileName().toString().equals("_metadata")).count();
+            List<Path> all = walk.filter(Files::isRegularFile).toList();
+            long completed = all.stream()
+                    .filter(p -> p.getFileName().toString().equals("_metadata")).count();
+            long bytes = all.stream().mapToLong(p -> {
+                try {
+                    return Files.size(p);
+                } catch (java.io.IOException e) {
+                    return 0L;
+                }
+            }).sum();
             assertTrue(completed >= 1,
                     "SignalJob must complete ≥1 checkpoint, found " + completed
                             + " under " + root);
+            return new long[] {completed, bytes};
         }
     }
 
@@ -546,10 +592,26 @@ class SignalChainLiveE2ETest {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> proc.destroyForcibly()));
     }
 
+    // Optional subprocess-output capture (E2E_DRAIN_LOG): when set, subprocess
+    // stdout/stderr is appended to that file instead of discarded — the
+    // 2026-08-17 warmup failures hid behind the null drain (bridge FATAL /
+    // config errors were invisible). Diagnosis only; unset keeps the null
+    // drain.
+    private static java.nio.file.Path drainLog() {
+        String v = System.getenv("E2E_DRAIN_LOG");
+        return (v == null || v.isBlank()) ? null : java.nio.file.Path.of(v);
+    }
+
     private static void drainStream(java.io.InputStream in) {
+        java.nio.file.Path log = drainLog();
         Thread t = new Thread(() -> {
-            try (java.io.InputStream s = in) {
-                s.transferTo(OutputStream.nullOutputStream());
+            try (java.io.InputStream s = in;
+                 java.io.OutputStream out = log == null
+                         ? OutputStream.nullOutputStream()
+                         : java.nio.file.Files.newOutputStream(log,
+                                 java.nio.file.StandardOpenOption.CREATE,
+                                 java.nio.file.StandardOpenOption.APPEND)) {
+                s.transferTo(out);
             } catch (IOException ignored) {
             }
         });

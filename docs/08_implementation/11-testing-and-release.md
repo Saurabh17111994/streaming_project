@@ -20,7 +20,7 @@ Use this file after each phase to track all tests, map requirements to proof, an
 | Work | Current state |
 | --- | --- |
 | Test design | Complete: every required test type is documented in this file or its owning phase document. |
-| Executable tests | Ingestion suites executable and green: 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill) — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/330 (compute count corrected 2026-08-16, was 268)); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus, CHG-008/009/010; +4 M2 hardening 2026-08-15 — ING-UNIT-018 Java↔Go config parity, CHG-012; +13 M3 hardening 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 READY gating matrix, CHG-017; +7 M4 hardening 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003, CHG-018; +3 M5 hardening 2026-08-15 — ING-UNIT-021/022 telemetry scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint bash harness, CHG-019), 0 failures, 8 env-gated skips (ingestion; common 340/0/1-skip; the 11 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker, SCH-20 Positions-store drill — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..006`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
+| Executable tests | Ingestion suites executable and green: 574 tests (234 ingestion + 340 common; corrected from 192/304 after the 2026-08-14 Standard-feed test deletion; common recounted 2026-08-15 at 177 = 160 + 17 — COMPAT-FLUSS-006 live bucket-skew probe +1, full-manifest routing identity +1, `KvStaleWriteRejectionTest` +7 (COMPAT-FLUSS-004 rejected/quarantined/audited half), plus 8 tests already in the tree but absent from the prior figure — 6 SCHEMA-AUDIT-001 reconstruction-simulation + 1 COMPAT-FLUSS-005 composite-PK matrix + 4 CompositeKeyMatrixVerifierTest matrix pin (pure JVM; the same verifier gates DDL applies in-band) + 10 DdlApplyToolStatusTest apply-status/limitation-prediction (incl. `--ack-limitations auto` prefill) — and grown since to 340 via the SCH-23/SCH-20/SCH-24/SCH-15 additions (CHG-003/005/006/007; docs-audit C6 line 340/234/291 (compute 291 — the 2026-08-17 Design-B merge `34af190` −19 DEC-038-era tests, then −10 CHG-023 item-1 emitter→native-reporter swap, then −2 CHG-023 item-2 native-TTL expiry swap, then −11 CHG-023 item-4 StallGuardedSink removal 2026-08-17; compute count corrected 2026-08-16, was 268)); ingestion +5 instrument-manifest-writer tests 2026-08-15 — ING-SCHEMA-002 unit + ING-INT-004 live; +3 hardening 2026-08-15 — ING-DQ-011 fuzz corpus, CHG-008/009/010; +4 M2 hardening 2026-08-15 — ING-UNIT-018 Java↔Go config parity, CHG-012; +13 M3 hardening 2026-08-15 — ING-FAIL-008 crash-loop, ING-FAIL-009 auth-failure, ING-FAIL-010 shutdown-deadlock, ING-INT-005 READY gating matrix, CHG-017; +7 M4 hardening 2026-08-15 — ING-UNIT-014/015/016/017, ING-RES-002/003/004, ING-TCP-003, CHG-018; +3 M5 hardening 2026-08-15 — ING-UNIT-021/022 telemetry scrubbing + cardinality (G6), ING-FAIL-006 warning-window throttle, plus the Go ING-UNIT-020 FATAL-message cases and the ING-INT-006 entrypoint bash harness, CHG-019), 0 failures, 8 env-gated skips (ingestion; common 340/0/1-skip; the 11 live-Fluss common integration tests — COMPAT-FLUSS-001/002/003/004/005/006, COMPAT-FLINK-002, SCHEMA-REC-001, SCHEMA-AUDIT-001 marker, SCH-20 Positions-store drill — run only with `FLUSS_BOOTSTRAP` set) — `ING-UNIT-*`, `ING-INT-001..006`, `ING-E2E-001`, `ING-DQ-*`, `ING-SAFE-*`, `ING-SCHEMA-001/002`, `THR-PROBE-001` (+ mock `SyntheticWorkloadTest`). Signal Slice 1 unit tests executable and green: 25 tests (CandleAggregateFunctionTest 5, RawValidationFunctionTest 7, SignalJobConfigTest 7, FingerprintDedupFunctionTest 6 — harness-driven) — see [Signal job](#signal-job) mapping. Action Capture, Executor, and release suites not st...
 | Runtime evidence | Ingestion live evidence recorded (2026-08-09): E2E fake-broker → Fluss (10,716 rows persisted), 58,951 ticks/s baseline probe on the 1,024-instrument envelope, SAFETY-INT-001 Fluss-connector proof. Signal Slice 1 live smoke recorded (2026-08-09): 205,146 candle rows, 1,074 instruments, 48 checkpoints (see [`04-signal-job.md`](./04-signal-job.md) §Slice 1 evidence). No downstream-phase runtime evidence yet. |
 | Live-money approval | Blocked until executable tests and all release evidence pass. |
 
@@ -118,7 +118,7 @@ Evidence: record the exact Fluss/Flink versions, DDL manifest ID, checksums, eff
 | `InstrumentManifestWriterTest` | 4 | `ING-SCHEMA-002` (DDL-order row mapping, entry validation R-115/R-116/R-193, empty/duplicate-composite-key refusal) |
 | `InstrumentManifestWriterIntegrationTest` | 1 | `ING-INT-004` (first production composite-PK raw-client writer — live upserts into an `instruments`-shaped scratch table, version retention, idempotent re-load; env-gated `INGESTION_INT_TEST_INSTRUMENTS=true`) |
 
-Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15 — **superseded**: that run predates the SCH-15/SCH-20/SCH-24 additions, and the current default-run totals are 340 common / 0 failures / 1 skip (CHG-003/005/006/007; docs-audit C6 line 340/234/333 (counts corrected 2026-08-16 — were 211/268; +3 compute 2026-08-17 CHG-021)); the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
+Live evidence: `logs/schema-compat/compat-fluss-001-003-20260815.md` + `logs/schema-compat/compat-flink-002-20260815.md` (Fluss 0.9.1-incubating, 177 common tests / 0 failures / 1 skip with `FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-15 — **superseded**: that run predates the SCH-15/SCH-20/SCH-24 additions, and the current default-run totals are 340 common / 0 failures / 1 skip (CHG-003/005/006/007; docs-audit C6 line 340/234/291 (compute −19 DEC-038-era tests 2026-08-17 Design-B merge `34af190` — the pre-merge high-water mark was 333 — then −10 CHG-023 item-1 emitter→native-reporter swap, then −2 CHG-023 item-2 native-TTL expiry swap, then −11 CHG-023 item-4 StallGuardedSink removal 2026-08-17; counts corrected 2026-08-16 — were 211/268; +3 compute 2026-08-17 CHG-021)); the +17 over the prior figure = COMPAT-FLUSS-006 live skew probe +1, full-manifest routing-identity coverage +1, `KvStaleWriteRejectionTest` +7, plus 8 tests already in the tree but absent from the previously recorded count).
 
 ### Ingestion
 
@@ -244,11 +244,11 @@ Evidence: fixture seed, event-time sequence, expected output, checkpoint/savepoi
 | `CandleAggregateFunctionTest` | 5 | `SIG-UNIT-001`/`SIG-UNIT-002` core (tie ordering, OHLCV aggregation, quote-only window, merge) |
 | `RawValidationFunctionTest` | 7 | Validation-gate rules (input classification) |
 | `SignalJobConfigTest` | 7 | `SIG-UNIT-003` core (pinned values + rejection of deviations) |
-| `FingerprintDedupFunctionTest` | 6 | `SIG-UNIT-008`/`SIG-UNIT-009` dedup half — Flink 2.2.1 operator harness (`KeyedOneInputStreamOperatorTestHarness`, no cluster): first occurrence passes / duplicate within TTL dropped; state stays exactly two rows per active key (dedup map + expiry index) regardless of fingerprint count; expiry timer deletes entries at watermark ≥ `first_seen + TTL` (never early), re-arriving expired fingerprint re-admitted; state key scoped by `version\|token\|fingerprint`; shared-expiry timer clears every listed key |
+| `FingerprintDedupFunctionTest` | 6 | `SIG-UNIT-008`/`SIG-UNIT-009` dedup half — Flink 2.2.1 operator harness (`KeyedOneInputStreamOperatorTestHarness`, no cluster): first occurrence passes / duplicate within TTL dropped; **2026-08-17 (CHG-023 item 2) expiry is native `StateTtlConfig` — the harness TTL clock advances past `first_seen + TTL` to re-admit; ONE state row per active key (the expiry index + timers are gone)**; re-arriving expired fingerprint re-admitted; state key scoped by `version\|token\|fingerprint` |
 | `CandleEmitFunctionTest` | 4 | `SIG-UNIT-008`/`SIG-UNIT-009` emit half (2026-08-16) — `CandleEmitFunction` state-content assertions: the only window state is the Boolean `candle-emitted` flag (BooleanSerializer); `CandleAccumulator` is exactly scalar OHLCV + identity + order keys — no tick list/collection/raw bytes |
 | `CepDependencyGuardTest` | 3 | `SIG-UNIT-007` (2026-08-16) — dependency scan: no CEP dependency declaration or import exists in the module pom/sources, plus shell-guard agreement + scan-scope parity vs `cep_guard.sh` (`make cep-check-module`) |
 
-**Pending (no implementing test yet):** ~~`SIG-UNIT-004..006` (candidate/ranking/reservation — Slice 3)~~ (**REMOVED 2026-08-15, CHG-005 — ranking/reservation out of scope**), ~~`SIG-UNIT-007` (dependency scan), `SIG-UNIT-008/009` emit half (`CandleEmitFunction` state-content assertions)~~ — **DONE 2026-08-16 (`CepDependencyGuardTest` + `CandleEmitFunctionTest` state-content legs; compute suite 333/0/17 as of 2026-08-17 (CHG-021 +3); `CepDependencyGuardTest` gained shell-guard agreement + scan-scope parity legs the same day — `make cep-check-module`)**, `SIG-HARNESS-001..005` (~~005 REMOVED 2026-08-15, CHG-005~~), `STATE-COMPAT-001`, `SIG-INT-001/002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001`. The full required set is `SIG-UNIT-001..009`, `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (reconciled with [`04-signal-job.md`](./04-signal-job.md) §Verification mapping; ranking/reservation rows now REMOVED per CHG-005). Solving method, prerequisites, and pass gates for each pending item: [`04-signal-job.md`](./04-signal-job.md) §Pending work items: resolution plan. Harness infra (compute-pom test-scope `flink-streaming-java` test-jar + `flink-test-utils`) landed 2026-08-10 — the pure-JVM rows need only test code from here on.
+**Pending (no implementing test yet):** ~~`SIG-UNIT-004..006` (candidate/ranking/reservation — Slice 3)~~ (**REMOVED 2026-08-15, CHG-005 — ranking/reservation out of scope**), ~~`SIG-UNIT-007` (dependency scan), `SIG-UNIT-008/009` emit half (`CandleEmitFunction` state-content assertions)~~ — **DONE 2026-08-16 (`CepDependencyGuardTest` + `CandleEmitFunctionTest` state-content legs; compute suite 333/0/17 as of 2026-08-17 (CHG-021 +3 — the pre-Design-B-merge high-water mark; current suite 291/0/16 after the same-day Design-B merge + CHG-023 items 1/2/4); `CepDependencyGuardTest` gained shell-guard agreement + scan-scope parity legs the same day — `make cep-check-module`)**, `SIG-HARNESS-001..005` (~~005 REMOVED 2026-08-15, CHG-005~~), `STATE-COMPAT-001`, `SIG-INT-001/002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (**envelope half DONE 2026-08-17** — `SignalChainLiveE2ETest` measurement leg, PASS on the final native topology: raw +4,559,401 rows, feature +22,440 rows, 1,024 instruments, 28 checkpoint completions / 0 expired / 0 restarts; evidence `logs/tracker-14/sig-perf-001-envelope-20260817.md`; **p99 decision-latency half signal-side/pending** — out of scope, feature-path-only per user 2026-08-17). The full required set is `SIG-UNIT-001..009`, `SIG-HARNESS-001..005`, `STATE-COMPAT-001`, `SIG-INT-001`, `SIG-INT-002`, `COMPAT-FLINK-001`, `SIG-FAIL-001`, `SIG-PERF-001` (reconciled with [`04-signal-job.md`](./04-signal-job.md) §Verification mapping; ranking/reservation rows now REMOVED per CHG-005). Solving method, prerequisites, and pass gates for each pending item: [`04-signal-job.md`](./04-signal-job.md) §Pending work items: resolution plan. Harness infra (compute-pom test-scope `flink-streaming-java` test-jar + `flink-test-utils`) landed 2026-08-10 — the pure-JVM rows need only test code from here on.
 
 ### Action Capture
 
@@ -866,8 +866,8 @@ This dossier is complete only when the evidence package can be independently rev
 
 **Status:** `EXECUTED (partial) — Phase 0 baseline DONE; Phases 1-3 + dedup sweep recorded as BLOCKED with evidence` (updated 2026-08-13) — **TOPOLOGY RE-SCOPED 2026-08-13, see banner below**
 \*\*Location:\*\* `docs/08_implementation/11-testing-and-release.md`
-**Tracker:** `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` — `## P7 — Performance and capacity evidence` (L870+) and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` (L1331-1333).
-**Dependency:** R2 lake-read stall fix (`§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`) — the bench uses R2 checkpoints for gate runs; the S3A timeout pins (30000/30000) and the outer-deadline containment apply.
+**Tracker:** the master dossier `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17 consolidation; tracker `14-candle-log-kv-replay-safety_2.md` was deleted — the `## P7 — Performance and capacity evidence` section and §4 register rows `PERF-THROUGHPUT-001` / `PERF-LATENCY-001` / `DEDUP-MEMORY-001` live in git history).
+**Dependency:** R2 lake-read stall fix (`§P3.5 — R2 lake-read stall containment`, absorbed into `04-signal-job.md` §Absorbed documents; plan file never persisted) — the bench uses R2 checkpoints for gate runs; the S3A timeout pins (30000/30000) and the outer-deadline containment apply.
 
 > **REQUIREMENT CHANGE (user decision, 2026-08-13) — bench topology re-scope.**
 >
@@ -936,7 +936,7 @@ Execute the tracker's P7.2 measurement battery (43 metrics) and P7.3 pass/fail g
 - TaskManager: 8 slots, `taskmanager.memory.process.size=2g` (pinned — the bench measures whether 8 × ~256 MB/slot sustains 50k with RocksDB + managed memory; that IS the memory gate).
 - JobManager: `jobmanager.memory.process.size=1600m` (pinned).
 - Checkpoint: 30 s interval (production config; 47/47 completed in the 2026-08-11 live run), `allowNonRestoredState` never set, RocksDB incremental.
-- Candle sink: `feature_candles_15s` KV upsert only (sole candle output — 2026-08-13 conversion; the LOG/KV dual-sink and `feature_candles_15s_current` are RETIRED). Signal sinks: `Signal_Candidates` LOG + `Signal_Candidates_current` KV, canonical signal filter + stall guard active.
+- Candle sink: `feature_candles_15s` KV upsert only (sole candle output — 2026-08-13 conversion; the LOG/KV dual-sink and `feature_candles_15s_current` are RETIRED). Signal sinks: `Signal_Candidates` LOG + `Signal_Candidates_current` KV, canonical signal filter active; **stall guard REMOVED 2026-08-17 (CHG-023 item 4 — every sink is a plain `FlussSink`; the Fluss client's own `client.request-timeout` is the stall bound)**.
 - All R2 S3A timeout pins effective (`iceberg.iceberg.hadoop.fs.s3a.connection.timeout` + `connection.establish.timeout` = 30000).
 - Gate runs: R2 checkpoint dir + `latencyTrackingInterval` enabled (the single documented config delta).
 - Debug runs: `file://` checkpoint dir, latency tracking optional, dedup expiry swept.
@@ -1042,9 +1042,9 @@ If any P7.3 gate fails: record the bottleneck in the evidence file and tracker P
 
 ## 13. Cross-references
 
-- Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` P7 (L870+), §4 register (L1331-1333), §6 acceptance (L1387+), P8.1 metrics battery (L1007-1059).
+- Tracker: master `docs/08_implementation/04-signal-job.md` §Absorbed documents (2026-08-17 consolidation; tracker `14-candle-log-kv-replay-safety_2.md` was deleted — its P7, §4 register, §6 acceptance, P8.1 metrics battery records live in git history).
 - Metrics recipe: `logs/tracker-14/p8-1-flink-distributed-metrics-2026-08-11.txt`.
-- R2 fix + containment: `§P3.5 of 14-candle-log-kv-replay-safety_2.md (plan file never persisted)`; tracker P3.5.
+- R2 fix + containment: `§P3.5 — R2 lake-read stall containment` (absorbed into `04-signal-job.md` §Absorbed documents; plan file never persisted).
 - Audit efficiency follow-up: tracker P3.6 (batch-audit engine parallelism/metadata-count; not exercised by this bench).
 - Feed tooling: faketool real-rate mode (`code/02_services/01_ingestion/go-bridge/faketool`), fluss-throughput-bench evidence.
 - Deployment: `docs/08_implementation/09-production-swarm.md` (future production target; not used by this bench).
@@ -1206,15 +1206,21 @@ Caveat (honesty): the tablet attribution is the best-supported inference, not a 
 ## Overview
 
 Close the six "implementable now" gaps identified by the 2026-08-12 audit of
-`docs/08_implementation/14-candle-log-kv-replay-safety_2.md`. Every item has a
-concrete code/evidence change in the compute module, the O2 provisioning script,
-or the tracker/evidence docs. None touches the live production path, the Fluss
+the corrective tracker (absorbed into `docs/08_implementation/04-signal-job.md`
+§Absorbed documents; the tracker file `14-candle-log-kv-replay-safety_2.md` was
+deleted 2026-08-17). Every item has a concrete code/evidence change in the
+compute module, the O2 provisioning script, or the tracker/evidence docs. None touches the live production path, the Fluss
 connector jar, or operator-only P10 territory.
 
 **Acceptance criteria (block-level):**
 
 1. SIGNAL-warn-dedup-state and SIGNAL-warn-dedup-expiry query live Flink-reporter
-   series, not the dead ComputeOtlpEmitter streams.
+   series, not the dead ComputeOtlpEmitter streams. **VERIFIED 2026-08-17:**
+   `SIGNAL-warn-dedup-state` (id `3I2RmqeXtLEGlW0B7rrVta0Ro3R`) confirmed bound
+   to `stream_name=flink_taskmanager_job_task_operator_compute_dedup_state_count`
+   (native series, live at 901 128 during the 10-min E2E) and
+   `SIGNAL-warn-dedup-expiry` confirmed ABSENT (retired CHG-023 item 2) —
+   evidence `logs/tracker-14/o2-native-reporter-series-20260817.md`.
 2. `CandleFailureInjectionIntegrationTest.kvTableDeletionFailsWholeJobNotLogOnlyDegraded`
    reaches terminal `FAILED` within a bounded window (no hang in FAILING).
 3. RocksDB native-memory metrics (block cache, memtables, table readers) and a
@@ -1223,28 +1229,37 @@ connector jar, or operator-only P10 territory.
    tracker box 427 (`[~]`) becomes `[x]` with real numbers.
 5. `STARTUP-GATE-001` appears as a register row in tracker §4.
 6. The §7 final coding-agent report exists with verdict `PENDING_OPERATOR_EVIDENCE`.
-7. Tracker `14-candle-log-kv-replay-safety_2.md` annotations are updated ONLY where
-   evidence exists (per tracker rule), with artifact paths and dates.
+7. Tracker annotations (now: the absorbed tracker-status content in `04-signal-job.md`
+   §Absorbed documents) are updated ONLY where evidence exists (per tracker rule),
+   with artifact paths and dates.
 
 ## Context
 
-Tracker: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` (1248 lines).
-All open-box anchors below verified by reading the tracker and the cited sources on
-2026-08-12.
+Tracker: the corrective tracker, absorbed into `docs/08_implementation/04-signal-job.md`
+§Absorbed documents (the 1248-line original `14-candle-log-kv-replay-safety_2.md`,
+deleted 2026-08-17, lives in git history).
+All open-box anchors below were verified by reading the tracker and the cited
+sources on 2026-08-12.
 
 ### Verified hooks (file:line, all current)
 
 - Dedup gauges ALREADY registered: `FingerprintDedupFunction.open()`
-  (`code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/FingerprintDedupFunction.java:113-118`)
-  registers `compute.dedup.state.count`, `compute.dedup.expiry.index.count`,
-  `compute.dedup.state.bytes.estimate` via `getRuntimeContext().getMetricGroup().gauge(...)`.
+  (`code/02_services/02_compute/src/main/java/com/trading/compute/signaljob/FingerprintDedupFunction.java`)
+  registers `compute.dedup.state.count`, `compute.dedup.state.bytes.estimate`
+  via `getRuntimeContext().getMetricGroup().gauge(...)` —
+  `compute.dedup.expiry.index.count` **DELETED 2026-08-17 (CHG-023 item 2)**
+  with the expiry index; the count gauge gains a periodic per-token resync so
+  native-TTL-expired entries stay out of it.
 - Startup-mode gauge precedent:
   `RawValidationFunction.java:74-76` registers `compute.startup.mode`; the alert
   retarget precedent (delete + recreate rule, alert_id `3HmIy7IwzFgY563mG6tL1sxouhq`)
   is recorded in tracker P8.1 box 850 and `logs/tracker-14/p8-5-observability-live-2026-08-11.md` §4.
 - Alert rules to retarget: `code/01_platform/04_scripts/o2-provision.py:425-430`
   (`SIGNAL-warn-dedup-state` stream=`compute_dedup_state_count`,
-  `SIGNAL-warn-dedup-expiry` stream=`compute_dedup_expiry_index_count`).
+  `SIGNAL-warn-dedup-expiry` stream=`compute_dedup_expiry_index_count` —
+  **2026-08-17, CHG-023 item 2: `SIGNAL-warn-dedup-expiry` is RETIRED — its
+  series is deleted with the expiry index; only `SIGNAL-warn-dedup-state`
+  remains (runbooks + o2-provision.py carry the retirement)**).
 - Dashboard panels already use the live names (same file :188, :263-267:
   `flink_taskmanager_job_task_operator_compute_dedup_state_count`,
   `flink_taskmanager_job_task_operator_compute_dedup_state_bytes_estimate`).
@@ -1292,7 +1307,7 @@ All open-box anchors below verified by reading the tracker and the cited sources
 ### Decisions (user, 2026-08-12)
 
 - P7 performance/capacity evidence is EXCLUDED from this block (separate campaign).
-- KV-write fail-fast fix uses a Flink-side sink stall guard (no Fluss client jar patch).
+- KV-write fail-fast fix uses a Flink-side sink stall guard (no Fluss client jar patch). **SUPERSEDED 2026-08-17 (CHG-023 item 4): the stall guard is deleted — the Fluss client's own `client.request-timeout` bounds each write, and the checkpoint timeout + fixed-delay restart fail the job rather than hang it.**
 - Metric-export gaps: Flink-side only (no Fluss server-side scrape, no collector changes).
 - Block lives in this plan file; the tracker is touched only where evidence lands.
 - Questions answered via ask: p7_scope=Exclude, failfast_approach=Flink-side watchdog,
@@ -1395,6 +1410,13 @@ alerts should use are ALREADY registered in `FingerprintDedupFunction.open()`; o
       PromQL query + idempotent re-run. → `logs/tracker-14/p8-3-dedup-alert-retarget-2026-08-12.txt`.
 
 ### Task 2: Bounded sink-write stall guard → terminal FAILED (tracker :682/:116)
+
+> **SUPERSEDED 2026-08-17 (CHG-023 item 4): the `StallGuardedSink` watchdog this
+> task built was deleted — every sink is a plain `FlussSink` carrying
+> `client.request-timeout = SINK_WRITE_STALL_TIMEOUT_MS` + `client.writer.retries=2`;
+> the native client request timeout is the stall bound. The task record below is
+> the historical 2026-08-12 build record; the artifact is gone (deleted with
+> `StallGuardedSink.java` + `StallGuardedSinkTest.java`).**
 
 **Why:** With the KV table deleted mid-run, the job cycles FAILING→RESTART→FAILING without
 reaching terminal FAILED in the observed window. Root cause (javap-verified in
@@ -1584,7 +1606,7 @@ as the historical record and this task is closed without execution.
 
 **Files:**
 
-- Modify: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` (§4 register table)
+- Modify: `docs/08_implementation/14-candle-log-kv-replay-safety_2.md` (§4 register table) — **file deleted 2026-08-17; the §4 register content is absorbed into `04-signal-job.md` §Absorbed documents (original in git history)**
 
 - [x] Add row `STARTUP-GATE-001` after `CHECKPOINT-RESTORE-002`: evidence = SignalJobConfig
       fail-closed startup gate (RESTORE requires nonblank STATE_RECOVERY_PATH; no
@@ -1659,7 +1681,9 @@ as the historical record and this task is closed without execution.
   The guard is per-sink and symmetric (LOG + KV) so the shared-fate contract (box 682) is
   unchanged — deleting either table still takes the whole job down, now to FAILED, not a hang.
 - **New pin:** `SINK_WRITE_STALL_TIMEOUT_MS` joins the `requirePinned*` set; P4.2's
-  "checkpoint pins unchanged" box is unaffected (existing pins untouched).
+  "checkpoint pins unchanged" box is unaffected (existing pins untouched). The pin
+  SURVIVES as the `client.request-timeout` value passed to every `FlussSink`
+  (CHG-023 item 4, 2026-08-17 — the watchdog is gone, the pin lives on).
 - **NMT:** `-XX:NativeMemoryTracking=summary` enables tracking; `-XX:+PrintNMTStatistics` prints
   the summary at JVM exit into the teed stdout of run-batch.sh (stdout is the log; no plumbing
   changes). Runtime overhead for a batch job is negligible.

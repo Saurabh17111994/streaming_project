@@ -1,6 +1,5 @@
 package com.trading.compute.signaljob;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
@@ -62,8 +61,21 @@ public final class CandleLateDrop {
 
         @Override
         public void open(OpenContext openContext) throws Exception {
+            // REQ-FC-006: the count reaches OpenObserve as the
+            // compute.candles.late.dropped MetricGroup counter, exported by
+            // the native flink-metrics-otel reporter (CHG-023 item 1). The
+            // old emitter's single bounded attribute set (latest drop's
+            // instrument/window/lateness/reason) is NOT carried by the native
+            // metric path — the count series + the WARN-side observability
+            // remain; the O2 late-drop query retargets to the count (see
+            // CHG-023).
             dropped = getRuntimeContext().getMetricGroup().counter(
-                    ComputeOtlpEmitter.CANDLE_LATE_DROPPED_METRIC);
+                    "compute.candles.late.dropped");
+        }
+
+        /** Counter-source accessor (tests): the value the MetricGroup counter exports. */
+        long droppedCountForTest() {
+            return dropped == null ? 0L : dropped.getCount();
         }
 
         @Override
@@ -72,11 +84,6 @@ public final class CandleLateDrop {
             long windowEnd = (eventTime / candleWindowMs) * candleWindowMs + candleWindowMs;
             long latenessMs = Math.max(0L, ctx.timerService().currentWatermark() - eventTime);
             dropped.inc();
-            ComputeOtlpEmitter.recordCandleLateDrop(
-                    row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
-                    windowEnd,
-                    latenessMs,
-                    REASON_BEYOND_ALLOWED_LATENESS);
         }
     }
 }

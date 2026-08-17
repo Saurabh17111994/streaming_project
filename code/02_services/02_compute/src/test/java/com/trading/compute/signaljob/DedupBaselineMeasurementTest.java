@@ -3,7 +3,6 @@ package com.trading.compute.signaljob;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.util.HashMap;
@@ -15,7 +14,6 @@ import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -26,18 +24,19 @@ import org.junit.jupiter.api.Test;
  * printed as a {@code P5.1[...]} System.out line so the surefire report is a
  * self-contained evidence record.
  *
- * <p>The timer-count box in the tracker explicitly allows an equivalent
- * deterministic timer/state-count measurement when the runtime metric is
- * unavailable — {@code KeyedOneInputStreamOperatorTestHarness#numEventTimeTimers}
- * IS the operator's event-time timer count (the exact value the runtime
- * {@code numTimers} metric reports), so it is used directly.
+ * <p>Since CHG-023 item 2 (2026-08-17) expiry is the NATIVE {@code StateTtlConfig}
+ * on the dedup MapState — no expiry-index map, no event-time timers — the
+ * timer-count box of the tracker is answered by {@code numEventTimeTimers()}
+ * == 0, and the post-expiry leg advances the harness TTL processing time and
+ * forces a gauge resync (which scans {@code entries()} — TTL-aware, skips
+ * expired) to prove the expired set falls out of the state-size gauge.
  *
  * <p>All feed waves use one instrument token with DISTINCT event times, so
- * every fingerprint gets its own expiry instant: state count, expiry-index
- * bucket count, and timer count grow in lockstep — a deterministic series that
- * proves the state is bounded and exactly one entry per live fingerprint.
+ * every fingerprint is a distinct state key: state count grows in lockstep —
+ * a deterministic series that proves the state is bounded and exactly one
+ * entry per live fingerprint.
  */
-@DisplayName("Tracker 14 P5.1: dedup baseline measurements (counts, timers, bytes, GC)")
+@DisplayName("Tracker 14 P5.1: dedup baseline measurements (counts, bytes, GC)")
 class DedupBaselineMeasurementTest {
 
     private static final long TTL_MS = 300_000L;
@@ -45,18 +44,16 @@ class DedupBaselineMeasurementTest {
 
     private KeyedOneInputStreamOperatorTestHarness<Long, RowData, RowData> harness;
 
+    /** The function under test — gauge reads use its fields (the MetricGroup gauges' source). */
+    private FingerprintDedupFunction function;
+
     @AfterEach
     void tearDown() throws Exception {
         if (harness != null) {
             harness.close();
             harness = null;
         }
-    }
-
-    @BeforeEach
-    void resetGaugeMirrors() {
-        // JVM-wide statics — every test starts from a clean mirror.
-        ComputeOtlpEmitter.resetDedupGaugesForTest();
+        FingerprintDedupFunction.GAUGE_RESYNC_INTERVAL_ROWS = 10_000L;
     }
 
     private static Map<String, String> env() {
@@ -72,8 +69,9 @@ class DedupBaselineMeasurementTest {
 
     private void openHarness() throws Exception {
         SignalJobConfig config = SignalJobConfig.from(env());
+        function = new FingerprintDedupFunction(config);
         harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(
-                new FingerprintDedupFunction(config),
+                function,
                 row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN),
                 Types.LONG);
         harness.open();
@@ -90,58 +88,52 @@ class DedupBaselineMeasurementTest {
     }
 
     @Test
-    @DisplayName("state/expiry-index/timer counts grow linearly with live fingerprints and fall to zero after expiry")
+    @DisplayName("state count grows linearly with live fingerprints and the expired set falls out via native TTL")
     void measureStateCountsAcrossFeedWaves() throws Exception {
         openHarness();
         int perWave = 2_000;
 
         feedDistinct(0, perWave);
-        long s1 = ComputeOtlpEmitter.dedupStateCount();
-        long e1 = ComputeOtlpEmitter.dedupExpiryIndexCount();
+        long s1 = function.dedupStateCountForTest();
         long t1 = harness.numEventTimeTimers();
-        long b1 = ComputeOtlpEmitter.dedupBytesEstimate();
-        System.out.println("P5.1[waves] wave1 state=" + s1 + " expiryIndex=" + e1
-                + " timers=" + t1 + " bytesEstimate=" + b1);
+        long b1 = function.bytesEstimateForTest();
+        System.out.println("P5.1[waves] wave1 state=" + s1 + " timers=" + t1
+                + " bytesEstimate=" + b1);
         assertEquals(perWave, s1, "one entry per live fingerprint");
-        assertEquals(perWave, e1, "one expiry bucket per distinct expiry instant");
-        assertEquals(perWave, t1, "one event-time timer per live fingerprint");
+        assertEquals(0, t1, "no hand-rolled timers — native TTL expires entries");
 
         feedDistinct(1, perWave);
-        long s2 = ComputeOtlpEmitter.dedupStateCount();
-        long e2 = ComputeOtlpEmitter.dedupExpiryIndexCount();
+        long s2 = function.dedupStateCountForTest();
         long t2 = harness.numEventTimeTimers();
-        System.out.println("P5.1[waves] wave2 state=" + s2 + " expiryIndex=" + e2
-                + " timers=" + t2 + " bytesEstimate=" + ComputeOtlpEmitter.dedupBytesEstimate());
+        System.out.println("P5.1[waves] wave2 state=" + s2 + " timers=" + t2
+                + " bytesEstimate=" + function.bytesEstimateForTest());
         assertEquals(2L * perWave, s2, "wave 2 doubles the live count");
-        assertEquals(2L * perWave, e2);
-        assertEquals(2L * perWave, t2);
+        assertEquals(0, t2);
 
         feedDistinct(2, perWave);
-        long s3 = ComputeOtlpEmitter.dedupStateCount();
-        long e3 = ComputeOtlpEmitter.dedupExpiryIndexCount();
+        long s3 = function.dedupStateCountForTest();
         long t3 = harness.numEventTimeTimers();
-        System.out.println("P5.1[waves] wave3 state=" + s3 + " expiryIndex=" + e3
-                + " timers=" + t3 + " bytesEstimate=" + ComputeOtlpEmitter.dedupBytesEstimate());
+        System.out.println("P5.1[waves] wave3 state=" + s3 + " timers=" + t3
+                + " bytesEstimate=" + function.bytesEstimateForTest());
         assertEquals(3L * perWave, s3, "wave 3 triples the live count");
-        assertEquals(3L * perWave, e3);
-        assertEquals(3L * perWave, t3);
-        assertEquals(3L * perWave * (FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES
-                        + FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES),
-                ComputeOtlpEmitter.dedupBytesEstimate(),
-                "bytes estimate = entries x (128 B entry + 64 B bucket) upper bound");
+        assertEquals(0, t3);
+        assertEquals(3L * perWave * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES,
+                function.bytesEstimateForTest(),
+                "bytes estimate = entries x 136 B/entry upper bound (entry + TTL timestamp)");
 
-        // Watermark past EVERY expiry instant (wave2's last expiry is
-        // T0+500000+1999): the timer sweep must delete all entries — state
-        // falls to zero (never retained after expiry).
-        harness.processWatermark(T0 + 502_001L);
-        long s4 = ComputeOtlpEmitter.dedupStateCount();
-        long e4 = ComputeOtlpEmitter.dedupExpiryIndexCount();
-        long t4 = harness.numEventTimeTimers();
-        System.out.println("P5.1[waves] afterExpiry state=" + s4 + " expiryIndex=" + e4
-                + " timers=" + t4 + " bytesEstimate=" + ComputeOtlpEmitter.dedupBytesEstimate());
-        assertEquals(0L, s4, "state falls to zero after watermark passes expiry");
-        assertEquals(0L, e4);
-        assertEquals(0L, t4);
+        // Native TTL expiry: advance the TTL clock past every entry's anchor
+        // (all anchored at write-time provider clock = 0) and force a gauge
+        // resync — entries() skips the expired set, so the state-size gauge
+        // falls to the single fresh row inserted after the advance.
+        FingerprintDedupFunction.GAUGE_RESYNC_INTERVAL_ROWS = 1L;
+        harness.setStateTtlProcessingTime(TTL_MS + 1L);
+        harness.processElement(
+                TestRawRows.row(1L, T0 + TTL_MS + 10_000L, "fp-after-expiry", "TRADE", 99_000L, 1L),
+                T0 + TTL_MS + 10_000L);
+        long s4 = function.dedupStateCountForTest();
+        System.out.println("P5.1[waves] afterTtlExpiry state=" + s4
+                + " bytesEstimate=" + function.bytesEstimateForTest());
+        assertEquals(1L, s4, "expired set falls out of the gauge — only the fresh row is live");
     }
 
     @Test
@@ -167,7 +159,7 @@ class DedupBaselineMeasurementTest {
 
         long allocAfter = allocSupported ? tmx.getCurrentThreadAllocatedBytes() : -1L;        long gcDelta = gcCount() - gcBefore;
         long gcTimeDelta = gcTimeMs() - gcTimeBefore;
-        long state = ComputeOtlpEmitter.dedupStateCount();
+        long state = function.dedupStateCountForTest();
         System.out.println("P5.1[gc] rows=" + n + " allocatedBytes="
                 + (allocSupported ? (allocAfter - allocBefore) : "unsupported")
                 + " gcCollections=" + gcDelta + " gcMs=" + gcTimeDelta
@@ -181,19 +173,17 @@ class DedupBaselineMeasurementTest {
     }
 
     @Test
-    @DisplayName("a repeated fingerprint creates no duplicate expiry-index entries")
-    void repeatedFingerprintDoesNotDuplicateExpiryIndexEntry() throws Exception {
+    @DisplayName("a repeated fingerprint creates no duplicate state entries")
+    void repeatedFingerprintDoesNotGrowState() throws Exception {
         openHarness();
         harness.processElement(TestRawRows.row(1L, T0, "fp-dup", "TRADE", 100, 1), T0);
         for (int i = 1; i < 10_000; i++) {
             harness.processElement(
                     TestRawRows.row(1L, T0 + i, "fp-dup", "TRADE", 100 + i, i), T0 + i);
         }
-        assertEquals(1L, ComputeOtlpEmitter.dedupStateCount(),
+        assertEquals(1L, function.dedupStateCountForTest(),
                 "10k duplicates must not grow the fingerprint map");
-        assertEquals(1L, ComputeOtlpEmitter.dedupExpiryIndexCount(),
-                "10k duplicates must not grow the expiry index");
-        assertEquals(1, harness.numEventTimeTimers(), "one expiry timer, never one per duplicate");
+        assertEquals(0, harness.numEventTimeTimers());
     }
 
     private static long gcCount() {

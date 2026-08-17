@@ -8,8 +8,10 @@ import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 /**
  * SCH-19 dual-sink machinery (machinery only — the feed is the ranking stage,
  * Slice 3): attaches the two sinks every published decision must reach, both
- * wrapped in {@link StallGuardedSink} (tracker 14 box 682/116 — the Fluss
- * client's unbounded hang points are bounded on every sink):
+ * plain {@code FlussSink}s (CHG-023 item 4, 2026-08-17: the StallGuardedSink
+ * watchdog was removed — the Fluss client's own {@code client.request-timeout}
+ * bounds each write, and the checkpoint timeout + fixed-delay restart fail
+ * the job rather than hang it):
  *
  * <ol>
  *   <li><b>{@code Trade_Decisions} LOG</b> — append-only
@@ -36,13 +38,12 @@ public final class TradeDecisionsSinks {
 
     /**
      * Attach the LOG + KV-index dual sinks to the decision stream. The stream
-     * is consumed twice (fan-out); both sinks sit inside the stall guard.
+     * is consumed twice (fan-out).
      */
     public static void attach(DataStream<RowData> decisions, SignalJobConfig config) {
         // (a) immutable instruction LOG — append-only
         decisions
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.tradeDecisionsTable())
@@ -50,8 +51,7 @@ public final class TradeDecisionsSinks {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("trade-decisions-sink")
                 .uid("trade-decisions-sink");
 
@@ -60,8 +60,7 @@ public final class TradeDecisionsSinks {
                 .map(new TradeDecisionIndexMapper())
                 .name("trade-instruction-index-map")
                 .uid("trade-instruction-index-map")
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.tradeInstructionStateTable())
@@ -69,8 +68,7 @@ public final class TradeDecisionsSinks {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("trade-instruction-state-sink")
                 .uid("trade-instruction-state-sink");
     }

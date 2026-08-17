@@ -2,7 +2,6 @@ package com.trading.compute.signaljob;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
@@ -15,12 +14,14 @@ import org.junit.jupiter.api.Test;
 
 /**
  * REQ-FC-006: raw ticks dropped by the 15 s candle window beyond
- * {@code window_end + ALLOWED_LATENESS_MS} are counted
- * ({@code compute.candles.late.dropped}) with the latest drop's attributes —
- * never silently discarded (dossier Required telemetry; DEC-038 bounded
- * cardinality — one attribute set, no per-key labels). The OTLP payload shape
- * (DELTA sum + the single bounded attribute set) is pinned by
- * {@code ComputeOtlpEmitterTest}; this test drives the counter OPERATOR.
+ * {@code window_end + ALLOWED_LATENESS_MS} are counted into the
+ * {@code compute.candles.late.dropped} MetricGroup counter — never silently
+ * discarded (dossier Required telemetry). CHG-023 item 1 (2026-08-17): the
+ * counter is exported by the native flink-metrics-otel reporter; the old
+ * emitter's single bounded attribute set (latest drop's instrument/window/
+ * lateness/reason) is NOT carried on the native metric path — the count
+ * series + WARN-side observability remain. This test drives the counter
+ * OPERATOR and asserts the MetricGroup counter's source value.
  */
 @DisplayName("CandleLateDrop counter (REQ-FC-006)")
 class CandleLateDropTest {
@@ -28,14 +29,12 @@ class CandleLateDropTest {
     private static final long T0 = 1_700_000_000_000L;
 
     private OneInputStreamOperatorTestHarness<RowData, RowData> harness;
-    private ComputeOtlpEmitter emitter;
+    private CandleLateDrop.CounterFunction counterFunction;
 
     @BeforeEach
     void setUp() throws Exception {
-        ComputeOtlpEmitter.resetDedupTelemetryForTest();
-        emitter = new ComputeOtlpEmitter("localhost:4318");
-        harness = ProcessFunctionTestHarnesses.forProcessFunction(
-                new CandleLateDrop.CounterFunction(15_000L));
+        counterFunction = new CandleLateDrop.CounterFunction(15_000L);
+        harness = ProcessFunctionTestHarnesses.forProcessFunction(counterFunction);
         harness.open();
     }
 
@@ -48,8 +47,8 @@ class CandleLateDropTest {
     }
 
     @Test
-    @DisplayName("each dropped tick is counted once and refreshes the latest-drop attributes")
-    void countsDroppedTicksWithLatestAttributes() throws Exception {
+    @DisplayName("each dropped tick is counted exactly once into compute.candles.late.dropped")
+    void countsDroppedTicksExactlyOnce() throws Exception {
         // Watermark far past the event time: the drop the window operator
         // would have performed is observable to the counter via the propagated
         // watermark (lateness = watermark - event_time).
@@ -60,26 +59,14 @@ class CandleLateDropTest {
         harness.processElement(new StreamRecord<>(
                 TestRawRows.row(7L, T0 + 1_000L, "fp-late-2", "TRADE", 101, 2), T0 + 1_000L));
 
-        assertEquals(2L, emitter.drainCandleLateDropDelta(),
-                "each dropped tick is counted exactly once");
-        // A drained delta never re-fires.
-        assertEquals(0L, emitter.drainCandleLateDropDelta());
-
-        // The latest drop wins the single bounded attribute set.
-        assertEquals(7L, ComputeOtlpEmitter.lateDropInstrumentForTest());
-        long windowEnd = ((T0 + 1_000L) / 15_000L) * 15_000L + 15_000L;
-        assertEquals(windowEnd, ComputeOtlpEmitter.lateDropWindowEndMsForTest());
-        assertEquals(watermark - (T0 + 1_000L),
-                ComputeOtlpEmitter.lateDropLatenessMsForTest());
-        assertEquals(CandleLateDrop.REASON_BEYOND_ALLOWED_LATENESS,
-                ComputeOtlpEmitter.lateDropReasonForTest());
+        assertEquals(2L, counterFunction.droppedCountForTest(),
+                "each dropped tick is counted exactly once into the MetricGroup counter");
     }
 
     @Test
-    @DisplayName("no drops → zero-count window, no attributes recorded")
+    @DisplayName("no drops → counter stays at zero")
     void emptyWindowRecordsNothing() {
-        assertEquals(0L, emitter.drainCandleLateDropDelta());
-        assertEquals(-1L, ComputeOtlpEmitter.lateDropInstrumentForTest());
-        assertEquals(null, ComputeOtlpEmitter.lateDropReasonForTest());
+        assertEquals(0L, counterFunction.droppedCountForTest());
     }
 }
+

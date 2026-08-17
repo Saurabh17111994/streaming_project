@@ -288,8 +288,9 @@ Trigger: `SIGNAL-error-flink-jm-scrape-down` / `SIGNAL-error-flink-tm-scrape-dow
 
 > **RETIRED (2026-08-13):** the candle dual-sink this runbook rolls back is retired (`feature_candles_15s` is now the KV-only sole candle output). The registry and chk-1539 cutoff below are historical dev-rehearsal evidence. The re-scope target is the SIGNAL dual-sink rollback runbook (`Signal_Candidates` LOG + `Signal_Candidates_current` KV), delivered by tracker 14 P10 (`docs/08_implementation/09-production-swarm.md`).
 
-Exact dev-rehearsed registry (2026-08-10, tracker
-`docs/08_implementation/13-candle-log-kv-replay-safety.md`):
+Exact dev-rehearsed registry (2026-08-10; retired candle era, absorbed into the
+master dossier `docs/08_implementation/04-signal-job.md` §Absorbed documents — the
+13 file was deleted 2026-08-17):
 
 | Job | Graph | Restore target | Last checkpoint |
 | --- | --- | --- | --- |
@@ -347,9 +348,26 @@ All rules route to the `dev-webhook` destination in dev (receiver logs:
 alerts have no first-class severity field — severity rides the rule-name prefix
 (`SIGNAL-crit`/`error`/`warn`, `ING-crit`/`warn`). Realtime rules evaluate
 continuously; while a condition holds, fires repeat on the ~30–75 s window
-cadence. 26 rules provisioned (9 ING- ingestion + 17 SIGNAL- compute).
+cadence. **24 rules provisioned (8 ING- ingestion + 16 SIGNAL- compute), verified live 2026-08-17** (the prior "26 = 9 + 17" count included the never-existing `SIGNAL-warn-dedup-cache-hit`; the dedup pair was re-provisioned the same day — see the banner below).
 
 Compute/SignalJob rules:
+
+> **DEDUP ALERTS RETARGETED (2026-08-17, CHG-022 / DEC-040):** the dedup set is
+> authoritative Flink keyed state (Design B) — the `fingerprint_dedup` Fluss
+> table and the bounded-cache gauges no longer exist. The two real rules
+> (`SIGNAL-warn-dedup-state`, `SIGNAL-warn-dedup-expiry`) were re-provisioned the
+> same day to watch the Flink `FingerprintDedupFunction` gauges
+> (`compute_dedup_state_count` / `compute_dedup_expiry_index_count` — the series
+> Design B keeps) with the threshold re-based from the DEC-038 250k cache cap to
+> the **Design-B envelope ≈ 6.5M** (20 480 t/s × 300 s TTL ≈ 6.1M + headroom).
+> **CHG-023 item 2 (2026-08-17): `SIGNAL-warn-dedup-expiry` is RETIRED — its
+> series (`compute_dedup_expiry_index_count`) is deleted with the expiry index;
+> expiry is native `StateTtlConfig` (no event-time timers to stall), and
+> `SIGNAL-warn-dedup-state` covers the same envelope on the live-set count.**
+> The old `SIGNAL-warn-dedup-cache-hit` row is DELETED — no such rule exists in
+> O2 (verified live 2026-08-17) and the cache gauges it watched were removed by
+> CHG-022. The retired Fluss table (`fingerprint_dedup`, DDL
+> `24_fingerprint_dedup.sql`) is retained on file but unused; no rule watches it.
 
 | Rule | Severity | Condition | Response | Recovery |
 | --- | --- | --- | --- | --- |
@@ -358,9 +376,9 @@ Compute/SignalJob rules:
 | SIGNAL-error-job-restarting | Error | restarts > 0 | Check flink_logs for the restart cause | restarts stop |
 | SIGNAL-error-source-stalled | Error | source rate == 0 (2 min) | Check feed/bridge; **false-fires on quiesced dev feed** | feed resumes |
 | SIGNAL-warn-kv-sink-zero | Warning | kv-sink rate == 0 (2 min) | Check KV sink task; **false-fires on quiesced dev feed** | sink writes resume |
-| SIGNAL-warn-dedup-state | Warning | Fluss dedup-table entry count > envelope (first-seen rate × TTL horizon) | Check first-seen rate and cleanup pace — DEC-038: the authoritative dedup set lives in `fingerprint_dedup` (DDL `24_fingerprint_dedup.sql` on file, applied with the DEC-038 implementation stage), not Flink state | table size plateaus back under envelope |
-| SIGNAL-warn-dedup-expiry | Warning | expired-row cleanup backlog > bound | Check the dedup cleanup pass (`DEDUP_CLEANUP_INTERVAL_MS`) and delete throughput | backlog drains |
-| SIGNAL-warn-dedup-cache-hit | Warning | dedup cache hit ratio below threshold (60 s) | Hot path degrading toward per-tick Fluss lookups — check cache bound vs envelope (DEC-038) | hit ratio recovers |
+| SIGNAL-warn-dedup-state | Warning | Flink dedup-state entries > 6.5M (`compute_dedup_state_count`; Design-B envelope ≈ 6.1M = 20 480 t/s × 300 s TTL + headroom) | Check accepted-rate × TTL math vs the envelope; state grows only when first-seen rate exceeds the envelope — no cache/cleanup pass to tune (Design B, CHG-022) | count drops back under envelope as expired entries' event-time timers fire |
+| ~~SIGNAL-warn-dedup-expiry~~ | ~~Warning~~ | ~~Flink dedup expiry-index entries > 6.5M (`compute_dedup_expiry_index_count`)~~ — **RETIRED 2026-08-17 (CHG-023 item 2): the expiry index is deleted — expiry is native `StateTtlConfig`; `SIGNAL-warn-dedup-state` covers the envelope on the live-set count** | — | — |
+| ~~SIGNAL-warn-dedup-cache-hit~~ | ~~Warning~~ | ~~dedup cache hit ratio below threshold (60 s)~~ — **DELETED 2026-08-17: no cache in Design B (CHG-022); rule never existed in O2** | — | — |
 | SIGNAL-warn-schema-rejected-rate | Warning | rejects per flush > 10 | Check raw_table_1 schema vs validator | rejects stop |
 | SIGNAL-crit-schema-version-rejected | Critical | any schema-version reject | Schema-preflight runbook | zero rejects |
 | SIGNAL-crit-full-replay-started | Critical | startup mode == FULL_REPLAY | Replay incident runbook (fires only when the emitter ships in production) | replay drains, job runs |

@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * Shared, versioned contract for the feature-candle table
- * (docs/08_implementation/13-candle-log-kv-replay-safety.md).
+ * (docs/08_implementation/04-signal-job.md §Absorbed documents — retired candle era).
  *
  * <p>One table carries the 15-column v2 candle row
  * ({@code code/01_platform/02_sql/ddl/03_feature_candles_15s.sql},

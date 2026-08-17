@@ -17,10 +17,10 @@
 #     b. stale 'pending implementation / still pending' prose in the upstream
 #        layers (requirements, architecture, contracts, project)
 #
-#   Layer 3 — dossier-trio coherence: docs/08_implementation/{04-signal-job,
-#     13-candle-log-kv-replay-safety, 14-candle-log-kv-replay-safety_2} must
-#     agree on the 2026-08-13 re-scope, the DEC-038 externalization landing,
-#     and the P11 status.
+#   Layer 3 — master-dossier coherence: docs/08_implementation/04-signal-job.md
+#     is the single signal-job dossier (13/14 deleted 2026-08-17; content
+#     absorbed) and must carry the 2026-08-13 re-scope markers, the DEC-038
+#     externalization landing, and the P11 status.
 #
 # Exit 0 only when all three layers pass. Run from the repo root.
 set -uo pipefail
@@ -98,7 +98,7 @@ fi
 # ---------------------------------------------------------------------------
 # Layer 3 — dossier-trio coherence
 # ---------------------------------------------------------------------------
-step "Layer 3: dossier-trio coherence (04-signal-job / 13-candle-log-kv-replay-safety / 14-candle-log-kv-replay-safety_2)"
+step "Layer 3: master-dossier coherence (04-signal-job holds the trio markers)"
 
 TRIO_FAIL=0
 trio_check() { # desc, file, literal substring
@@ -121,27 +121,26 @@ trio_check "doc04: SIG-PERF-001 halves disambiguated (benchmark landed / decisio
 	"$TRIO_DIR/04-signal-job.md" \
 	"externalization-benchmark half LANDED"
 
-# Doc 13 (13-candle-log-kv-replay-safety.md): candle [LOG+KV] retired, signal tables carry the facility.
-trio_check "doc13: candle [LOG+KV] RETIRED banner" \
-	"$TRIO_DIR/13-candle-log-kv-replay-safety.md" \
+# Absorbed trio markers (13/14 deleted 2026-08-17; content moved into 04):
+# candle [LOG+KV] retired + signal tables carry the facility; P11 + re-scope markers.
+trio_check "doc04: candle [LOG+KV] RETIRED banner" \
+	"$TRIO_DIR/04-signal-job.md" \
 	"CANDLE [LOG + KV] RETIRED"
-trio_check "doc13: feature_candles_15s_current retired" \
-	"$TRIO_DIR/13-candle-log-kv-replay-safety.md" \
+trio_check "doc04: feature_candles_15s_current retired" \
+	"$TRIO_DIR/04-signal-job.md" \
 	"feature_candles_15s_current"
-
-# Doc 14 (14-candle-log-kv-replay-safety_2.md): P11 + re-scope markers.
-trio_check "doc14: P11 section present" \
-	"$TRIO_DIR/14-candle-log-kv-replay-safety_2.md" \
-	"## P11 — DEC-038 state ownership: dedup externalization"
-trio_check "doc14: re-scope LANDED marker (CANDLE-CANONICAL-001 cell)" \
-	"$TRIO_DIR/14-candle-log-kv-replay-safety_2.md" \
+trio_check "doc04: P11 section present" \
+	"$TRIO_DIR/04-signal-job.md" \
+	"P11 — DEC-038 state ownership: dedup externalization"
+trio_check "doc04: re-scope LANDED marker (CANDLE-CANONICAL-001 cell)" \
+	"$TRIO_DIR/04-signal-job.md" \
 	"re-scope LANDED 2026-08-13"
-trio_check "doc14: P11 landed re-target note" \
-	"$TRIO_DIR/14-candle-log-kv-replay-safety_2.md" \
+trio_check "doc04: P11 landed re-target note" \
+	"$TRIO_DIR/04-signal-job.md" \
 	"P11 landed 2026-08-15"
 
 if [ "$TRIO_FAIL" -ne 0 ]; then
-	fail "dossier-trio coherence broken — the three dossiers disagree on a reconciled truth"
+	fail "master-dossier coherence broken — 04-signal-job.md disagrees with the reconciled truth"
 fi
 
 # ---------------------------------------------------------------------------

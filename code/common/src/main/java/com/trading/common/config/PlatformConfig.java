@@ -64,17 +64,16 @@ public final class PlatformConfig {
     public static final int RESTART_MAX_ATTEMPTS = 3;
     public static final long RESTART_DELAY_MS = 30_000L;
 
-    // ---- sink write-path (tracker 14 box 682/116, 2026-08-12) ----
+    // ---- sink write-path (tracker 14 box 682/116, 2026-08-12; CHG-023 item 4, 2026-08-17) ----
     /**
-     * Governed pin: the sink write-path stall bound. Any single
-     * write/flush/close on the candle sinks that does not complete within
-     * this window throws (StallGuardedSink) — the Flink-side watchdog that
-     * turns a hanging Fluss client write (client.request-timeout default
-     * 30 s, observed ~31 s failure cycles) into a bounded task failure so
-     * the configured restart policy can drive the job to terminal FAILED.
-     * Healthy-path writes complete in milliseconds; 15000 ms is ~10x
-     * headroom. Change via the PlatformConfig/tracker governed-change
-     * process, not a tuning knob.
+     * Governed pin: the sink write-path stall bound. Passed to every Fluss
+     * sink as the Fluss client's own {@code client.request-timeout} (CHG-023
+     * item 4 removed the StallGuardedSink watchdog — the native client
+     * timeout is the stall bound; a stalled write fails within this window
+     * and the configured restart policy drives the job to terminal FAILED
+     * rather than hanging it). Healthy-path writes complete in
+     * milliseconds; 15000 ms is ~10x headroom. Change via the
+     * PlatformConfig/tracker governed-change process, not a tuning knob.
      */
     public static final long SINK_WRITE_STALL_TIMEOUT_MS = 15_000L;
 

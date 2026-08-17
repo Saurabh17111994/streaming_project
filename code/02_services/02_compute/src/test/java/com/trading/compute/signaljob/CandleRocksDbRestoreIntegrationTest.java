@@ -54,7 +54,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracker 14 P4.3 (docs/08_implementation/14-candle-log-kv-replay-safety_2.md) —
+ * Tracker 14 P4.3 (docs/08_implementation/04-signal-job.md §Absorbed documents) —
  * the pinned production state backend proven at RUNTIME, not just in config
  * tests: the actual {@link SignalJob#buildTopology} graph runs on the embedded
  * <b>RocksDB</b> backend inside a Flink MiniCluster, checkpoints to a local

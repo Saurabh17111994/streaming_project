@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -49,18 +48,19 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Tracker 14 P8.2 box 5/6 — telemetry outage is non-blocking, on the REAL
- * {@link SignalJob} graph with the {@link ComputeOtlpEmitter} actually STARTED
- * (the one path every prior graph test skipped: {@code buildTopology} alone
- * never starts the emitter; {@code SignalJob.run} does).
+ * {@link SignalJob} graph with the NATIVE flink-metrics-otel reporter wired
+ * (CHG-023 item 1, 2026-08-17): {@code applyRuntimeOptions} configures the
+ * reporter from {@code OTEL_COLLECTOR_HOST}, so this graph test exercises the
+ * exact run path the old {@code ComputeOtlpEmitter}-started-in-{@code run()}
+ * test covered.
  *
- * <p>The emitter is pointed at {@code 127.0.0.1:1} (refused port — the collector
- * is fully absent), mirroring {@code SignalJob.run}: {@code recordStartupMode}
- * then {@code start()} before {@code executeAsync}. The graph must close every
- * candle window of the canonical 46-row feed, the LOG must reach 46 rows
- * (write path unaffected), the scheduler flush thread must stay alive, and
- * a synchronous {@code flushOnce()} must surface the transport failure as an
- * {@link IOException} while {@code flush()} swallows it — telemetry off the
- * critical path.
+ * <p>The reporter is pointed at {@code 127.0.0.1:1} (refused port — the
+ * collector is fully absent). The graph must still reach RUNNING and close
+ * every candle window of the canonical 46-row feed (the LOG reaches 46 rows —
+ * write path unaffected): a metric-reporter export failure runs on the
+ * reporter's own schedule thread and never fails a task — telemetry off the
+ * critical path (verified: MetricRegistryImpl wraps reporter setup in a
+ * try/catch, and the OTel exporter logs export failures without propagating).
  *
  * <p>Gate: {@code @EnabledIfEnvironmentVariable(COMPUTE_INT_TEST_P6=true)} — same
  * dev-cluster gate as P6/P4.3. Scratch tables only; no live-cluster disturbance.
@@ -124,44 +124,21 @@ class CandleTelemetryOutageIntegrationTest {
         ScratchSet s = createSet();
         MiniClusterWithClientResource cluster = newMiniCluster();
         JobClient job = null;
-        ComputeOtlpEmitter otlp = null;
         cluster.before();
         try {
-            // Mirror SignalJob.run's telemetry wiring exactly — but the collector
-            // endpoint is a refused port: the collector is ABSENT.
-            ComputeOtlpEmitter.recordStartupMode(0); // RESTORE-mode gauge, like run()
-            otlp = new ComputeOtlpEmitter("127.0.0.1:1");
-            otlp.start();
-
-            // Job startup must not block on telemetry: the emitter is started
-            // BEFORE the graph, exactly as in run(), and the job still reaches
-            // RUNNING.
+            // The collector endpoint is a refused port: the collector is ABSENT.
+            // applyRuntimeOptions wires metrics.reporter.otel.exporter.endpoint to
+            // http://127.0.0.1:1 (protocol http) — the reporter instantiates and
+            // its export thread fails every 10 s poll, logged, never fatal.
             appendFeed(s);
             job = startJob(baseEnv(s), "p82-outage");
-            assertTrue(flushThreadAlive(), "emitter scheduler thread must be alive");
-
-            // The transport failure is real and surfaced at the flushOnce() seam:
-            // the collector is unreachable, so the exporter cannot deliver. The
-            // scheduled flush() swallows it (non-blocking); flushOnce() reports it.
-            try {
-                otlp.flushOnce();
-                fail("flushOnce() against a refused port must throw IOException");
-            } catch (IOException expected) {
-                LOG.info("p82-outage: flushOnce() surfaced transport failure: {}",
-                        expected.getMessage());
-            }
 
             // Telemetry must not stop SignalJob processing: the canonical feed
             // closes every window on the LOG despite the outage.
             awaitLogCount(s, WINDOWS * 2L,
                     "candles close with the collector down (46 rows)", 180);
-            assertTrue(flushThreadAlive(),
-                    "emitter scheduler thread must survive the outage (swallow, no rethrow)");
             LOG.info("p82-outage: LOG=46 with collector absent — processing unaffected");
         } finally {
-            if (otlp != null) {
-                otlp.close();
-            }
             try {
                 if (job != null) {
                     job.cancel().get(5, TimeUnit.SECONDS);
@@ -171,11 +148,6 @@ class CandleTelemetryOutageIntegrationTest {
             }
             cluster.after();
         }
-    }
-
-    private static boolean flushThreadAlive() {
-        return Thread.getAllStackTraces().keySet().stream()
-                .anyMatch(t -> "compute-otlp-flush".equals(t.getName()) && t.isAlive());
     }
 
     // ── harness (same shape as P6.2/P6.3) ─────────────────────────────────

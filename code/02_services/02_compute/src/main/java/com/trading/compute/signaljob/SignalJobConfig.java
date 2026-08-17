@@ -546,56 +546,6 @@ public record SignalJobConfig(
         return Boolean.parseBoolean(trimmed);
     }
 
-    /**
-     * Optional RocksDB managed-memory budget for local/embedded execution
-     * (2026-08-17, E2E root cause). Under a real deployment the TM memory is
-     * set by flink-conf.yaml (dev compose: {@code taskmanager.memory.process.size}
-     * 3g → managed fraction ≈ 1.2 GB); under LOCAL execution (no conf file)
-     * Flink falls back to 128 MB TOTAL managed memory, which starves the
-     * RocksDB block cache (bounded dedup cache + candle windows) and collapses
-     * throughput to ≈ the feed rate.
-     *
-     * <p>This key is a passthrough for exactly that case: when set, the value
-     * (a Flink memory string, e.g. {@code 2048m} / {@code 2g}) is written to
-     * {@code taskmanager.memory.managed.size} in
-     * {@code SignalJob.applyRuntimeOptions}. When unset the key stays absent
-     * and the deployment (flink-conf.yaml) stays authoritative — production is
-     * never affected by a default. Validated to be a non-blank string; the
-     * actual memory format is enforced by Flink's own parser at startup.
-     */
-    private static String taskManagerMemoryManagedSize(Map<String, String> env) {
-        String raw = env.get("TASK_MANAGER_MEMORY_MANAGED_SIZE");
-        if (raw == null) {
-            return null;
-        }
-        String trimmed = raw.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalStateException("Config TASK_MANAGER_MEMORY_MANAGED_SIZE must be a "
-                    + "Flink memory string (e.g. '2048m' or '2g'), got empty");
-        }
-        return trimmed;
-    }
-
-    /**
-     * Optional taskmanager.memory.network.max override for embedded/local runs
-     * (E2E). Local MiniCluster execution defaults network memory to 64 MB —
-     * at higher parallelism the connected forming-bar branch needs more
-     * buffers (measured 2026-08-17: p16 deploy failed with "required 17, but
-     * only 13 available"). Unset → the deployment stays authoritative.
-     */
-    private static String taskManagerNetworkMemoryMax(Map<String, String> env) {
-        String raw = env.get("TASK_MANAGER_NETWORK_MEMORY_MAX");
-        if (raw == null) {
-            return null;
-        }
-        String trimmed = raw.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalStateException("Config TASK_MANAGER_NETWORK_MEMORY_MAX must be a "
-                    + "Flink memory string (e.g. '512m' or '1g'), got empty");
-        }
-        return trimmed;
-    }
-
     /** Explicit task parallelism (tracker 14 P4.1). */
     private static int parallelism(Map<String, String> env) {
         int value = intValue(env, "PARALLELISM", 1);

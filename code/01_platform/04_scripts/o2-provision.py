@@ -58,7 +58,14 @@ METRIC_TYPES = {
     "decode_errors_by_reason": "counter",
     "append_latency_ms": "histogram",
     "otelcol_exporter_send_failed_metric_points": "counter",
+    # CHG-023 item 1 (2026-08-17): the schema-version rejection counter now
+    # reaches O2 via the native flink-metrics-otel reporter as the Flink
+    # MetricGroup series below (same flink_taskmanager_job_task_operator_*
+    # shape as the dashboards already query). The hand-emitted
+    # compute_invalid_byreason_schema_version stream is dead — retained as the
+    # historical entry.
     "compute_invalid_byreason_schema_version": "counter",
+    "flink_taskmanager_job_task_operator_compute_invalid_byreason_schema-version": "counter",
 }
 
 
@@ -705,15 +712,28 @@ ALERTS = [
     dict(
         name="SIGNAL-warn-dedup-state",
         stream="flink_taskmanager_job_task_operator_compute_dedup_state_count",
-        conditions=[("value", ">", 250000)],
-        desc="[Warning/compute] Dedup state > 250000 entries (dev envelope headroom; P7 replaces the envelope before P10); recovery = expiry sweep shrinks state. Series = Flink FingerprintDedupFunction gauge (retargeted 2026-08-12 from the dead ComputeOtlpEmitter stream — p8-3-dedup-alert-retarget-2026-08-12.txt)",
+        # 2026-08-17: the old custom condition (value > 6.5M) was PER-SUBTASK —
+        # ~8x too loose for the intended TOTAL envelope (fires only when one
+        # subtask holds > 6.5M). O2 v0.91.5 realtime alerts are per-row only
+        # (evaluate_realtime(row), source-verified) and promql/sql are rejected
+        # for realtime ("Realtime alert should use Custom query type", probed),
+        # so the total is only expressible as a SCHEDULED promql alert. The
+        # reporter's gauge carries a start_time label that changes EVERY flush,
+        # so a naive sum() over-counts ~15x (validated: 202M vs ~23M at peak) —
+        # `max by (subtask_index)` collapses the per-flush series to one value
+        # per subtask, `sum` totals them (validated 16.75M/23.18M @12:52/12:55Z
+        # vs the SQL-derived totals). Evaluates every 1 min.
+        promql="sum(max by (subtask_index) (flink_taskmanager_job_task_operator_compute_dedup_state_count))",
+        promql_condition=(">", 6500000),
+        period=1,
+        frequency=1,
+        desc="[Warning/compute] TOTAL dedup state across ALL subtasks > 6.5M entries (Design-B envelope = 20 480 t/s x 300 s TTL ≈ 6.1M, 2026-08-17 CHG-022/DEC-040: dedup is authoritative Flink keyed state — the MapState IS the set). SCHEDULED promql (O2 v0.91.5 realtime = per-row only, so a cross-subtask sum cannot be realtime); max by (subtask_index) collapses the reporter's per-flush start_time series, sum totals the subtasks — validated 2026-08-17 (naive sum over-counts ~15x). Recovery = check accepted-rate/TTL math vs the envelope, not a cache sweep. Series = Flink FingerprintDedupFunction gauge (retargeted 2026-08-12 from the dead ComputeOtlpEmitter stream; threshold re-based 2026-08-17 to the Design-B envelope TOTAL)",
     ),
-    dict(
-        name="SIGNAL-warn-dedup-expiry",
-        stream="flink_taskmanager_job_task_operator_compute_dedup_expiry_index_count",
-        conditions=[("value", ">", 250000)],
-        desc="[Warning/compute] Dedup expiry index > 250000 entries (dev envelope headroom; P7 replaces the envelope before P10); recovery = expiry sweep. Series = Flink FingerprintDedupFunction gauge (retargeted 2026-08-12 from the dead ComputeOtlpEmitter stream — p8-3-dedup-alert-retarget-2026-08-12.txt)",
-    ),
+    # RETIRED 2026-08-17 (CHG-023 item 2): SIGNAL-warn-dedup-expiry watched
+    # compute_dedup_expiry_index_count — the expiry-index gauge is DELETED with
+    # the index (expiry is native StateTtlConfig on the MapState now; no
+    # event-time timers to stall). SIGNAL-warn-dedup-state above covers the
+    # same Design-B envelope on the live-set count (compute_dedup_state_count).
     dict(
         name="SIGNAL-warn-schema-rejected-rate",
         stream="compute_invalid_byreason_schema_version",
@@ -1195,23 +1215,37 @@ def provision_alerts():
         if name in names:
             print(f"alert exists: {name}")
             continue
+        promql = spec.get("promql")
         body = {
             "name": name,
             "stream_name": spec["stream"],
             "stream_type": "metrics",
-            "is_real_time": True,
-            "query_condition": {
-                "type": "custom",
-                "conditions": [
-                    {"column": col, "operator": op, "value": val}
-                    for col, op, val in spec["conditions"]
-                ],
-            },
+            "is_real_time": promql is None,
+            "query_condition": (
+                {
+                    "type": "promql",
+                    "promql": promql,
+                    "promql_condition": {
+                        "column": "value",
+                        "operator": spec["promql_condition"][0],
+                        "value": spec["promql_condition"][1],
+                        "ignore_case": False,
+                    },
+                }
+                if promql
+                else {
+                    "type": "custom",
+                    "conditions": [
+                        {"column": col, "operator": op, "value": val}
+                        for col, op, val in spec["conditions"]
+                    ],
+                }
+            ),
             "trigger_condition": {
                 "period": spec.get("period", 1),  # minutes
                 "frequency": spec.get(
                     "frequency", 0
-                ),  # real-time: evaluate continuously
+                ),  # real-time: 0 = evaluate continuously
                 "frequency_type": "minutes",
                 "operator": ">=",
                 "threshold": spec.get(

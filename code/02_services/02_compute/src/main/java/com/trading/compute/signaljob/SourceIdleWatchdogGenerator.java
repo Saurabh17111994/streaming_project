@@ -1,6 +1,5 @@
 package com.trading.compute.signaljob;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.function.LongSupplier;
 import org.apache.flink.api.common.eventtime.Watermark;
 import org.apache.flink.api.common.eventtime.WatermarkGenerator;
@@ -96,11 +95,10 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
 
     @Override
     public void onEvent(RowData event, long eventTimestamp, WatermarkOutput output) {
-        // REQ-FC-010 source throughput: one counter increment per source
-        // record (the generator's onEvent fires once per record in the
-        // FLIP-27 source operator). Never blocking — nanosecond static.
-        ComputeOtlpEmitter.recordSourceRecord();
-        delegate.onEvent(event, eventTimestamp, lagRecordingOutput(output));
+        // REQ-FC-010 source throughput: covered natively by the FLIP-27 source
+        // operator's numRecordsOut / numRecordsOutPerSecond metrics (CHG-023
+        // item 1 removed the client-side ComputeOtlpEmitter mirror).
+        delegate.onEvent(event, eventTimestamp, output);
         long now = clock.getAsLong();
         if (EPISODE_REPORTED.getAndSet(false)) {
             LOG.info("signal-job: source resumed after {} ms idle at the tail — records flowing "
@@ -111,7 +109,10 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
 
     @Override
     public void onPeriodicEmit(WatermarkOutput output) {
-        delegate.onPeriodicEmit(lagRecordingOutput(output));
+        // REQ-FC-010 watermark lag: covered natively by the source operator's
+        // currentOutputWatermark gauge (lag = now - watermark at scrape time)
+        // — CHG-023 item 1 removed the client-side ComputeOtlpEmitter gauge.
+        delegate.onPeriodicEmit(output);
         long now = clock.getAsLong();
         long idleMs = now - lastEventWallClockMs;
         // Edge-triggered: report once per idle episode (compareAndSet wins for
@@ -123,37 +124,13 @@ final class SourceIdleWatchdogGenerator implements WatermarkGenerator<RowData> {
                     + "stall; probe-verified 2026-08-13 — verify with a raw-scanner probe "
                     + "subscribing at the tail). Investigate only if the feed should be live.",
                     idleMs, sourceIdleAlertMs);
-            ComputeOtlpEmitter.recordSourceIdleAtTail();
+            // The old compute.source.idle.at.tail DELTA metric was removed with
+            // the emitter (CHG-023 item 1): the native idle signal is the source
+            // operator's numRecordsOutPerSecond meter dropping to 0 + the
+            // currentOutputWatermark gauge freezing (O2 alert retargets to
+            // those native series). The WARN/INFO episode logs remain the
+            // primary operator-facing signal.
         }
-    }
-
-    /**
-     * Wraps the watermark output so every emitted watermark's processing-time
-     * staleness is recorded as the REQ-FC-010 watermark-lag gauge
-     * ({@code now - watermark}, ms) — zero graph nodes, the same decorator
-     * discipline as the rest of this class. A live feed emits watermarks
-     * close to the wall clock; a frozen/stalled tail stops emitting, so the
-     * gauge holds the last value while the idle-episode counter fires.
-     */
-    private WatermarkOutput lagRecordingOutput(WatermarkOutput delegateOutput) {
-        return new WatermarkOutput() {
-            @Override
-            public void emitWatermark(Watermark watermark) {
-                long lag = Math.max(0L, clock.getAsLong() - watermark.getTimestamp());
-                ComputeOtlpEmitter.recordWatermarkLagMs(lag);
-                delegateOutput.emitWatermark(watermark);
-            }
-
-            @Override
-            public void markIdle() {
-                delegateOutput.markIdle();
-            }
-
-            @Override
-            public void markActive() {
-                delegateOutput.markActive();
-            }
-        };
     }
 
     /** TEST-ONLY: resets the job-wide episode latch (keeps tests independent). */

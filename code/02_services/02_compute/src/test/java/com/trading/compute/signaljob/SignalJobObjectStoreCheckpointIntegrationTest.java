@@ -49,7 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracker 14 P4.2 (docs/08_implementation/14-candle-log-kv-replay-safety_2.md) —
+ * Tracker 14 P4.2 (docs/08_implementation/04-signal-job.md §Absorbed documents) —
  * durable checkpoints on a real S3-compatible object store (Cloudflare R2),
  * proven at RUNTIME through the SAME config path the job uses:
  * {@link SignalJobConfig#from} → {@link SignalJob#applyRuntimeOptions} (which

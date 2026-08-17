@@ -14,9 +14,11 @@ import org.junit.jupiter.api.Test;
  * {@code bytes.estimate}. The gauge's per-entry constant
  * ({@link FingerprintDedupFunction#PER_ENTRY_ESTIMATE_BYTES}) must be an
  * UPPER BOUND on the actually serialized size of a
- * {@code fingerprint → (first_seen, expiry)} MapState entry plus its
- * expiry-index bucket contribution — measured here with the same Flink type
- * serializers the HashMap state backend uses.
+ * {@code fingerprint → (first_seen, nominal_expiry)} MapState entry — measured
+ * here with the same Flink type serializers the HashMap state backend uses.
+ * Since CHG-023 item 2 (2026-08-17) the constant includes the +8 B/entry TTL
+ * timestamp RocksDB stores per map entry (Flink TTL docs); the expiry-index
+ * bucket contribution is gone with the index.
  */
 @DisplayName("Dedup per-entry bytes measurement (tracker 14 P5.1)")
 class DedupStateSizeTest {
@@ -35,7 +37,7 @@ class DedupStateSizeTest {
     }
 
     @Test
-    @DisplayName("128 B/entry upper bound covers the serialized key+value for a real state key")
+    @DisplayName("136 B/entry upper bound covers the serialized key+value for a real state key")
     void perEntryEstimateCoversSerializedSize() {
         // A realistic state key: version | token | fingerprint (raw_table_1 v2
         // fingerprints are ~40 chars).
@@ -47,37 +49,21 @@ class DedupStateSizeTest {
         int valueBytes = serialize(entry, FingerprintDedupFunction.DedupEntry.class).length;
 
         // HashMapStateBackend stores key + value + HashMap overhead (~32-48 B
-        // per node); the gauge constant must dominate the serialized payload.
-        assertTrue(keyBytes + valueBytes < FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES,
-                "serialized key+value " + (keyBytes + valueBytes)
+        // per node); the gauge constant must dominate the serialized payload
+        // plus the 8 B TTL timestamp RocksDB adds per map entry.
+        assertTrue(keyBytes + valueBytes + 8 < FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES,
+                "serialized key+value+ttl " + (keyBytes + valueBytes + 8)
                         + " B must fit the " + FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES
                         + " B/entry upper bound");
-    }
-
-    @Test
-    @DisplayName("64 B/bucket upper bound covers one expiry-index bucket entry")
-    void perBucketEstimateCoversExpiryIndex() {
-        // Long bucket key + one list entry (the list itself is the entry's
-        // storage, and it holds N strings — the per-entry cost already covers
-        // the strings, so the bucket constant covers Long key + list node).
-        long expiry = 1_700_300_000_000L;
-        int keyBytes = serialize(expiry, Long.class).length;
-
-        assertTrue(keyBytes < FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES,
-                "serialized Long bucket key " + keyBytes
-                        + " B must fit the " + FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES
-                        + " B/bucket upper bound");
     }
 
     @Test
     @DisplayName("gauge estimate for a full 1.0 GB-scale state stays within the same order")
     void estimateScalesLinearly() {
         long count = 1_000_000L; // 1M live fingerprints
-        long estimate = count * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES
-                + count * FingerprintDedupFunction.PER_BUCKET_ESTIMATE_BYTES;
-        // 128 + 64 = 192 B/entry — 1M entries ≈ 192 MB, same order as the
-        // dossier's per-entry envelope; the gauge is an estimate, not a
-        // memory profiler.
+        long estimate = count * FingerprintDedupFunction.PER_ENTRY_ESTIMATE_BYTES;
+        // 136 B/entry — 1M entries ≈ 136 MB, same order as the dossier's
+        // per-entry envelope; the gauge is an estimate, not a memory profiler.
         assertTrue(estimate >= 100L * 1024L * 1024L, "estimate=" + estimate);
     }
 }

@@ -2,7 +2,7 @@ package com.trading.compute.signaljob;
 
 import com.trading.common.model.FormingBar;
 import com.trading.common.schema.CandleTableSchema;
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
+import com.trading.compute.telemetry.ComputeAlertLogs;
 import java.time.Duration;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.CheckpointingOptions;
@@ -40,8 +40,11 @@ import org.slf4j.LoggerFactory;
  * those boundaries — postponed with the ranking phase.
  *
  * <p>Checkpointing: EXACTLY_ONCE, pinned interval/timeout/max-concurrent
- * (REQ-FC-006); fixed-delay restart 3 × 30s. All sinks stay inside
- * {@code StallGuardedSink} (hang containment, identical on all sinks). The
+ * (REQ-FC-006); fixed-delay restart 3 × 30s. All output sinks are plain
+ * {@code FlussSink}s — the NATIVE stall-guard is the checkpoint timeout
+ * (30 s) + fixed-delay restart failing the job, never hanging it (CHG-023
+ * item 4 removed the StallGuardedSink watchdog; the Fluss client's own
+ * {@code client.request-timeout} bounds each write). The
  * signal LOG sink uses {@code RowDataSerializationSchema(true, true)}
  * (append-only, ignore delete — correct for a LOG table); the candle KV and
  * signal current-state KV sinks use
@@ -74,36 +77,33 @@ public final class SignalJob {
             LOG.info("signal-job: startup mode = {} (restore={}, fullReplay={})",
                     config.startupMode(), config.stateRecoveryPath() != null, config.allowFullReplay());
         }
-        ComputeOtlpEmitter.recordStartupMode(
-                config.startupMode() == SignalJobConfig.StartupMode.RESTORE ? 0 : 1);
-
         // Tracker 14 P8.0 box 828: ship the startup-mode event to the
-        // trading_alerts stream (synchronous — the periodic emitter flush
-        // never runs for these client-side lifecycle events under
-        // `flink run -d`). Best-effort: collector outage never fails the job.
-        ComputeOtlpEmitter.emitAlertLog(config.otelCollectorHost(),
+        // trading_alerts stream. A synchronous emit is required because the
+        // native OTel metric reporter (CHG-023 item 1) only runs INSIDE the
+        // cluster and never sees these client-side lifecycle events under
+        // `flink run -d`. Best-effort: collector outage never fails the job.
+        ComputeAlertLogs.emitAlertLog(config.otelCollectorHost(),
                 config.startupMode() == SignalJobConfig.StartupMode.FULL_REPLAY ? "WARN" : "INFO",
                 "startup-mode",
                 "mode=" + config.startupMode() + " restore=" + (config.stateRecoveryPath() != null)
                         + " fullReplay=" + config.allowFullReplay());
 
         // Tracker 14 P8.0/831 — resource attributes (environment, host,
-        // deployment version, job name, execution mode) ride every payload so
-        // OpenObserve queries can slice by env/host/version. Only known-safe
-        // config fields + hostname; never credentials.
-        ComputeOtlpEmitter.configureResourceAttributes(
+        // deployment version, job name, execution mode) ride the alert-log
+        // payload so OpenObserve queries can slice by env/host/version. Only
+        // known-safe config fields + hostname; never credentials.
+        ComputeAlertLogs.configureResourceAttributes(
                 "deployment.environment", config.deploymentEnv(),
                 "host.name", hostName(),
                 "deployment.version", config.configurationVersion(),
                 "job.name", "signal-job",
                 "flink.execution.mode", "embedded");
 
-        // Process rule 2 (2026-08-10): ship the schema-version rejection counter
-        // to OpenObserve via the OTel collector (delta per 10 s flush). Static
-        // holder + same-JVM drain is exact for the embedded dev run.
-        ComputeOtlpEmitter otlp = new ComputeOtlpEmitter(config.otelCollectorHost());
-        otlp.start();
-
+        // The METRIC half of the retired ComputeOtlpEmitter is gone: the
+        // schema-version rejection counter, dedup gauges, source metrics, and
+        // late-drop counter are all Flink MetricGroup metrics exported by the
+        // native flink-metrics-otel reporter wired in applyRuntimeOptions
+        // (CHG-023 item 1, 2026-08-17). Nothing client-side to start here.
         StreamExecutionEnvironment env = buildTopology(config);
         env.execute("signal-job-compute");
     }
@@ -130,7 +130,7 @@ public final class SignalJob {
             // Tracker 14 P8.0 box 828: record the fail-closed startup event on
             // the trading_alerts stream before rethrowing — the job exits
             // right after, so this is the only chance to ship it.
-            ComputeOtlpEmitter.emitAlertLog(config.otelCollectorHost(), "ERROR",
+            ComputeAlertLogs.emitAlertLog(config.otelCollectorHost(), "ERROR",
                     "schema-preflight-failed",
                     String.valueOf(e.getMessage()));
             throw e;
@@ -229,31 +229,17 @@ public final class SignalJob {
                 .name("candle-late-drop-counter")
                 .uid("candle-late-drop-counter");
 
-        // Tracker 14 box 682/116 (2026-08-12): the candle sink is
-        // wrapped in StallGuardedSink — a Flink-side watchdog
-        // that runs every delegate write/flush/close on a worker thread and
-        // bounds the CALL ITSELF at SINK_WRITE_STALL_TIMEOUT_MS. This is
-        // required because the Fluss client has two unbounded hang points a
-        // post-hoc check cannot see (bytecode-verified in
-        // fluss-client-0.9.1-incubating): flush() blocks forever in
-        // RecordAccumulator.awaitFlushCompletion() (latch never counts down
-        // while the deleted table's batch stays undrained) and close() blocks
-        // forever in awaitTermination(Long.MAX_VALUE) — the sender's shutdown
-        // drain loop needs forceClose=true, which close() only sets AFTER
-        // awaitTermination returns (circular deadlock). On timeout the guard
-        // interrupts the worker (both hang points exit fast on interrupt) and
-        // throws, failing the task so the configured restart policy drives the
-        // job to terminal FAILED instead of cycling FAILING forever.
-        // client.request-timeout (spike-verified: FlussSinkBuilder.build() ->
-        // Configuration.fromMap(configOptions) -> ConnectionFactory, so
-        // sink-scoped options reach the writer client) and
-        // client.writer.retries=2 (default Integer.MAX_VALUE, verified in
-        // Sender.canRetry: attempts < retries) bound transient failures; the
-        // deleted-table case never consults retries (its batch never fails),
-        // so the interrupt-based call bound is the actual unblock.
+        // Plain FlussSink (CHG-023 item 4, 2026-08-17): the StallGuardedSink
+        // watchdog is REMOVED. The native stall-guard is the checkpoint
+        // timeout (30 s) + fixed-delay restart failing the job, never hanging
+        // it; the Fluss client's own request-timeout (client.request-timeout
+        // below) + retries=2 bound the write path. The 2026-08-12 hang the
+        // guard patched (deleted table -> flush latch never counts down) is
+        // now bounded by the checkpoint timeout + restart policy, and the
+        // checkpoint-1 zero-ack stall class was eliminated by Design B (no
+        // RPC on the hot path, CHG-022).
         candles
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.candleTable())
@@ -268,8 +254,7 @@ public final class SignalJob {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("feature-candles-15s-sink")
                 .uid("feature-candles-15s-sink");
 
@@ -286,11 +271,9 @@ public final class SignalJob {
         // table metadata fetched by FlussSink.build() — fail-fast startup if
         // the table is missing or is not a KV table.
         //
-        // Both sinks stay inside StallGuardedSink (tracker 14 box 682/116,
-        // identical on ALL sinks): the Fluss client has two unbounded hang
-        // points only an interrupt-bounded call guard can see; on timeout the
-        // guard fails the task so the restart policy drives the job to
-        // terminal FAILED instead of cycling FAILING forever.
+        // Plain FlussSinks (CHG-023 item 4): the StallGuardedSink watchdog is
+        // removed — the native checkpoint timeout + fixed-delay restart fail
+        // the job on a stalled sink, never hang it.
         DataStream<RowData> signals = candles
                 .keyBy(row -> row.getLong(CandleTableColumns.INSTRUMENT_TOKEN))
                 .process(new SignalDetectionFunction(config))
@@ -349,8 +332,7 @@ public final class SignalJob {
                 .returns(FormingBarTableColumns.ROW_TYPE_INFO)
                 .name("forming-bar-writer")
                 .uid("forming-bar-writer")
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.formingBarTable())
@@ -362,8 +344,7 @@ public final class SignalJob {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("forming-bar-sink")
                 .uid("forming-bar-sink");
 
@@ -373,8 +354,7 @@ public final class SignalJob {
         DataStream<RowData> allSignals = signals.union(formingSignals);
 
         allSignals
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.signalCandidatesTable())
@@ -382,8 +362,7 @@ public final class SignalJob {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("signal-candidates-sink")
                 .uid("signal-candidates-sink");
 
@@ -391,8 +370,7 @@ public final class SignalJob {
                 .filter(new CanonicalSignalFilterFunction())
                 .name("canonical-signal-filter")
                 .uid("canonical-signal-filter")
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
+                .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
                                 .setTable(config.signalCurrentTable())
@@ -400,8 +378,7 @@ public final class SignalJob {
                                 .setOption("client.request-timeout",
                                         config.sinkWriteStallTimeoutMs() + "ms")
                                 .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
+                                .build())
                 .name("signal-candidates-current-sink")
                 .uid("signal-candidates-current-sink");
 
@@ -489,6 +466,40 @@ public final class SignalJob {
         if (config.savepointDir() != null) {
             flinkConfig.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, config.savepointDir());
         }
+        // Native OpenTelemetry metric reporter (CHG-023 item 1, 2026-08-17):
+        // every Signal-job counter/gauge (compute.invalid.byReason.schema-
+        // version, compute.dedup.*, compute.candles.late.dropped, source
+        // throughput/watermark, container memory, ...) is now a Flink
+        // MetricGroup metric exported by flink-metrics-otel — the hand-rolled
+        // ComputeOtlpEmitter metric mirror is deleted. The reporter is wired
+        // from OTEL_COLLECTOR_HOST (default otel-collector:4318 — the HTTP
+        // OTLP port; protocol=http matches the emitter's old HTTP path).
+        // Keys verified against OpenTelemetryReporterOptions + MetricOptions
+        // in the pinned 2.2.1 dist: exporter.endpoint (required),
+        // exporter.protocol (gRPC default → http), service.name/version, and
+        // the standard metrics.reporter.<name>.interval (default 10 s — the
+        // old emitter's flush cadence). ServiceLoader discovers the factory
+        // from the job classpath (embedded/dev/E2E) or /opt/flink/plugins/
+        // (distributed dist — see CHG-023 deployment note).
+        flinkConfig.setString("metrics.reporter.otel.factory.class",
+                "org.apache.flink.metrics.otel.OpenTelemetryMetricReporterFactory");
+        flinkConfig.setString("metrics.reporter.otel.exporter.endpoint",
+                // The /v1/metrics path is REQUIRED in the endpoint (2026-08-17
+                // verification): flink-metrics-otel 2.2.1 passes the configured
+                // value verbatim to the OTLP HTTP sender — no signal-path
+                // append. The shaded SDK's OWN default is
+                // http://localhost:4318/v1/metrics (path included); a bare
+                // host:port endpoint makes the reporter POST to the ROOT, which
+                // the otelcol OTLP receiver answers 404 (observed: every 10 s
+                // flush failed, O2 got nothing until this fix).
+                "http://" + config.otelCollectorHost() + "/v1/metrics");
+        flinkConfig.setString("metrics.reporter.otel.exporter.protocol", "http");
+        flinkConfig.setString("metrics.reporter.otel.service.name", "compute");
+        flinkConfig.setString("metrics.reporter.otel.service.version",
+                config.configurationVersion());
+        // Pin the 10 s cadence explicitly — the DELTA alert semantics (fires
+        // on NEW rejections/episodes per poll, never on replay) depend on it.
+        flinkConfig.setString("metrics.reporter.otel.interval", "10s");
         // Tracker 14 P4.2 — object-store (S3/R2) checkpoint access. The
         // endpoint/credentials/region go into the Flink Configuration ONLY
         // when a checkpoint/savepoint URI is an object-store URI (config

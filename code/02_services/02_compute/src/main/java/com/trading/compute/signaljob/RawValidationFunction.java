@@ -1,6 +1,5 @@
 package com.trading.compute.signaljob;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.flink.api.common.functions.OpenContext;
@@ -117,13 +116,10 @@ public class RawValidationFunction extends RichFlatMapFunction<RowData, RowData>
         // warning on every re-registration of the same name — per-row
         // registration flooded the log during the 2026-08-10 live replay).
         reasonCounters.computeIfAbsent(reason, invalidByReasonGroup::counter).inc();
-        // Ship schema-version rejections to OpenObserve (process rule 2,
-        // 2026-08-10): the counter lives in Flink's in-process registry, which
-        // no reporter exports — the emitter mirrors it to the OTel collector.
-        // Only schema-version is wired now; other reasons stay Flink-local.
-        if ("schema-version".equals(reason)) {
-            ComputeOtlpEmitter.recordSchemaVersionRejection();
-        }
+        // Process rule 2 (2026-08-10): schema-version rejections reach
+        // OpenObserve as the compute.invalid.byReason.schema-version MetricGroup
+        // counter above, exported by the native flink-metrics-otel reporter
+        // (CHG-023 item 1) — the client-side ComputeOtlpEmitter mirror is gone.
     }
 
     /** Package-visible for direct classification tests (no runtime context needed). */

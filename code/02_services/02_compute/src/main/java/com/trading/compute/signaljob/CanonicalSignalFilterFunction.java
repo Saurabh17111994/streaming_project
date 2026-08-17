@@ -1,7 +1,8 @@
 package com.trading.compute.signaljob;
 
-import com.trading.compute.telemetry.ComputeOtlpEmitter;
-import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.api.common.functions.RichFilterFunction;
+import org.apache.flink.metrics.Counter;
 import org.apache.flink.table.data.RowData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,20 +19,29 @@ import org.slf4j.LoggerFactory;
  * is lost. The filter therefore never reorders, retimes, or rewrites rows: a
  * pass-through row is byte-identical to what the LOG sink writes.
  *
- * <p>Dropped rows are counted in {@code compute.signal.kv.filtered.noncanonical}
- * (DELTA per flush) and WARN-logged with the row's instrument/identity so a
- * misconfigured {@code SIGNAL_STRATEGY_*} override is visible in both the O2
- * stream and the job log. The counters are static mirrors of the single-JVM
- * embedded run (same scope as the other {@code ComputeOtlpEmitter} mirrors).
+ * <p>Dropped rows are counted in the {@code compute.signal.kv.filtered.noncanonical}
+ * MetricGroup counter — exported by the native flink-metrics-otel reporter
+ * (CHG-023 item 1; the client-side ComputeOtlpEmitter mirror is gone) — and
+ * WARN-logged with the row's instrument/identity so a misconfigured
+ * {@code SIGNAL_STRATEGY_*} override is visible in both the O2 stream and the
+ * job log.
  *
  * <p>Stateless and deterministic: {@code filter} holds no state and performs
  * no I/O, so replay/restore produces identical KV rows.
  */
-public class CanonicalSignalFilterFunction implements FilterFunction<RowData> {
+public class CanonicalSignalFilterFunction extends RichFilterFunction<RowData> {
 
     private static final long serialVersionUID = 1L;
 
     private static final Logger LOG = LoggerFactory.getLogger(CanonicalSignalFilterFunction.class);
+
+    private transient Counter nonCanonical;
+
+    @Override
+    public void open(OpenContext openContext) {
+        nonCanonical = getRuntimeContext().getMetricGroup().counter(
+                "compute.signal.kv.filtered.noncanonical");
+    }
 
     @Override
     public boolean filter(RowData row) {
@@ -51,7 +61,7 @@ public class CanonicalSignalFilterFunction implements FilterFunction<RowData> {
                 // DEC-035 dual-sink). Everything else stays filtered.
                 SignalCandidatesTableColumns.CANONICAL_FORMING_RULE_ID);
         if (!canonical) {
-            ComputeOtlpEmitter.recordSignalKvFilteredNonCanonical();
+            nonCanonical.inc();
             LOG.warn("signal-canonical-filter: dropping non-canonical signal from the KV "
                     + "current-state (instrument={}, schema={}, strategy={}:{}, rule={}) — the "
                     + "LOG twin keeps every signal",
@@ -59,6 +69,11 @@ public class CanonicalSignalFilterFunction implements FilterFunction<RowData> {
                     schemaVersion, strategyId, strategyVersion, ruleId);
         }
         return canonical;
+    }
+
+    /** Counter-source accessor (tests): the value the MetricGroup counter exports. */
+    long filteredCountForTest() {
+        return nonCanonical == null ? 0L : nonCanonical.getCount();
     }
 
     private static String stringAt(RowData row, int index) {
