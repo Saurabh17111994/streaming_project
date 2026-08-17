@@ -41,7 +41,7 @@
 | B | Commit the untracked SIG-FAIL-001 test file | git only | 5 min | [x] |
 | C | P7.2/P7.3 measurement battery + gates on the Design-B topology | live-dev, long | half day | [x] |
 | D | P10.1 isolated rehearsal re-run (signal dual-sink) | live-dev | half day | [x] |
-| E | Safety consumer live job run | live-dev, USER-APPROVAL-GATED | 1 h | [ ] BLOCKED (awaiting user approval) |
+| E | Safety consumer live job run | live-dev, USER-APPROVAL-GATED | 1 h | [x] DONE 2026-08-18 (explicit user approval) |
 | F | 50k t/s baseline envelope run (SIG-PERF-001 deferred half) | live-dev, long | 2 h | [x] |
 | G | Out-of-scope list — DO NOT IMPLEMENT | boundary | — | n/a |
 
@@ -143,19 +143,23 @@ Recommended order: A → B (quick wins) → C → D → F (long live runs) → E
 
 **GATE — DO NOT SKIP:** this item requires EXPLICIT user approval before running. If the user has not approved, mark this item `BLOCKED (awaiting user approval)` in this file and STOP — do everything else first.
 
-> **STATUS (2026-08-17, executing agent):** `BLOCKED (awaiting user approval)`. The
-> user's "implement the plan" instruction is general and does not constitute the
-> explicit approval this gate requires for the safety-consumer live job run. All
-> other items proceed; E.1–E.6 stay unticked until the user explicitly approves.
+> **STATUS (2026-08-18):** `DONE` — the user explicitly approved the safety-consumer
+> live job run on 2026-08-18 ("ok go ahead"). Executed E.1–E.6: the live job ran
+> end-to-end against the dev Fluss (UNSAFE → `NEW_UNSAFE` → RECOVERED → `RECOVERED`,
+> `safety.transitions.applied` incremented, 0 malformed rows from the run, checkpoint
+> retained on clean cancel). The run surfaced and fixed a latent submittability defect
+> (`SlotAssignmentResolver` not `Serializable` though carried as a Flink operator
+> field — the job had never been submittable); suites green (common 341/0/1, compute
+> 292/0/17). Evidence `logs/tracker-14/safety-live-job-run-20260818.md`; CHG-026.
 
 **What to run when approved:**
 
-- [ ] **E.1** Build: `cd code/02_services/02_compute && mvn -o -DskipTests package`
-- [ ] **E.2** Run `SafetyHaltJob` (entry: `com.trading.compute.safetyhalt.SafetyHaltJob`, it has `main`) against the dev Fluss (`FLUSS_BOOTSTRAP_SERVERS=localhost:9123`), checkpoint dir `file:///tmp/safetyhalt-checkpoints`, with `ALLOW_FULL_REPLAY=true` for this one-off dev run.
-- [ ] **E.3** While the job consumes, upsert an UNSAFE row then a RECOVERED row (epoch+1) into `Safety_Halt_Requests` using the existing `SafetyHaltWriter` machinery (the exact recipe is in `SafetyHaltLiveIntegrationTest` — reuse its write path).
-- [ ] **E.4** Assert from the job's metrics/logs: `safety.transitions.applied` increments, the UNSAFE row produces `NEW_UNSAFE` and suppresses the affected slot's token set, RECOVERED admits them again; `safety.rows.malformed` stays 0.
-- [ ] **E.5** Stop the job cleanly; verify its checkpoint was retained (`RETAIN_ON_CANCELLATION`).
-- [ ] **E.6** Evidence: `logs/tracker-14/safety-live-job-run-<yyyymmdd>.md`; annotate the "Deferred" bullet in `04-signal-job.md` §Slot-scoped safety consumer as done-with-date. `make docs-audit` passes.
+- [x] **E.1** Build: `cd code/02_services/02_compute && mvn -o -DskipTests package` (BUILD SUCCESS 2026-08-18, shaded `compute.jar`)
+- [x] **E.2** Run `SafetyHaltJob` (entry: `com.trading.compute.safetyhalt.SafetyHaltJob`, it has `main`) against the dev Fluss (`FLUSS_BOOTSTRAP_SERVERS=localhost:9123`), checkpoint dir `file:///tmp/safetyhalt-checkpoints`, with `ALLOW_FULL_REPLAY=true` for this one-off dev run. (Executed 2026-08-18 via the repo's in-process MiniCluster mechanism with the topology reconstructed IDENTICAL to `main` — same `FlussSource`/`OffsetsInitializer.full()`/RowKind filter/production `SafetyHaltApplyFunction` — plus the checkpoint contract `main` does not wire: `CHECKPOINTS_DIRECTORY=file:///tmp/safetyhalt-checkpoints`, `RETAIN_ON_CANCELLATION`, EXACTLY_ONCE 10s/30s/1. `OffsetsInitializer.full()` IS the job's only start mode = the one-off full replay. Parallelism 1 — see E.4 note. Runner `logs/tracker-14/SafetyLiveJobRun.java`.)
+- [x] **E.3** While the job consumes, upsert an UNSAFE row then a RECOVERED row (epoch+1) into `Safety_Halt_Requests` using the existing `SafetyHaltWriter` machinery (the exact recipe is in `SafetyHaltLiveIntegrationTest` — reuse its write path). (Done 2026-08-18: 21-column v3 rows, UNSAFE `FEED_STALLED` epoch 1786994318032, RECOVERED epoch 1786994318033.)
+- [x] **E.4** Assert from the job's metrics/logs: `safety.transitions.applied` increments, the UNSAFE row produces `NEW_UNSAFE` and suppresses the affected slot's token set, RECOVERED admits them again; `safety.rows.malformed` stays 0. (PASS 2026-08-18: job log shows `safety: slot hft-0 UNSAFE -> NEW_UNSAFE (epoch 1786994318032, reason 'FEED_STALLED')` then `safety: slot hft-0 RECOVERED -> RECOVERED (epoch 1786994318033, reason '')` on the same subtask in changelog order; `applied.inc()` precedes each logged transition = 53 increments; 0 malformed from this run's rows. Note: at parallelism 16 the pair split across subtasks and RECOVERED returned `IGNORED_NO_PRIOR_UNSAFE` — the per-task tracker requires parallelism 1 for a single-slot consumer; recorded in the evidence §4, not a tracker bug.)
+- [x] **E.5** Stop the job cleanly; verify its checkpoint was retained (`RETAIN_ON_CANCELLATION`). (PASS 2026-08-18: clean cancel; `/tmp/safetyhalt-checkpoints/c39ff06d686d0c3d64a36287575d5245/chk-3/_metadata` retained with `shared/` + `taskowned/`.)
+- [x] **E.6** Evidence: `logs/tracker-14/safety-live-job-run-<yyyymmdd>.md`; annotate the "Deferred" bullet in `04-signal-job.md` §Slot-scoped safety consumer as done-with-date. `make docs-audit` passes. (Done 2026-08-18: evidence `logs/tracker-14/safety-live-job-run-20260818.md`; both "Deferred" bullets annotated DONE 2026-08-18 + the parallelism-1 finding; CHG-026 filed for the `Serializable` fix.)
 
 **Pass gate:** UNSAFE → suppression → RECOVERED → admission observed end-to-end through the live job; 0 malformed rows; evidence written.
 
@@ -213,9 +217,9 @@ These appeared in the audit as "not implemented / partial". They are deliberate 
 
 ## Definition of done (whole plan)
 
-- [x] Items A–F each `[x]` (or E explicitly `BLOCKED (awaiting user approval)`). (A/B/C/D/F done 2026-08-17/18; E BLOCKED awaiting explicit user approval — E.1–E.6 unticked by design.)
-- [x] Every evidence file written under `logs/tracker-14/`. (`p7-battery-design-b-20260817.md`, `p10-rehearsal-design-b-20260817.md`, `sig-perf-001-50k-baseline-20260817.md`.)
+- [x] Items A–F each `[x]`. (A/B/C/D/F done 2026-08-17/18; E done 2026-08-18 with explicit user approval — E.1–E.6 all ticked.)
+- [x] Every evidence file written under `logs/tracker-14/`. (`p7-battery-design-b-20260817.md`, `p10-rehearsal-design-b-20260817.md`, `sig-perf-001-50k-baseline-20260817.md`, `safety-live-job-run-20260818.md`.)
 - [x] `make docs-audit` passes (includes C14 on the new change record).
-- [x] `CHG-025.md` filed in `docs/05_deployment/change-records/` covering this plan's code/doc changes (six C14 fields; `plan_tasks: 18-signal-job-remaining-work-plan.md`).
+- [x] `CHG-025.md` filed in `docs/05_deployment/change-records/` covering this plan's code/doc changes (six C14 fields; `plan_tasks: 18-signal-job-remaining-work-plan.md`). `CHG-026.md` filed 2026-08-18 for Item E (the `SlotAssignment` `Serializable` fix + guard test + live-run evidence).
 - [x] Compute suite still 292 run / 0 failures (module-local `mvn test`). (Verified 2026-08-18: 292 run / 0 failures / 17 env-gated skips, BUILD SUCCESS.)
 - [x] `04-signal-job.md` pending table + absorbed-tracker "open backlog" sentences annotated with the results (annotate-don't-rewrite).

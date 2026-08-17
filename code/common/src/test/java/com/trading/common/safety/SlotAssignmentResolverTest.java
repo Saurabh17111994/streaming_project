@@ -109,4 +109,25 @@ class SlotAssignmentResolverTest {
             assertTrue("hft-0".equals(r.slotIdOf(t)), "token " + t);
         }
     }
+
+    @Test
+    @DisplayName("assignment survives Java serialization (Flink operator field)")
+    void serializableRoundTrip() throws Exception {
+        SlotAssignmentResolver original = SlotAssignmentResolver.of(range(1L, 1500L), 2, 1024);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (java.io.ObjectOutputStream out = new java.io.ObjectOutputStream(bytes)) {
+            out.writeObject(original);
+        }
+        SlotAssignment restored;
+        try (java.io.ObjectInputStream in = new java.io.ObjectInputStream(
+                new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+            restored = (SlotAssignment) in.readObject();
+        }
+        assertEquals(original.manifestFingerprint(), restored.manifestFingerprint());
+        assertEquals(original.slotIds(), restored.slotIds());
+        assertEquals(original.tokenSetHashOf("hft-0"), restored.tokenSetHashOf("hft-0"));
+        assertEquals(original.tokenSetHashOf("hft-1"), restored.tokenSetHashOf("hft-1"));
+        assertEquals("hft-1", restored.slotIdOf(1500L));
+        assertNull(restored.slotIdOf(1501L));
+    }
 }

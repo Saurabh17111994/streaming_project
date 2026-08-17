@@ -1,5 +1,6 @@
 package com.trading.common.safety;
 
+import java.io.Serializable;
 import java.util.List;
 
 /**
@@ -11,8 +12,12 @@ import java.util.List;
  * matches the hash of the tokens deterministically assigned to that slot.
  * A request whose hash disagrees with the manifest-derived assignment is not
  * trusted (its slot could have been claimed by a different manifest).
+ *
+ * <p>Serializable: the assignment is a value object carried as a field of the
+ * safety-halt consumer's Flink operator, so it crosses the job-graph
+ * serialization boundary (Item E live run, 2026-08-18).
  */
-public interface SlotAssignment {
+public interface SlotAssignment extends Serializable {
 
     /** All slot ids, e.g. {@code ["hft-0", "hft-1"]}. */
     List<String> slotIds();

@@ -135,5 +135,6 @@ public final class SlotAssignmentResolver implements SlotAssignment {
         return list;
     }
 
-    record SlotEntry(String slotId, List<Long> tokens, String tokenSetHash) {}
+    record SlotEntry(String slotId, List<Long> tokens, String tokenSetHash)
+            implements java.io.Serializable {}
 }
