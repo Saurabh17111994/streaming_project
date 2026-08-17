@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * Signal job — compute path (docs/08_implementation/04-signal-job.md).
  *
  * <p>Topology: {@code raw_table_1} (Fluss LOG source, full offsets) → raw
- * schema/validity gate → bounded fingerprint dedup → 15-second event-time
+ * schema/validity gate → state-authoritative fingerprint dedup → 15-second event-time
  * tumbling window (OHLCV aggregate) → {@code feature_candles_15s} (Fluss KV
  * upsert sink — user requirement 2026-08-13: candle tables are KV-only, no
  * LOG+KV twin) → MVP signal detection (Slice 2.1, DEC-034) → signal dual-sink
@@ -198,43 +198,17 @@ public final class SignalJob {
                 .name("raw-validation")
                 .uid("raw-validation");
 
+        // State-authoritative dedup (2026-08-16, DEC-038 superseded): the
+        // complete 5-minute dedup set lives in this operator's keyed state,
+        // checkpointed atomically with the source offset — no Fluss store, no
+        // write path. keyBy(instrument_token) keeps every record of a token on
+        // one subtask (key-group hashing, rescale-safe).
         SingleOutputStreamOperator<RowData> deduped = valid
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
-                .process(new FingerprintDedupFunction(config, () ->
-                        FlussFingerprintDedupStateStore.open(
-                                config.bootstrapServers(), config.database(),
-                                config.dedupStateTable(),
-                                java.time.Duration.ofMillis(config.dedupCleanupIntervalMs()))))
+                .process(new FingerprintDedupFunction(config))
                 .returns(ticks.getType())
                 .name("fingerprint-dedup")
                 .uid("fingerprint-dedup");
-
-        // DEC-038 (2026-08-15): the authoritative dedup set lives in Fluss.
-        // First-seen fingerprints leave the dedup operator via the side output
-        // and are durably upserted to fingerprint_dedup through the batched
-        // writer (DEDUP_WRITE_BATCH_MS / DEDUP_WRITE_BATCH_SIZE cadence) + the
-        // FlussSink (INSERT -> UPSERT; barrier-aligned). The sink is wrapped in
-        // StallGuardedSink like every other Fluss sink (box 682/116).
-        deduped
-                .getSideOutput(FingerprintDedupFunction.DEDUP_WRITE_OUTPUT)
-                .keyBy(row -> 0L)
-                .process(new FingerprintDedupWriterFunction(config))
-                .name("fingerprint-dedup-writer")
-                .uid("fingerprint-dedup-writer")
-                .setParallelism(1)
-                .sinkTo(new StallGuardedSink<>(
-                        FlussSink.<RowData>builder()
-                                .setBootstrapServers(config.bootstrapServers())
-                                .setDatabase(config.database())
-                                .setTable(config.dedupStateTable())
-                                .setSerializationSchema(new RowDataSerializationSchema(false, false))
-                                .setOption("client.request-timeout",
-                                        config.sinkWriteStallTimeoutMs() + "ms")
-                                .setOption("client.writer.retries", "2")
-                                .build(),
-                        config.sinkWriteStallTimeoutMs()))
-                .name("fingerprint-dedup-sink")
-                .uid("fingerprint-dedup-sink");
 
         SingleOutputStreamOperator<RowData> candles = deduped
                 .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN))
@@ -472,10 +446,10 @@ public final class SignalJob {
             }
             // E2E root cause (2026-08-17): under LOCAL execution (no
             // flink-conf.yaml) Flink defaults taskmanager.memory.managed.size
-            // to 128 MB TOTAL — the RocksDB block cache (bounded dedup cache
-            // + candle windows) thrashes inside that pool and throughput
-            // collapses to ≈ the feed rate, so the E2E job never catches the
-            // backlog tail. Explicit passthrough
+            // to 128 MB TOTAL — the RocksDB block cache for the Design-B dedup
+            // envelope (~628 MB at 20 480 t/s × 300 s) thrashes inside that
+            // pool and throughput collapses to ≈ the feed rate, so the E2E job
+            // never catches the backlog tail. Explicit passthrough
             // (TASK_MANAGER_MEMORY_MANAGED_SIZE) for embedded/local runs only;
             // unset → the deployment (flink-conf.yaml) stays authoritative.
             if (config.taskManagerMemoryManagedSize() != null) {
@@ -580,20 +554,11 @@ public final class SignalJob {
                             config.database(), config.signalCurrentTable()))
                     .getTableInfo();
             TableContractValidator.validateSignalCurrentKvTable(signalCurrent);
-            // DEC-038: the authoritative dedup set lives in Fluss, so the
-            // fingerprint_dedup table is a hard startup dependency — fail
-            // closed on drift, never run with an empty/mismatched dedup set
-            // (SIG-STATE-003).
-            org.apache.fluss.metadata.TableInfo dedupState = conn
-                    .getTable(org.apache.fluss.metadata.TablePath.of(
-                            config.database(), config.dedupStateTable()))
-                    .getTableInfo();
-            TableContractValidator.validateFingerprintDedupTable(dedupState);
             // Forming-bar durable home (persistence phase, 2026-08-16): the
             // forming_bar KV is Fluss-authoritative durable state (DEC-038
-            // matrix) — a hard startup dependency like the dedup table; fail
-            // closed on drift, never write to a table that contradicts the
-            // 11-column v1 current-state contract.
+            // matrix) — a hard startup dependency; fail closed on drift,
+            // never write to a table that contradicts the 11-column v1
+            // current-state contract.
             org.apache.fluss.metadata.TableInfo formingBar = conn
                     .getTable(org.apache.fluss.metadata.TablePath.of(
                             config.database(), config.formingBarTable()))

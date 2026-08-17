@@ -53,8 +53,9 @@ class SignalJobOperatorUidTest {
         EXPECTED_OPERATORS.put("raw-table-1", "Source: raw-table-1");
         EXPECTED_OPERATORS.put("raw-validation", "raw-validation");
         EXPECTED_OPERATORS.put("fingerprint-dedup", "fingerprint-dedup");
-        EXPECTED_OPERATORS.put("fingerprint-dedup-writer", "fingerprint-dedup-writer");
-        EXPECTED_OPERATORS.put("fingerprint-dedup-sink", "fingerprint-dedup-sink");
+        // The DEC-038 dedup writer/sink branch was removed with design B
+        // (2026-08-16) — the dedup operator's uid is untouched, the writer +
+        // sink uids no longer exist.
         EXPECTED_OPERATORS.put("candle-15s", "candle-15s");
         EXPECTED_OPERATORS.put("candle-late-drop-counter", "candle-late-drop-counter");
         EXPECTED_OPERATORS.put("feature-candles-15s-sink", "feature-candles-15s-sink");

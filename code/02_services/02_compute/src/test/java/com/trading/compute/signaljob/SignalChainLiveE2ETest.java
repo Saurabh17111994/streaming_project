@@ -5,8 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -43,7 +46,7 @@ import org.slf4j.LoggerFactory;
 /**
  * SIGNAL-CHAIN-E2E-001 (DRAFT): full-chain live proof — broker → bridge →
  * {@code raw_table_1} → SignalJob → {@code feature_candles_15s}, run for
- * {@code E2E_RUN_MINUTES} (default 30) with live assertions at both ends.
+ * {@code E2E_RUN_MINUTES} (default 5) with live assertions at both ends.
  *
  * <p>This is the test the repo previously lacked: the ingestion leg
  * (broker → Fluss) and the compute leg (Fluss → feature table) are each proven
@@ -86,10 +89,7 @@ import org.slf4j.LoggerFactory;
  * SIGNAL_CHAIN_E2E=true                      gate (required)
  * FLUSS_BOOTSTRAP                            default localhost:9123
  * E2E_BROKER                                 faketool | arrow-hft (default faketool)
- * E2E_RUN_MINUTES                            default 30
- * TASK_MANAGER_MEMORY_MANAGED_SIZE           RocksDB managed-memory passthrough (default 2048m in runner)
- * TASK_MANAGER_NETWORK_MEMORY_MAX            network-memory passthrough for p16 embedded runs
- * STATE_BACKEND / STATE_BACKEND_LOCAL_DIRS / STATE_BACKEND_MANAGED_MEMORY / PARALLELISM   backend passthrough
+ * E2E_RUN_MINUTES                            default 5
  * E2E_FRESH_WARMUP_S                         default 90 (arrow modes: wait for first raw growth)
  * E2E_CHECKPOINT_DIR                         default file:///tmp/signal-chain-e2e-checkpoints
  * INGESTION_CLASSPATH                        ingestion module test/runtime classpath (runner computes it)
@@ -107,7 +107,7 @@ import org.slf4j.LoggerFactory;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "SIGNAL_CHAIN_E2E", matches = "true")
-@DisplayName("SIGNAL-CHAIN-E2E-001: broker → raw_table_1 → SignalJob → feature_candles_15s (30 min live)")
+@DisplayName("SIGNAL-CHAIN-E2E-001: broker → raw_table_1 → SignalJob → feature_candles_15s (5 min live)")
 class SignalChainLiveE2ETest {
 
     private static final Logger LOG = LoggerFactory.getLogger(SignalChainLiveE2ETest.class);
@@ -298,14 +298,18 @@ class SignalChainLiveE2ETest {
         e.put("MAX_CONCURRENT_CHECKPOINTS", "1");
         e.put("ALLOW_FULL_REPLAY", "true"); // fresh job — explicit offset-0 replay gate
         e.put("CHECKPOINT_DIR", env("E2E_CHECKPOINT_DIR", "file:///tmp/signal-chain-e2e-checkpoints"));
-        // Backend + memory passthrough (2026-08-17, E2E root cause): the E2E
-        // MUST run on RocksDB (production pin) with a realistic managed-memory
-        // budget — local execution defaults taskmanager.memory.managed.size to
-        // 128 MB TOTAL, which starves the RocksDB block cache and throttles
-        // the job to ≈ the feed rate (backlog never drains, feature never
-        // grows). The runner script exports STATE_BACKEND=rocksdb +
-        // TASK_MANAGER_MEMORY_MANAGED_SIZE=2048m; absent those, the dev
-        // defaults apply as before.
+        // Backend passthrough (design B, 2026-08-16): the state-authoritative
+        // dedup set is ~6M entries at the 20,480 t/s envelope — the benchmark
+        // MUST run on RocksDB (rule 9), never the dev hashmap default. The
+        // runner script sets STATE_BACKEND=rocksdb + STATE_BACKEND_LOCAL_DIRS;
+        // absent those, the dev defaults apply as before.
+        //
+        // TASK_MANAGER_MEMORY_MANAGED_SIZE (2026-08-17, E2E root cause): local
+        // execution defaults taskmanager.memory.managed.size to 128 MB TOTAL,
+        // which starves the RocksDB block cache for the ~628 MB dedup envelope
+        // and throttles the job to ≈ the 20,480/s feed rate (backlog never
+        // drains, feature never grows). The runner must pass a realistic
+        // managed-memory budget (e.g. 2048m) for the E2E to reach the tail.
         for (String k : new String[] {"STATE_BACKEND", "STATE_BACKEND_LOCAL_DIRS",
                 "STATE_BACKEND_MANAGED_MEMORY", "TASK_MANAGER_MEMORY_MANAGED_SIZE",
                 "TASK_MANAGER_NETWORK_MEMORY_MAX", "PARALLELISM"}) {

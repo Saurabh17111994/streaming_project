@@ -147,7 +147,7 @@ class RuntimeOptionsTest {
         assertEquals("2048m", flinkConfig.getString("taskmanager.memory.managed.size", null),
                 "the explicit managed-memory budget must reach the Flink Configuration "
                         + "so local/embedded RocksDB gets a real block cache (E2E root cause "
-                        + "2026-08-17: 128 MB local default starves the RocksDB state)");
+                        + "2026-08-17: 128 MB default starves the ~628 MB dedup envelope)");
     }
 
     @Test
