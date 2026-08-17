@@ -36,9 +36,6 @@ class ComputeOtlpEmitterTest {
         emitter.drainSourceIdleAtTailDelta();
         emitter.drainSignalKvFilteredNonCanonicalDelta();
         emitter.drainCandleLateDropDelta();
-        emitter.drainDedupCacheHitsDelta();
-        emitter.drainDedupCacheMissesDelta();
-        emitter.drainDedupRehydrationFailuresDelta();
         ComputeOtlpEmitter.resetStartupModeForTest();
         ComputeOtlpEmitter.resetDedupTelemetryForTest();
     }
@@ -176,7 +173,7 @@ class ComputeOtlpEmitterTest {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
 
         ComputeOtlpEmitter.recordCandleLateDrop(42L, 1_700_015_000L, 12_345L, "beyond-allowed-lateness");
-        String json = emitter.buildMetricsJson(0, 0, 0, 2, 0, 0, 0);
+        String json = emitter.buildMetricsJson(0, 0, 0, 2, 0);
         assertThat(json).contains("\"name\":\"compute.candles.late.dropped\"");
         assertThat(json).contains("\"asInt\":2");
         assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
@@ -191,31 +188,6 @@ class ComputeOtlpEmitterTest {
     }
 
     @Test
-    @DisplayName("dedup cache hits/misses + rehydration failures drain as deltas, ratio + latency as gauges")
-    void dedupTelemetryShipsDeltasAndGauges() {
-        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
-
-        ComputeOtlpEmitter.recordDedupCacheHit();
-        ComputeOtlpEmitter.recordDedupCacheHit();
-        ComputeOtlpEmitter.recordDedupCacheHit();
-        ComputeOtlpEmitter.recordDedupCacheMiss();
-        ComputeOtlpEmitter.recordDedupRehydrationLatencyMs(42L);
-        String json = emitter.buildMetricsJson(0, 0, 0, 0, 3, 1, 0);
-        assertThat(json).contains("\"name\":\"compute.dedup.cache.hits\"");
-        assertThat(json).contains("\"asInt\":3");
-        assertThat(json).contains("\"name\":\"compute.dedup.cache.misses\"");
-        assertThat(json).contains("\"asInt\":1");
-        assertThat(json).contains("\"name\":\"compute.dedup.rehydration.failures\"");
-        assertThat(json).contains("\"asInt\":0");
-        // Drain-window ratio 3/(3+1) = 0.75 as integer basis points (7500);
-        // last lookup 42 ms.
-        assertThat(json).contains("\"name\":\"compute.dedup.cache.hit.ratio\"");
-        assertThat(json).contains("\"asInt\":7500");
-        assertThat(json).contains("\"name\":\"compute.dedup.rehydration.latency.ms\"");
-        assertThat(json).contains("\"asInt\":42");
-    }
-
-    @Test
     @DisplayName("REQ-FC-010: source throughput ships as a DELTA sum, watermark lag as a gauge")
     void reqFc010SourceAndWatermarkMetrics() {
         ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
@@ -227,7 +199,7 @@ class ComputeOtlpEmitterTest {
         assertThat(emitter.drainSourceRecordsDelta()).isEqualTo(3); // drained by the flush thread
         assertThat(emitter.drainSourceRecordsDelta()).isZero();     // drained, never re-fires
         ComputeOtlpEmitter.recordSourceRecord();
-        String json = emitter.buildMetricsJson(0, 0, 1, 0, 0, 0, 0, 0);
+        String json = emitter.buildMetricsJson(0, 0, 1, 0, 0);
         assertThat(json).contains("\"name\":\"compute.source.records\"");
         assertThat(json).contains("\"asInt\":1");
         assertThat(json).contains("\"aggregationTemporality\":\"AGGREGATION_TEMPORALITY_DELTA\"");
@@ -243,25 +215,9 @@ class ComputeOtlpEmitterTest {
         assertThat(withLag).contains("\"gauge\":{\"dataPoints\"");
     }
 
-    @Test
-    @DisplayName("dedup telemetry counters drain independently and never re-fire")
-    void dedupTelemetryCountersDrainAsDeltas() {
-        ComputeOtlpEmitter emitter = new ComputeOtlpEmitter("localhost:4318");
-
-        assertThat(emitter.drainDedupCacheHitsDelta()).isZero();
-        assertThat(emitter.drainDedupCacheMissesDelta()).isZero();
-        assertThat(emitter.drainDedupRehydrationFailuresDelta()).isZero();
-
-        ComputeOtlpEmitter.recordDedupCacheHit();
-        ComputeOtlpEmitter.recordDedupCacheMiss();
-        ComputeOtlpEmitter.recordDedupCacheMiss();
-        ComputeOtlpEmitter.recordDedupRehydrationFailure();
-        assertThat(emitter.drainDedupCacheHitsDelta()).isEqualTo(1);
-        assertThat(emitter.drainDedupCacheMissesDelta()).isEqualTo(2);
-        assertThat(emitter.drainDedupRehydrationFailuresDelta()).isEqualTo(1);
-        // A drained increment never re-fires.
-        assertThat(emitter.drainDedupCacheHitsDelta()).isZero();
-    }
+    // The DEC-038 dedup cache-hit/miss/rehydration telemetry legs were retired
+    // with design B (2026-08-16): the dedup set is authoritative Flink keyed
+    // state — there is no cache and no store to measure.
 
     // ── tracker 14 P8.2: payload contract + delivery/outage semantics ─────
 

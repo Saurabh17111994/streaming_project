@@ -70,13 +70,10 @@ class SignalJobConfigTest {
         assertEquals(false, cfg.tradeDecisionsEnabled(),
                 "TRADE_DECISIONS_ENABLED defaults to false — the decision dual-sink stays off "
                         + "until the ranking feed exists");
-        // DEC-038 dedup externalization defaults
-        assertEquals("fingerprint_dedup", cfg.dedupStateTable());
-        assertEquals(250_000L, cfg.dedupCacheMaxEntries());
-        assertEquals(33_554_432L, cfg.dedupCacheMaxBytes());
-        assertEquals(250L, cfg.dedupWriteBatchMs());
-        assertEquals(5_000L, cfg.dedupWriteBatchSize());
-        assertEquals(60_000L, cfg.dedupCleanupIntervalMs());
+        // The DEC-038 dedup externalization keys (DEDUP_STATE_TABLE /
+        // DEDUP_CACHE_* / DEDUP_WRITE_* / DEDUP_CLEANUP_INTERVAL_MS) were
+        // retired with design B (2026-08-16): the dedup set is authoritative
+        // Flink keyed state, no Fluss store.
     }
 
     @Test
@@ -228,12 +225,6 @@ class SignalJobConfigTest {
         env.put("TRADE_DECISIONS_TABLE", "Trade_Decisions_dev");
         env.put("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state_dev");
         env.put("TRADE_DECISIONS_ENABLED", "true");
-        env.put("DEDUP_STATE_TABLE", "fingerprint_dedup_dev");
-        env.put("DEDUP_CACHE_MAX_ENTRIES", "100000");
-        env.put("DEDUP_CACHE_MAX_BYTES", "16777216");
-        env.put("DEDUP_WRITE_BATCH_MS", "100");
-        env.put("DEDUP_WRITE_BATCH_SIZE", "2000");
-        env.put("DEDUP_CLEANUP_INTERVAL_MS", "30000");
         SignalJobConfig cfg = SignalJobConfig.from(env);
         assertEquals(2_500L, cfg.outOfOrderMs());
         assertEquals(1_000L, cfg.allowedLatenessMs());
@@ -256,12 +247,6 @@ class SignalJobConfigTest {
         assertEquals("trade_instruction_state_dev", cfg.tradeInstructionStateTable());
         assertEquals(true, cfg.tradeDecisionsEnabled(),
                 "explicit TRADE_DECISIONS_ENABLED=true must enable the dual-sink gate");
-        assertEquals("fingerprint_dedup_dev", cfg.dedupStateTable());
-        assertEquals(100_000L, cfg.dedupCacheMaxEntries());
-        assertEquals(16_777_216L, cfg.dedupCacheMaxBytes());
-        assertEquals(100L, cfg.dedupWriteBatchMs());
-        assertEquals(2_000L, cfg.dedupWriteBatchSize());
-        assertEquals(30_000L, cfg.dedupCleanupIntervalMs());
     }
 
     /**
@@ -353,18 +338,8 @@ class SignalJobConfigTest {
         assertTrue(e.getMessage().contains("FORMING_BAR_WRITE_BATCH_MS"), e.getMessage());
     }
 
-    @Test
-    void rejectsNonPositiveDedupTuningKeys() {
-        for (String key : new String[] {"DEDUP_CACHE_MAX_ENTRIES", "DEDUP_CACHE_MAX_BYTES",
-                "DEDUP_WRITE_BATCH_MS", "DEDUP_WRITE_BATCH_SIZE", "DEDUP_CLEANUP_INTERVAL_MS"}) {
-            Map<String, String> env = env();
-            env.put(key, "0");
-            IllegalStateException e = assertThrows(IllegalStateException.class,
-                    () -> SignalJobConfig.from(env), key + " must reject a non-positive value");
-            assertTrue(e.getMessage().contains(key),
-                    "error must name the key, got: " + e.getMessage());
-        }
-    }
+    // The DEC-038 dedup tuning-key rejection legs (DEDUP_CACHE_* /
+    // DEDUP_WRITE_* / DEDUP_CLEANUP_*) were retired with design B (2026-08-16).
 
     // ── tracker 14 P2: canonical version pair is pinned fail-closed
     //    (CANDLE-CANONICAL-001), NOT a tuning knob ──

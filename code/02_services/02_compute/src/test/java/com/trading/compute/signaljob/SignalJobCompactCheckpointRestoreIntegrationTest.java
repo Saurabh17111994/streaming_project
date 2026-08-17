@@ -40,40 +40,40 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
- * DEC-038 SIG-STATE-001 (compact-checkpoint restore, bounded size) — the last
- * pending half of the row in {@code docs/08_implementation/04-signal-job.md}:
- * the MiniCluster restore with the dedup table PRESENT, asserting (a) the
- * checkpoint does NOT grow with Fluss dedup cardinality (bounded working
- * state, never a second copy of the durable set) and (b) a strict restore
- * resumes from the compact checkpoint with no full replay, inside the 30 s
- * budget.
+ * Design-B checkpoint/restore + rescale validation (2026-08-16; rules C + D of
+ * the state-authoritative dedup change): the dedup set is authoritative Flink
+ * keyed state, checkpointed atomically with the source offset, so (a) a strict
+ * restore reconstructs the COMPLETE dedup set and a replay of already-accepted
+ * fingerprints is never re-accepted, and (b) a rescale restore (1 → 2) cannot
+ * split identical keys across subtasks — keyBy(instrument_token) + Flink
+ * key-group redistribution keep every record of a token on exactly one
+ * subtask at any parallelism.
  *
- * <p><b>The dedup table is present.</b> The graph wires the real
- * {@link FingerprintDedupFunction} with the real writer path — first-seen rows
- * leave via the {@code fingerprint-dedup-write} side output, are batched by
- * {@link FingerprintDedupWriterFunction}, and land in a SHARED
- * {@link InMemoryFingerprintDedupStateStore} (the Fluss-table model) through a
- * store-put sink. The shared store survives across MiniCluster phases exactly
- * as the Fluss {@code fingerprint_dedup} table survives a job restart — so
- * restore re-feeds are decided by Fluss authority (cache miss → store
- * SEEN_LIVE), never re-accepted.
+ * <p>This REPLACES the DEC-038 SIG-STATE-001 compact-checkpoint test: under
+ * the old bounded-cache design the checkpoint had to stay flat across dedup
+ * cardinality (the Fluss table was authoritative); under design B the
+ * checkpoint carries the full live set by construction, so the measured bytes
+ * are evidence that the state IS checkpointed (job B = 5x the live set of job
+ * A must produce a larger checkpoint), and the restore phase is the
+ * functional proof that the checkpointed set is complete and correct.
  *
- * <p><b>Bounded-checkpoint measurement.</b> Two jobs with the SAME cache cap
- * (500) but 5× the accepted fingerprints (2,000 vs 10,000 — the store grows
- * 2,000 → 12,000 via the shared table). The completed-checkpoint byte size is
- * walked on the local FS (the whole job root under retention 1 = one
- * checkpoint's state). DEC-038 hard invariant: the checkpoint is bounded by
- * the cache cap and does NOT grow with Fluss dedup cardinality — asserted as
- * {@code S(10k) < 3 × S(2k)}. This is also the regression guard for the
- * eviction timer-deletion fix: without it, evicted buckets leave orphaned
- * event-time timers, and the checkpoint grows ~with the accepted count.
+ * <p><b>The post-checkpoint replay window.</b> Records accepted AFTER the last
+ * completed checkpoint are replayed on restore; their entries are not in the
+ * restored state, so they re-pass downstream. The window is bounded by the
+ * checkpoint interval (10 s) and is inherent to at-least-once recovery — it
+ * existed identically under DEC-038 (post-checkpoint first-seen rows had not
+ * reached a completed Fluss checkpoint either). This test validates the
+ * PRE-checkpoint window: every fingerprint whose entry was checkpointed is
+ * swallowed on replay, never re-accepted.
  *
- * <p><b>No-full-replay restore.</b> Phase 3 restores the 10,000-fingerprint
- * job's latest checkpoint strictly (2× parallelism, no
- * {@code allowNonRestoredState}) on a fresh MiniCluster and re-feeds all
- * 10,000 + 2 new fingerprints: exactly the 2 NEW ones emit (a zero-state
- * re-run would emit all 10,002). Restore-submit → first-new-output duration is
- * recorded and must stay under the 30 s budget.
+ * <p><b>Phases.</b> Job A (parallelism 2, 2,000 fingerprints) and job B
+ * (parallelism 1, 10,000 fingerprints — the full live set on one subtask)
+ * each emit, checkpoint once on top of the fully-built state, and are
+ * cancelled with the checkpoint retained. Phase 3 restores job B's latest
+ * checkpoint at 2x parallelism (1 → 2 rescale) and re-feeds all 10,000 + 2
+ * new fingerprints: exactly the 2 NEW ones emit (a zero-state re-run would
+ * emit all 10,002). Restore-submit → first-new-output duration must stay under
+ * the 30 s checkpoint budget.
  *
  * <p>Gate: {@code @EnabledIfEnvironmentVariable(COMPUTE_INT_TEST_SIG_STATE_RESTORE=true)}
  * — skipped in the normal suite (MiniCluster). Host-runnable: embedded
@@ -83,30 +83,21 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "COMPUTE_INT_TEST_SIG_STATE_RESTORE", matches = "true")
-@DisplayName("DEC-038 SIG-STATE-001: checkpoint bounded across dedup cardinality; strict restore, no full replay, < 30s")
+@DisplayName("Design B: checkpointed dedup set survives restore + 1->2 rescale; replay never re-accepts")
 class SignalJobCompactCheckpointRestoreIntegrationTest {
-
-    /** The Fluss-table model — shared across ALL phases (survives restarts). */
-    private static final InMemoryFingerprintDedupStateStore SHARED_STORE =
-            new InMemoryFingerprintDedupStateStore();
 
     /** Collects main-output fingerprints (accepted first-seen), parallel-safe. */
     private static final List<String> EMITTED = Collections.synchronizedList(new ArrayList<>());
 
     private static final Duration POLL = Duration.ofMillis(250);
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
-    private static final long CACHE_CAP = 500L;
     private static final int RUN_A_COUNT = 2_000;
     private static final int RUN_B_COUNT = 10_000;
 
     /**
-     * Wall-clock base for event times. The store's read path judges expiry by
-     * the PROCESSING-time clock (nowMs): a fixture with a historical event time
-     * (e.g. 1_700_000_000_000) stores {@code first_seen} in the past, so every
-     * row is {@code SEEN_EXPIRED} (re-acceptable) by restore time and the
-     * restore re-feed re-accepts everything — the exact failure this test
-     * caught. Basing event time on the real clock keeps every row live
-     * ({@code SEEN_LIVE}) for the whole ~60 s run (TTL = 300 s).
+     * Wall-clock base for event times: every re-fed row must still be inside
+     * its 5-minute TTL at restore time, so the restored entries are still live
+     * (expiry = first_seen + TTL, first_seen based on the real clock).
      */
     private static final long WALL_T0 = System.currentTimeMillis();
 
@@ -122,16 +113,6 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         env.put("CHECKPOINT_TIMEOUT_MS", "30000");
         env.put("MAX_CONCURRENT_CHECKPOINTS", "1");
         env.put("ALLOW_FULL_REPLAY", "true");
-        // Bounded working cache — the checkpoint must stay ≤ this, independent
-        // of how many fingerprints the Fluss table holds.
-        env.put("DEDUP_CACHE_MAX_ENTRIES", String.valueOf(CACHE_CAP));
-        // Deterministic durable-write: the writer flushes synchronously with
-        // each emitted first-seen row (batch size 1), so by the time the main
-        // output has emitted all `count` rows, the store holds all `count` —
-        // no dependence on the 250 ms processing-time flush timer vs the job
-        // cancel. The writer's buffer is transient (never managed state), so
-        // the checkpoint-size measurement is unaffected by this setting.
-        env.put("DEDUP_WRITE_BATCH_SIZE", "1");
         return env;
     }
 
@@ -202,47 +183,6 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         }
     }
 
-    /**
-     * The fingerprint_dedup sink: durable putFirstSeen per first-seen row. In
-     * production this is the FlussSink upserting {@code fingerprint_dedup};
-     * here it writes the shared table model so the durable set survives the
-     * job restart (Fluss authority).
-     */
-    private static final class StorePutSink implements Sink<RowData> {
-        private static final long serialVersionUID = 1L;
-
-        @Override
-        public SinkWriter<RowData> createWriter(WriterInitContext context) {
-            return new SinkWriter<>() {
-                @Override
-                public void write(RowData row, Context context) {
-                    try {
-                        SHARED_STORE.putFirstSeen(
-                                row.getLong(FingerprintDedupTableColumns.INSTRUMENT_TOKEN),
-                                row.getString(FingerprintDedupTableColumns.FINGERPRINT_VERSION)
-                                        .toString(),
-                                row.getString(FingerprintDedupTableColumns.EVENT_FINGERPRINT)
-                                        .toString(),
-                                row.getLong(FingerprintDedupTableColumns.FIRST_SEEN_MS),
-                                row.getLong(FingerprintDedupTableColumns.EXPIRY_MS));
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-
-                @Override
-                public void flush(boolean endOfInput) {
-                    // in-memory store is already durable for the test's purpose
-                }
-
-                @Override
-                public void close() {
-                    // nothing to release
-                }
-            };
-        }
-    }
-
     private static Configuration baseConfig(Path workDir) {
         Configuration config = new Configuration();
         config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "file://" + workDir);
@@ -267,23 +207,23 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
 
     /**
      * The real dedup sub-graph: source → toRow → keyBy(token) → dedup → main
-     * output sink; first-seen rows → side output → writer → store-put sink.
-     * Checkpoint storage + restore go through the declarative Configuration
-     * (the same route SignalJob uses — Flink 2.2.1 removed
+     * output sink. No side output, no writer, no store — design B has no write
+     * path. Checkpoint storage + restore go through the declarative
+     * Configuration (the same route SignalJob uses — Flink 2.2.1 removed
      * {@code CheckpointConfig.setCheckpointStorage}; restore reads
      * {@code StateRecoveryOptions.SAVEPOINT_PATH}). The SAME configuration is
      * the MiniCluster's (JobManager resolves checkpoint storage from its own
      * config) AND the env's — the FS walk must find the checkpoints under the
      * phase's checkpoint root.
      */
-    private static JobClient submit(Configuration config,
-            List<RowSpec> feed, boolean restore, String restorePath) throws Exception {
+    private static JobClient submit(Configuration config, List<RowSpec> feed, boolean restore,
+            String restorePath, int parallelism) throws Exception {
         if (restore) {
             config.set(StateRecoveryOptions.SAVEPOINT_PATH, restorePath);
         }
         StreamExecutionEnvironment env =
                 StreamExecutionEnvironment.getExecutionEnvironment(config);
-        env.setParallelism(2);
+        env.setParallelism(parallelism);
         env.enableCheckpointing(10_000L, CheckpointingMode.EXACTLY_ONCE);
         env.getCheckpointConfig().setExternalizedCheckpointRetention(
                 ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION);
@@ -292,19 +232,9 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
                 env.addSource(new EmitOnceThenPark(feed)).uid("src")
                         .map(SignalJobCompactCheckpointRestoreIntegrationTest::toRow).uid("map")
                         .keyBy(row -> row.getLong(RawTableColumns.INSTRUMENT_TOKEN), Types.LONG)
-                        .process(new FingerprintDedupFunction(
-                                SignalJobConfig.from(env()), () -> SHARED_STORE))
+                        .process(new FingerprintDedupFunction(SignalJobConfig.from(env())))
                         .uid("dedup");
         deduped.sinkTo(new CollectingSink()).uid("out");
-        // The durable-write path: side output → keyBy(constant) → batched
-        // writer (parallelism 1) → store sink — the exact SignalJob wiring.
-        deduped.getSideOutput(FingerprintDedupFunction.DEDUP_WRITE_OUTPUT)
-                .keyBy(row -> 0L)
-                .process(new FingerprintDedupWriterFunction(SignalJobConfig.from(env())))
-                .setParallelism(1)
-                .uid("dedup-writer")
-                .sinkTo(new StorePutSink())
-                .uid("dedup-sink");
         return env.executeAsync();
     }
 
@@ -342,11 +272,7 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         return chks;
     }
 
-    /**
-     * Latest completed checkpoint path (highest N), or null. Retention 1 means
-     * it is also the only chk-N present; the job root holds its shared +
-     * taskowned state.
-     */
+    /** Latest completed checkpoint path (highest N), or null. */
     private static String latestCompletedCheckpoint(Path cpRoot) throws IOException {
         List<Path> chks = completedCheckpoints(cpRoot);
         return chks.isEmpty() ? null : chks.get(chks.size() - 1).toString();
@@ -377,11 +303,7 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         return p;
     }
 
-    /**
-     * Latest checkpoint's full state size: the whole job root (latest chk-N +
-     * its shared/taskowned siblings). Retention 1 + RETAIN_ON_CANCELLATION
-     * keeps exactly this set on disk.
-     */
+    /** Latest checkpoint's full state size (whole job root). */
     private static long latestCheckpointBytes(Path cpRoot) throws IOException {
         String latest = latestCompletedCheckpoint(cpRoot);
         assertFalse(latest == null, "no completed checkpoint under " + cpRoot);
@@ -394,8 +316,7 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         while (System.currentTimeMillis() < deadline) {
             JobStatus status = job.getJobStatus().get(10, TimeUnit.SECONDS);
             if (status == JobStatus.FAILED || status == JobStatus.CANCELED) {
-                fail("job " + status + " before " + want + " completed checkpoint(s) — "
-                        + "see logs; store rows=" + SHARED_STORE.rowCount());
+                fail("job " + status + " before " + want + " completed checkpoint(s) — see logs");
             }
             if (completedCheckpoints(cpRoot).size() >= want) {
                 return;
@@ -420,46 +341,36 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
     }
 
     @Test
-    @DisplayName("checkpoint bounded across 5x dedup cardinality; strict restore, no full replay, < 30s")
-    void compactCheckpointBoundedAndRestoresWithoutFullReplay() throws Exception {
+    @DisplayName("checkpointed dedup set survives restore + 1->2 rescale; replay never re-accepts; < 30s")
+    void checkpointedStateRestoresAndRescalesWithoutReacceptingReplay() throws Exception {
         org.apache.logging.log4j.core.config.Configurator.setRootLevel(
                 org.apache.logging.log4j.Level.INFO);
         Path workDir = Files.createTempDirectory("sig-state-001-");
         try {
-            // ---- Job A: 2,000 fingerprints, cache cap 500 -------------------
-            long sA = runSizedJob(workDir, "jobA", "fp-a", RUN_A_COUNT, RUN_A_COUNT);
-            // ---- Job B: 10,000 fingerprints (5x), SAME cache cap ------------
-            long sB = runSizedJob(workDir, "jobB", "fp-b", RUN_B_COUNT,
-                    (long) RUN_A_COUNT + RUN_B_COUNT);
+            // ---- Job A: 2,000 fingerprints at parallelism 2 ----------------
+            long sA = runSizedJob(workDir, "jobA", "fp-a", RUN_A_COUNT, 2);
+            // ---- Job B: 10,000 fingerprints (5x) at parallelism 1 ---------
+            // The FULL live set on a single subtask — the restore below at
+            // parallelism 2 is a genuine 1 -> 2 rescale.
+            long sB = runSizedJob(workDir, "jobB", "fp-b", RUN_B_COUNT, 1);
 
-            long storeRows = SHARED_STORE.rowCount();
-            System.out.println("SIG-STATE-001[checkpoint-size] S(2k)=" + sA
-                    + " bytes, S(10k)=" + sB + " bytes, ratio=" + (sB / (double) sA)
-                    + ", store-rows=" + storeRows + ", cache-cap=" + CACHE_CAP);
-            // Measured: fixed = ratio ~1.00 (54465 vs 54482); broken (no timer
-            // deletion on eviction) = ratio ~2.70 (79982 vs 215982 — the
-            // orphaned event-time timers accumulate in the checkpoint). 1.5x
-            // sits well between, so the assertion guards the DEC-038 invariant
-            // with real margin while never flaking on FS overhead.
-            assertTrue(sB < 3L * sA / 2L,
-                    "checkpoint must NOT grow with Fluss dedup cardinality: 5x fingerprints "
-                            + "(2,000 -> 10,000, store " + storeRows + ") but checkpoint "
-                            + sB + " < 1.5x " + sA + "=" + (3L * sA / 2L) + " — the checkpoint "
-                            + "duplicates the durable dedup set (bounded-cache/timer invariant "
-                            + "broken, DEC-038 hard rule)");
-            assertEquals(12_000, storeRows,
-                    "the shared dedup table holds every first-seen fingerprint (2,000 + 10,000)");
+            System.out.println("DESIGN-B[checkpoint-size] S(2k)=" + sA
+                    + " bytes, S(10k)=" + sB + " bytes, ratio=" + (sB / (double) sA));
+            // Inverted DEC-038 invariant: the checkpoint MUST grow with the
+            // live set — the full dedup set is checkpointed state now. A flat
+            // checkpoint would mean the state is not being captured.
+            assertTrue(sB > sA,
+                    "checkpoint must carry the full live dedup set: 5x fingerprints "
+                            + "(2,000 -> 10,000) must grow the checkpoint from " + sA
+                            + " to more than " + sA + " bytes (got " + sB + ")");
 
-            // ---- Phase 3: strict restore of the 10,000-fingerprint job -----
-            // Scope to JOB B's root: both jobA and jobB have a chk-1, so a
-            // whole-tree scan ties on the checkpoint number and could restore
-            // the WRONG (2,000-fingerprint) state.
+            // ---- Phase 3: strict restore at 2x parallelism (1 -> 2 rescale) -
             String restore = latestCompletedCheckpoint(workDir.resolve("jobB"));
             assertFalse(restore == null, "latest jobB checkpoint to restore from");
             long restoreStart = System.nanoTime();
             runRestoreAndVerify(workDir, restore);
             long restoreMs = (System.nanoTime() - restoreStart) / 1_000_000L;
-            System.out.println("SIG-STATE-001[restore] restore-to-first-new-output="
+            System.out.println("DESIGN-B[restore] restore-to-first-new-output="
                     + restoreMs + " ms (budget 30000)");
             assertTrue(restoreMs < 30_000L,
                     "restore must resume inside the 30 s budget, took " + restoreMs + " ms");
@@ -470,32 +381,26 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
 
     /**
      * Run one sized job (fresh MiniCluster): await all `count` first-seen
-     * emitted + durable in the shared store + one completed checkpoint ON TOP
-     * of that state (retention 1 keeps exactly the latest chk-N on disk), then
-     * return the checkpoint's byte size. The main-output emit and the
-     * side-output → writer → store write cross a network shuffle (writer is
-     * parallelism 1), so the store count is awaited too — no in-flight rows at
-     * measure time. `expectedStoreRows` is the CUMULATIVE table size after this
-     * run (2000 after run A, 12000 after run B).
+     * emitted + one completed checkpoint ON TOP of that state (retention 1
+     * keeps exactly the latest chk-N on disk), then return the checkpoint's
+     * byte size.
      */
     private long runSizedJob(Path workDir, String runId, String fpPrefix, int count,
-            long expectedStoreRows) throws Exception {
+            int parallelism) throws Exception {
         Path sub = workDir.resolve(runId);
         Files.createDirectories(sub);
         Configuration config = baseConfig(sub);
-        MiniClusterWithClientResource cluster = cluster(config, 2);
+        MiniClusterWithClientResource cluster = cluster(config, parallelism);
         cluster.before();
         try {
             EMITTED.clear();
-            JobClient job = submit(config, rows(fpPrefix, count, 1L, WALL_T0), false, null);
-            // State fully built FIRST (main output + durable store write), then
-            // one completed checkpoint ON TOP of it — the measured bytes are
-            // the checkpoint that carries all `count` fingerprints' bounded
-            // working state.
+            JobClient job = submit(config, rows(fpPrefix, count, 1L, WALL_T0), false, null,
+                    parallelism);
+            // State fully built FIRST (main output), then one completed
+            // checkpoint ON TOP of it — the measured bytes are the checkpoint
+            // that carries all `count` fingerprints' dedup state.
             awaitTrue(fpPrefix + ": all " + count + " first-seen emitted",
                     () -> EMITTED.size() == count);
-            awaitTrue(fpPrefix + ": all " + count + " durable in the store",
-                    () -> SHARED_STORE.rowCount() >= expectedStoreRows);
             awaitCompletedCheckpoints(job, sub, 1);
             long bytes = latestCheckpointBytes(sub);
             cancelAndWait(job);
@@ -505,7 +410,13 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         }
     }
 
-    /** Fresh MiniCluster, strict restore, re-feed all 10,000 + 2 new. */
+    /**
+     * Fresh MiniCluster, strict restore at 2x parallelism (job B ran at 1),
+     * re-feed all 10,000 + 2 new. Every re-fed fingerprint whose entry was in
+     * the checkpoint must be swallowed (never re-accepted); only the 2 new
+     * pass. All rows share token 1 — the key-group redistribution across the
+     * 1 -> 2 rescale must keep the whole set on exactly one subtask.
+     */
     private void runRestoreAndVerify(Path workDir, String restorePath) throws Exception {
         EMITTED.clear();
         Path sub = workDir.resolve("jobB-restore");
@@ -516,18 +427,18 @@ class SignalJobCompactCheckpointRestoreIntegrationTest {
         try {
             List<RowSpec> refeed = new ArrayList<>(rows("fp-b", 10_000, 1L, WALL_T0));
             refeed.addAll(rows("fp-new", 2, 1L, WALL_T0 + 20_000_000L));
-            JobClient job = submit(config, refeed, true, restorePath);
+            JobClient job = submit(config, refeed, true, restorePath, 2);
             awaitTrue("restored job to pass exactly the 2 NEW fingerprints",
                     () -> EMITTED.size() == 2);
             List<String> emitted = new ArrayList<>(EMITTED);
             List<String> expected = rows("fp-new", 2, 1L, WALL_T0 + 20_000_000L).stream()
                     .map(RowSpec::fingerprint).sorted().collect(Collectors.toList());
             assertEquals(expected, emitted.stream().sorted().collect(Collectors.toList()),
-                    "restored dedup state + Fluss authority must swallow all 10,000 re-fed "
-                            + "fingerprints (no full replay) and pass exactly the new ones — a "
-                            + "zero-state re-run would have emitted all 10,002");
+                    "restored dedup state must swallow all 10,000 re-fed fingerprints "
+                            + "(no full replay) and pass exactly the new ones — a zero-state "
+                            + "re-run would have emitted all 10,002");
             assertTrue(job.getJobStatus().get(15, TimeUnit.SECONDS) == JobStatus.RUNNING,
-                    "restored job must run (strict restore did not fail)");
+                    "restored job must run (strict restore at 1 -> 2 did not fail)");
             cancelAndWait(job);
         } finally {
             cluster.after();

@@ -4,28 +4,15 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Pure expiry + bounded cleanup-selection logic for the {@code fingerprint_dedup}
- * state table (DEC-038; design: docs/08_implementation/04-signal-job.md
- * §Design — fingerprint_dedup dedup state table).
+ * Pure expiry logic for fingerprint deduplication (design B, 2026-08-16:
+ * the dedup set is authoritative Flink keyed state).
  *
- * <p>Fluss 0.9.1 has no per-key TTL, so logical expiry is writer-enforced:
- *
- * <ol>
- *   <li>the write path stores {@code expiry_ms = first_seen_ms + DEDUP_TTL_MS}
- *       exactly — {@link #expiryMs};</li>
- *   <li>the read path treats a row as a duplicate iff the key exists AND
- *       {@code expiry_ms} is in the future — {@link #isExpired} makes stale
- *       rows harmless, never a false "seen" after expiry;</li>
- *   <li>the cleanup pass deletes rows with {@code expiry_ms < now} in bounded
- *       batches on {@code DEDUP_CLEANUP_INTERVAL_MS} — {@link #selectBatch}
- *       picks the earliest-expiring keys first (deterministic, re-entrant, so
- *       an interrupted pass resumes on the next tick and never loses rows).</li>
- * </ol>
- *
- * <p>The exact Fluss delete/ack semantics of the live cleanup pass are
- * evidence-gated (SIG-STATE-001/002); this class is the pure, unit-tested
- * selection/expiry core the live pass drives. Growth is bounded by
- * construction: entries = accepted rate × TTL horizon.
+ * <p>{@link #expiryMs} defines the exact event-time expiry used by
+ * {@link FingerprintDedupFunction}: {@code first_seen_ms + DEDUP_TTL_MS}.
+ * {@link #isExpired} and {@link #selectBatch} remain as the reference
+ * semantics of the retired Fluss-backed dedup store (DEC-038) — they are
+ * unit-tested here and kept for test-only use; the live operator expires via
+ * event-time timers, not these helpers.
  */
 public final class DedupExpiry {
 

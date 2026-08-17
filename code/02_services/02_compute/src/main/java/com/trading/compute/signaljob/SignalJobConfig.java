@@ -91,6 +91,8 @@ public record SignalJobConfig(
         String savepointDir,
         String stateBackendLocalDirs,
         boolean stateBackendManagedMemory,
+        String taskManagerMemoryManagedSize,
+        String taskManagerNetworkMemoryMax,
         int parallelism,
         String s3Endpoint,
         String s3AccessKey,
@@ -100,13 +102,7 @@ public record SignalJobConfig(
         long sinkWriteStallTimeoutMs,
         String tradeDecisionsTable,
         String tradeInstructionStateTable,
-        boolean tradeDecisionsEnabled,
-        String dedupStateTable,
-        long dedupCacheMaxEntries,
-        long dedupCacheMaxBytes,
-        long dedupWriteBatchMs,
-        long dedupWriteBatchSize,
-        long dedupCleanupIntervalMs) implements Serializable {
+        boolean tradeDecisionsEnabled) implements Serializable {
 
     public static SignalJobConfig fromEnv() {
         return from(System.getenv());
@@ -161,6 +157,8 @@ public record SignalJobConfig(
                 savepointDir(env),
                 stateBackendLocalDirs(env),
                 stateBackendManagedMemory(env),
+                taskManagerMemoryManagedSize(env),
+                taskManagerNetworkMemoryMax(env),
                 parallelism(env),
                 s3Endpoint(env),
                 s3AccessKey(env),
@@ -170,13 +168,7 @@ public record SignalJobConfig(
                 sinkWriteStallTimeoutMs(env),
                 env.getOrDefault("TRADE_DECISIONS_TABLE", "Trade_Decisions"),
                 env.getOrDefault("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state"),
-                booleanValue(env, "TRADE_DECISIONS_ENABLED", false),
-                env.getOrDefault("DEDUP_STATE_TABLE", "fingerprint_dedup"),
-                positiveLong(env, "DEDUP_CACHE_MAX_ENTRIES", 250_000L),
-                positiveLong(env, "DEDUP_CACHE_MAX_BYTES", 33_554_432L),
-                positiveLong(env, "DEDUP_WRITE_BATCH_MS", 250L),
-                positiveLong(env, "DEDUP_WRITE_BATCH_SIZE", 5_000L),
-                positiveLong(env, "DEDUP_CLEANUP_INTERVAL_MS", 60_000L));
+                booleanValue(env, "TRADE_DECISIONS_ENABLED", false));
     }
 
     /**
@@ -488,6 +480,56 @@ public record SignalJobConfig(
     }
 
     /**
+     * Optional RocksDB managed-memory budget for local/embedded execution
+     * (2026-08-17, E2E root cause). Under a real deployment the TM memory is
+     * set by flink-conf.yaml (dev compose: {@code taskmanager.memory.process.size}
+     * 3g → managed fraction ≈ 1.2 GB); under LOCAL execution (no conf file)
+     * Flink falls back to 128 MB TOTAL managed memory, which starves the
+     * RocksDB block cache for the Design-B dedup envelope (~628 MB at
+     * 20 480 t/s × 300 s) and collapses throughput to ≈ the feed rate.
+     *
+     * <p>This key is a passthrough for exactly that case: when set, the value
+     * (a Flink memory string, e.g. {@code 2048m} / {@code 2g}) is written to
+     * {@code taskmanager.memory.managed.size} in
+     * {@code SignalJob.applyRuntimeOptions}. When unset the key stays absent
+     * and the deployment (flink-conf.yaml) stays authoritative — production is
+     * never affected by a default. Validated to be a non-blank string; the
+     * actual memory format is enforced by Flink's own parser at startup.
+     */
+    private static String taskManagerMemoryManagedSize(Map<String, String> env) {
+        String raw = env.get("TASK_MANAGER_MEMORY_MANAGED_SIZE");
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalStateException("Config TASK_MANAGER_MEMORY_MANAGED_SIZE must be a "
+                    + "Flink memory string (e.g. '2048m' or '2g'), got empty");
+        }
+        return trimmed;
+    }
+
+    /**
+     * Optional taskmanager.memory.network.max override for embedded/local runs
+     * (E2E). Local MiniCluster execution defaults network memory to 64 MB —
+     * at higher parallelism the connected forming-bar branch needs more
+     * buffers (measured 2026-08-17: p16 deploy failed with "required 17, but
+     * only 13 available"). Unset → the deployment stays authoritative.
+     */
+    private static String taskManagerNetworkMemoryMax(Map<String, String> env) {
+        String raw = env.get("TASK_MANAGER_NETWORK_MEMORY_MAX");
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalStateException("Config TASK_MANAGER_NETWORK_MEMORY_MAX must be a "
+                    + "Flink memory string (e.g. '512m' or '1g'), got empty");
+        }
+        return trimmed;
+    }
+
+    /**
      * RocksDB managed-memory toggle (tracker 14 P4.1); explicit boolean, no
      * unsafe default substitution when the key is present but unparsable.
      */
@@ -646,11 +688,13 @@ public record SignalJobConfig(
     }
 
     /**
-     * DEC-038 dedup tuning keys (DEDUP_CACHE_* / DEDUP_WRITE_* /
-     * DEDUP_CLEANUP_*): defaulted and validated at startup — a missing key
-     * falls back to the documented starting value, a present non-positive
-     * value is fatal (a zero cache bound or write cadence would break the
-     * bounded-cache contract; see 04-signal-job.md §Design — fingerprint_dedup).
+     * Positive tuning keys (e.g. FORMING_BAR_WRITE_BATCH_MS): defaulted and
+     * validated at startup — a missing key falls back to the documented
+     * starting value, a present non-positive value is fatal (a zero cadence
+     * would break the write contract). The DEC-038 dedup keys this helper
+     * used to serve (DEDUP_CACHE_* / DEDUP_WRITE_* / DEDUP_CLEANUP_*) were
+     * retired 2026-08-16 with the bounded-cache externalization contract
+     * (design B: the dedup set is authoritative Flink keyed state).
      */
     private static long positiveLong(Map<String, String> env, String key, long defaultValue) {
         long value = longValue(env, key, defaultValue);

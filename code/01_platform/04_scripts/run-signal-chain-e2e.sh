@@ -27,9 +27,17 @@ CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJ_ROOT="$(cd "$CODE_ROOT/.." && pwd)"
 
 : "${E2E_BROKER:=faketool}"
-: "${E2E_RUN_MINUTES:=5}"
+: "${E2E_RUN_MINUTES:=30}"
 : "${FLUSS_BOOTSTRAP:=localhost:9123}"
 : "${E2E_CHECKPOINT_DIR:=file:///tmp/signal-chain-e2e-checkpoints}"
+# RocksDB managed-memory budget for the embedded job (E2E root cause
+# 2026-08-17): local execution defaults taskmanager.memory.managed.size to
+# 128 MB TOTAL, which starves the block cache for the ~628 MB dedup envelope
+# and throttles the job to ≈ the feed rate — the backlog never drains and the
+# tail is never reached. 2048m gives RocksDB a real cache (probe-verified:
+# 128m → ~30k/s, 2048m → ~49k/s; the passing DedupRocksDbThroughputMemoryIT
+# uses process.size=1024m + managed.fraction=0.4 ≈ 400 MB).
+: "${TASK_MANAGER_MEMORY_MANAGED_SIZE:=2048m}"
 : "${INGESTION_JAR_DIR:=$CODE_ROOT/02_services/01_ingestion/target}"
 MANIFEST_DEFAULT="$PROJ_ROOT/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv"
 : "${INSTRUMENT_MANIFEST_PATH:=$MANIFEST_DEFAULT}"
@@ -66,11 +74,35 @@ fi
 		exit 1
 	}
 
+# The E2E spawns the REAL IngestionService as a subprocess with
+# INGESTION_CLASSPATH; the compute surefire classpath does NOT contain the
+# ingestion module, so the classpath must be computed here (the original
+# script computed it into INGESTION_CP but exported INGESTION_CLASSPATH — a
+# name mismatch that shipped an empty classpath and silently killed the
+# ingestion subprocess, failing the warmup await).
+# mvn -q suppresses the classpath stdout (dependency:build-classpath prints it
+# at INFO level), so the cp must be captured via -Dmdep.outputFile — a stdout
+# capture yields an empty deps list and the ingestion subprocess dies instantly
+# on a missing fluss-client class (observed 2026-08-17: warmup timeout).
+INGESTION_CP_FILE="$CODE_ROOT/02_services/01_ingestion/target/e2e-ingestion-cp.txt"
+(cd "$CODE_ROOT" && mvn -q -o dependency:build-classpath \
+	-pl 02_services/01_ingestion -Dmdep.outputAbsoluteArtifactFilename=true \
+	-Dmdep.outputFile="$INGESTION_CP_FILE") ||
+	{
+		echo "ingestion classpath failed" >&2
+		exit 1
+	}
+INGESTION_CP="$CODE_ROOT/02_services/01_ingestion/target/classes:$(cat "$INGESTION_CP_FILE")"
+rm -f "$INGESTION_CP_FILE"
+
+export INGESTION_CLASSPATH="$INGESTION_CP"
+
 echo "=== chain-e2e: run (E2E_BROKER=$E2E_BROKER, ${E2E_RUN_MINUTES} min, Fluss $FLUSS_BOOTSTRAP)"
 export SIGNAL_CHAIN_E2E=true
 export E2E_BROKER E2E_RUN_MINUTES FLUSS_BOOTSTRAP E2E_CHECKPOINT_DIR
+export TASK_MANAGER_MEMORY_MANAGED_SIZE
 export INSTRUMENT_MANIFEST_PATH
-export INGESTION_CLASSPATH ARROW_BRIDGE_BIN FAKETOOL_BIN
+export ARROW_BRIDGE_BIN FAKETOOL_BIN
 # arrow modes: pass the credentials through untouched
 [ "$E2E_BROKER" != "faketool" ] && export ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN
 

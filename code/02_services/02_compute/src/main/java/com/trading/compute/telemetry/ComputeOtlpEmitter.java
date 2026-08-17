@@ -112,22 +112,13 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     public static final String CANDLE_LATE_DROPPED_METRIC = "compute.candles.late.dropped";
 
     /**
-     * DEC-038 dedup telemetry. The bounded Flink cache's hot-path decisions
-     * are counted as DELTA sums (cache hit = definite duplicate from the
-     * cache alone; cache miss = store consulted); the cache hit ratio is the
-     * drained-window gauge hits/(hits+misses) so OpenObserve sees the
-     * architecture behave as intended without per-key labels. The query-on-
-     * miss rehydration read (lazy rehydration) is measured as a last-value
-     * gauge; a store failure is counted (DELTA) BEFORE the task fails closed
-     * (SIG-STATE-003 — never an empty dedup set).
+     * Dedup-state telemetry (tracker 14 P5.1): the state/expiry-index/bytes
+     * gauges below (DEDUP_STATE_*), shipped as current-value gauges. The
+     * DEC-038 cache-hit/miss/rehydration metrics were retired on 2026-08-16
+     * with the bounded-cache externalization contract (design B: the dedup
+     * set is authoritative Flink keyed state — there is no cache and no
+     * store).
      */
-    public static final String DEDUP_CACHE_HITS_METRIC = "compute.dedup.cache.hits";
-    public static final String DEDUP_CACHE_MISSES_METRIC = "compute.dedup.cache.misses";
-    public static final String DEDUP_CACHE_HIT_RATIO_METRIC = "compute.dedup.cache.hit.ratio";
-    public static final String DEDUP_REHYDRATION_FAILURES_METRIC =
-            "compute.dedup.rehydration.failures";
-    public static final String DEDUP_REHYDRATION_LATENCY_METRIC =
-            "compute.dedup.rehydration.latency.ms";
 
     /**
      * Source throughput (REQ-FC-010): raw records consumed from the Fluss
@@ -200,14 +191,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     private static volatile long LATE_DROP_LATENESS_MS = -1L;
     private static volatile String LATE_DROP_REASON = null;
 
-    /** DEC-038 dedup cache/rehydration statics; drained (delta) by the flush thread. */
-    private static final AtomicLong DEDUP_CACHE_HITS = new AtomicLong();
-    private static final AtomicLong DEDUP_CACHE_MISSES = new AtomicLong();
-    private static final AtomicLong DEDUP_REHYDRATION_FAILURES = new AtomicLong();
-
-    /** Last store-lookup duration (gauge; -1 = never measured). */
-    private static final AtomicLong DEDUP_REHYDRATION_LATENCY_MS = new AtomicLong(-1L);
-
     /**
      * Extra resource attributes (tracker 14 P8.0/831), configured once at job
      * startup via {@link #configureResourceAttributes(String...)}: flat
@@ -254,10 +237,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         LATE_DROP_WINDOW_END_MS = -1L;
         LATE_DROP_LATENESS_MS = -1L;
         LATE_DROP_REASON = null;
-        DEDUP_CACHE_HITS.set(0L);
-        DEDUP_CACHE_MISSES.set(0L);
-        DEDUP_REHYDRATION_FAILURES.set(0L);
-        DEDUP_REHYDRATION_LATENCY_MS.set(-1L);
         SOURCE_RECORDS.set(0L);
         WATERMARK_LAG_MS.set(-1L);
     }
@@ -359,51 +338,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
     /** Deltas the beyond-lateness drop counter (public: cross-package counter tests read it). */
     public long drainCandleLateDropDelta() {
         return CANDLE_LATE_DROPPED.getAndSet(0);
-    }
-
-    /** Called by {@code FingerprintDedupFunction} on a cache-only definite duplicate. */
-    public static void recordDedupCacheHit() {
-        DEDUP_CACHE_HITS.incrementAndGet();
-    }
-
-    /** Called by {@code FingerprintDedupFunction} on a cache miss (store consulted). */
-    public static void recordDedupCacheMiss() {
-        DEDUP_CACHE_MISSES.incrementAndGet();
-    }
-
-    /**
-     * Called by {@code FingerprintDedupFunction} when the authoritative store
-     * lookup throws — the task fails closed right after (SIG-STATE-003); this
-     * counter proves the failure happened rather than being silently
-     * swallowed.
-     */
-    public static void recordDedupRehydrationFailure() {
-        DEDUP_REHYDRATION_FAILURES.incrementAndGet();
-    }
-
-    /** Last-value gauge for the query-on-miss store lookup duration (ms). */
-    public static void recordDedupRehydrationLatencyMs(long ms) {
-        DEDUP_REHYDRATION_LATENCY_MS.set(ms);
-    }
-
-    /** Deltas the dedup cache-hit counter (public: cross-package dedup tests read it). */
-    public long drainDedupCacheHitsDelta() {
-        return DEDUP_CACHE_HITS.getAndSet(0);
-    }
-
-    /** Deltas the dedup cache-miss counter (public: cross-package dedup tests read it). */
-    public long drainDedupCacheMissesDelta() {
-        return DEDUP_CACHE_MISSES.getAndSet(0);
-    }
-
-    /** Deltas the dedup rehydration-failure counter (public: cross-package dedup tests read it). */
-    public long drainDedupRehydrationFailuresDelta() {
-        return DEDUP_REHYDRATION_FAILURES.getAndSet(0);
-    }
-
-    /** TEST-ONLY getter: last store-lookup duration, -1 = never measured. */
-    public static long rehydrationLatencyMsForTest() {
-        return DEDUP_REHYDRATION_LATENCY_MS.get();
     }
 
     /** TEST-ONLY getters: the latest recorded late-drop attributes. */
@@ -530,11 +464,8 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         long sourceRecords = drainSourceRecordsDelta();
         long signalKvFiltered = drainSignalKvFilteredNonCanonicalDelta();
         long candleLateDropped = drainCandleLateDropDelta();
-        long dedupCacheHits = drainDedupCacheHitsDelta();
-        long dedupCacheMisses = drainDedupCacheMissesDelta();
-        long dedupRehydrationFailures = drainDedupRehydrationFailuresDelta();
         String json = buildMetricsJson(delta, sourceIdleAtTail, sourceRecords, signalKvFiltered,
-                candleLateDropped, dedupCacheHits, dedupCacheMisses, dedupRehydrationFailures);
+                candleLateDropped);
         URL url = URI.create(collectorUrl).toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -649,28 +580,19 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
      * metrics still appear in the payload at 0).
      */
     String buildMetricsJson(long delta) {
-        return buildMetricsJson(delta, 0L, 0L, 0L, 0L, 0L, 0L);
+        return buildMetricsJson(delta, 0L, 0L, 0L, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail) {
-        return buildMetricsJson(delta, sourceIdleAtTail, 0L, 0L, 0L, 0L, 0L);
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L, 0L, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered) {
-        return buildMetricsJson(delta, sourceIdleAtTail, 0L, signalKvFiltered,
-                0L, 0L, 0L, 0L);
-    }
-
-    String buildMetricsJson(long delta, long sourceIdleAtTail, long signalKvFiltered,
-            long candleLateDropped, long dedupCacheHits, long dedupCacheMisses,
-            long dedupRehydrationFailures) {
-        return buildMetricsJson(delta, sourceIdleAtTail, 0L, signalKvFiltered,
-                candleLateDropped, dedupCacheHits, dedupCacheMisses, dedupRehydrationFailures);
+        return buildMetricsJson(delta, sourceIdleAtTail, 0L, signalKvFiltered, 0L);
     }
 
     String buildMetricsJson(long delta, long sourceIdleAtTail, long sourceRecords,
-            long signalKvFiltered, long candleLateDropped, long dedupCacheHits,
-            long dedupCacheMisses, long dedupRehydrationFailures) {
+            long signalKvFiltered, long candleLateDropped) {
         long now = System.currentTimeMillis() * 1_000_000L; // epoch nanos
         long mode = STARTUP_MODE.get();
         StringBuilder sb = new StringBuilder(640);
@@ -709,10 +631,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
           .append("\"dataPoints\":[{\"asInt\":").append(signalKvFiltered).append(",")
           .append("\"timeUnixNano\":\"").append(now).append("\"}]}}");
         appendLateDropSum(sb, candleLateDropped, now);
-        appendDeltaSum(sb, DEDUP_CACHE_HITS_METRIC, dedupCacheHits, "lookups", now);
-        appendDeltaSum(sb, DEDUP_CACHE_MISSES_METRIC, dedupCacheMisses, "lookups", now);
-        appendDeltaSum(sb, DEDUP_REHYDRATION_FAILURES_METRIC, dedupRehydrationFailures,
-                "failures", now);
         if (mode != -1L) {
             sb.append(",{\"name\":\"").append(STARTUP_MODE_METRIC).append("\",")
               .append("\"unit\":\"mode\",")
@@ -725,17 +643,6 @@ public final class ComputeOtlpEmitter implements AutoCloseable {
         appendGauge(sb, DEDUP_EXPIRY_INDEX_COUNT_METRIC, DEDUP_EXPIRY_INDEX_COUNT.get(),
                 "buckets", now);
         appendGauge(sb, DEDUP_STATE_BYTES_METRIC, DEDUP_STATE_BYTES.get(), "bytes", now);
-        // DEC-038: last query-on-miss store lookup (rehydration) duration and
-        // the drained-window cache hit ratio hits/(hits+misses) — 0 when the
-        // window saw no lookups (not a 0% ratio claim). The ratio is shipped as
-        // integer basis points (×10000) to keep the payload all-integer.
-        long rehydrationMs = DEDUP_REHYDRATION_LATENCY_MS.get();
-        if (rehydrationMs >= 0L) {
-            appendGauge(sb, DEDUP_REHYDRATION_LATENCY_METRIC, rehydrationMs, "ms", now);
-        }
-        long lookups = dedupCacheHits + dedupCacheMisses;
-        long ratioBp = lookups == 0 ? 0L : Math.round(10000.0 * dedupCacheHits / lookups);
-        appendGauge(sb, DEDUP_CACHE_HIT_RATIO_METRIC, ratioBp, "bp", now);
         // REQ-FC-010 watermark lag: last emitted watermark's staleness (ms).
         long watermarkLag = WATERMARK_LAG_MS.get();
         if (watermarkLag >= 0L) {

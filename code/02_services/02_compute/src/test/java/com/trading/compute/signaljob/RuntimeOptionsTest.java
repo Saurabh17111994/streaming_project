@@ -3,6 +3,7 @@ package com.trading.compute.signaljob;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashMap;
@@ -125,6 +126,58 @@ class RuntimeOptionsTest {
         assertTrue(flinkConfig.get(CheckpointingOptions.INCREMENTAL_CHECKPOINTS));
         assertNull(flinkConfig.getString("state.backend.rocksdb.memory.managed", null),
                 "managed memory defaults true in RocksDB — key only set when disabled");
+        assertNull(flinkConfig.getString("taskmanager.memory.managed.size", null),
+                "no TASK_MANAGER_MEMORY_MANAGED_SIZE → local-execution fallback stays "
+                        + "the deployment's flink-conf.yaml default, never a hard-coded value");
+    }
+
+    @Test
+    @DisplayName("TASK_MANAGER_MEMORY_MANAGED_SIZE passthrough → taskmanager.memory.managed.size")
+    void managedSizePassthroughApplied() {
+        Map<String, String> env = env();
+        env.put("STATE_BACKEND", "rocksdb");
+        env.put("TASK_MANAGER_MEMORY_MANAGED_SIZE", "2048m");
+        SignalJobConfig config = SignalJobConfig.from(env);
+
+        assertEquals("2048m", config.taskManagerMemoryManagedSize());
+
+        Configuration flinkConfig = new Configuration();
+        SignalJob.applyRuntimeOptions(config, flinkConfig);
+
+        assertEquals("2048m", flinkConfig.getString("taskmanager.memory.managed.size", null),
+                "the explicit managed-memory budget must reach the Flink Configuration "
+                        + "so local/embedded RocksDB gets a real block cache (E2E root cause "
+                        + "2026-08-17: 128 MB default starves the ~628 MB dedup envelope)");
+    }
+
+    @Test
+    @DisplayName("TASK_MANAGER_NETWORK_MEMORY_MAX passthrough → taskmanager.memory.network.max/min")
+    void networkMemoryMaxPassthroughApplied() {
+        Map<String, String> env = env();
+        env.put("STATE_BACKEND", "rocksdb");
+        env.put("TASK_MANAGER_NETWORK_MEMORY_MAX", "512m");
+        SignalJobConfig config = SignalJobConfig.from(env);
+
+        assertEquals("512m", config.taskManagerNetworkMemoryMax());
+
+        Configuration flinkConfig = new Configuration();
+        SignalJob.applyRuntimeOptions(config, flinkConfig);
+
+        assertEquals("512m", flinkConfig.getString("taskmanager.memory.network.max", null),
+                "embedded p16 runs need more than the 64 MB local network-memory default "
+                        + "(p16 deploy failed 2026-08-17: required 17 buffers, only 13 available)");
+        assertEquals("512m", flinkConfig.getString("taskmanager.memory.network.min", null),
+                "min must be pinned so min <= max holds for the local pair");
+    }
+
+    @Test
+    @DisplayName("TASK_MANAGER_MEMORY_MANAGED_SIZE blank → fail closed")
+    void managedSizeBlankRejected() {
+        Map<String, String> env = env();
+        env.put("TASK_MANAGER_MEMORY_MANAGED_SIZE", "  ");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SignalJobConfig.from(env));
+        assertTrue(e.getMessage().contains("TASK_MANAGER_MEMORY_MANAGED_SIZE"), e.getMessage());
     }
 
     @Test
