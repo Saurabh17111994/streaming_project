@@ -60,8 +60,8 @@ code/
 └── 02_services/
     ├── 01_ingestion/            implemented & validated (Phase 2)
     ├── 02_compute/              Signal job Slice 1 + Slice 2.1 implemented; ranking/reservations pending
-    ├── 03_action_capture/       scaffold
-    ├── 04_executor/             Executor scaffold; starts disabled and halted
+    ├── 03_action_capture/       scaffold (capture path → Execution Core dossier)
+    ├── 04_executor/             scaffold (order path → Execution Core dossier)
     ├── 05_mock_arrow/           Mock Arrow broker (per-instrument, deterministic)
     └── 06_mock_openalgo/        Retained for compatibility; no longer active
 ```
@@ -84,6 +84,8 @@ make down     # stop
 
 Phase 4.1 (Design & architecture) — **closed**.
 Phase 4.2 (MVP) — **Implementation active** (live-money blocked). See [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md).
+
+**2026-08-18 (execution-core re-architecture):** Action Capture, Babysitter, and Executor are consolidated into one Execution Core ([`docs/08_implementation/05-execution-core.md`](docs/08_implementation/05-execution-core.md)) — Nautilus as the execution/position core with a go-arrow bridge as the sole Arrow-facing component (DEC-041). Build contracts and DEC-006 re-scope pending; live money remains blocked.
 
 ---
 

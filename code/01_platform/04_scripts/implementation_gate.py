@@ -162,7 +162,7 @@ TASKS = [
     {
         "seq": 6,
         "title": "Keep Babysitter state minimal",
-        "dossier": "docs/08_implementation/06-babysitter.md",
+        "dossier": "docs/08_implementation/05-execution-core.md",  # Babysitter absorbed (2026-08-18)
         "checks": [
             {
                 "type": "contains",

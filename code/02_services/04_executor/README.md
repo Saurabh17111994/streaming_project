@@ -1,8 +1,10 @@
 # Executor — implementation handoff
 
-> **Status:** scaffold only; `main.py` raises `NotImplementedError`. Use
-> [`../../../docs/08_implementation/07-executor.md`](../../../docs/08_implementation/07-executor.md)
-> as the implementation contract.
+> **Status:** scaffold only; `main.py` raises `NotImplementedError`. **2026-08-18:** the Executor
+> scope is now part of the integrated **Execution Core** dossier
+> [`../../../docs/08_implementation/05-execution-core.md`](../../../docs/08_implementation/05-execution-core.md)
+> (order path — Nautilus execution engine + go-arrow bridge as the sole Arrow-facing
+> component). The checklist below describes the superseded standalone-Executor design.
 >
 > **Live money:** prohibited. The default and uncertain state is `HALTED`.
 
@@ -46,5 +48,5 @@ never treats broker REST as exactly-once.
 
 - Requirements: `../../../docs/02_requirements/02-functional/07-executor.md`
 - Contract: `../../../docs/04_contracts/07-executor.md`
-- Implementation dossier: `../../../docs/08_implementation/07-executor.md`
+- Implementation dossier: `../../../docs/08_implementation/05-execution-core.md` (integrated Execution Core — order path)
 - Release evidence: `../../../docs/08_implementation/11-testing-and-release.md`

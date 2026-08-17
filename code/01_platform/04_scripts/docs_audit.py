@@ -651,9 +651,7 @@ COVERAGE_DOSSIERS = [
     "02-schema-storage.md",
     "03-ingestion.md",
     "04-signal-job.md",
-    "05-action-capture.md",
-    "06-babysitter.md",
-    "07-executor.md",
+    "05-execution-core.md",  # integrated Action Capture + Babysitter + Executor (2026-08-18)
     "08-local-compose.md",
     "09-production-swarm.md",
     "10-observability.md",

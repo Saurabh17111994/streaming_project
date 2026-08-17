@@ -50,15 +50,13 @@ Documentation-complete is not code-complete. A checklist item may be marked docu
 | [`02-schema-storage.md`](./02-schema-storage.md) | Data tables/storage instructions and their test design | 3 |
 | [`03-ingestion.md`](./03-ingestion.md) | Ingestion instructions and test design | 4 |
 | [`04-signal-job.md`](./04-signal-job.md) | Signal-job instructions and test design | 5 |
-| [`05-action-capture.md`](./05-action-capture.md) | Action Capture instructions and test design | 6 |
-| [`06-babysitter.md`](./06-babysitter.md) | Babysitter instructions and test design | 6 |
-| [`07-executor.md`](./07-executor.md) | Executor instructions and test design | 7 |
+| [`05-execution-core.md`](./05-execution-core.md) | Execution Core — integrated Action Capture + Babysitter + Executor (Nautilus → go-arrow bridge → Arrow) | 6–7 |
 | [`08-local-compose.md`](./08-local-compose.md) | Local runtime instructions and test design | 8 |
 | [`09-production-swarm.md`](./09-production-swarm.md) | Production runtime instructions and test design | 9 |
 | [`10-observability.md`](./10-observability.md) | Monitoring/operations instructions and test design | 10 |
 | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, and final release evidence | 11–12 |
 | [`15-ingestion-test-hardening.md`](./15-ingestion-test-hardening.md) | Ingestion test-hardening backlog — additional robustness tests mapped to `03-ingestion.md` aspects (2026-08-15 audit) | 4 (ingestion) |
-| **Roadmap** | Step-by-step plans live INSIDE their dossiers (2026-08-13 merge): current build plan → `04-signal-job.md` (appended section); P7 bench + completed gaps → `11-testing-and-release.md`; P10 rehearsal → `09-production-swarm.md`; agent-2 executor plan → `07-executor.md` | — |
+| **Roadmap** | Step-by-step plans live INSIDE their dossiers (2026-08-13 merge): current build plan → `04-signal-job.md` (appended section); P7 bench + completed gaps → `11-testing-and-release.md`; P10 rehearsal → `09-production-swarm.md`; executor/execution-core plan → `05-execution-core.md` | — |
 
 ## Document status vocabulary
 
@@ -84,9 +82,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | DDL/schema | Design-ready | Implementing | Untested | Blocked |
 | Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
 | Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 188 compute tests green + 7-test gated battery, re-measured 2026-08-15) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
-| Action Capture | Design-ready | Not-implemented | Untested | Blocked |
-| Babysitter | Design-ready | Not-implemented | Untested | Blocked |
-| Executor | Design-ready | Not-implemented | Untested | Blocked |
+| Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-18) | Draft (upstream re-scoped 2026-08-18, CHG-027) | Not-implemented | Untested | Blocked |
 | Local runtime | Design-ready | Implementing | Tested-in-sandbox | Blocked |
 | Production runtime | Design-ready | Not-implemented | Untested | Blocked |
 | Test/evidence program | Design-ready | Implementing | Tested-in-sandbox | Blocked |
@@ -98,8 +94,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 3. Validate DDL capability and schema lifecycle.
 4. Implement ingestion and test fixtures.
 5. Implement the Signal job.
-6. Implement Action Capture and the no-op Babysitter.
-7. Implement Executor last among functional services, with broker calls disabled until safety tests pass.
+6. Implement the Execution Core (Action Capture + Babysitter + Executor) as the last functional work, with broker calls disabled until safety tests pass — see `05-execution-core.md`.
 8. Implement local integration runtime.
 9. Implement production Swarm and operational controls.
 10. Produce the release evidence package.
@@ -187,56 +182,30 @@ Read these **in order** before writing any code:
 
 ---
 
-### Phase 4: Action Capture + Babysitter (parallelizable)
-
-| Step | Artifact | Purpose |
-| --- | --- | --- |
-| **Contract** | [`../04_contracts/06-action-capture.md`](../04_contracts/06-action-capture.md) | Postback consumer, lifecycle, position projection |
-| **Contract** | [`../04_contracts/05-babysitter.md`](../04_contracts/05-babysitter.md) | Babysitter contract (MVP no-op) |
-| **Contract** | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (postback section) | Postback protocol — WS JSON, identity mapping |
-| **Dossier** | [`05-action-capture.md`](./05-action-capture.md) | Action Capture engineering plan |
-| **Dossier** | [`06-babysitter.md`](./06-babysitter.md) | Babysitter engineering plan |
-| **DDL** | `09_order_lifecycle.sql`, `10_positions.sql`, `16_postback_quarantine.sql`, `17_postback_projection_ledger.sql` | Physical schemas |
-
-**Action Capture — what to build:**
-
-1. Arrow postback WebSocket consumer
-2. Order lifecycle state machine (`OrderLifecycleState` transitions)
-3. Position projector (fill aggregation into `PositionState`)
-4. Postback quarantine (unknown/malformed events)
-5. Postback projection ledger
-
-**Babysitter (MVP = no-op):**
-
-- Already scaffolded (`BabysitterJob.java`) — wire the Positions changelog source and emit zero actions
-- `POSITION_ACTIONS_ENABLED` must remain `false`
-
-**Acceptance tests:** `BABYSITTER-001`
-
----
-
-### Phase 5: Executor (LAST — money-moving code)
+### Phase 4+5: Execution Core (Action Capture + Babysitter + Executor) 🔴 NEXT AFTER SIGNAL
 
 Read these **in order** before writing any code:
 
 | Step | Artifact | Purpose |
 | --- | --- | --- |
+| **Contract** | [`../04_contracts/06-action-capture.md`](../04_contracts/06-action-capture.md) | Postback consumer, lifecycle, position projection |
+| **Contract** | [`../04_contracts/05-babysitter.md`](../04_contracts/05-babysitter.md) | Babysitter contract (MVP no-op) |
 | **Contract** | [`../04_contracts/07-executor.md`](../04_contracts/07-executor.md) | Executor contract — gates, attempts, audit, safe-halt |
-| **Contract** | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (REST section) | Arrow REST — `POST /order/regular`, auth, response, idempotency |
-| **Dossier** | [`07-executor.md`](./07-executor.md) | How to build — gates, fencing, changelog consumer, retry rules |
-| **DDL** | `11_execution_gate.sql`, `12_execution_attempts.sql`, `13_order_correlation.sql`, `14_execution_audit.sql`, `18_safety_halt_requests.sql` | Physical schemas |
+| **Contract** | [`../04_contracts/arrow_broker.md`](../04_contracts/arrow_broker.md) (postback + REST sections) | Postback protocol — WS JSON, identity mapping; Arrow REST — `POST /order/regular`, auth, response |
+| **Dossier** | [`05-execution-core.md`](./05-execution-core.md) | **Single integrated engineering plan** — Nautilus execution core + go-arrow bridge (sole Arrow-facing component) + custom gate/fencing/correlation glue |
+| **DDL** | `09_order_lifecycle.sql`, `10_positions.sql`, `16_postback_quarantine.sql`, `17_postback_projection_ledger.sql`, `11_execution_gate.sql`, `12_execution_attempts.sql`, `13_order_correlation.sql`, `14_execution_audit.sql`, `18_safety_halt_requests.sql` | Physical schemas |
 
-**What to build:**
+**What to build (one execution core, per `05-execution-core.md`):**
 
-1. `TradeDecisions` changelog consumer (tail from Fluss)
-2. Pre-call safety gate checks (identity, epoch, fencing, hash persistence)
-3. Arrow REST call (`POST /order/regular`) with client_order_ref ≤ 16 chars
-4. Attempt/correlation/audit persistence
-5. Safe-halt on `UNKNOWN` outcome (no auto-resume)
+1. go-arrow bridge (localhost) — the ONLY component that talks to Arrow: auth, order REST, order-updates WS, positions
+2. Nautilus execution/position core — OMS, position engine, risk, reconciliation, event-store audit, with a thin `ExecutionClient` adapter to the bridge
+3. Fluss trade-row reader + projection sinks (Fills, Order_Lifecycle, Positions, Execution_* tables, quarantine, ledger)
+4. Custom safety glue — two-person gate (`HALTED → ENABLED`), fencing, attempt/correlation mapping, unknown-outcome halt
+5. Babysitter — MVP no-op observer on position events; `POSITION_ACTIONS_ENABLED` stays `false` and fails closed
 
-**Starts `HALTED`.** `EXECUTION_ENABLED=false` in `.env.example`. Money calls disabled until all gate checks + acceptance tests pass.
+**Starts `HALTED`.** Money calls disabled until all gate checks + acceptance tests pass; live money stays BLOCKED.
 
-**Acceptance tests:** gate transitions, fencing expiry, duplicate/replay, unknown-outcome halt
+**Acceptance tests:** `AC-UNIT-001`–`AC-UNIT-005`, `AC-INT-001`, `BROKER-PB-001`, `AC-FAIL-001`–`AC-FAIL-004`, `AC-REC-001`, `BAB-UNIT-001/002` (implemented), `BAB-INT-001`, `BAB-FAIL-001/002`, `BAB-OPS-001`, `EXE-UNIT-001/003–005`, `EXE-INT-001`, `EXE-FAIL-001`–`EXE-FAIL-006`, `EXE-OPS-001`, `EXE-AUDIT-001`, `ARROW-REST-001/002`
 
 ---
 

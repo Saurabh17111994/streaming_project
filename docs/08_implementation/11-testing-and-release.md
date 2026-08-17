@@ -733,9 +733,9 @@ Every acceptance-test row in the [acceptance matrix](../02_requirements/09-accep
 | `AC-FC-*` | `AC-FC-001`–`AC-FC-016` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*`, `STATE-CANDLE-001`, `STATE-COMPAT-001`, `SAFETY-INT-001` |
 | `AC-SS-*` | `AC-SS-001`–`AC-SS-012` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (slot-scoped safety consumer), `SAFETY-INT-001` |
 | `AC-RNK-*` | `AC-RNK-001`–`AC-RNK-009` | [`04-signal-job.md`](./04-signal-job.md) | `SIG-*` (in-operator ranking) — **REMOVED 2026-08-15 (CHG-005)** |
-| `AC-AC-*` | `AC-AC-001`–`AC-AC-017` | [`05-action-capture.md`](./05-action-capture.md) | `AC-UNIT-*`, `AC-INT-001`, `AC-FAIL-*`, `AC-REC-001`, `BROKER-PB-001` |
-| `AC-BB-*` | `AC-BB-001`–`AC-BB-009` | [`06-babysitter.md`](./06-babysitter.md) | `BAB-*`, `BABYSITTER-001` |
-| `AC-EXE-*` | `AC-EXE-001`–`AC-EXE-016` | [`07-executor.md`](./07-executor.md) | `EXE-*`, `ARROW-REST-*` |
+| `AC-AC-*` | `AC-AC-001`–`AC-AC-017` | [`05-execution-core.md`](./05-execution-core.md) | `AC-UNIT-*`, `AC-INT-001`, `AC-FAIL-*`, `AC-REC-001`, `BROKER-PB-001` |
+| `AC-BB-*` | `AC-BB-001`–`AC-BB-009` | [`05-execution-core.md`](./05-execution-core.md) | `BAB-*`, `BABYSITTER-001` |
+| `AC-EXE-*` | `AC-EXE-001`–`AC-EXE-016` | [`05-execution-core.md`](./05-execution-core.md) | `EXE-*`, `ARROW-REST-*` |
 | `AC-OBS-*` | `AC-OBS-001`–`AC-OBS-010` | [`10-observability.md`](./10-observability.md) | `OPS-*` |
 | `AC-PF-*` | `AC-PF-001`–`AC-PF-019` | [`08-local-compose.md`](./08-local-compose.md) (local subset, e.g. Compose isolation), [`09-production-swarm.md`](./09-production-swarm.md) | `LOCAL-*`, `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001` |
 | `AC-NFR-*` | `AC-NFR-001`–`AC-NFR-012` | Cross-cutting: [`01-foundation.md`](./01-foundation.md) + this catalog (performance campaigns, security tests, ops acceptance) | `PERF-*`, `SEC-*`, `OPS-*`, `CI-PERF-001` |

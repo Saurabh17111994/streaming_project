@@ -53,4 +53,4 @@ Stage 3 (2026-08-13) removed `CandleCurrentDdlContractTest` + DDL 22; the signal
 - Requirements: `../../../docs/02_requirements/02-functional/03-compute.md`, `04-business-logic.md`, `05-babysitter.md`, `10-ranking.md`
 - Contracts: `../../../docs/04_contracts/03-compute.md`, `04-business-logic.md`, `05-babysitter.md`, `10-ranking.md`
 - Signal dossier: `../../../docs/08_implementation/04-signal-job.md`
-- Babysitter dossier: `../../../docs/08_implementation/06-babysitter.md`
+- Babysitter dossier: `../../../docs/08_implementation/05-execution-core.md` (integrated Execution Core — Babysitter absorbed 2026-08-18)

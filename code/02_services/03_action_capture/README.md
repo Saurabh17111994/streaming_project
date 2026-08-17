@@ -1,6 +1,6 @@
 # Action Capture — implementation handoff
 
-> **Status:** implementation not started. Use the implementation dossier at [`../../../docs/08_implementation/05-action-capture.md`](../../../docs/08_implementation/05-action-capture.md).
+> **Status:** implementation not started. The Action Capture scope is now part of the integrated **Execution Core** dossier at [`../../../docs/08_implementation/05-execution-core.md`](../../../docs/08_implementation/05-execution-core.md) (capture path — Nautilus position/lifecycle machinery + go-arrow bridge postback source).
 >
 > **Live money:** disabled until postback identity, correlation, projection, and reconciliation evidence passes.
 
@@ -33,5 +33,5 @@ The current architecture does **not** assume Arrow Trade, `order_id`, `postback_
 
 - Requirements: `../../../docs/02_requirements/02-functional/06-action-capture.md`
 - Contract: `../../../docs/04_contracts/06-action-capture.md`
-- Implementation dossier: `../../../docs/08_implementation/05-action-capture.md`
+- Implementation dossier: `../../../docs/08_implementation/05-execution-core.md` (integrated Execution Core — capture path)
 - Schema lifecycle: `../../../docs/08_implementation/01-foundation.md`
