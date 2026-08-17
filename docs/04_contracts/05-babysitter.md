@@ -1,6 +1,6 @@
 # Segment Build Contract — Babysitter
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** Babysitter remains the position-observation no-op
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** Babysitter remains the position-observation no-op
 > of the integrated Execution Core. It consumes the Fluss `Positions` changelog (materialized by
 > the Execution Core's projection sinks from the Nautilus position engine), validates
 > continuity/schema, checkpoints observation state, emits metrics, and produces zero actions.

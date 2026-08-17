@@ -1,6 +1,6 @@
 # 02.7 — Executor (Execution Core — order path)
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** the Executor is the order path of the integrated
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** the Executor is the order path of the integrated
 > Execution Core. Nautilus provides the OMS/position/risk/reconciliation machinery; the
 > **go-arrow bridge** is the ONLY component permitted to call Arrow REST; the two-person gate,
 > fencing, attempts, correlation, and immutable audit remain custom glue. Former

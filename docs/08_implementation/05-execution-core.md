@@ -6,7 +6,7 @@
 > 2026-08-18 user decision: **Nautilus** (Rust-native trading engine) is the execution/position
 > core; a **go-arrow bridge** (localhost) is the ONLY component that talks to Arrow; the Fluss
 > trade-row reader and the two-person gate are custom glue. The upstream layer is reconciled to
-> this architecture (2026-08-18, **CHG-027**): build contracts
+> this architecture (2026-08-18, **CHG-028**): build contracts
 > `docs/04_contracts/05-babysitter.md`/`06-action-capture.md`/`07-executor.md`, functional
 > requirements `02-functional/05/06/07`, and DEC-006 are re-scoped — see their dated banners.
 >
@@ -19,11 +19,11 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Design revision (Nautilus + go-arrow bridge); upstream contracts/requirements/DEC-006 re-scoped 2026-08-18 (CHG-027) |
+| Status | Design revision (Nautilus + go-arrow bridge); upstream contracts/requirements/DEC-006 re-scoped 2026-08-18 (CHG-028) |
 | Owner | Execution Team (order path) · Action Capture Team (capture path) · Babysitter Team (position observation) |
 | Requirements | `REQ-AC-001`–`REQ-AC-013` → `AC-AC-001`–`AC-AC-017`; `REQ-BB-001`–`REQ-BB-008` → `AC-BB-001`–`AC-BB-009`; `REQ-EXE-001`–`REQ-EXE-013` → `AC-EXE-001`–`AC-EXE-016` |
 | Acceptance criteria | `AC-AC-001`–`AC-AC-017`, `AC-BB-001`–`AC-BB-009`, `AC-EXE-001`–`AC-EXE-016` |
-| Contracts | `docs/04_contracts/06-action-capture.md` · `docs/04_contracts/05-babysitter.md` · `docs/04_contracts/07-executor.md` (re-scoped 2026-08-18, CHG-027) · `docs/04_contracts/arrow_broker.md` |
+| Contracts | `docs/04_contracts/06-action-capture.md` · `docs/04_contracts/05-babysitter.md` · `docs/04_contracts/07-executor.md` (re-scoped 2026-08-18, CHG-028) · `docs/04_contracts/arrow_broker.md` |
 | Writes | `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`; consumes `Safety_Halt_Requests` (KV control table) |
 | Must not own | Strategy, candidate scoring, gate approval, order submission to any component other than the go-arrow bridge (**ranking/reservations/decisions REMOVED 2026-08-15, CHG-005**) |
 
@@ -324,7 +324,7 @@ all broker calls remain disabled until the release evidence package approves ena
 
 ## Open gates and upstream impact
 
-1. **~~Upstream re-scope pending~~ — RESOLVED 2026-08-18 (CHG-027):** build contracts
+1. **~~Upstream re-scope pending~~ — RESOLVED 2026-08-18 (CHG-028):** build contracts
    `05-babysitter.md`, `06-action-capture.md`, `07-executor.md`, requirements
    `02-functional/05/06/07`, and DEC-006 are re-scoped to the Nautilus + go-arrow bridge design
    (dated banners in each file).

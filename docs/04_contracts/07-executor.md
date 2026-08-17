@@ -1,6 +1,6 @@
 # Segment Build Contract — Executor
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** this contract describes the Executor as part of the
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** this contract describes the Executor as part of the
 > integrated Execution Core (**Nautilus** engine + **go-arrow bridge** + custom safety glue). The
 > former standalone-service wording — Executor calling Arrow's REST API directly — is superseded:
 > the go-arrow bridge is the **only** component that can reach Arrow; Nautilus commands the bridge

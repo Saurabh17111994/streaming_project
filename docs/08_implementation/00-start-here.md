@@ -82,7 +82,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | DDL/schema | Design-ready | Implementing | Untested | Blocked |
 | Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
 | Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 188 compute tests green + 7-test gated battery, re-measured 2026-08-15) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
-| Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-18) | Draft (upstream re-scoped 2026-08-18, CHG-027) | Not-implemented | Untested | Blocked |
+| Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-18) | Draft (upstream re-scoped 2026-08-18, CHG-028) | Not-implemented | Untested | Blocked |
 | Local runtime | Design-ready | Implementing | Tested-in-sandbox | Blocked |
 | Production runtime | Design-ready | Not-implemented | Untested | Blocked |
 | Test/evidence program | Design-ready | Implementing | Tested-in-sandbox | Blocked |

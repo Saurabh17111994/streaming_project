@@ -1,6 +1,6 @@
 # Segment Build Contract — Action Capture
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** this contract describes the capture path as part of
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** this contract describes the capture path as part of
 > the integrated Execution Core (**Nautilus** engine + **go-arrow bridge** + custom projection
 > glue). Postback intake now runs through the go-arrow bridge's order-updates WebSocket consumer
 > (wrapping the vendored `go-arrow` SDK `OrderStream`); Nautilus provides the OMS, position engine,

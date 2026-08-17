@@ -1,6 +1,6 @@
 # 02.5 — Babysitter (position observation of the Execution Core)
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** Babysitter is the position-observation no-op of
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** Babysitter is the position-observation no-op of
 > the integrated Execution Core. It consumes the Fluss `Positions` changelog (materialized by
 > the Execution Core's projection sinks from the Nautilus position engine), validates
 > checkpoint/recovery wiring, and in MVP emits zero actions. The MVP boundary, separate

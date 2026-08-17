@@ -1,6 +1,6 @@
 # 02.6 — Action Capture and Position Projection (capture path of the Execution Core)
 
-> **RE-SCOPED 2026-08-18 (CHG-027, DEC-041):** the capture path is part of the integrated
+> **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** the capture path is part of the integrated
 > Execution Core. The go-arrow bridge consumes the broker postback stream (wrapping the pinned
 > `go-arrow` SDK order-updates WebSocket) and re-publishes normalized events; the Nautilus OMS
 > adopts them as external order events; the Nautilus position engine drives fill-derived
