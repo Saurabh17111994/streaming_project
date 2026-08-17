@@ -5,11 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -46,7 +43,7 @@ import org.slf4j.LoggerFactory;
 /**
  * SIGNAL-CHAIN-E2E-001 (DRAFT): full-chain live proof — broker → bridge →
  * {@code raw_table_1} → SignalJob → {@code feature_candles_15s}, run for
- * {@code E2E_RUN_MINUTES} (default 5) with live assertions at both ends.
+ * {@code E2E_RUN_MINUTES} (default 30) with live assertions at both ends.
  *
  * <p>This is the test the repo previously lacked: the ingestion leg
  * (broker → Fluss) and the compute leg (Fluss → feature table) are each proven
@@ -89,7 +86,10 @@ import org.slf4j.LoggerFactory;
  * SIGNAL_CHAIN_E2E=true                      gate (required)
  * FLUSS_BOOTSTRAP                            default localhost:9123
  * E2E_BROKER                                 faketool | arrow-hft (default faketool)
- * E2E_RUN_MINUTES                            default 5
+ * E2E_RUN_MINUTES                            default 30
+ * TASK_MANAGER_MEMORY_MANAGED_SIZE           RocksDB managed-memory passthrough (default 2048m in runner)
+ * TASK_MANAGER_NETWORK_MEMORY_MAX            network-memory passthrough for p16 embedded runs
+ * STATE_BACKEND / STATE_BACKEND_LOCAL_DIRS / STATE_BACKEND_MANAGED_MEMORY / PARALLELISM   backend passthrough
  * E2E_FRESH_WARMUP_S                         default 90 (arrow modes: wait for first raw growth)
  * E2E_CHECKPOINT_DIR                         default file:///tmp/signal-chain-e2e-checkpoints
  * INGESTION_CLASSPATH                        ingestion module test/runtime classpath (runner computes it)
@@ -107,7 +107,7 @@ import org.slf4j.LoggerFactory;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "SIGNAL_CHAIN_E2E", matches = "true")
-@DisplayName("SIGNAL-CHAIN-E2E-001: broker → raw_table_1 → SignalJob → feature_candles_15s (5 min live)")
+@DisplayName("SIGNAL-CHAIN-E2E-001: broker → raw_table_1 → SignalJob → feature_candles_15s (30 min live)")
 class SignalChainLiveE2ETest {
 
     private static final Logger LOG = LoggerFactory.getLogger(SignalChainLiveE2ETest.class);
@@ -160,7 +160,7 @@ class SignalChainLiveE2ETest {
                 Thread.sleep(15_000L);
                 samples++;
                 long rawNow = rawCount();
-                long featNow = featureCount();
+                long featNow = countRowsLazy(featureTable, lastFeature);
                 JobStatus status = job.getJobStatus().get(10, TimeUnit.SECONDS);
                 assertEquals(JobStatus.RUNNING, status,
                         "SignalJob must stay RUNNING (sample " + samples + ")");
@@ -210,7 +210,18 @@ class SignalChainLiveE2ETest {
         Process p = new ProcessBuilder(bin, "--port", String.valueOf(port),
                 "-real-rate", "-real-rate-hz", "20")
                 .redirectErrorStream(true).start();
-        p.getInputStream().transferTo(OutputStream.nullOutputStream());
+        // Drain the merged stdout/stderr on a DAEMON thread: the faketool is a
+        // long-running server, so a synchronous transferTo would block the
+        // test forever (the pipe never reaches EOF while the process lives).
+        Thread drainer = new Thread(() -> {
+            try (java.io.InputStream in = p.getInputStream()) {
+                in.transferTo(OutputStream.nullOutputStream());
+            } catch (IOException ignored) {
+                // process died — nothing to drain
+            }
+        });
+        drainer.setDaemon(true);
+        drainer.start();
         try {
             Thread.sleep(500L); // let it bind
         } catch (InterruptedException e) {
@@ -287,6 +298,22 @@ class SignalChainLiveE2ETest {
         e.put("MAX_CONCURRENT_CHECKPOINTS", "1");
         e.put("ALLOW_FULL_REPLAY", "true"); // fresh job — explicit offset-0 replay gate
         e.put("CHECKPOINT_DIR", env("E2E_CHECKPOINT_DIR", "file:///tmp/signal-chain-e2e-checkpoints"));
+        // Backend + memory passthrough (2026-08-17, E2E root cause): the E2E
+        // MUST run on RocksDB (production pin) with a realistic managed-memory
+        // budget — local execution defaults taskmanager.memory.managed.size to
+        // 128 MB TOTAL, which starves the RocksDB block cache and throttles
+        // the job to ≈ the feed rate (backlog never drains, feature never
+        // grows). The runner script exports STATE_BACKEND=rocksdb +
+        // TASK_MANAGER_MEMORY_MANAGED_SIZE=2048m; absent those, the dev
+        // defaults apply as before.
+        for (String k : new String[] {"STATE_BACKEND", "STATE_BACKEND_LOCAL_DIRS",
+                "STATE_BACKEND_MANAGED_MEMORY", "TASK_MANAGER_MEMORY_MANAGED_SIZE",
+                "TASK_MANAGER_NETWORK_MEMORY_MAX", "PARALLELISM"}) {
+            String v = System.getenv().get(k);
+            if (v != null && !v.isBlank()) {
+                e.put(k, v);
+            }
+        }
 
         SignalJobConfig config = SignalJobConfig.from(e);
         StreamExecutionEnvironment senv = SignalJob.buildTopology(config);
@@ -322,23 +349,91 @@ class SignalChainLiveE2ETest {
         }
     }
 
-    /** Row count over every bucket — P6 scanAll pattern, count-only (no materialization). */
+    /**
+     * Row count over every bucket. KV tables (feature_candles_15s,
+     * Signal_Candidates_current) are counted with the batch scanner (P6
+     * scanAll pattern, count-only — no materialization). LOG tables
+     * (raw_table_1) are counted as the SUM OF END OFFSETS via listOffsets:
+     * the KV batch scanner returns nothing for a LOG table, and a full log
+     * scan would replay the multi-GB backlog per sample — measured
+     * 2026-08-16 that a LOG-table batch scan ALSO poisons the shared
+     * connection so the next KV scan silently returns 0, so the two paths
+     * must never share a scan call. The end-offset sum is monotone with
+     * growth, which is exactly what the DELTA assertions need.
+     */
     private long countRows(Table table) throws Exception {
         TableInfo info = table.getTableInfo();
-        long n = 0;
-        for (int b = 0; b < info.getNumBuckets(); b++) {
-            TableBucket tb = new TableBucket(info.getTableId(), b);
-            try (BatchScanner scanner = table.newScan()
-                         .limit(Integer.MAX_VALUE)
-                         .createBatchScanner(tb);
-                 CloseableIterator<InternalRow> it = scanner.pollBatch(Duration.ofMillis(250))) {
-                while (it.hasNext()) {
-                    it.next();
-                    n++;
+        if (!info.hasPrimaryKey()) {
+            List<Integer> buckets = new ArrayList<>();
+            for (int b = 0; b < info.getNumBuckets(); b++) {
+                buckets.add(b);
+            }
+            org.apache.fluss.client.admin.ListOffsetsResult ends = connection.getAdmin()
+                    .listOffsets(info.getTablePath(), buckets,
+                            new org.apache.fluss.client.admin.OffsetSpec.LatestSpec());
+            long sum = 0;
+            for (int b : buckets) {
+                sum += ends.bucketResult(b).get(10, TimeUnit.SECONDS);
+            }
+            return sum;
+        }
+        // KV count under live write load is NOT snapshot-isolated per scan:
+        // a bucket's batch scan can transiently return a partial snapshot while
+        // the job is concurrently upserting (observed 2026-08-17: one bucket's
+        // worth of rows vanished from a single sample, count recovered after
+        // the run). KV rows are never deleted, so the true count is the MAX
+        // over repeated scans — a single low scan is a read artifact, not a
+        // shrink. Longer poll timeout so a busy server can finish the scan.
+        // This full max-of-3 is used for the start/end baselines (a handful of
+        // calls per run); the per-sample loop uses countRowsLazy so the
+        // steady-state scan load is 1 full pass per sample instead of 3
+        // (3× full-table scans every 15 s were measured to roughly halve the
+        // job's replay throughput on the shared Fluss server).
+        return countRowsLazy(table, 0, 3, false);
+    }
+
+    /**
+     * KV row count with dip-retry. {@code forceMax} (baseline calls) always
+     * runs all {@code attempts} and returns the max. Per-sample calls pass
+     * {@code previousBest} = the previous sample's count: a scan >= previous
+     * best is the true count (KV rows only grow) and returns after ONE scan;
+     * a dip means the scan caught a partial snapshot, so it keeps scanning
+     * and returns the max (guarding against two partial scans agreeing).
+     */
+    private long countRowsLazy(Table table, long previousBest, int attempts, boolean forceMax)
+            throws Exception {
+        TableInfo info = table.getTableInfo();
+        long best = 0;
+        int attempt = 0;
+        while (attempt < attempts) {
+            long n = 0;
+            for (int b = 0; b < info.getNumBuckets(); b++) {
+                TableBucket tb = new TableBucket(info.getTableId(), b);
+                try (BatchScanner scanner = table.newScan()
+                             .limit(Integer.MAX_VALUE)
+                             .createBatchScanner(tb);
+                     CloseableIterator<InternalRow> it =
+                             scanner.pollBatch(Duration.ofSeconds(5))) {
+                    while (it.hasNext()) {
+                        it.next();
+                        n++;
+                    }
                 }
             }
+            if (n > best) {
+                best = n;
+            }
+            if (!forceMax && best >= previousBest) {
+                return best;
+            }
+            attempt++;
         }
-        return n;
+        return best;
+    }
+
+    /** Per-sample: 1 scan unless a dip below the previous sample is detected. */
+    private long countRowsLazy(Table table, long previousBest) throws Exception {
+        return countRowsLazy(table, previousBest, 3, false);
     }
 
     private long rawCount() throws Exception {
@@ -358,7 +453,8 @@ class SignalChainLiveE2ETest {
             try (BatchScanner scanner = featureTable.newScan()
                          .limit(Integer.MAX_VALUE)
                          .createBatchScanner(tb);
-                 CloseableIterator<InternalRow> it = scanner.pollBatch(Duration.ofMillis(250))) {
+                 CloseableIterator<InternalRow> it =
+                         scanner.pollBatch(Duration.ofSeconds(5))) {
                 while (it.hasNext()) {
                     InternalRow r = it.next();
                     if (r.getLong(CandleTableColumns.WINDOW_END) > runStartMillis) {
@@ -437,20 +533,24 @@ class SignalChainLiveE2ETest {
     // ── plumbing ──────────────────────────────────────────────────────────
 
     private static void drain(Process proc) {
-        StringBuilder log = new StringBuilder();
+        // Drain BOTH streams on daemon threads: a long-lived subprocess whose
+        // stdout/stderr pipe fills would block forever. (The error stream is
+        // the ingest service's stderr; stdout carries its log4j console
+        // output.)
+        drainStream(proc.getErrorStream());
+        drainStream(proc.getInputStream());
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> proc.destroyForcibly()));
+    }
+
+    private static void drainStream(java.io.InputStream in) {
         Thread t = new Thread(() -> {
-            try (BufferedReader r = new BufferedReader(
-                    new InputStreamReader(proc.getErrorStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    log.append(line).append('\n');
-                }
+            try (java.io.InputStream s = in) {
+                s.transferTo(OutputStream.nullOutputStream());
             } catch (IOException ignored) {
             }
         });
         t.setDaemon(true);
         t.start();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> proc.destroyForcibly()));
     }
 
     @FunctionalInterface

@@ -470,6 +470,30 @@ public final class SignalJob {
             if (!config.stateBackendManagedMemory()) {
                 flinkConfig.setString("state.backend.rocksdb.memory.managed", "false");
             }
+            // E2E root cause (2026-08-17): under LOCAL execution (no
+            // flink-conf.yaml) Flink defaults taskmanager.memory.managed.size
+            // to 128 MB TOTAL — the RocksDB block cache (bounded dedup cache
+            // + candle windows) thrashes inside that pool and throughput
+            // collapses to ≈ the feed rate, so the E2E job never catches the
+            // backlog tail. Explicit passthrough
+            // (TASK_MANAGER_MEMORY_MANAGED_SIZE) for embedded/local runs only;
+            // unset → the deployment (flink-conf.yaml) stays authoritative.
+            if (config.taskManagerMemoryManagedSize() != null) {
+                flinkConfig.setString("taskmanager.memory.managed.size",
+                        config.taskManagerMemoryManagedSize());
+            }
+            // p16 E2E (2026-08-17): local MiniCluster defaults network memory
+            // to 64 MB (2048 × 32 KB buffers) — at 16 subtasks the connected
+            // forming-bar branch fails deploy with "required 17, but only 13
+            // available". Optional passthrough for embedded runs; unset → the
+            // deployment stays authoritative.
+            if (config.taskManagerNetworkMemoryMax() != null) {
+                flinkConfig.setString("taskmanager.memory.network.max",
+                        config.taskManagerNetworkMemoryMax());
+                // min must not exceed max; pin it below so the pair is sane.
+                flinkConfig.setString("taskmanager.memory.network.min",
+                        config.taskManagerNetworkMemoryMax());
+            }
             // Tracker 14 box 906 (2026-08-12): export RocksDB native-memory
             // gauges via the per-property boolean keys (verified against
             // RocksDBProperty in the pinned flink-statebackend-rocksdb-2.2.1
