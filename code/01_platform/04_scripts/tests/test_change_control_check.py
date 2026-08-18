@@ -23,7 +23,7 @@ compatibility_class: COMPATIBLE_WITH_LIMITATION
 savepoint_impact: migration — new serializer, old savepoints unreadable
 test_updates: SIG-UNIT-010, replay battery
 rollback_behavior: restore prior jar + savepoint
-plan_tasks: tracker-14 P10
+plan_tasks: tracker-04 P10
 ```
 """
 
@@ -91,7 +91,7 @@ class ValidateTests(unittest.TestCase):
 
     def test_empty_value_is_missing(self):
         text = GOOD_RECORD.replace(
-            "plan_tasks: tracker-14 P10",
+            "plan_tasks: tracker-04 P10",
             "plan_tasks:",
         )
         issues = ccc.validate_text(text)
@@ -118,7 +118,7 @@ class ValidateTests(unittest.TestCase):
         )
 
     def test_multiple_missing_fields_reported(self):
-        text = GOOD_RECORD.replace("plan_tasks: tracker-14 P10\n", "")
+        text = GOOD_RECORD.replace("plan_tasks: tracker-04 P10\n", "")
         text = text.replace("rollback_behavior: restore prior jar + savepoint\n", "")
         issues = ccc.validate_text(text)
         self.assertEqual(
@@ -171,7 +171,7 @@ class PlanTasksReferenceTests(unittest.TestCase):
     """plan_tasks references must resolve to real trackers/dossiers."""
 
     def test_tracker_reference_resolves(self):
-        self.assertEqual(ccc.plan_task_issues("tracker-14 P10", ccc.DEFAULT_RECORDS_DIR), [])
+        self.assertEqual(ccc.plan_task_issues("tracker-04 P10", ccc.DEFAULT_RECORDS_DIR), [])
 
     def test_tracker_without_dossier_fails(self):
         issues = ccc.plan_task_issues("tracker-99", ccc.DEFAULT_RECORDS_DIR)
@@ -215,7 +215,7 @@ class PlanTasksReferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "CHG-001.md")
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(GOOD_RECORD.replace("tracker-14 P10", "tracker-99"))
+                fh.write(GOOD_RECORD.replace("tracker-04 P10", "tracker-99"))
             issues = ccc.validate_file(path)
             self.assertTrue(any("tracker-99" in i for i in issues))
 
