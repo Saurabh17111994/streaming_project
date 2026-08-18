@@ -135,7 +135,7 @@ The implementation must satisfy `docs/02_requirements/02-functional/07-executor.
 - `REQ-EXE-002`: enforce the gate state machine and halt on uncertainty.
 - `REQ-EXE-003`: require two distinct authenticated approvals for the same epoch/evidence hash.
 - `REQ-EXE-004`: consume a durable immutable execution-intent stream distinct from the retired
-  ranking-era `Trade_Decisions` feed.
+  the old `Trade_Decisions` feed.
 - `REQ-EXE-005`: persist `PREPARED` attempt identity before broker command; classify outcomes explicitly.
 - `REQ-EXE-006`: correlate only by verified broker ID, echoed client reference, or evidence-approved
   reconciliation; never by proximity.
@@ -271,7 +271,7 @@ Safety_Halt_Requests → Execution Gateway → Nautilus gate → no broker call 
 ### New execution-intent contract
 
 Create a dedicated append-only `Execution_Intent` LOG. It is not `Trade_Decisions` and is not a
-ranking result. The canonical row contains:
+decision result. The canonical row contains:
 
 | Field | Rule |
 | --- | --- |
@@ -289,7 +289,7 @@ ranking result. The canonical row contains:
 | `schema_version` | Versioned contract |
 
 The existing `trade_instruction_state` KV may be re-scoped as the one-row-per-`instruction_id`
-canonical hash/index table, but it must not be described as a ranking output. No producer may revive
+canonical hash/index table, but it must not be described as a decision output. No producer may revive
 the removed ranking/reservation path.
 
 ### Protocol envelopes
@@ -332,9 +332,9 @@ order failures to market-data ingestion restarts.
 
 ### Decision D — Dedicated `Execution_Intent` LOG
 
-Create a dedicated execution-intent LOG instead of reviving `Trade_Decisions`. The ranking path was
+Create a dedicated execution-intent LOG instead of reviving `Trade_Decisions`. The decision path was
 removed and must stay removed. A new table makes the source contract explicit and prevents a future
-agent from treating a candidate/ranking row as a broker instruction.
+agent from treating a candidate/decision row as a broker instruction.
 
 ### Decision E — Nautilus is live execution authority; Fluss is command/control/projection authority
 
@@ -379,7 +379,7 @@ durability, or the policy-controlled one-year audit requirement.
 
 - Existing market-data bridge protocol, HFT subscription policy, and ingestion hot path.
 - Flink Signal candle/window/dedup semantics and stable operator UIDs/max parallelism.
-- Removal of ranking, reservations, and the old ranking-era `Trade_Decisions` producer.
+- Removal of the ~~ranking~~/~~reservation~~ path and the old `Trade_Decisions` producer.
 - Fluss table semantics for existing market/signal tables unless a schema parity test requires a
   documented clean-break change.
 - Live-money enablement posture: remains blocked through every implementation phase.
@@ -441,7 +441,7 @@ each major workstream; the detailed checkboxes under that task are the actual TO
 | --- | --- | --- | --- |
 | `T0` dependency/policy freeze | **PARTIAL** | Nautilus commit/workspace pin, Rust 1.97.1 record, Go 1.24.5 image tag, platform/Arrow SDK pins, version matrix, `CHG-039`–`CHG-041`, cargo metadata/check, and saved phase-1 evidence exist | Immutable Go image digest, ignored credential-injection proof for real sandbox secrets, retention approval, and final service capability evidence remain absent |
 | `T1` intent contract | **PARTIAL — producer slice** | `27_execution_intent.sql`, 25-entry manifest, Java layout/builder/protocol, deterministic context resolver, strict config, disabled-by-default Signal branch, stable UIDs, producer tests, and full compute suite | Enabled-graph scratch Fluss append proof and durable quarantine/audit writer remain T2 responsibilities |
-| `T2` Java Fluss gateway | **PARTIAL — offline/runtime slice** | `code/02_services/06_execution_gateway/` now contains the standalone Java 17 module, Fluss readers/writers, authenticated protocol, readiness, ledger, and focused tests | Live Fluss composite-key matrix/scratch proof, durable end-to-end replay evidence, and production Compose wiring remain |
+| `T2` Java Fluss gateway | **PARTIAL — durable-replay leg done, offline+live green** | `code/02_services/06_execution_gateway/` contains the standalone Java 17 module, Fluss readers/writers, authenticated protocol, readiness, ledger, focused tests, and a durable source-event dedup index (`Execution_Intent_Processed`) that replaces the process-local duplicate guard. 18 tests PASS (13 unit incl. durable-dispatcher, 16 offline / 3 env-gated live: composite-key matrix, durable restart-replay, recoverable-ledger resume) | Production Compose wiring of the gateway remains; broker exactly-once across a forward/commit crash boundary is deferred to T5 (durable fence token) |
 | `T3` Go Arrow execution bridge | **PARTIAL — offline fake/network slice** | Separate module, pinned vendored SDK replacement, private v1 command/report protocol, SDK REST adapter, fake HTTP lifecycle, fake WebSocket lifecycle/reconnect fixture, request-id cache, postback normalizer, Dockerfile, resolved Compose profile, network policy checker, race tests, and disabled-mode health probe | Real sandbox authentication/re-authentication remains intentionally blocked; T8 still must wire gateway/Rust services and perform cross-container runtime probes; T9 owns real broker evidence |
 | `T4` Rust Nautilus service | **NOT IMPLEMENTED** | Nautilus reference crates compile at the pinned checkout; no service exists under `code/02_services/04_executor/` | Rust binary, `ExecutionClient`, runtime, health, fake bridge, event-store integration, and restart behavior remain |
 | `T5` durable gate/attempt/fencing | **PARTIAL — prerequisite models only** | Pure-JVM `GateTransitionValidator`, `InMemoryAttemptStore`, audit/hash-chain, and identity tests exist | No durable gateway-backed state, Rust orchestration, pre-call persistence, fencing, approvals, or crash-window enforcement exists |
@@ -548,7 +548,7 @@ recorded, and live money remains disabled.
 
 ### Task 1 — Define and produce the immutable execution intent — **PARTIAL: contract slice only**
 
-**Objective:** Give the execution service a concrete input contract without reviving ranking.
+**Objective:** Give the execution service a concrete input contract without reviving the decision path.
 
 **Files/components:**
 
@@ -574,7 +574,7 @@ recorded, and live money remains disabled.
 - Same `instruction_id` plus same hash is a duplicate/no-op; same ID plus different hash is a
   violation that produces quarantine/audit intent and no execution event.
 - `EXECUTION_INTENT_ENABLED` defaults to `false`; no production broker path is enabled by this flag.
-- The old ranking/reservation/`Trade_Decisions` producer remains disabled.
+- The old ~~ranking~~/~~reservation~~/`Trade_Decisions` producer remains disabled.
 
 **Dependencies:** Task 0; existing `SignalCandidate` schema and `TradeDecisionBuilder` behavior may
 be reused only after the new intent fields are explicitly mapped.
@@ -794,14 +794,18 @@ remains for the owner-approved DDL settings.
 
 **Atomic TODO checklist:**
 
-- [~] Resolve the Fluss 0.9.1 composite-key raw-client limitation and record the approved
+- [x] Resolve the Fluss 0.9.1 composite-key raw-client limitation and record the approved
   `kv.format-version=2`/single-subset bucket-key DDL change for `Order_Lifecycle` and
-  `Order_Correlation`; DDL, manifest, agreement test, module, and unit proof are present, but
-  the live COMPAT-FLUSS-005 scratch append/lookup is still pending.
+  `Order_Correlation`; DDL, manifest, agreement test, module, and unit proof are present, AND
+  the live COMPAT-FLUSS-005 matrix + scratch append/lookup were run against the local cluster
+  (2026-08-19): matrix PASS + full scratch apply `RESULT=PASS EXIT=0` for all 26 tables.
 - [x] Create the gateway module, build descriptor, container image, configuration model, and
   private authenticated endpoint.
-- [~] Implement `IntentReader` with offset/restart behavior and schema/hash/expiry/scope checks;
-  restart replay is unit-safe but durable attempt/index dedup is still pending.
+- [x] Implement `IntentReader` with offset/restart behavior and schema/hash/expiry/scope checks;
+  the process-local duplicate guard is now reconciled from a durable attempt/index lookup
+  (`FlussIntentDedupStore`/`DurableIntentDispatcher`, backed by the new `Execution_Intent_Processed`
+  KV index), committed on each FORWARDED handoff and hydrated on boot; the live restart-replay
+  proof (append one intent, hand off once, restart reader, no second handoff) PASSES (2026-08-19).
 - [~] Implement control-state reads for gate epoch, halt state, approvals, and reconciliation
   requests without making Java an OMS.
 - [x] Implement authenticated, versioned gateway-to-Rust envelopes with timeout/backpressure
@@ -811,17 +815,26 @@ remains for the owner-approved DDL settings.
 - [x] Implement `ProjectionLedger` transitions and idempotent replay from every incomplete state.
 - [x] Implement readiness so Fluss or protocol uncertainty is never reported as durable success.
 - [~] Add duplicate, malformed, gap, disconnect, partial-write, restart, and authentication tests;
-  protocol/partial-write/readiness tests exist, while live gap/disconnect and Fluss restart legs remain.
-- [~] Run module unit tests and the environment-gated Fluss integration test; module tests pass,
-  `FLUSS_BOOTSTRAP` is unset, so the live gate is pending.
+  protocol/partial-write/readiness tests exist and the live Fluss restart legs now PASS
+  (durable-replay no-second-handoff + recoverable-ledger resume to COMPLETE with a duplicate
+  no-op); live gap/disconnect legs remain.
+- [x] Run module unit tests and the environment-gated Fluss integration test; module tests pass
+  (13 unit, 0 failures) and the env-gated `GatewayFlussIntegrationTest` + `CompatFlussCompositeKeyIntegrationTest`
+  both PASS against the local cluster (`FLUSS_BOOTSTRAP=localhost:9123`, 2026-08-19).
 
-**Current output guarantee:** Unit tests prove validated intent rules, authenticated envelopes,
-readiness fail-closed behavior, forward-only ledger transitions, and resume without repeating
-completed steps. The runtime awaits Fluss futures and leaves an incomplete ledger state on a
-reported write failure. **Exactly-once behavior across a process crash after an append but before
-the ledger acknowledgement is not yet claimed**; the live reconciliation scan and source-event
-dedup proof are still required. The gateway has no order lifecycle arithmetic, position authority,
-broker credential, or Arrow access.
+**Current output guarantee:** Unit + live tests prove validated intent rules, authenticated
+envelopes, readiness fail-closed behavior, forward-only ledger transitions, and resume without
+repeating completed steps. The live durable-replay proof (append one Execution_Intent, hand it off
+once, restart the reader, replay from offset 0 -> no second handoff via the durable
+`Execution_Intent_Processed` index) and the live recoverable-ledger proof (crash mid-apply leaves an
+incomplete ledger row; a fresh applier resumes to COMPLETE without repeating completed steps and a
+re-apply is a duplicate no-op) both PASS against the local cluster (2026-08-19). The runtime awaits
+Fluss futures and leaves an incomplete ledger state on a reported write failure. **The durable dedup
+record is committed on a FORWARDED handoff; exactly-once across a crash between an outbound
+forward and its durable-commit, and any real broker side effect, still require T5's durable fence
+token / forwarding path** (a durable-commit failure today fails readiness closed rather than risk a
+duplicate). The gateway has no order lifecycle arithmetic, position authority, broker credential, or
+Arrow access.
 
 **Evidence:** Gateway test report, protocol fixtures, incomplete-ledger restart report, Fluss
 integration output, readiness transitions, and a static credential/Arrow-access check.
@@ -1776,7 +1789,7 @@ ledger state, restart count, recovery duration, and evidence hashes. Evidence be
 - [~] Exact Nautilus commit, Cargo lock, Rust toolchain, Go SDK commit, and protocol versions pinned.
 - [~] One-year minimum audit policy approved; longer policy override and deletion/legal-hold evidence defined.
 - [~] `Execution_Intent` LOG DDL, manifest, schema classes, hash index, and contract tests complete.
-- [x] Removed ranking-era `Trade_Decisions` producer remains disabled and is not consumed by execution.
+- [x] Removed ~~ranking-era~~ `Trade_Decisions` producer remains disabled and is not consumed by execution.
 - [ ] Java Fluss gateway reads intent/control state and writes idempotent projections.
 - [ ] Rust Nautilus service replaces the Python scaffold and starts `HALTED`.
 - [ ] Custom Nautilus `ExecutionClient` lifecycle and bridge protocol tests pass.

@@ -18,7 +18,7 @@ Strategy: `Signal_Candidates` (immutable append-only LOG — RE-SCOPED 2026-08-1
 
 Signal state ownership (DEC-038): `feature_candles_15s`, `Signal_Candidates`, and `Signal_Candidates_current` are **Fluss-owned authoritative state**; Flink checkpoints never carry a second full copy of them. A **fingerprint-dedup KV state table** (proposed name `fingerprint_dedup`) is the authoritative dedup set: key `(instrument_token, fingerprint_version, event_fingerprint)`, value `(first_seen_ms, expiry_ms)`, `bucket.key = instrument_token`, owner Signal job, rebuild source `raw_table_1` replay within the dedup TTL, bounded growth via a tested expiry/cleanup mechanism (no per-key TTL in Fluss 0.9.1), and restart behavior = verify Fluss availability, then rehydrate the Flink working cache after a compact checkpoint restore. Design/DDL/tests land in a later stage — **IMPLEMENTED 2026-08-15 (CHG-003: DDL 24 + manifest + expiry/cleanup + tests + live wiring; DEC-038 completed)**; the contract fixes ownership, keys, and semantics — the full contract is formalized in [Dedup state table contract](#dedup-state-table-contract-dec-038) below. **SUPERSEDED 2026-08-17 (CHG-022 / DEC-040): the dedup set is authoritative Flink keyed state (Design B) — see the section banner below.**
 
-Intent: `Execution_Intent` (immutable LOG; Signal-owned; distinct from the retired `Trade_Decisions` ranking feed).
+Intent: `Execution_Intent` (immutable LOG; Signal-owned; distinct from the retired `Trade_Decisions` feed).
 
 Order/position: `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Projection_Ledger`, `Postback_Quarantine`.
 

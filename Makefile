@@ -115,8 +115,7 @@ test-audit-r2:
 # sentinels. Env-gated: SKIPPED when FLUSS_BOOTSTRAP is unset; wired into the
 # Monday verification gate (run-monday-gates.sh) after the Java full gate.
 execution-network-check:
-	@python3 code/01_platform/04_scripts/execution_network_check.py 
-		--compose code/01_platform/01_docker/docker-compose.yml
+	@python3 code/01_platform/04_scripts/execution_network_check.py --compose code/01_platform/01_docker/docker-compose.yml
 ddl-apply-smoke:
 	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py
 

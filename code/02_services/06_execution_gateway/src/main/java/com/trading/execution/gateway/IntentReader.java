@@ -25,7 +25,8 @@ public final class IntentReader implements AutoCloseable {
     private final GatewayConfig config;
     private final IntentSink forwarder;
     private final Consumer<String> violationHandler;
-    private final IntentDeduplicator deduplicator = new IntentDeduplicator();
+    private final IntentDedupStore dedupStore;
+    private final DurableIntentDispatcher dispatcher;
     private final Map<Integer, Long> lastOffsets = new HashMap<>();
 
     public static IntentReader open(GatewayConfig config, IntentSink forwarder,
@@ -38,16 +39,20 @@ public final class IntentReader implements AutoCloseable {
             if (table.getTableInfo().getRowType().getFieldCount() != 22) {
                 throw new IllegalStateException("Execution_Intent schema must contain 22 columns");
             }
-            return new IntentReader(connection, table, config, forwarder, violationHandler);
+            return new IntentReader(connection, table, config, forwarder, violationHandler,
+                    FlussIntentDedupStore.open(config));
         } catch (Exception e) {
             throw new IllegalStateException("cannot open Execution_Intent", e);
         }
     }
 
     IntentReader(Connection connection, Table table, GatewayConfig config,
-            IntentSink forwarder, Consumer<String> violationHandler) {
+            IntentSink forwarder, Consumer<String> violationHandler,
+            IntentDedupStore dedupStore) throws Exception {
         this.connection = connection; this.table = table; this.config = config;
         this.forwarder = forwarder; this.violationHandler = violationHandler;
+        this.dedupStore = dedupStore;
+        this.dispatcher = new DurableIntentDispatcher(dedupStore);
         this.scanner = table.newScan().createLogScanner();
     }
 
@@ -64,8 +69,9 @@ public final class IntentReader implements AutoCloseable {
             try {
                 IntentRecord intent = decode(record.getRow(), record.logOffset());
                 IntentValidator.validate(intent, config.accountScopeId(), config.executionPartitionId());
-                IntentDeduplicator.Outcome outcome = deduplicator.classify(intent.instructionId(), intent.requestHash());
-                if (outcome == IntentDeduplicator.Outcome.HASH_VIOLATION) {
+                DurableIntentDispatcher.Verdict outcome = dispatcher.classify(
+                        intent.instructionId(), intent.requestHash());
+                if (outcome == DurableIntentDispatcher.Verdict.HASH_VIOLATION) {
                     violationHandler.accept("instruction hash changed: " + intent.instructionId());
                     continue;
                 }
@@ -73,7 +79,7 @@ public final class IntentReader implements AutoCloseable {
                 // bucket. Keep the last observed offset as a process-wide
                 // diagnostic until the client exposes bucket metadata.
                 lastOffsets.put(-1, record.logOffset());
-                if (outcome == IntentDeduplicator.Outcome.FIRST) {
+                if (outcome == DurableIntentDispatcher.Verdict.FIRST) {
                     IntentSink.Result result;
                     try {
                         result = forwarder.forward(intent);
@@ -83,7 +89,18 @@ public final class IntentReader implements AutoCloseable {
                         continue;
                     }
                     if (result == IntentSink.Result.FORWARDED) {
-                        deduplicator.commit(intent.instructionId(), intent.requestHash()); accepted++;
+                        try {
+                            dispatcher.committed(intent.instructionId(), intent.requestHash(),
+                                    record.logOffset());
+                            accepted++;
+                        } catch (Exception recursive) {
+                            // A durable-commit failure means we cannot prove the
+                            // handoff is idempotent; fail closed rather than
+                            // silently risk a duplicate side effect on replay.
+                            violationHandler.accept(
+                                    "durable intent dedup commit failed: "
+                                            + intent.instructionId() + " — " + recursive.getMessage());
+                        }
                     }
                 }
             } catch (RuntimeException e) {
@@ -105,5 +122,8 @@ public final class IntentReader implements AutoCloseable {
     private static String nullableText(InternalRow r, int i) { return r.isNullAt(i) ? null : r.getString(i).toString(); }
     private static Long nullableLong(InternalRow r, int i) { return r.isNullAt(i) ? null : r.getLong(i); }
 
-    @Override public void close() throws Exception { scanner.close(); table.close(); connection.close(); }
+    @Override public void close() throws Exception {
+        scanner.close(); table.close(); connection.close();
+        try { dedupStore.close(); } catch (Exception ignored) { }
+    }
 }

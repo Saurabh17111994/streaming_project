@@ -42,7 +42,7 @@ step() { echo; echo "===== $1 ====="; }
 pass() { echo "  PASS  $1"; }
 fail() { echo "  FAIL  $1"; FAIL=1; }
 
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 # ---------------------------------------------------------------------------
 # Layer 1 — machine gates

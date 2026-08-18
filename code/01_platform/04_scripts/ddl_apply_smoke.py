@@ -11,13 +11,18 @@ COMPAT-FLUSS-005 matrix gate, and the fail-closed refusal — needs end-to-end
 regression coverage. This smoke provides it by running the REAL orchestrator CLI
 (`ddl_apply.py --apply-verified`) three times against scratch-prefixed catalogs:
 
-  S1  full PASS        DDL_APPLY_SKIP_SMOKE=1                -> exit 0  RESULT=PASS
-  S2  refused          no acknowledgment                     -> exit 1  RESULT=PASS_WITH_LIMITATION
-  S3  acknowledged     DDL_APPLY_ACK_LIMITATIONS=auto        -> exit 6  RESULT=PASS_WITH_LIMITATION
-      + evidence record: status / ack_mode=auto /
-        acknowledged_limitations == the manifest-predicted set
-        (Order_Lifecycle, Order_Correlation — the documented Flink-connector-only
-        design; the COMPAT-FLUSS-005 failing cell).
+  S1  full PASS        DDL_APPLY_SKIP_SMOKE=1                  -> exit 0  RESULT=PASS
+  S2  full PASS        write/read smoke enabled (default)      -> exit 0  RESULT=PASS
+  S3  full PASS        DDL_APPLY_ACK_LIMITATIONS=auto (no-op,  -> exit 0  RESULT=PASS
+      no predicted limitation)
+      + evidence record: status PASS / ack_mode / acknowledged_limitations == []
+        The composite-PK raw-client limitation (COMPAT-FLUSS-005) is RESOLVED
+        by the owner-approved DDL fix (kv.format-version=2 + a single-field
+        subset bucket key on Order_Lifecycle/Order_Correlation) — see the plan
+        19-nautilus-execution-service-implementation-plan.md T2 and
+        CompositeKeyMatrixVerifier. The refusal/acknowledgment machinery
+        (exit 6 / exit 1) stays unit-tested for any FUTURE table that
+        re-introduces bucket key == PK.
   S4  containerized    mounts a PRE-SEEDED bad-ownership evidence record
       bad-ownership    (engine-uid-owned, mode 644 — the exact umask/setgid
       drill            regression class) into a scratch evidence dir and runs
@@ -26,8 +31,8 @@ regression coverage. This smoke provides it by running the REAL orchestrator CLI
                        the final exit to 1 with 'EVIDENCE OWNERSHIP CHECK
                        FAILED' naming the seeded record, while the engine's own
                        RESULT= sentinel still documents the apply
-                       (PASS_WITH_LIMITATION EXIT=6) — the apply ran; the gate
-                       flipped the exit. Runs only when docker + the built
+                       (PASS EXIT=0) — the apply ran; the gate flipped
+                       the exit. Runs only when docker + the built
                        ddl-apply image are available on the HOST.
 
 Every scenario additionally asserts the evidence record's `matrix` object
@@ -73,9 +78,14 @@ import ddl_apply  # noqa: E402  (reuse pins, DDL dir, classpath builder)
 
 REPO_ROOT = ddl_apply.REPO_ROOT
 # The composite-PK tables the raw 0.9.1 client cannot upsert (bucket key == PK,
-# iceberg key encoder) — manifest-predicted by --ack-limitations auto and the
-# documented Flink-connector-only design (02-schema-storage.md, COMPAT-FLUSS-005).
-EXPECTED_LIMITED = ["Order_Lifecycle", "Order_Correlation"]
+# iceberg key encoder) — manifest-predicted by --ack-limitations auto. RESOLVED
+# by the owner-approved DDL fix (COMPAT-FLUSS-005): Order_Lifecycle /
+# Order_Correlation now use kv.format-version=2 + a single-field subset bucket
+# key (account_scope_id / instruction_id), so the raw client can write them and
+# the current manifest predicts NO limitation (verified live full PASS). Keep
+# the prediction list empty; the acknowledgment machinery stays unit-tested for
+# any future table shape that re-introduces bucket key == PK.
+EXPECTED_LIMITED = []
 # Real capability evidence when present (enrich_evidence just records path+sha).
 REAL_EVIDENCE = os.path.join(
     REPO_ROOT, "logs", "schema-compat", "composite-pk-raw-client-20260815.md"
@@ -187,12 +197,12 @@ def scenario_container_bad_ownership(compose_file, bootstrap, classpath):
     the final container exit to 1 with 'EVIDENCE OWNERSHIP CHECK FAILED'. This
     drill mounts a PRE-SEEDED bad record (engine-uid-owned 644) into a scratch
     evidence dir and asserts the containerized apply:
-      * exits 1 (the gate overrides the apply's own exit 6),
+      * exits 1 (the gate overrides the apply's own exit 0 for a full PASS),
       * prints EVIDENCE OWNERSHIP CHECK FAILED NAMING the seeded record
         (positive control: the failure is OUR seed, not a wrapper regression),
       * while the engine's RESULT= sentinel still documents the apply itself
-        (PASS_WITH_LIMITATION EXIT=6) — the apply ran fully; the gate flipped
-        the exit.
+        (PASS EXIT=0 — no composite-PK limitation remains after COMPAT-FLUSS-005)
+        — the apply ran fully; the gate flipped the exit.
     SKIPs (True) when docker or the ddl-apply image are unavailable; any actual
     deviation from the pinned outcome FAILs.
     """
@@ -237,7 +247,7 @@ def scenario_container_bad_ownership(compose_file, bootstrap, classpath):
                             "(ownership gate must flip the apply exit)")
         for part in ["EVIDENCE OWNERSHIP CHECK FAILED",
                      "/bad/bad/apply.json",
-                     "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=6"]:
+                     "ddl-apply: RESULT=PASS EXIT=0"]:
             if part not in combined:
                 problems.append(f"output missing {part!r}")
         if problems:
@@ -376,8 +386,10 @@ def main():
 
     print(f"ddl-apply-smoke: cluster={bootstrap} "
           f"matrix_evidence={MATRIX_EVIDENCE}")
-    print(f"ddl-apply-smoke: expected limited tables = "
-          f"{', '.join(EXPECTED_LIMITED)} (manifest prediction, COMPAT-FLUSS-005)")
+    print("ddl-apply-smoke: expected limited tables = "
+          "[] (COMPAT-FLUSS-005 resolved by the owner-approved DDL fix: "
+          "kv.format-version=2 + single-field subset bucket key on "
+          "Order_Lifecycle/Order_Correlation -> every table raw-client writable)")
 
     # The default evidence dir (repo-root logs/ddl-apply) becomes
     # container-owned (10001:10001 2775) after any container run — the host
@@ -409,7 +421,7 @@ def main():
                    expect_rc=0,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS exit=0",
-                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=25 MANIFEST="],
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
                    expect_absent=["PASS_WITH_LIMITATION", "LIMITATION"],
                    check_evidence={"status": "PASS",
                                    "acknowledged_limitations": [],
@@ -417,32 +429,34 @@ def main():
                                    "matrix.cells": 4},
                    classpath=classpath, bootstrap=bootstrap)
 
-    # S2 — refused limitation: smoke surfaces the composite-PK tables and no
-    # acknowledgment is given -> exit 1, fail-closed refusal + auto hint.
+    # S2 — full PASS with the real write/read smoke enabled. The owner-approved
+    # composite-key DDL fix (COMPAT-FLUSS-005) makes Order_Lifecycle /
+    # Order_Correlation raw-client writable (kv.format-version=2 + single-field
+    # subset bucket key), so the per-table KV upsert+lookup smoke now passes for
+    # ALL tables (including both composite-PK tables) -> full PASS, no ack.
     ok &= scenario(2, {},
-                   expect_rc=1,
+                   expect_rc=0,
                    expect_parts=[
-                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=1 TABLES=25",
-                       "REFUSED to mark the apply fully PASS",
-                       "Order_Lifecycle, Order_Correlation",
-                       "Pass --ack-limitations auto"],
-                   expect_absent=["DDL-APPLY-RESULT: PASS exit=0"],
-                   check_evidence={"status": "PASS_WITH_LIMITATION",
+                       "DDL-APPLY-RESULT: PASS exit=0",
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
+                   expect_absent=["PASS_WITH_LIMITATION", "LIMITATION",
+                                  "REFUSED"],
+                   check_evidence={"status": "PASS",
                                    "acknowledged_limitations": [],
                                    "matrix.status": "PASS",
                                    "matrix.cells": 4},
                    classpath=classpath, bootstrap=bootstrap)
 
-    # S3 — acknowledged partial: --ack-limitations auto resolves the manifest
-    # prediction -> dedicated exit 6, ack_mode=auto, tables recorded.
+    # S3 — --ack-limitations auto is a no-op when the manifest predicts no
+    # limitation (the composite-key DDL fix resolved COMPAT-FLUSS-005): still
+    # full PASS exit 0, acknowledged_limitations == [].
     ok &= scenario(3, {"DDL_APPLY_ACK_LIMITATIONS": "auto"},
-                   expect_rc=6,
+                   expect_rc=0,
                    expect_parts=[
-                       "DDL-APPLY-RESULT: PASS_WITH_LIMITATION exit=6",
-                       "ddl-apply: RESULT=PASS_WITH_LIMITATION EXIT=6 TABLES=25",
-                       "acknowledged the documented composite-PK raw-client "
-                       "limitation on Order_Lifecycle, Order_Correlation"],
-                   check_evidence={"status": "PASS_WITH_LIMITATION",
+                       "DDL-APPLY-RESULT: PASS exit=0",
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
+                   expect_absent=["PASS_WITH_LIMITATION", "LIMITATION"],
+                   check_evidence={"status": "PASS",
                                    "ack_mode": "auto",
                                    "limitations": EXPECTED_LIMITED,
                                    "acknowledged_limitations": EXPECTED_LIMITED,
@@ -452,7 +466,8 @@ def main():
 
     # S4 — containerized negative drill: a pre-seeded bad-ownership record must
     # flip the containerized apply to exit 1 with EVIDENCE OWNERSHIP CHECK
-    # FAILED even though the apply itself succeeded (sentinel 6). Host-only:
+    # FAILED even though the apply itself succeeded (sentinel PASS EXIT=0).
+    # Host-only:
     # docker CLI + the ddl-apply image are required, otherwise SKIP (incl.
     # always in the in-container `smoke` subcommand — the image has no docker).
     compose_file = os.path.join(SCRIPT_DIR, "..", "01_docker",
@@ -466,7 +481,8 @@ def main():
         print("ddl-apply-smoke: FAIL — the live contract deviates from the "
               "pinned outcomes (see deviations above)")
         return 1
-    print("ddl-apply-smoke: PASS — exit-code contract 0/6/1 + sentinels + "
+    print("ddl-apply-smoke: PASS — exit-code contract (full PASS exit 0 after "
+          "the COMPAT-FLUSS-005 composite-key resolution) + sentinels + "
           "evidence + the containerized bad-ownership drill verified on "
           "scratch catalogs")
     return 0

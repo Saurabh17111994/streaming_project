@@ -350,6 +350,20 @@
       "writer_owner": "Signal job (sole writer)",
       "retention_policy": "2d",
       "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
+    },
+    {
+      "table_name": "Execution_Intent_Processed",
+      "ddl_path": "28_execution_intent_processed.sql",
+      "ddl_sha256": "3a579082ec3daee0e96e4ff983e98523d7b5502c7a2e0b861744acc30e73b24d",
+      "table_kind": "KV",
+      "primary_key": "instruction_id",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "1",
+      "writer_owner": "Action Capture",
+      "retention_policy": "2d",
+      "lake_policy": "off"
     }
   ]
 }

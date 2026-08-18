@@ -70,6 +70,13 @@ class SignalJobConfigTest {
         assertEquals(false, cfg.tradeDecisionsEnabled(),
                 "TRADE_DECISIONS_ENABLED defaults to false — the decision dual-sink stays off "
                         + "until the ranking feed exists");
+        assertEquals("Execution_Intent", cfg.executionIntentTable());
+        assertEquals(null, cfg.executionAccountScopeId());
+        assertEquals("partition-0", cfg.executionPartitionId());
+        assertEquals("CNC", cfg.executionProductType());
+        assertEquals("DAY", cfg.executionTimeInForce());
+        assertEquals(false, cfg.executionIntentEnabled(),
+                "execution intent must remain disabled unless explicitly enabled");
         // The DEC-038 dedup externalization keys (DEDUP_STATE_TABLE /
         // DEDUP_CACHE_* / DEDUP_WRITE_* / DEDUP_CLEANUP_INTERVAL_MS) were
         // retired with design B (2026-08-16): the dedup set is authoritative
@@ -247,6 +254,61 @@ class SignalJobConfigTest {
         assertEquals("trade_instruction_state_dev", cfg.tradeInstructionStateTable());
         assertEquals(true, cfg.tradeDecisionsEnabled(),
                 "explicit TRADE_DECISIONS_ENABLED=true must enable the dual-sink gate");
+    }
+
+    @Test
+    void executionIntentDefaultsToDisabledWithoutExecutionScope() {
+        Map<String, String> env = env();
+        env.put("EXECUTION_INTENT_ENABLED", "false");
+        SignalJobConfig cfg = SignalJobConfig.from(env);
+        assertFalse(cfg.executionIntentEnabled());
+        assertEquals(null, cfg.executionAccountScopeId());
+    }
+
+    @Test
+    void enabledExecutionIntentRequiresExplicitScopeAndContractVersion() {
+        Map<String, String> env = env();
+        env.put("EXECUTION_INTENT_ENABLED", "true");
+        env.put("ACCOUNT_SCOPE_ID", "sandbox-account");
+        env.put("EXECUTION_PARTITION_ID", "partition-0");
+        env.put("EXECUTION_PRODUCT_TYPE", "CNC");
+        env.put("EXECUTION_TIME_IN_FORCE", "DAY");
+        assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
+
+        env.put("CONFIGURATION_VERSION", CandleTableSchema.CANONICAL_CONFIGURATION_VERSION);
+        SignalJobConfig cfg = SignalJobConfig.from(env);
+        assertTrue(cfg.executionIntentEnabled());
+        assertEquals("sandbox-account", cfg.executionAccountScopeId());
+        assertEquals("partition-0", cfg.executionPartitionId());
+    }
+
+    @Test
+    void enabledExecutionIntentRejectsMissingRequiredScopeValues() {
+        Map<String, String> env = env();
+        env.put("EXECUTION_INTENT_ENABLED", "true");
+        env.put("CONFIGURATION_VERSION", CandleTableSchema.CANONICAL_CONFIGURATION_VERSION);
+        env.put("ACCOUNT_SCOPE_ID", " ");
+        env.put("EXECUTION_PARTITION_ID", "partition-0");
+        env.put("EXECUTION_PRODUCT_TYPE", "CNC");
+        env.put("EXECUTION_TIME_IN_FORCE", "DAY");
+        assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
+
+        env.put("ACCOUNT_SCOPE_ID", "sandbox-account");
+        env.put("EXECUTION_PARTITION_ID", "");
+        assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
+    }
+
+    @Test
+    void enabledExecutionIntentRejectsBlankTableName() {
+        Map<String, String> env = env();
+        env.put("EXECUTION_INTENT_ENABLED", "true");
+        env.put("CONFIGURATION_VERSION", CandleTableSchema.CANONICAL_CONFIGURATION_VERSION);
+        env.put("ACCOUNT_SCOPE_ID", "sandbox-account");
+        env.put("EXECUTION_PARTITION_ID", "partition-0");
+        env.put("EXECUTION_PRODUCT_TYPE", "CNC");
+        env.put("EXECUTION_TIME_IN_FORCE", "DAY");
+        env.put("EXECUTION_INTENT_TABLE", " ");
+        assertThrows(IllegalStateException.class, () -> SignalJobConfig.from(env));
     }
 
     /**

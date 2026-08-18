@@ -102,7 +102,13 @@ public record SignalJobConfig(
         long sinkWriteStallTimeoutMs,
         String tradeDecisionsTable,
         String tradeInstructionStateTable,
-        boolean tradeDecisionsEnabled) implements Serializable {
+        boolean tradeDecisionsEnabled,
+        String executionIntentTable,
+        String executionAccountScopeId,
+        String executionPartitionId,
+        String executionProductType,
+        String executionTimeInForce,
+        boolean executionIntentEnabled) implements Serializable {
 
     public static SignalJobConfig fromEnv() {
         return from(System.getenv());
@@ -111,6 +117,13 @@ public record SignalJobConfig(
     /** Builds a validated config from an environment map (production: {@code System.getenv()}). */
     public static SignalJobConfig from(Map<String, String> env) {
         StartupMode mode = validateStartupMode(env);
+        boolean executionIntentEnabled = booleanValue(env, "EXECUTION_INTENT_ENABLED", false);
+        String configurationVersion = requireCanonicalVersion(env, "CONFIGURATION_VERSION",
+                CandleTableSchema.CANONICAL_CONFIGURATION_VERSION);
+        if (executionIntentEnabled && !env.containsKey("CONFIGURATION_VERSION")) {
+            throw new IllegalStateException("Config CONFIGURATION_VERSION must be explicit when "
+                    + "EXECUTION_INTENT_ENABLED=true — no implicit execution contract version");
+        }
         return new SignalJobConfig(
                 env.getOrDefault("FLUSS_BOOTSTRAP_SERVERS", "localhost:9123"),
                 env.getOrDefault("FLUSS_DATABASE", "default"),
@@ -119,8 +132,7 @@ public record SignalJobConfig(
                 env.getOrDefault("RAW_SCHEMA_VERSION", PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION),
                 requireCanonicalVersion(env, "ALGORITHM_VERSION",
                         CandleTableSchema.CANONICAL_ALGORITHM_VERSION),
-                requireCanonicalVersion(env, "CONFIGURATION_VERSION",
-                        CandleTableSchema.CANONICAL_CONFIGURATION_VERSION),
+                configurationVersion,
                 env.getOrDefault("CANDLE_SCHEMA_VERSION", "2"),
                 requirePinnedLong(env, "DEDUP_TTL_MS", PlatformConfig.DEDUP_TTL_MS),
                 requirePinnedLong(env, "CANDLE_WINDOW_MS", PlatformConfig.CANDLE_WINDOW_MS),
@@ -168,7 +180,13 @@ public record SignalJobConfig(
                 sinkWriteStallTimeoutMs(env),
                 env.getOrDefault("TRADE_DECISIONS_TABLE", "Trade_Decisions"),
                 env.getOrDefault("TRADE_INSTRUCTION_STATE_TABLE", "trade_instruction_state"),
-                booleanValue(env, "TRADE_DECISIONS_ENABLED", false));
+                booleanValue(env, "TRADE_DECISIONS_ENABLED", false),
+                executionIntentTable(env, executionIntentEnabled),
+                executionAccountScopeId(env, executionIntentEnabled),
+                executionPartitionId(env, executionIntentEnabled),
+                executionProductType(env, executionIntentEnabled),
+                executionTimeInForce(env, executionIntentEnabled),
+                executionIntentEnabled);
     }
 
     /**
@@ -685,6 +703,55 @@ public record SignalJobConfig(
                     + "(case-insensitive), got '" + trimmed + "'");
         }
         return Boolean.parseBoolean(trimmed);
+    }
+
+    private static String executionAccountScopeId(Map<String, String> env, boolean enabled) {
+        String value = env.get("ACCOUNT_SCOPE_ID");
+        if (!enabled) {
+            return value == null ? null : value.trim();
+        }
+        return requiredExecutionText(value, "ACCOUNT_SCOPE_ID");
+    }
+
+    private static String executionIntentTable(Map<String, String> env, boolean enabled) {
+        String value = env.get("EXECUTION_INTENT_TABLE");
+        if (!enabled) {
+            return value == null ? "Execution_Intent" : value.trim();
+        }
+        return requiredExecutionText(value == null ? "Execution_Intent" : value,
+                "EXECUTION_INTENT_TABLE");
+    }
+
+    private static String executionPartitionId(Map<String, String> env, boolean enabled) {
+        String value = env.get("EXECUTION_PARTITION_ID");
+        if (!enabled) {
+            return value == null ? "partition-0" : value.trim();
+        }
+        return requiredExecutionText(value, "EXECUTION_PARTITION_ID");
+    }
+
+    private static String executionProductType(Map<String, String> env, boolean enabled) {
+        String value = env.get("EXECUTION_PRODUCT_TYPE");
+        if (!enabled) {
+            return value == null ? "CNC" : value.trim();
+        }
+        return requiredExecutionText(value, "EXECUTION_PRODUCT_TYPE");
+    }
+
+    private static String executionTimeInForce(Map<String, String> env, boolean enabled) {
+        String value = env.get("EXECUTION_TIME_IN_FORCE");
+        if (!enabled) {
+            return value == null ? "DAY" : value.trim();
+        }
+        return requiredExecutionText(value, "EXECUTION_TIME_IN_FORCE");
+    }
+
+    private static String requiredExecutionText(String value, String key) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalStateException("Config " + key + " must be non-blank when "
+                    + "EXECUTION_INTENT_ENABLED=true");
+        }
+        return value.trim();
     }
 
     /**

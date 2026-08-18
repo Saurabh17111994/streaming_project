@@ -24,7 +24,7 @@ single-writer boundary.
 
 Inputs: durable immutable execution-intent rows; durable `Safety_Halt_Requests`; future immutable
 `Position_Actions`; lifecycle/position/changelog health for validation. The execution-intent stream
-is distinct from the retired ranking-era `Trade_Decisions` feed.
+is distinct from the retired `Trade_Decisions` feed.
 
 Owned Fluss state: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and immutable
 `Execution_Audit`. The Execution Core never mutates strategy fields.

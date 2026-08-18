@@ -120,7 +120,7 @@ Nautilus Execution Service
 ### Flink/Fluss to Nautilus
 
 The input is an immutable, versioned execution-intent record. It is not a broker request body and
-it is not the retired ranking-era `Trade_Decisions` feed.
+it is not the retired `Trade_Decisions` feed.
 
 | Field group | Required content |
 | --- | --- |

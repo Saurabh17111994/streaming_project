@@ -41,7 +41,7 @@ that time" (e.g. "(2026-08-10: ... 21 tables ...)") — a distant date on the
 same line does NOT hide a stale code description.
 
 Test-count drift claims (same tiers, truth from the docs-audit C6 line,
-01-foundation.md L42 — common 341 / ingestion 236 / compute 294):
+01-foundation.md L3 — common 341 / ingestion 236 / compute 319):
 
   * test-count-stale -> "common N" / "ingestion N" / "compute N" (or
                         "N common/ingestion/compute tests") claims where N
@@ -183,8 +183,8 @@ NUMERIC_CLAIM_TYPES = (
 
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
-# current docs-audit C6 truth (01-foundation.md L42: unit suites green
-# 341/236/294 — common/ingestion/compute; ingestion +2 2026-08-18 (ING-UNIT-023
+# current docs-audit C6 truth (01-foundation.md L3: unit suites green
+# 341/236/319 — common/ingestion/compute; ingestion +2 2026-08-18 (ING-UNIT-023
 # CHG-032 bridge SIGTERM-drain regression + ING-UNIT-024 CHG-033 JVM
 # shutdown-hook layer — see 15-ingestion-test-hardening.md); common +1 2026-08-18
 # SlotAssignmentResolverTest.serializableRoundTrip — Item E safety-consumer
@@ -200,9 +200,8 @@ NUMERIC_CLAIM_TYPES = (
 # compute +2 2026-08-18 forming-bar emission-profile tests
 # (FormingBarDetectionFunctionTest.driftingFeedFiresOncePerWarmWindow +
 # qualifyingTickBeforeWarmUpIsLostForThatWindow — CHG-030 follow-up).
-# The correct values (341/236/294) are filtered in code, so only stale
 # counts fire.
-TEST_COUNT_TRUTH = {"common": 341, "ingestion": 236, "compute": 294}
+TEST_COUNT_TRUTH = {"common": 341, "ingestion": 236, "compute": 319}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",
@@ -667,7 +666,7 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                 seen.add(key)
                 hits.append((TIER_RANK["LIVE-STALE"], i + 1, claim_type, line.strip(),
                              "truth: current suite triples common 341/0/1, "
-                             "ingestion 236/0/8, compute 294/0/17 (docs-audit C6)"))
+                             "ingestion 236/0/8, compute 319/0/17 (docs-audit C6)"))
 
     # Section-heading kind assertions: "### LOG/KV contract" headings that
     # introduce a now-contradictory table within the following few lines.
