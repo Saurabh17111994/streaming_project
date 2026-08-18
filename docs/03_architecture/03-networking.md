@@ -6,6 +6,14 @@
 
 Docker Compose uses an isolated single-host bridge network for deterministic development and integration testing. Service names provide internal DNS. Host exposure is limited to the endpoints explicitly required by local operators and tests.
 
+For the offline execution-bridge profile, Compose adds an internal `execution-net` for private
+gateway/Nautilus/bridge traffic and a separate `arrow-egress` network. Only the Go order-path
+bridge joins `arrow-egress`; it has no published host port. The policy is checked against the
+resolved Compose model by `code/01_platform/04_scripts/execution_network_check.py`. Runtime
+cross-container route probes are deferred to T8 because the gateway and Rust service are not yet
+deployed. The existing ingestion service remains a separately documented market-data Arrow
+exception and is not an order-path execution service.
+
 ### Production
 
 Docker Swarm uses separate encrypted overlay networks or equivalent TLS-protected cross-host transport. The three workload VMs host Fluss replicas/quorum and Flink workload capacity with anti-co-location: all three replicas of any critical Fluss/Flink role SHALL be placed across separate workload VMs. The fourth VM hosts OpenObserve and is not required for order-safety correctness.
@@ -47,6 +55,10 @@ The observability VM cannot authorize orders, change the Nautilus execution gate
 - Ingestion can append to market-data tables and write discontinuity/quarantine evidence.
 - Signal jobs can write signal/candle outputs and their checkpoint state. (**Ranking/instruction outputs REMOVED 2026-08-15, CHG-005.**)
 - The go-arrow bridge can hold broker credentials, consume Arrow postbacks, and call Arrow.
+- Only the execution Go bridge can join the order-path `arrow-egress` network. Java, Rust, Flink,
+  and Fluss services must use the internal execution network or their own platform network and
+  must not receive Arrow order credentials. The ingestion market-data bridge is a separate,
+  explicitly approved exception.
 - Nautilus Execution Service can consume immutable intent, apply OMS/position/risk/reconciliation behavior, and emit execution events.
 - Custom execution control/projection glue can consume safety-halt requests and write execution-owned control state and Fluss projections.
 - EOD controller owns manifest creation/verification and retention extension.

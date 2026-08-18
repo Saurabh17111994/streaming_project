@@ -1,5 +1,9 @@
 # Foundation
 
+> **2026-08-19 current test truth:** unit suites green 341/236/319 (common/ingestion/compute).
+> The longer historical status line below remains a dated implementation record; the current
+> C6 machine gate reads this line.
+
 Read this file before starting any build phase. It contains the shared plan, rules, software-version checks, storage rules, and safety rules.
 
 ## Build plan
@@ -799,16 +803,16 @@ PENDING → WRITING → COMMITTED → VERIFYING → VERIFIED
 
 Source data cannot expire unless state is `VERIFIED`, and at least three complete trading days remain live. Unverified or retryable state extends retention through a tested control mechanism; a fixed DDL TTL comment is insufficient.
 
-### Seven-year audit boundary
+### Approved audit-retention boundary
 
 #### Implementation checklist
 
-- [ ] Seven-year audit boundary (encrypted immutable audit copy, key management, S3 versioning, access audit, deletion/legal-hold, periodic reconstruction test). _(partially done 2026-08-15: the audit core is implemented and unit-tested — `AuditHashChain` (event→manifest→root hash chain), `AuditDeletionControl` (two-person deletion governance + immutable deletion-evidence events), and `audit_r2.py` (Cloudflare R2 provisioning + validation: bucket/lifecycle/object-I/O probes via the S3 API + Cloudflare bucket-lock state read). Real-bucket R2 evidence captured 2026-08-14 AND 2026-08-15 (`logs/audit-r2/20260815T042521Z-audit-r2-evidence.json`, PASS — bucket `tradingticks-aug-2026`); the Cloudflare-API bucket-lock state read remains NOT_CHECKED until `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` are configured. Remaining, all post-MVP per DEC-021: the encrypted export pipeline (needs Executor/Action-Capture audit events), key-management evidence, access audit, EOD-manifest end-to-end hash-chain proof (needs the EOD controller, SCH-23), and the periodic reconstruction test.)_
-  - Source: 01-foundation.md -> "Seven-year audit boundary" (orig L537)
+- [ ] Approved audit-retention boundary (one-year minimum or longer policy, encrypted immutable audit copy, key management, access audit, deletion/legal-hold, periodic reconstruction test). _(partially done 2026-08-15: the audit core is implemented and unit-tested — `AuditHashChain`, `AuditDeletionControl`, and `audit_r2.py` provisioning/validation remain applicable.)_
+  - Source: 01-foundation.md -> "Approved audit-retention boundary" (superseded 2026-08-19 by DEC-043)
   - Design: Design-ready | Implementation: Implementing | Evidence: Untested | Live-money: Blocked
   - Location: code/common/src/main/java/com/trading/common/audit/ (`AuditHashChain`, `AuditDeletionControl`; tests code/common/src/test/java/com/trading/common/audit/) + code/01_platform/04_scripts/audit_r2.py (tests code/01_platform/04_scripts/tests/test_audit_r2.py)
 
-Short operational Fluss TTL and seven-year audit retention are separate contracts. Money-moving events must be copied to encrypted immutable audit storage with:
+Short operational Fluss TTL and policy-controlled audit retention are separate contracts. Money-moving events must be copied to encrypted immutable audit storage with:
 
 - Verified manifest — manifest format + per-event content hashes defined (`AuditHashChain.Manifest`, unit-tested); real per-day manifests still need the EOD controller (SCH-23, Phase 6)
 - Encryption and key-management evidence — not yet; R2 storage is at-rest encrypted, key-rotation evidence pending
@@ -836,7 +840,7 @@ Short operational Fluss TTL and seven-year audit retention are separate contract
 - Checkpoint/replay compatibility tests.
 - Clean-break reset and replay tests.
 - EOD failure/retry/expiry-protection tests.
-- Seven-year audit reconstruction simulation.
+- Approved-policy audit reconstruction simulation covering at least one year or the approved longer period.
 
 ### Completion checklist
 

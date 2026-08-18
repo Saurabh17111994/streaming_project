@@ -166,8 +166,8 @@ if printf '%s' "$STATUS" | grep -q "Restarting"; then
     echo "point at a segment in a DIFFERENT table/bucket — re-run with that table, e.g."
     echo "    ./repair-tablet.sh <other-table-dir>"
     echo "Then verify the cluster serves the manifest (24/0/0) via the service's"
-    echo "startup log: 'ddl-bootstrap: verified 24 tables ok, 0 missing, 0 schema-mismatch'."
+    echo "startup log: 'ddl-bootstrap: verified 25 tables ok, 0 missing, 0 schema-mismatch'."
     exit 1
 fi
 echo "tablet is up — recovery completed. Verify the schema with the service's"
-echo "startup log ('ddl-bootstrap: verified 24 tables ok, 0 missing, 0 schema-mismatch')."
+echo "startup log ('ddl-bootstrap: verified 25 tables ok, 0 missing, 0 schema-mismatch')."

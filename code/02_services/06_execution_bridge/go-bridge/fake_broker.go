@@ -1,0 +1,80 @@
+package main
+
+import (
+	"context"
+	"sync"
+)
+
+// FakeBroker is an offline-only broker double. It records command counts and
+// lets tests force SUCCESS, REJECTED, or UNKNOWN outcomes deterministically.
+type FakeBroker struct {
+	mu      sync.Mutex
+	results map[string]BrokerResult
+	calls   map[string]int
+}
+
+func NewFakeBroker() *FakeBroker {
+	return &FakeBroker{results: map[string]BrokerResult{}, calls: map[string]int{}}
+}
+
+func (f *FakeBroker) SetResult(command string, result BrokerResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.results[command] = result
+}
+
+func (f *FakeBroker) Calls(command string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[command]
+}
+
+func (f *FakeBroker) result(ctx context.Context, command string, c CommandEnvelope) BrokerResult {
+	if err := ctx.Err(); err != nil {
+		return unknownResult(err)
+	}
+	f.mu.Lock()
+	f.calls[command]++
+	result, ok := f.results[command]
+	f.mu.Unlock()
+	if ok {
+		return result
+	}
+	result = BrokerResult{Outcome: OutcomeSuccess, BrokerOrderID: c.BrokerOrderID}
+	if command == CommandPlace {
+		result.BrokerOrderID = "fake-broker-order-1"
+	}
+	if command == CommandReconcileOrders {
+		result.Data = []map[string]string{{"id": "fake-broker-order-1", "orderStatus": "OPEN"}}
+	}
+	if command == CommandReconcileTrades {
+		result.Data = []map[string]string{}
+	}
+	if command == CommandReconcilePosition {
+		result.Data = []map[string]string{}
+	}
+	result.Fingerprint = fingerprint(result.Data)
+	return result
+}
+
+func (f *FakeBroker) Place(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandPlace, c)
+}
+func (f *FakeBroker) Modify(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandModify, c)
+}
+func (f *FakeBroker) Cancel(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandCancel, c)
+}
+func (f *FakeBroker) QueryOrder(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandQueryOrder, c)
+}
+func (f *FakeBroker) ReconcileOrders(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandReconcileOrders, c)
+}
+func (f *FakeBroker) ReconcileTrades(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandReconcileTrades, c)
+}
+func (f *FakeBroker) ReconcilePositions(ctx context.Context, c CommandEnvelope) BrokerResult {
+	return f.result(ctx, CommandReconcilePosition, c)
+}

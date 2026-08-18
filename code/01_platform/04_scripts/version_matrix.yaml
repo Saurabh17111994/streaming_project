@@ -135,7 +135,7 @@ boundaries:
       converges to latest state.
     limitations: >-
       Local single-tablet evidence. Replication/failover, checkpoint/restore,
-      FULL changelog image, and 7-year lake reconstruction remain UNKNOWN
+      FULL changelog image, and policy-controlled lake reconstruction remain UNKNOWN
       (need multi-node + tiered storage). Retention live-alter NOT supported:
       Admin.alterTable rejects table.log.ttl ("not supported to alter yet");
       log.retention.ms/comment alters are silent no-ops (getLogTTLMs
@@ -400,3 +400,32 @@ boundaries:
       multi-node E2E perf campaign.
     date: 2026-07-31
     status: PARTIAL_EVIDENCE_LOOPBACK_50K
+
+  - compatibility_id: VM-NAUTILUS-014
+    boundary: Nautilus Rust execution workspace
+    proposed_version: "0.62.0 / v2.0.0rc3"
+    evidence_source: >-
+      Local Nautilus checkout at commit
+      74d57e7e055015a8d974a0cf047ac2e5139610b3; cargo check passed for
+      nautilus-execution, nautilus-live, and nautilus-event-store. The
+      required service toolchain is Rust 1.97.1; the execution bridge target
+      toolchain is Go 1.24.5 using golang:1.24.5-alpine.
+    compatibility_class: UNKNOWN
+    evidence_owner: Execution
+    evidence_method: >-
+      Build the service with Cargo.lock against the exact commit; run the
+      audited ExecutionClient lifecycle, fake-bridge order lifecycle,
+      event-store verification/replay, and restart crash-window tests.
+    source_artifact: null
+    fixture: null
+    scenario: null
+    result: null
+    observed_behavior: null
+    limitations: >-
+      The workspace is on a v2 release-candidate/develop line and the event
+      store is early alpha; the host Go toolchain is newer than the required
+      bridge toolchain and the exact container digest still requires capture;
+      this pin is not live-money approval and does not independently satisfy
+      production audit durability.
+    date: 2026-08-19
+    status: PINNED_AWAITING_EXECUTION_SERVICE_EVIDENCE

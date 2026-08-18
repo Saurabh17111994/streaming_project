@@ -39,6 +39,10 @@ Local volumes and one-node services are intentional development simplifications.
 - All required tables are created from the validated schema manifest or the environment is clearly marked schema-unready.
 - Nautilus Execution Service starts `HALTED`.
 - The go-arrow bridge is the only service with Arrow credentials or Arrow network access.
+- The T3 `execution-t3` profile attaches the bridge only to internal `execution-net` plus the
+  bridge-only `arrow-egress` network and publishes no host port. The profile defaults to
+  credential-free `disabled` mode; `fake` mode is also offline-only. T8 must attach the gateway
+  and Nautilus service to `execution-net` and run the container route probes.
 - Nautilus owns the live OMS/position state; Fluss execution tables are written only by the projection boundary.
 - Broker calls point only to sandbox/simulation unless an explicit non-default test profile is selected.
 - Production credentials, audit buckets, checkpoints, and endpoints are rejected.
@@ -110,6 +114,16 @@ Bind operator interfaces to localhost by default. Do not expose Fluss internal R
 6. Start data services and validate subscriptions/projections.
 7. Start Nautilus Execution Service in `HALTED` and start the go-arrow bridge with sandbox-only credentials.
 8. Run simulation/sandbox reconciliation before any controlled test enablement.
+
+The T3-only bridge policy can be checked without starting the platform:
+
+```bash
+python3 code/01_platform/04_scripts/execution_network_check.py \
+  --compose code/01_platform/01_docker/docker-compose.yml
+```
+
+This validates the resolved `execution-t3` Compose profile. It is not a substitute for T8's
+runtime connectivity probes or T9's real sandbox authentication evidence.
 
 ### JVM and memory configuration
 

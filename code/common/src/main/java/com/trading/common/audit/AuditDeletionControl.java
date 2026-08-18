@@ -10,9 +10,9 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Seven-year audit deletion governance
+ * Approved audit-retention deletion governance
  * (docs/02_requirements/03-non-functional.md &sect;3.4.1 "Deletion";
- * docs/02_requirements/04-data.md: deletion of audit records before seven years
+ * docs/02_requirements/04-data.md: deletion of audit records before the approved retention period
  * is prohibited unless an approved retention-policy change, a legal-hold release,
  * and two-person authorization are recorded as immutable deletion-evidence events).
  */
@@ -29,7 +29,7 @@ public final class AuditDeletionControl {
         REJECTED_MISSING_EVIDENCE
     }
 
-    /** A deletion attempt against the seven-year audit store. */
+    /** A deletion attempt against the policy-controlled audit store. */
     public record DeletionRequest(
             String requestId,
             String scope,
@@ -59,7 +59,7 @@ public final class AuditDeletionControl {
 
     /**
      * Immutable evidence of one deletion attempt. Approved and rejected attempts
-     * both produce an event; each event feeds the seven-year audit hash chain
+     * both produce an event; each event feeds the immutable audit hash chain
      * via {@link #asAuditEvent()}.
      */
     public record DeletionEvidenceEvent(
@@ -90,7 +90,7 @@ public final class AuditDeletionControl {
                     authorizerOne, authorizerTwo, timestampMs);
         }
 
-        /** The evidence identity feeds the seven-year audit hash chain. */
+        /** The evidence identity feeds the immutable audit hash chain. */
         public AuditHashChain.AuditEvent asAuditEvent() {
             return new AuditHashChain.AuditEvent(eventId, contentHash);
         }
@@ -101,7 +101,7 @@ public final class AuditDeletionControl {
     /**
      * Evaluates a deletion request against the known governance state. Approval
      * always requires two distinct, authorized operators. Deletion of records
-     * still inside the seven-year retention window additionally requires an
+     * still inside the approved retention window additionally requires an
      * approved retention-policy change and a legal-hold release. Every attempt —
      * approved or rejected — produces an immutable deletion-evidence event.
      */

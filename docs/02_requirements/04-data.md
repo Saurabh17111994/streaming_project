@@ -14,8 +14,8 @@ Every table records a schema version. Event tables are immutable; corrections ap
 - An overloaded `order_id` SHALL NOT be used as a generic cross-domain identity. Each domain uses its own identity from the 14-entry identity model.
 - All monetary price values SHALL be stored as integer paise (BIGINT). ₹1 = 100 paise. Floating-point (DOUBLE/FLOAT) SHALL NOT be used for financial values. Conversion to decimal rupees occurs only at display/API boundaries.
 - No source data SHALL expire before verified EOD offload plus the minimum three-day live buffer. Retention SHALL extend automatically while the manifest is unverified, retryable, or under reconciliation.
-- Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be encrypted at rest in the lake tier and retained for seven years.
-- Deletion of audit records before seven years SHALL require an approved retention policy change, legal-hold release, and two-person authorization recorded as immutable deletion-evidence events.
+- Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be immutable, encrypted at rest in the lake tier, integrity-verifiable, access-controlled, and retained for at least one year or longer under the approved retention policy.
+- Deletion before the approved retention period SHALL require an approved policy change, legal-hold release where applicable, and two-person authorization recorded as immutable deletion-evidence events.
 - All state tables SHALL be rebuildable from immutable events/audit or have a documented, tested backup/restore contract.
 - Physical schemas SHALL be generated/reconciled from these logical contracts. A DDL that contradicts this document is blocked until the contract is reconciled.
 - LOG tables SHOULD use a tested `bucket.key` aligned with their dominant identity. KV tables SHALL distribute by primary key. Bucket counts SHALL be workload-tested configuration, not copied assumptions.
@@ -31,7 +31,7 @@ Every table records a schema version. Event tables are immutable; corrections ap
 | ASM-DATA-004 | S3 `ap-south-1` can complete verified EOD offload of a full trading day's data within 30 minutes, and Iceberg table format is compatible with the audit retention and export requirements. | ASM-006 |
 | ASM-DATA-005 | Fingerprint collisions and identical-legitimate-event collapses remain within the measured and accepted rate under production workload. Fingerprints are not exact identity. | RISK-001 |
 | ASM-DATA-006 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value for correlation into `Order_Correlation`. | ASM-002 |
-| ASM-DATA-007 | Seven-year audit retention with encrypted lake storage is acceptable for the applicable live-money jurisdiction and account model. | ASM-010 |
+| ASM-DATA-007 | The approved audit-retention policy, currently at least one year, with encrypted lake storage is acceptable for the applicable live-money jurisdiction and account model. | ASM-010 |
 
 Assumptions are validated by the owner and method recorded in the project risks and assumptions register (`docs/01_project/05-risks-and-assumptions.md`). An invalidated assumption blocks the affected requirement.
 
@@ -93,18 +93,18 @@ An overloaded `order_id` is prohibited.
 | `Signal_Candidates_current` | KV             | Signal job           | Current state plus rebuild window                         | Rebuilt from LOG audit                |
 | `Ranking_Results`           | ~~LOG~~            | ~~Signal job~~           | ~~≤7 complete trading days~~                                  | ~~EOD Iceberg~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Trade_Decisions`           | ~~immutable feed~~ | ~~Signal job~~           | ~~Until consumed plus replay buffer~~          | ~~Execution audit links~~ — **REMOVED 2026-08-15 (CHG-005)** |
-| `Fills`               | LOG            | Action Capture       | ≥3 complete trading days                                  | Encrypted 7-year audit                 |
+| `Fills`               | LOG            | Action Capture       | ≥3 complete trading days                                  | Encrypted audit under approved policy  |
 | `Order_Lifecycle`           | KV             | Action Capture       | Current state plus rebuild window                         | Rebuilt from audit                     |
 | `Positions`                 | KV             | Position projector   | Current state plus rebuild window                         | Rebuilt from audit                     |
-| `Execution_Gate`            | KV             | Executor             | Current plus history in audit                             | Encrypted 7-year audit                 |
-| `Execution_Attempts`        | KV             | Executor             | Active/reconciliation window                              | Encrypted 7-year audit                 |
-| `Order_Correlation`         | KV             | Executor             | Active/reconciliation window                              | Encrypted 7-year audit                 |
-| `Execution_Audit`           | LOG            | Executor             | ≥3 complete trading days                                  | Encrypted 7-year audit                 |
-| `Position_Actions`          | LOG            | Babysitter after MVP | Replay/reconciliation buffer                              | Encrypted 7-year audit                 |
+| `Execution_Gate`            | KV             | Executor             | Current plus history in audit                             | Encrypted audit under approved policy  |
+| `Execution_Attempts`        | KV             | Executor             | Active/reconciliation window                              | Encrypted audit under approved policy  |
+| `Order_Correlation`         | KV             | Executor             | Active/reconciliation window                              | Encrypted audit under approved policy  |
+| `Execution_Audit`           | LOG            | Executor             | ≥3 complete trading days                                  | Encrypted audit under approved policy  |
+| `Position_Actions`          | LOG            | Babysitter after MVP | Replay/reconciliation buffer                              | Encrypted audit under approved policy  |
 | `Postback_Quarantine`       | LOG            | Action Capture       | Until disposition plus buffer                             | Encrypted evidence per policy          |
 | `Portfolio_Reservations`    | ~~KV/logical state~~ | ~~Signal job~~          | ~~Active plus rebuild window~~                 | ~~Reservation audit/rebuild evidence~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Postback_Projection_Ledger` | KV            | Action Capture       | Incomplete plus recovery/disposition window                | Rebuilt/reconciled from postback audit |
-| `Safety_Halt_Requests`      | KV              | Authorized components | Safety/reconciliation window                             | Execution audit retained 7 years       |
+| `Safety_Halt_Requests`      | KV              | Authorized components | Safety/reconciliation window                             | Execution audit under approved policy  |
 | `suspected_discontinuities` | LOG            | Ingestion            | Operational investigation window                          | Optional operational lake retention    |
 | `ingestion_quarantine`      | LOG            | Ingestion            | Operational investigation window (2d TTL)                 | Optional operational lake retention    |
 | `instruments`               | manifest       | Operators            | Current and prior manifest versions                       | Configuration audit                    |
@@ -179,7 +179,7 @@ Each EOD commit produces a manifest with trading date, table/schema version, sou
 
 ## 4.8 Storage capacity budget (`STOR-7DAY-60000-001`)
 
-Seven-day Fluss retention is the ceiling, subject to measured capacity. Actual data volume at the variable 50,000 ticks/s average baseline (3,000 instruments, no instrument above 30 ticks/s; the 90,000 ticks/s peak model is retired, DEC-036) for seven complete trading days is evidence-gated. The storage capacity formula SHALL account for:
+Seven-day Fluss retention is the ceiling for the operational source buffer, subject to measured capacity. Actual data volume at the variable 50,000 ticks/s average baseline (3,000 instruments, no instrument above 30 ticks/s; the 90,000 ticks/s peak model is retired, DEC-036) for seven complete trading days is evidence-gated. The storage capacity formula SHALL account for:
 
 - Raw data volume (packet bytes + typed fields + overhead per row)
 - Three-node replication factor (3× raw data)
@@ -195,4 +195,4 @@ Warning, critical, and stop thresholds SHALL be defined as configuration placeho
 | `STOR-7DAY-60000-001` | Seven-day capacity model from 50,000 ticks/s workload measuring projected data volume with replication, checkpoints, buffer, and free-space reserve | `EVIDENCE-BLOCKED`; live-money blocking |
 | `STOR-7DAY-90000-001` | RETIRED with the peak campaign (DEC-036, 2026-08-13) — was: seven-day capacity model from the 90,000 ticks/s peak | `RETIRED`; storage model uses the 50,000 ticks/s baseline |
 
-All state tables must be rebuildable from immutable events/audit or have a documented backup/restore contract. Schema evolution requires compatibility classification, replay test, lake synchronization, deployment order, and rollback. Seven-year audit deletion requires approved retention policy and immutable deletion evidence.
+All state tables must be rebuildable from immutable events/audit or have a documented backup/restore contract. Schema evolution requires compatibility classification, replay test, lake synchronization, deployment order, and rollback. Audit deletion requires an approved retention-policy change, applicable legal-hold handling, and immutable deletion evidence.

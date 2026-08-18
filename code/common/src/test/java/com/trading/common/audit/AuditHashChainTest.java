@@ -8,7 +8,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-/** Unit tests for the seven-year audit hash chain. */
+/** Unit tests for the policy-controlled audit hash chain. */
 class AuditHashChainTest {
 
     private static final String H1 = ImmutabilityProtocol.canonicalHash("event-one");

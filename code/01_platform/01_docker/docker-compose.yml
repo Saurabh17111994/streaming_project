@@ -78,6 +78,16 @@ x-flink-common: &flink-common
 networks:
   trading-net:
     driver: bridge
+  # T3: execution traffic is private to the gateway/Nautilus/bridge boundary.
+  # This profile is disabled from the default local stack until T8 wires the
+  # gateway and Rust service; the network policy is still resolved and tested.
+  execution-net:
+    driver: bridge
+    internal: true
+  # T3: only execution-bridge may join the Arrow order-path egress network.
+  # The real sandbox endpoint is intentionally not configured by this phase.
+  arrow-egress:
+    driver: bridge
 
 volumes:
   fluss-data:
@@ -248,7 +258,7 @@ services:
         # S3A's default provider chain (EnvironmentVariableCredentialsProvider)
         # reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the container env.
 
-  # ---- Flink: compute (feature + signal + babysitter jobs) -----------------
+  # ---- Flink: compute (signal + babysitter jobs) ----------------------------
   flink-jobmanager:
     <<: *flink-common
     image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
@@ -336,6 +346,29 @@ services:
         read_only: true
       # R-171: /data/ingestion/logs holds the JSON log (LOG_DIR default).
       - ingestion-logs:/data/ingestion/logs
+
+  # ---- T3 offline execution bridge profile -------------------------------
+  # This is deliberately not part of the default stack. It is credential-free
+  # in fake/disabled mode and has no host port. T8 will add the gateway and
+  # Nautilus service to execution-net and provide the end-to-end probe.
+  execution-bridge:
+    profiles: [execution-t3]
+    build:
+      # The bridge Dockerfile copies paths relative to the code/ reactor root,
+      # matching the ingestion image build context above.
+      context: ../..
+      dockerfile: 02_services/06_execution_bridge/Dockerfile
+    networks: [execution-net, arrow-egress]
+    environment:
+      EXECUTION_BRIDGE_AUTH_TOKEN: ${EXECUTION_BRIDGE_AUTH_TOKEN:-local-only}
+      EXECUTION_BRIDGE_MODE: ${EXECUTION_BRIDGE_MODE:-disabled}
+      EXECUTION_BRIDGE_LISTEN_ADDR: 0.0.0.0:8787
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
 
   # ---- DDL apply contract (one-shot, dev/CI) ------------------------------

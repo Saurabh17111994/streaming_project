@@ -1,0 +1,165 @@
+package main
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+func startTestServer(t *testing.T, broker Broker) (*BridgeServer, *httptest.Server) {
+	t.Helper()
+	bridge, err := NewBridgeServer(broker, "internal-secret", "fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(bridge.Handler())
+	t.Cleanup(server.Close)
+	return bridge, server
+}
+
+func postCommand(t *testing.T, serverURL string, command CommandEnvelope, token string) (int, ReportEnvelope) {
+	t.Helper()
+	body, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, serverURL+commandPath, strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var report ReportEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, report
+}
+
+func TestPrivateCommandRequiresBearerAuth(t *testing.T) {
+	_, server := startTestServer(t, NewFakeBroker())
+	status, report := postCommand(t, server.URL, validPlaceCommand(), "")
+	if status != http.StatusUnauthorized || report.Outcome != OutcomeUnknown {
+		t.Fatalf("status=%d report=%+v", status, report)
+	}
+}
+
+func TestPlaceCommandUsesFakeBrokerAndReturnsExplicitOutcome(t *testing.T) {
+	fake := NewFakeBroker()
+	_, server := startTestServer(t, fake)
+	status, report := postCommand(t, server.URL, validPlaceCommand(), "internal-secret")
+	if status != http.StatusOK || report.Outcome != OutcomeSuccess || report.BrokerOrderID != "fake-broker-order-1" {
+		t.Fatalf("status=%d report=%+v", status, report)
+	}
+	if fake.Calls(CommandPlace) != 1 {
+		t.Fatalf("place calls=%d, want 1", fake.Calls(CommandPlace))
+	}
+}
+
+func TestUnknownPlaceOutcomeIsReturnedWithoutRetry(t *testing.T) {
+	fake := NewFakeBroker()
+	fake.SetResult(CommandPlace, BrokerResult{Outcome: OutcomeUnknown, Reason: "ambiguous_broker_response"})
+	_, server := startTestServer(t, fake)
+	status, report := postCommand(t, server.URL, validPlaceCommand(), "internal-secret")
+	if status != http.StatusOK || report.Outcome != OutcomeUnknown || report.Reason != "ambiguous_broker_response" {
+		t.Fatalf("status=%d report=%+v", status, report)
+	}
+	if fake.Calls(CommandPlace) != 1 {
+		t.Fatalf("unknown place was retried: calls=%d", fake.Calls(CommandPlace))
+	}
+}
+
+func TestDuplicateRequestIDReturnsCachedOutcomeWithoutSecondBrokerCall(t *testing.T) {
+	fake := NewFakeBroker()
+	_, server := startTestServer(t, fake)
+	command := validPlaceCommand()
+	status, first := postCommand(t, server.URL, command, "internal-secret")
+	if status != http.StatusOK || first.Outcome != OutcomeSuccess {
+		t.Fatalf("first status=%d report=%+v", status, first)
+	}
+	status, second := postCommand(t, server.URL, command, "internal-secret")
+	if status != http.StatusOK || second.BrokerOrderID != first.BrokerOrderID {
+		t.Fatalf("second status=%d report=%+v", status, second)
+	}
+	if fake.Calls(CommandPlace) != 1 {
+		t.Fatalf("duplicate request reached broker: calls=%d", fake.Calls(CommandPlace))
+	}
+}
+
+func TestRequestIDReuseWithDifferentContentIsRejected(t *testing.T) {
+	fake := NewFakeBroker()
+	_, server := startTestServer(t, fake)
+	command := validPlaceCommand()
+	if status, _ := postCommand(t, server.URL, command, "internal-secret"); status != http.StatusOK {
+		t.Fatal("initial request failed")
+	}
+	command.Order.Quantity = "3"
+	status, report := postCommand(t, server.URL, command, "internal-secret")
+	if status != http.StatusConflict || report.Reason != "request_id_reuse_violation" {
+		t.Fatalf("status=%d report=%+v", status, report)
+	}
+	if fake.Calls(CommandPlace) != 1 {
+		t.Fatal("request-id violation reached broker")
+	}
+}
+
+func TestPrivateEventsMapAndDeliverPostback(t *testing.T) {
+	bridge, server := startTestServer(t, NewFakeBroker())
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + eventsPath
+	header := http.Header{}
+	header.Set("Authorization", "Bearer internal-secret")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := bridge.hub.Publish(NormalizeOrderUpdate(map[string]any{"id": "BRK-2", "remarks": "INS2", "orderStatus": "OPEN"})); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report ReportEnvelope
+	if err := json.Unmarshal(payload, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Command != "postback" || report.BrokerOrderID != "BRK-2" {
+		t.Fatalf("report=%+v", report)
+	}
+}
+
+func TestMalformedCommandDoesNotReachBroker(t *testing.T) {
+	fake := NewFakeBroker()
+	_, server := startTestServer(t, fake)
+	req, err := http.NewRequest(http.MethodPost, server.URL+commandPath, strings.NewReader(`{"record_type":"execution_command","contract_version":1,"request_id":"x","command":"place",}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer internal-secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+	}
+	if fake.Calls(CommandPlace) != 0 {
+		t.Fatal("malformed command reached broker")
+	}
+}

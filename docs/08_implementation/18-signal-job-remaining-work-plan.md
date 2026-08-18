@@ -18,7 +18,7 @@
    ```bash
    cd code/02_services/02_compute && mvn -o test
    ```
-   The suite must be green after every code change: **294 run / 0 failures** (15 skips without gates + 2 class-gated classes that report 0/0 = the documented "17 env-gated skips").
+   The suite must be green after every code change: **310 run / 0 failures** (15 skips without gates + 2 class-gated classes that report 0/0 = the documented "17 env-gated skips").
 3. **Full-chain E2E runner** (needs the dev Fluss cluster on `localhost:9123` and the compose stack):
    ```bash
    E2E_RUN_MINUTES=<N> OTEL_COLLECTOR_HOST=localhost:4318 \
@@ -221,5 +221,5 @@ These appeared in the audit as "not implemented / partial". They are deliberate 
 - [x] Every evidence file written under `logs/tracker-14/`. (`p7-battery-design-b-20260817.md`, `p10-rehearsal-design-b-20260817.md`, `sig-perf-001-50k-baseline-20260817.md`, `safety-live-job-run-20260818.md`.)
 - [x] `make docs-audit` passes (includes C14 on the new change record).
 - [x] `CHG-025.md` filed in `docs/05_deployment/change-records/` covering this plan's code/doc changes (six C14 fields; `plan_tasks: 18-signal-job-remaining-work-plan.md`). `CHG-026.md` filed 2026-08-18 for Item E (the `SlotAssignment` `Serializable` fix + guard test + live-run evidence).
-- [x] Compute suite still 294 run / 0 failures (module-local `mvn test`). (Verified 2026-08-18: 294 run / 0 failures / 17 env-gated skips, BUILD SUCCESS.)
+- [x] Compute suite still 310 run / 0 failures (module-local `mvn test`). (Verified 2026-08-19: 310 run / 0 failures / 17 env-gated skips, BUILD SUCCESS.)
 - [x] `04-signal-job.md` pending table + absorbed-tracker "open backlog" sentences annotated with the results (annotate-don't-rewrite).

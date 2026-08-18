@@ -62,7 +62,7 @@ Postbacks arrive through a separate WebSocket (`wss://order-updates.arrow.trade`
 
 Custom execution control glue durably persists an attempt, deterministic `client_order_ref`, gate epoch, and fencing token before Nautilus commands the bridge. Timeout, disconnect, malformed response, crash window, or ambiguous response produces `UNKNOWN`, halts the gate, and requires Nautilus/Arrow reconciliation before retry.
 
-Nautilus is authoritative for live order, fill, position, PnL, and reconciliation behavior. Fluss remains the durable integration plane for immutable intent, safety control state, execution attempts/correlation, and queryable projections. Flink and Fluss SHALL NOT implement a competing production OMS or position engine. The Nautilus event store is an additional execution-history and replay boundary; its early-alpha status requires dedicated durability, verification, backup, and recovery evidence before it can satisfy the seven-year authoritative-audit requirement by itself.
+Nautilus is authoritative for live order, fill, position, PnL, and reconciliation behavior. Fluss remains the durable integration plane for immutable intent, safety control state, execution attempts/correlation, and queryable projections. Flink and Fluss SHALL NOT implement a competing production OMS or position engine. The Nautilus event store is an additional execution-history and replay boundary; its early-alpha status requires dedicated durability, verification, backup, and recovery evidence before live use.
 
 ## EOD controller
 
@@ -78,7 +78,7 @@ Observability must prove throughput, latency, deduplication, checkpoint health, 
 
 Eligible immutable events are offloaded at EOD to encrypted Iceberg/S3 storage. The offload produces a verification manifest containing table/schema version, trading date, source range, row/byte counts, hashes/checksums, commit status, and retry state.
 
-Source retention is at least three complete trading days and extends while the relevant manifest is unverified, retryable, or under reconciliation. Execution, order, fill, gate, correlation, approval, reconciliation, and future action audit is encrypted and retained for seven years according to approved policy.
+Source retention is at least three complete trading days and extends while the relevant manifest is unverified, retryable, or under reconciliation. Execution, order, fill, gate, correlation, approval, reconciliation, and future action audit is immutable, encrypted, integrity-verifiable, access-controlled, and retained for at least one year according to approved policy.
 
 ## Container runtime
 
@@ -89,7 +89,7 @@ Source retention is at least three complete trading days and extends while the r
 - Production network traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - MVP requires four mandatory alert groups with owner, threshold, routing, and acknowledgement: order safety, streaming health, storage safety, and security. Critical alerts have defined escalation, remediation, and closure evidence.
 - Every managed or durable state category must have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, and restore size/time for production readiness.
-- Seven-year audit retention requires WORM/Object Lock immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval SLA under 15 minutes from cold storage, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; an indefinite rule on the audit prefix is the WORM-equivalent (the S3 Object Lock API is not implemented on R2).**
+- Approved audit retention requires WORM-equivalent immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval evidence, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
 
 Compose is deliberately simpler, but it cannot prove production HA or live-money safety.
 

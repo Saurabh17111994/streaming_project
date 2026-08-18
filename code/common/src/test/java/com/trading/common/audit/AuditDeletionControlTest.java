@@ -92,7 +92,7 @@ class AuditDeletionControlTest {
 
     @Test
     void approvedOutsideRetentionWindowWithoutPolicyChange() {
-        // Records past the seven-year window: normal expiry, no policy-change or
+        // Records past the approved retention window: normal expiry, no policy-change or
         // legal-hold evidence required — two-person authorization still applies.
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
                 request(false, null, null, List.of("ops-1", "ops-2")), context(), TS);

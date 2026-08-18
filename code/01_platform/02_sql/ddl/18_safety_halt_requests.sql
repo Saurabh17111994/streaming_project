@@ -3,7 +3,7 @@
 -- Type: KV (primary key on halt_request_id)
 -- Bucket key: halt_request_id
 -- Retention: safety/reconciliation window (30 calendar days via table.log.ttl)
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: account_scope_id, portfolio_id, execution_partition_id
 -- Schema version: 3
 --

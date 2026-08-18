@@ -151,6 +151,10 @@ class SignalJobOperatorUidTest {
         }
         assertEquals(EXPECTED_OPERATORS.size(), uidToName.size(),
                 "graph carries operators outside the pinned UID set");
+        assertTrue(!uidToName.containsKey("execution-intent-producer"),
+                "EXECUTION_INTENT_ENABLED defaults false; the executable-intent branch must be absent");
+        assertTrue(!uidToName.containsKey("execution-intent-sink"),
+                "EXECUTION_INTENT_ENABLED defaults false; the executable-intent sink must be absent");
     }
 
     private static Map<String, String> env() {

@@ -134,15 +134,16 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `Ranking_Results` | ~~LOG~~ | ~~Signal job~~ | ~~Audit/lake~~ | ~~Immutable; EOD Iceberg~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Trade_Decisions` | ~~Immutable feed~~ | ~~Signal job~~ | ~~Executor~~ | ~~Replay/reconciliation buffer~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Portfolio_Reservations` | ~~KV/logical state~~ | ~~Signal job~~ | ~~Executor/reconciliation~~ | ~~Active + rebuild window~~ — **REMOVED 2026-08-15 (CHG-005)** |
+| `Execution_Intent` | LOG | Signal job (disabled producer until execution-intent wiring is enabled) | Nautilus gateway | Immutable request; operational replay plus policy-controlled durable offload |
 | `Postback_Projection_Ledger` | KV | Nautilus Execution Service projection glue | Recovery scanner | Incomplete + recovery window |
 | `Safety_Halt_Requests` | KV | Authorized components | Executor | Safety/reconciliation window |
-| `Fills` | LOG | Nautilus Execution Service projection glue | Projection/audit | Immutable; encrypted seven-year audit |
+| `Fills` | LOG | Nautilus Execution Service projection glue | Projection/audit | Immutable; encrypted audit retained under approved policy (one-year minimum) |
 | `Order_Lifecycle` | KV | Nautilus Execution Service projection glue | Babysitter/operations | Current state; rebuildable from Nautilus event history |
 | `Positions` | KV | Nautilus Execution Service projection glue | Babysitter/operations | Current state; rebuildable from Nautilus event history |
 | `Execution_Gate` | KV | Custom execution control glue | Nautilus service/control plane | Current state plus immutable audit |
 | `Execution_Attempts` | KV | Custom execution control glue | Nautilus service/reconciliation | Active/reconciliation window |
 | `Order_Correlation` | KV | Custom execution control glue | Nautilus service/capture path | Active/reconciliation window |
-| `Execution_Audit` | LOG | Nautilus service plus custom control projection | Operations/audit | Encrypted seven-year audit |
+| `Execution_Audit` | LOG | Nautilus service plus custom control projection | Operations/audit | Immutable encrypted audit retained under approved policy (one-year minimum) |
 | `Postback_Quarantine` | LOG | Nautilus Execution Service projection glue | Reconciliation | Until disposition plus evidence retention |
 | `suspected_discontinuities` | LOG | Ingestion | Operations | Investigation window |
 | `ingestion_quarantine` | LOG | Ingestion | Operations/quarantine review | Investigation window (2d TTL) |
@@ -168,7 +169,7 @@ Eligible immutable event tables offload at EOD to encrypted Iceberg/S3. The EOD 
 
 Every offload produces a manifest with source range, counts, bytes, schema versions, hashes/checksums, commit identifier, verification status, and retries.
 
-A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are encrypted and retained seven years with WORM/Object Lock immutability, legal-hold capability, key rotation, role-restricted access, retrieval SLA, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; an indefinite rule on the audit prefix is the WORM-equivalent (the S3 Object Lock API is not implemented on R2).**
+A source day cannot expire while its manifest is unverified, retryable, or under reconciliation. At least three complete trading days remain live even after successful offload. Money-moving audit categories are immutable, encrypted, integrity-verifiable, access-controlled, and retained for at least one year or longer under approved policy with WORM-equivalent immutability, legal-hold capability, key rotation, retrieval evidence, hash-chain integrity, and authorized deletion controls. Exact mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
 
 ## Safe-halt coupling
 

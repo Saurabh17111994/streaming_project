@@ -625,9 +625,9 @@ class CompatFlussIntegrationTest {
    */
   @Test
   @DisplayName("audit reconstruction: tiered-storage half — skipped (removed SCH-24)")
-  void schemaAudit001SevenYearReconstruction() {
+  void schemaAudit001PolicyRetentionReconstruction() {
     assumeTrue(false,
-        "the tiered-storage half of 7-year reconstruction (S3/Iceberg offload, encryption, "
+        "the tiered-storage half of policy-controlled reconstruction (S3/Iceberg offload, encryption, "
             + "key management) was SCH-24 — removed from scope; the chain/reconstruction half is "
             + "covered by AuditReconstructionSimulationTest");
   }

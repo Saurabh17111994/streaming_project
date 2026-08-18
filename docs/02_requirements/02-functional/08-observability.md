@@ -122,7 +122,7 @@ Each SLO metric reports p50/p95/p99, unit, boundary events, UTC clock source/off
 
 ## REQ-OBS-006: Audit and access
 
-Money-moving logs, gate transitions, attempts, mappings, postback evidence, reconciliation, and approvals are immutable and retained seven years in encrypted lake storage. Audit queries are role-restricted and access is itself logged.
+Money-moving logs, gate transitions, attempts, mappings, postback evidence, reconciliation, and approvals are immutable, integrity-verifiable, and retained for at least one year in encrypted lake storage under approved policy. Audit queries are role-restricted and access is itself logged.
 
 ## REQ-OBS-007: Acceptance
 

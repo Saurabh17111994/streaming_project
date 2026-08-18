@@ -211,7 +211,7 @@ code/01_platform/04_scripts/fluss-repair/repair-tablet.sh raw_table_1-696
 
 The tool discovers the tablet container + data volume, scans every segment with the server's own batch arithmetic (`LogScan.py`: `batchSize = 12 + int32_le(header[8:12])`; an all-zero 48-byte header marks the preallocated tail), truncates each affected segment to the exact end of the last complete batch, restarts the tablet, and verifies recovery completed. It refuses to act while the tablet is Up (a healthy active segment is mid-append — the scanner may catch an in-progress write).
 
-**Verify.** After repair, the service startup log must show `ddl-bootstrap: verified 24 tables ok, 0 missing, 0 schema-mismatch` (manifest 24), then `Fluss connected` — then re-run ING-E2E-001.
+**Verify.** After repair, the service startup log must show `ddl-bootstrap: verified 25 tables ok, 0 missing, 0 schema-mismatch` (manifest 25), then `Fluss connected` — then re-run ING-E2E-001.
 
 **History.** 2026-08-15 the dev cluster hit this on 12 of raw_table_1's 16 buckets (zero-tail deltas 160–3,040 bytes each, all from today's E2E runs); all were repaired with the tool and the schema re-verified 24/0/0. Backup of the original corrupt bucket-6 segment: host `/tmp/fluss-repair/raw_table_1-696-log-6/`.
 
@@ -772,7 +772,7 @@ The dossiers specify implementation behavior but do not prove that code, DDL, de
 10. Dashboard/alert/runbook readiness evidence.
 11. Rollback/readability test and deployment change record.
 12. Executor crash-window, fencing, reconciliation, and two-person approval evidence.
-13. Seven-year audit reconstruction simulation and policy approval.
+13. Approved-policy audit reconstruction simulation covering at least one year and policy approval.
 
 ### Binary release gates
 

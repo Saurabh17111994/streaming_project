@@ -6,7 +6,7 @@
 -- Order_Lifecycle rebuild window (7d) it is the source for; R-184: 7 calendar
 -- days always contains ≥3 trading days, satisfying the compliance floor even
 -- across a weekend + holiday.
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: account_scope_id (R-085: column materialized — the header declared
 -- account scoping but the schema had no such column)
 -- Schema version: 2

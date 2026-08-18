@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
 
 help:
 	@echo "Targets:"
@@ -39,6 +39,7 @@ help:
 	@echo "  test        run unit tests (common + ingestion)"
 	@echo "  test-ingestion  run only the ingestion module tests"
 	@echo "  test-audit-r2   run audit_r2.py unit tests (stdlib unittest, no R2 access needed)"
+	@echo "  execution-network-check  verify resolved Compose execution-net/Arrow-egress isolation"
 	@echo "  gate        run the full Monday verification gate (static + compose + go + java + schema/perf)"
 	@echo "  gate-order  mandatory implementation order gate (01-foundation.md): 7 tasks in sequence,"
 	@echo "              stops if any upstream task's acceptance checks are red or missing"
@@ -113,6 +114,9 @@ test-audit-r2:
 # acknowledged PASS_WITH_LIMITATION / 1 refused) + the machine-readable
 # sentinels. Env-gated: SKIPPED when FLUSS_BOOTSTRAP is unset; wired into the
 # Monday verification gate (run-monday-gates.sh) after the Java full gate.
+execution-network-check:
+	@python3 code/01_platform/04_scripts/execution_network_check.py 
+		--compose code/01_platform/01_docker/docker-compose.yml
 ddl-apply-smoke:
 	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py
 

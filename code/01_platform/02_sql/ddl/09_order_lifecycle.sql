@@ -1,11 +1,11 @@
 -- Order_Lifecycle: KV projection — current order state keyed by account+broker order
 -- Owner: Action Capture
 -- Type: KV (primary key on account_scope_id, broker_order_id)
--- Bucket key: account_scope_id, broker_order_id
+-- Bucket key: account_scope_id (raw-client compatible subset of the composite PK)
 -- Retention: current state + short rebuild buffer (2 calendar days);
 --   rebuildable from Fills audit (Fills retains 7d; see 08_fills.sql)
 -- Scope: account_scope_id (R-013: column materialized + composite PK)
--- Schema version: 2
+-- Schema version: 2 (routing/encoding compatibility amendment; columns unchanged)
 --
 -- v2 (2026-08-03, review R-013): the header declared "Scope: account_scope_id"
 -- but the table had no such column and was keyed only on broker_order_id.
@@ -33,7 +33,8 @@ CREATE TABLE Order_Lifecycle (
     PRIMARY KEY (account_scope_id, broker_order_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '8',
-    'bucket.key' = 'account_scope_id,broker_order_id',
+    'bucket.key' = 'account_scope_id',
+    'table.kv.format-version' = '2',
     'table.log.ttl' = '2d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',

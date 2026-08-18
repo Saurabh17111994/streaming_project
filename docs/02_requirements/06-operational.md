@@ -15,7 +15,7 @@ Local operations use Docker Compose. Production operations use Docker Swarm acro
 - Runbooks SHALL distinguish fault injection, detector threshold, detection timestamp, safety-gate block, recovery start, recovery completion, source catch-up, and resume approval as separate events. Safe-halt and data-recovery targets apply to the complete declared boundary.
 - A named service or scheduled job SHALL own EOD manifest creation, verification, retry/backoff, retention extension, expiry protection, and storage-pressure alerts. Its state and ownership SHALL be durable.
 - Local Compose commands SHALL NOT be presented as production procedures. Every runbook identifies its environment.
-- Unauthorized or mismatched gate approvals SHALL be rejected, audited, and alerted. The rejection event is immutable and retained as part of the 7-year execution audit.
+- Unauthorized or mismatched gate approvals SHALL be rejected, audited, and alerted. The rejection event is immutable and retained under the approved execution-audit policy.
 
 ## Assumptions
 
@@ -40,7 +40,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Maintenance halts gate first:** Planned maintenance that could affect money-moving correctness halts new orders, records the gate epoch and reason, drains in-flight attempts, checkpoints jobs, and verifies durable state before proceeding.
 - **RPO/RTO per scenario, not a single platform claim:** Recovery Point Objective and Recovery Time Objective are measured per failure scenario (VM loss, checkpoint corruption, S3 interruption, quorum degradation, broker disconnect, crash window). A single aggregate HA claim is not sufficient.
 - **Paper trading validates but does not waive live-money gates:** Simulated or paper trading may be used for validation, but all live-money release gates must still pass with evidence.
-- **Unauthorized approvals are immutable audit events:** Every approval attempt — successful, rejected, mismatched, or unauthorized — is recorded in `Execution_Audit` and retained for seven years.
+- **Unauthorized approvals are immutable audit events:** Every approval attempt — successful, rejected, mismatched, or unauthorized — is recorded in `Execution_Audit` and retained for at least one year or longer under approved policy.
 - **Local Compose is development-only:** Docker Compose proves component integration and deterministic tests. It does not prove production HA, replication, quorum, TLS, secret management, or VM-loss tolerance.
 
 ## Out of Scope
@@ -88,7 +88,7 @@ DDL, version, checkpoint/savepoint, retention, secret, network, and capacity cha
 
 - Flink checkpoints/savepoints: encrypted versioned S3.
 - Fluss: three-node replicated data across workload VMs.
-- Immutable audit/lake: encrypted S3; execution/order/fill/gate audit retained seven years.
+- Immutable audit/lake: encrypted S3; execution/order/fill/gate audit retained for at least one year or longer under approved policy.
 - Operational KV projections: rebuildable from immutable audit or tested backup.
 
 Required exercises include process restart, tablet/worker loss, any one workload VM loss, checkpoint corruption/unavailability, S3 interruption, Fluss quorum degradation, observability loss, broker disconnect, and Executor crash windows.
@@ -125,7 +125,7 @@ Runbook coverage (kept in sync with the runbook index in `../06_operations/`):
 | [`../06_operations/02-ingestion-alerting.md`](../06_operations/02-ingestion-alerting.md) — Ingestion alerting contract | — | Ingestion alerts (`ING-*`) |
 | [`../06_operations/04-dr-plan.md`](../06_operations/04-dr-plan.md) — Disaster recovery plan | — | Recovery and VM-loss exercise procedures |
 | [`../06_operations/05-maintenance.md`](../06_operations/05-maintenance.md) — Maintenance and change operations | — | Planned maintenance and change records |
-| [`../06_operations/06-audit-store.md`](../06_operations/06-audit-store.md) — Seven-year audit store (R2 bucket locks) | `OPS-AUDIT-STORE-001` | Storage-safety: seven-year audit retention WORM (NFR 3.4.1 / AC-NFR-005); provisioning and validation (`audit_r2.py`) |
+| [`../06_operations/06-audit-store.md`](../06_operations/06-audit-store.md) — Policy-controlled audit store (R2 bucket locks) | `OPS-AUDIT-STORE-001` | Storage-safety: approved audit-retention policy and immutable storage (NFR 3.4.1 / AC-NFR-005); provisioning and validation (`audit_r2.py`) |
 
 ## 6.11 Control-plane operations
 

@@ -115,7 +115,7 @@ def c1_manifest():
     if m is None:
         return check("C1 manifest readable", False, p)
     tables = m.get("tables", [])
-    check("C1 manifest has 24 tables", len(tables) == 24, f"got {len(tables)}")
+    check("C1 manifest has 25 tables", len(tables) == 25, f"got {len(tables)}")
     bad_sha = [t["table_name"] for t in tables if not t.get("ddl_sha256")]
     bad_compat = [t["table_name"] for t in tables if not t.get("compatibility_class")]
     bad_routing = [
@@ -599,9 +599,9 @@ def c9_dec039_invariants():
     ) or ""
     check("C9 ledger live-in-dev evidence", "Postback_Projection_Ledger 705" in foundation)
 
-    # --- DEC-038 dedup DDL + SCH-19 instruction-index DDL + SCH-23 EOD state DDL; 24 DDLs ---
+    # --- DEC-038 dedup + SCH-19 index + SCH-23 EOD + REQ-EXE-004 intent DDL; 25 DDLs ---
     sqls = sorted(f for f in os.listdir(DDL_DIR) if f.endswith(".sql"))
-    check("C9 DDL count = 24", len(sqls) == 24, f"got {len(sqls)}")
+    check("C9 DDL count = 25", len(sqls) == 25, f"got {len(sqls)}")
     check(
         "C9 dedup DDL on file",
         os.path.exists(os.path.join(DDL_DIR, "24_fingerprint_dedup.sql")),
@@ -613,6 +613,10 @@ def c9_dec039_invariants():
     check(
         "C9 eod offload-state DDL on file",
         os.path.exists(os.path.join(DDL_DIR, "26_eod_offload_state.sql")),
+    )
+    check(
+        "C9 execution-intent DDL on file",
+        os.path.exists(os.path.join(DDL_DIR, "27_execution_intent.sql")),
     )
     obs = safe_read(os.path.join(DOCS_DIR, "08_implementation", "10-observability.md")) or ""
     rb = safe_read(os.path.join(DOCS_DIR, "06_operations", "01-runbooks.md")) or ""

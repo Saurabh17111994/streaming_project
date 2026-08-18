@@ -24,7 +24,7 @@
 | Requirements | `REQ-AC-001`–`REQ-AC-013` → `AC-AC-001`–`AC-AC-017`; `REQ-BB-001`–`REQ-BB-008` → `AC-BB-001`–`AC-BB-009`; `REQ-EXE-001`–`REQ-EXE-013` → `AC-EXE-001`–`AC-EXE-016` |
 | Acceptance criteria | `AC-AC-001`–`AC-AC-017`, `AC-BB-001`–`AC-BB-009`, `AC-EXE-001`–`AC-EXE-016` |
 | Contracts | `docs/04_contracts/06-action-capture.md` · `docs/04_contracts/05-babysitter.md` · `docs/04_contracts/07-executor.md` (re-scoped 2026-08-18, CHG-028) · `docs/04_contracts/arrow_broker.md` |
-| Writes | `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`; consumes `Safety_Halt_Requests` (KV control table) |
+| Writes | `Fills`, `Order_Lifecycle`, `Positions`, `Postback_Quarantine`, `Postback_Projection_Ledger`, `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, `Execution_Audit`; consumes immutable `Execution_Intent` and `Safety_Halt_Requests` (KV control table) |
 | Must not own | Strategy, candidate scoring, gate approval, order submission to any component other than the go-arrow bridge (**ranking/reservations/decisions REMOVED 2026-08-15, CHG-005**) |
 
 ## Why one dossier
@@ -308,7 +308,8 @@ immutable execution intent, custom control state, and projections of Nautilus ev
 consumers. The Fluss projections are durable read models and integration surfaces, not a second
 production OMS or position engine. The Nautilus event store is an execution-history and replay
 boundary, but its current early-alpha status requires dedicated durability, backup, verification,
-and recovery evidence before it can independently satisfy the seven-year audit requirement.
+and recovery evidence before live use. The current audit target is at least one year, or longer
+under the approved retention policy.
 
 ## Component map
 
@@ -334,7 +335,7 @@ and recovery evidence before it can independently satisfy the seven-year audit r
 | AC — postback intake, correlation, quarantine, ledger | Decode Arrow order-updates WS; adopt orders the platform did not create here; immutable audit; quarantine unknowns; crash recovery | go-arrow bridge (`OrderStream`) + Nautilus external-order adoption + event store; **correlation mapping + quarantine path custom** |
 | AC — lifecycle + position projection | Per-order state transitions, no regression on stale evidence; fill-derived positions with weighted values | Nautilus OMS + position engine; **UNKNOWN/regression policy custom** |
 | BB — position observation | Consume `Positions` state; observe freshness; **MVP emits zero actions**; fail closed on `POSITION_ACTIONS_ENABLED=true` | Nautilus position events + a no-op observer strategy; **fail-closed guard custom** (Flink scaffold already implements it) |
-| EXE — gate/attempts/audit | Durable gate, two-person resume, attempt phases, no blind retry on UNKNOWN, immutable audit, seven-year reconstruction | **Gate + fencing + attempt/correlation glue custom** on Nautilus; audit via Nautilus event store + R2 retention (`bucket locks`) |
+| EXE — gate/attempts/audit | Durable gate, two-person resume, attempt phases, no blind retry on UNKNOWN, immutable audit, policy-controlled reconstruction for at least one year | **Gate + fencing + attempt/correlation glue custom** on Nautilus; audit via Nautilus event store + approved encrypted retention storage |
 | EXE — broker side effects | Sole path to Arrow; verified acceptance/rejection only; timeout/disconnect → halt + reconcile | go-arrow bridge (single writer) + Nautilus reconciliation |
 
 ## State machines
@@ -480,9 +481,10 @@ only the latest version in Babysitter state.
 
 Every money-moving and safety event flows through the Nautilus event store (append-only,
 replayable): commands, order events, venue reports, correlations, approvals, halts. Cache
-snapshots + tail-replay provide stable restarts and deterministic incident replay. Seven-year
-retention (DEC-020) is met by the event store's encrypted storage with R2 retention (the `bucket
-locks` mechanism) and lifecycle governance.
+snapshots + tail-replay provide stable restarts and deterministic incident replay. The audit target
+is at least one year, or longer under the approved retention policy, using encrypted storage,
+integrity verification, access governance, and an R2 bucket-lock or equivalent immutability
+mechanism where deployed.
 
 The audit envelope for every money-moving or safety event carries: audit ID/type/schema version;
 all relevant domain identities; gate state/epoch before and after; actor/service/operator
@@ -562,8 +564,9 @@ Arrow (proven by test); every trade row is either executed with a verified outco
 `UNKNOWN`; every postback is either correlated or quarantined; partial writes recover after
 restart (event-store replay); stale evidence cannot regress state; positions and orders remain
 separate aggregates; `UNKNOWN` never releases capacity and never auto-retries; the two-person gate
-and fencing are enforced; no crash-window test duplicates an order; the seven-year audit
-reconstruction (`EXE-AUDIT-001`) passes; the Babysitter emits zero actions and fails closed; and
+and fencing are enforced; no crash-window test duplicates an order; the policy-controlled audit
+reconstruction (`EXE-AUDIT-001`) covers at least one year or the approved longer period; the
+Babysitter emits zero actions and fails closed; and
 all broker calls remain disabled until the release evidence package approves enablement.
 
 ## Verification mapping
@@ -578,7 +581,7 @@ all broker calls remain disabled until the release evidence package approves ena
    `05-babysitter.md`, `06-action-capture.md`, `07-executor.md`, requirements
    `02-functional/05/06/07`, and DEC-006 are re-scoped to the Nautilus + go-arrow bridge design
    (dated banners in each file).
-2. **~~Truth authority~~ — RESOLVED 2026-08-19 (DEC-042):** Nautilus owns live execution behavior; Fluss owns immutable intent, control state, and queryable projections. The Nautilus event store's production durability and seven-year retention evidence remain open gates.
+2. **~~Truth authority~~ — RESOLVED 2026-08-19 (DEC-042/DEC-043):** Nautilus owns live execution behavior; Fluss owns immutable intent, control state, and queryable projections. The Nautilus event store's production durability, approved-policy retention, and recovery evidence remain open gates.
 3. **Broker evidence:** Arrow sandbox order round-trip (place → update stream → fill), REST
    reconciliation endpoints, and client-reference echo (Level 3) remain the live-money gates.
 4. **Existing code:** the Flink `BabysitterJob` scaffold and the `common` Agent-2 safety-core

@@ -65,6 +65,43 @@ confirmed Arrow REST contract below; Nautilus never holds broker credentials or 
 - Product codes: `I`=MIS (intraday, auto-squared 3:15 PM), `C`=CNC (delivery, T+1), `M`=NRML (F&O)
 - Exchanges in scope: NSE, NFO, MCX. INDEX is market data only — the Execution Core must reject INDEX instructions
 
+### Private Go bridge protocol (version 1)
+
+The first-party Go bridge exposes the following private, bearer-authenticated boundary. The
+endpoint is not a public API and its readiness does not authorize trading.
+
+| Method | Path | Purpose | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/v1/commands` | Place, modify, cancel, query, or reconcile through the bridge | `Authorization: Bearer <bridge-token>` |
+| `GET` | `/v1/events` | Receive normalized Arrow order-update reports over WebSocket | `Authorization: Bearer <bridge-token>` |
+| `GET` | `/healthz` | Process health | local/private probe |
+| `GET` | `/readyz` | Bridge mode/readiness; disabled mode is intentionally not ready | local/private probe |
+
+Every command has `record_type=execution_command`, `contract_version=1`, a unique `request_id`,
+and a command name from `place`, `modify`, `cancel`, `query-order`, `reconcile-orders`,
+`reconcile-trades`, or `reconcile-positions`. Place and modify require separate
+`instruction_id`, `execution_attempt_id`, and `client_order_ref` values. `client_order_ref` is
+validated to 1–16 safe ASCII characters before it can become Arrow `remarks`.
+
+Every accepted command returns `record_type=execution_report` and exactly one explicit outcome:
+
+| Outcome | Meaning | Retry behavior |
+| --- | --- | --- |
+| `SUCCESS` | Verified broker response; place requires nonblank `data.orderNo` | Nautilus may advance its own state after durable recording |
+| `REJECTED` | Local validation rejection or documented broker rejection | No place retry without a new approved attempt |
+| `UNKNOWN` | Timeout, transport failure, 401/403/408/429/5xx, malformed/ambiguous response, or unknown postback state | No automatic retry; reconcile first and halt as required |
+
+Repeated `request_id` with identical content returns the cached report without a second broker call.
+Reusing a `request_id` with different content returns `request_id_reuse_violation` and never reaches
+Arrow. The cache is process-local; restart recovery remains the responsibility of the durable
+Execution Attempt and reconciliation protocol.
+
+The bridge's `disabled` mode is the default and carries no Arrow credentials or route. `fake` mode
+is test-only. `live` mode is an explicit process configuration in which only the Go process loads
+Arrow credentials and opens the Arrow REST/order-update connections. Neither mode changes the
+custom `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED` gate, and no bridge health response may
+be interpreted as gate enablement.
+
 ## Concurrency and fencing
 
 One fenced active owner holds each `execution_partition_id` (Nautilus instance + custom fencing
@@ -96,7 +133,7 @@ measured.
 
 Crash-window, duplicate, timeout, rejection, malformed response, missing mapping, changelog gap,
 restart/corrupt state, fencing, safety-halt idempotency/scope, unauthorized/mismatched approval,
-two-person resume, reconciliation capability, and seven-year reconstruction tests pass. Bridge
+two-person resume, reconciliation capability, and approved-policy reconstruction tests pass. Bridge
 `PlaceOrder`/modify/cancel endpoints require Arrow-sandbox smoke tests before trust (the go-arrow
 SDK order path is currently untested). Live money stays blocked until the evidence package
 approves enablement.

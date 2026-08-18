@@ -107,7 +107,7 @@ Live-money deployment requires all of the following:
 - One-workload-VM failure posture is proven
 - Data recovery target under 30 seconds is met for accepted scenarios
 - EOD offload and three-day retention safety are proven
-- Seven-year encrypted audit retrieval is proven
+- Approved-policy encrypted audit retrieval is proven for at least one year
 - Security, secret rotation, least privilege, and unauthorized-control tests pass
 - Dashboards, alerts, runbooks, rollback, and gate approval evidence are operational
 

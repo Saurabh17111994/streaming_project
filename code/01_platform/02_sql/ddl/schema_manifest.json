@@ -74,7 +74,7 @@
     {
       "table_name": "Trade_Decisions",
       "ddl_path": "07_trade_decisions.sql",
-      "ddl_sha256": "7e46d8068b484046b951d8c94242699b981746d1c6437525b9454a16b02f05b4",
+      "ddl_sha256": "903ca888234944a936f34952896a25d98053e378ff4bde80baee4d3bf012c691",
       "table_kind": "LOG",
       "bucket_key": "instruction_id",
       "primary_key": null,
@@ -88,7 +88,7 @@
     {
       "table_name": "Fills",
       "ddl_path": "08_fills.sql",
-      "ddl_sha256": "2a15db548fe13d5a4be6f08825627ac77f597a25bde58d0567b809cb3c9d4fd0",
+      "ddl_sha256": "950f659b160e017da2d08ba74857a9cfcd8761680832cbb827bb34ab516e36a6",
       "table_kind": "LOG",
       "bucket_key": "postback_event_id",
       "primary_key": null,
@@ -102,7 +102,7 @@
     {
       "table_name": "Order_Lifecycle",
       "ddl_path": "09_order_lifecycle.sql",
-      "ddl_sha256": "d83996791d468dd49bcac997b0f775028bdd0f4d496ac710f66869d1bcd27e2c",
+      "ddl_sha256": "43d10fe690742d830dae220e82b7ee91fcea0b2bd978ac2f6c2d86d1dacdddbb",
       "table_kind": "KV",
       "primary_key": "account_scope_id, broker_order_id",
       "bucket_key": null,
@@ -130,7 +130,7 @@
     {
       "table_name": "Execution_Gate",
       "ddl_path": "11_execution_gate.sql",
-      "ddl_sha256": "63ba828d21657bd6859c54f8357b89a73a2b1bc97a0c4108feddd636542b5ef2",
+      "ddl_sha256": "366fc4725c0b10aaa771a386fdbbe6064bc179d307675afae9e25c182384d35d",
       "table_kind": "KV",
       "primary_key": "execution_partition_id",
       "bucket_key": null,
@@ -144,7 +144,7 @@
     {
       "table_name": "Execution_Attempts",
       "ddl_path": "12_execution_attempts.sql",
-      "ddl_sha256": "556b7d514f61780f139f6063672a87c26827454954b2f6105a95cfd1ea382eb2",
+      "ddl_sha256": "7ea884a76244e15159960eaa24fd67660981f69ad73bae8ebc512f5ee69133bb",
       "table_kind": "KV",
       "primary_key": "execution_attempt_id",
       "bucket_key": null,
@@ -158,7 +158,7 @@
     {
       "table_name": "Order_Correlation",
       "ddl_path": "13_order_correlation.sql",
-      "ddl_sha256": "dc51ddc30fae5b9425231924e64d9c93a3288d370ceea121d5089c3e7e0652bc",
+      "ddl_sha256": "126e2f7fe811e2e6de586c83f3282986a31b9e27b281d9dca27af02d92daef43",
       "table_kind": "KV",
       "primary_key": "instruction_id, execution_attempt_id",
       "bucket_key": null,
@@ -172,7 +172,7 @@
     {
       "table_name": "Execution_Audit",
       "ddl_path": "14_execution_audit.sql",
-      "ddl_sha256": "b6e6ec3d7aa1c8a302fd603de3fc2ea28bafc67473cb88faad2d8c05eb7669a3",
+      "ddl_sha256": "60598c3361011030a206d0ca295d013f8ac8487a0200f16602078ab8c94beeb4",
       "table_kind": "LOG",
       "bucket_key": "audit_event_id",
       "primary_key": null,
@@ -228,7 +228,7 @@
     {
       "table_name": "Safety_Halt_Requests",
       "ddl_path": "18_safety_halt_requests.sql",
-      "ddl_sha256": "d9acc14567a267f8387dd748abc9afc6072201844feb367403b3adbdce5e3ece",
+      "ddl_sha256": "1791a83c52f9681699ca5cc4aab3d5c3c0c81d9d65ac49a093cb13fa3def596e",
       "table_kind": "KV",
       "primary_key": "halt_request_id",
       "bucket_key": null,
@@ -336,6 +336,20 @@
       "writer_owner": "EOD controller (sole writer)",
       "retention_policy": "2d",
       "lake_policy": "off"
+    },
+    {
+      "table_name": "Execution_Intent",
+      "ddl_path": "27_execution_intent.sql",
+      "ddl_sha256": "086241cea2b4620a225ea8c267f55e36e804efadda55f875f6c4922b60b46c29",
+      "table_kind": "LOG",
+      "bucket_key": "instruction_id",
+      "primary_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-SRV-005",
+      "schema_version": "1",
+      "writer_owner": "Signal job (sole writer)",
+      "retention_policy": "2d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     }
   ]
 }

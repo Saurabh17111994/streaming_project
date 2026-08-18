@@ -90,7 +90,7 @@ class CompatFlussDdlParityIntegrationTest {
         manifest = MAPPER.readValue(
                 ddlDir.resolve("schema_manifest.json").toFile(), SchemaManifest.class);
         assertNotNull(manifest.tables, "manifest must carry tables");
-        assertEquals(24, manifest.tables.size(), "approved manifest must hold 24 tables");
+        assertEquals(25, manifest.tables.size(), "approved manifest must hold 25 tables");
         try {
             Configuration conf = new Configuration();
             conf.setString("bootstrap.servers", bootstrap);

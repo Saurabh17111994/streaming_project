@@ -170,8 +170,10 @@ class SchemaAgreementTest {
                 "Order_Lifecycle must materialize account_scope_id (R-013)");
         assertTrue(ddl.contains("PRIMARY KEY (account_scope_id, broker_order_id)"),
                 "Order_Lifecycle PK must be (account_scope_id, broker_order_id)");
-        assertTrue(ddl.contains("'bucket.key' = 'account_scope_id,broker_order_id'"),
-                "Order_Lifecycle bucket key must match the composite PK");
+        assertTrue(ddl.contains("'bucket.key' = 'account_scope_id'"),
+                "Order_Lifecycle bucket key must be the raw-client-compatible account subset");
+        assertTrue(ddl.contains("'table.kv.format-version' = '2'"),
+                "Order_Lifecycle must use the raw-client-compatible KV encoding");
     }
 
     @Test

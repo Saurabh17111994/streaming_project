@@ -2,7 +2,7 @@
 -- Owner: Executor
 -- Type: KV (primary key on execution_attempt_id)
 -- Retention: active + reconciliation window (30 calendar days via table.log.ttl)
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: execution_partition_id, account_scope_id (R-233: account_scope_id
 --   column materialized — the header declared account scoping but the schema
 --   had no such column, so account-scoped reconciliation was impossible)

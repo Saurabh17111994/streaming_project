@@ -68,7 +68,7 @@ SERVICE = "s3"
 CLOUDFLARE_API = "https://api.cloudflare.com/client/v4"
 
 # Lifecycle rule: probe scratch cleanup only. The audit prefix is NEVER expired
-# by this tool — seven-year audit retention is a policy contract, not a TTL.
+# by this tool — audit retention is a policy contract, not a TTL.
 SCRATCH_LIFECYCLE_XML = """\
 <LifecycleConfiguration>
   <Rule>

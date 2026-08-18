@@ -3,7 +3,7 @@
 -- Type: LOG (no primary key)
 -- Bucket key: instruction_id
 -- Retention: 2 calendar days via table.log.ttl (until consumed + replay/reconciliation buffer)
--- Lake: execution audit links retained 7 years
+-- Lake: execution audit links retained under approved policy (one-year minimum target)
 -- Scope: portfolio_id, account_scope_id
 -- Schema version: 2
 

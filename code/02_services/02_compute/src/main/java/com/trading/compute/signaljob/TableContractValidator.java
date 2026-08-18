@@ -59,6 +59,8 @@ public final class TableContractValidator {
     private static final String SIGNAL_CONTRACT = "tracker 14 re-scoped P2, SIGNAL-SCHEMA-001";
     private static final String CANDLE_CONTRACT = "tracker 14 P1, CANDLE-SCHEMA-002";
     private static final String TRADE_CONTRACT = "SCH-19, TRADE-SCHEMA-001";
+    private static final String EXECUTION_INTENT_CONTRACT =
+            "REQ-EXE-004, EXECUTION-INTENT-SCHEMA-001";
     private static final String DEDUP_CONTRACT = "DEC-038, DEDUP-SCHEMA-001";
     private static final String FORMING_BAR_CONTRACT = "DEC-038, FORMING-BAR-SCHEMA-001";
 
@@ -122,6 +124,15 @@ public final class TableContractValidator {
                 TradeInstructionStateColumns.TYPE_ROOTS, "4-column v1 instruction index",
                 TRADE_CONTRACT);
         validateRouting(info, "instruction_id", 8, TRADE_CONTRACT);
+    }
+
+    /** Execution_Intent LOG: immutable request feed, no primary key, instruction routing. */
+    public static void validateExecutionIntentLogTable(TableInfo info) {
+        requireNoPrimaryKey(info, "append-only execution-intent LOG", EXECUTION_INTENT_CONTRACT);
+        validateSchema(info, Arrays.asList(ExecutionIntentTableColumns.NAMES),
+                ExecutionIntentTableColumns.TYPE_ROOTS, "22-column v1 execution intent",
+                EXECUTION_INTENT_CONTRACT);
+        validateRouting(info, "instruction_id", 8, EXECUTION_INTENT_CONTRACT);
     }
 
     /**

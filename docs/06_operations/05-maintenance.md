@@ -40,7 +40,7 @@ Record workload basis, resource impact, bucket/partition/replication impact, che
 
 ### Retention or EOD policy change
 
-Verify manifest fields, counts, ranges, hashes/checksums, commit state, retry behavior, expiry margin, three-day live buffer, seven-year audit policy, and legal/compliance approval where applicable.
+Verify manifest fields, counts, ranges, hashes/checksums, commit state, retry behavior, expiry margin, three-day live buffer, approved audit-retention policy, and legal/compliance approval where applicable.
 
 ### Secret/network/security change
 

@@ -19,7 +19,8 @@ import org.junit.jupiter.api.Test;
  * v2 — 15 columns, names in DDL order, per-column type roots, per-column
  * nullability — plus the composite-KV contract the ownership matrix relies on:
  * PK exactly {@code (account_scope_id, broker_order_id)} and routing on the
- * same composite key (R-013 account safety).
+ * account-scope subset routing (raw-client-compatible v2 encoding; R-013
+ * account safety remains enforced by the composite primary key).
  */
 class OrderLifecycleColumnsAgreementTest {
 
@@ -83,7 +84,8 @@ class OrderLifecycleColumnsAgreementTest {
         assertThat(ddl)
                 .containsIgnoringCase("PRIMARY KEY (account_scope_id, broker_order_id) NOT ENFORCED");
         assertThat(ddl)
-                .containsIgnoringCase("'bucket.key' = 'account_scope_id,broker_order_id'");
+                .containsIgnoringCase("'bucket.key' = 'account_scope_id'");
+        assertThat(ddl).containsIgnoringCase("'table.kv.format-version' = '2'");
         assertThat(ddl).containsIgnoringCase("'table.log.ttl' = '2d'");
     }
 

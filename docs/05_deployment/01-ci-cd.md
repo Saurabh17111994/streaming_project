@@ -130,7 +130,7 @@ Retain release evidence sufficient to reconstruct:
 - Gate transitions and operators
 - Post-deployment verification
 
-Money-moving execution evidence follows the seven-year encrypted audit policy. General CI logs follow the approved operational retention policy and must redact secrets and raw payloads.
+Money-moving execution evidence follows the approved encrypted audit-retention policy, currently with a one-year minimum. General CI logs follow the approved operational retention policy and must redact secrets and raw payloads.
 
 ## Failure policy
 

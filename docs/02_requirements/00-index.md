@@ -33,7 +33,7 @@ The requirements in this directory enforce these decisions:
 - Local development uses Docker Compose; production uses four-VM Docker Swarm.
 - Production checkpoints/savepoints use S3; Fluss uses three-node replication across workload VMs.
 - Eligible live source tables retain at least three complete trading days and do not expire data while EOD offload is unverified.
-- Money-moving audit records are encrypted and retained for seven years.
+- Money-moving audit records are immutable, encrypted, integrity-verifiable, and retained for at least one year or longer under approved policy.
 
 ## Reading map
 

@@ -234,7 +234,7 @@ Before architecture is considered implementation-ready:
 - [ ] EOD controller has a named owner and durable restart behavior.
 - [ ] RPO is defined per boundary; failure timeline includes detection delay.
 - [ ] State capacity budgets exist or are evidence-gated for every category.
-- [ ] Seven-year audit controls are described or explicitly evidence-gated.
+- [ ] Approved audit-retention controls are described or explicitly evidence-gated; the current minimum target is one year.
 - [ ] Transport encryption is mandatory for all sensitive paths.
 - [ ] No stale name (separate Ranking job — REMOVED 2026-08-15 CHG-005, generic `order_id`, TLS "where supported") remains.
 - [ ] All relative Markdown links resolve.

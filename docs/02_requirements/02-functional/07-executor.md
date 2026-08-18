@@ -264,7 +264,7 @@ live-money release.
 7. Mapping, quarantine, broker rejection, timeout, malformed response, and changelog
    discontinuity tests pass.
 8. Arrow REST reconciliation capability and consistency-delay tests pass (via the bridge).
-9. Every money-moving call is reconstructable from seven-year immutable audit data.
+9. Every money-moving call is reconstructable from immutable audit data retained for at least one year or longer under the approved retention policy.
 10. Bridge place/modify/cancel endpoints pass Arrow-sandbox smoke tests (the go-arrow SDK order
     path is currently untested), the current `NotImplementedError` scaffold is replaced, and all
     gates pass before live-money release.

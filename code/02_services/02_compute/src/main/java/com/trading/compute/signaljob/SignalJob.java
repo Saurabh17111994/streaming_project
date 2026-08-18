@@ -382,6 +382,29 @@ public final class SignalJob {
                 .name("signal-candidates-current-sink")
                 .uid("signal-candidates-current-sink");
 
+        // Execution intent is a separate, explicitly disabled-by-default
+        // branch. It consumes the immutable candidate stream but does not
+        // call a broker, gateway, or Arrow service. The gateway remains the
+        // authoritative duplicate/quarantine boundary in T2.
+        if (config.executionIntentEnabled()) {
+            allSignals
+                    .flatMap(new ExecutionIntentProducerFunction(config))
+                    .returns(ExecutionIntentTableColumns.ROW_TYPE_INFO)
+                    .name("execution-intent-producer")
+                    .uid("execution-intent-producer")
+                    .sinkTo(FlussSink.<RowData>builder()
+                            .setBootstrapServers(config.bootstrapServers())
+                            .setDatabase(config.database())
+                            .setTable(config.executionIntentTable())
+                            .setSerializationSchema(new RowDataSerializationSchema(true, true))
+                            .setOption("client.request-timeout",
+                                    config.sinkWriteStallTimeoutMs() + "ms")
+                            .setOption("client.writer.retries", "2")
+                            .build())
+                    .name("execution-intent-sink")
+                    .uid("execution-intent-sink");
+        }
+
         return env;
     }
 
@@ -575,6 +598,17 @@ public final class SignalJob {
                             config.database(), config.formingBarTable()))
                     .getTableInfo();
             TableContractValidator.validateFormingBarKvTable(formingBar);
+            if (config.executionIntentEnabled()) {
+                org.apache.fluss.metadata.TableInfo executionIntent = conn
+                        .getTable(org.apache.fluss.metadata.TablePath.of(
+                                config.database(), config.executionIntentTable()))
+                        .getTableInfo();
+                TableContractValidator.validateExecutionIntentLogTable(executionIntent);
+                LOG.info("signal-job: execution-intent LOG contract OK ({})",
+                        config.executionIntentTable());
+                LOG.info("signal-job: {}", TableContractValidator.schemaReport(
+                        executionIntent, ExecutionIntentTableColumns.COLUMN_NULLABLE_IN_DDL));
+            }
             // SCH-19 (machinery): when the decision dual-sink is enabled, the
             // Trade_Decisions LOG + trade_instruction_state KV index must
             // match the contracts the write paths rely on before the graph is

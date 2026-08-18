@@ -1,13 +1,13 @@
-# Runbook — Seven-Year Audit Store (Cloudflare R2 bucket locks)
+# Runbook — Policy-Controlled Audit Store (Cloudflare R2 bucket locks)
 
 ```text
 runbook_id: OPS-AUDIT-STORE-001
-scope: seven-year money-moving audit retention store (Cloudflare R2)
+scope: policy-controlled money-moving audit retention store (Cloudflare R2; one-year minimum target)
 severity: setup/validation procedure; no live-money impact
 owner: Platform Team
 ```
 
-This runbook provisions and validates the seven-year audit store on Cloudflare R2
+This runbook provisions and validates the policy-controlled audit store on Cloudflare R2
 and records the WORM control (NFR 3.4.1 / AC-NFR-005). It is the
 
 ## Background (the reality, 2026-08-14)

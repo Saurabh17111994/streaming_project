@@ -43,6 +43,9 @@ class TableContractValidatorTest {
     private static final List<String> TRADE_TYPES = TradeDecisionsTableColumns.TYPE_ROOTS;
     private static final List<String> INSTRUCTION_NAMES = Arrays.asList(TradeInstructionStateColumns.NAMES);
     private static final List<String> INSTRUCTION_TYPES = TradeInstructionStateColumns.TYPE_ROOTS;
+    private static final List<String> EXECUTION_INTENT_NAMES =
+            Arrays.asList(ExecutionIntentTableColumns.NAMES);
+    private static final List<String> EXECUTION_INTENT_TYPES = ExecutionIntentTableColumns.TYPE_ROOTS;
     private static final List<String> DEDUP_NAMES = Arrays.asList(FingerprintDedupTableColumns.NAMES);
     private static final List<String> DEDUP_TYPES = FingerprintDedupTableColumns.TYPE_ROOTS;
     private static final List<String> FORMING_BAR_NAMES = Arrays.asList(FormingBarTableColumns.NAMES);
@@ -53,6 +56,7 @@ class TableContractValidatorTest {
     private static final String DEDUP_TABLE = "fingerprint_dedup";
     private static final String FORMING_BAR_TABLE = "forming_bar";
     private static final String INSTRUCTION_ID = "instruction_id";
+    private static final String EXECUTION_INTENT = "Execution_Intent";
 
     // ── candle KV (CANDLE-SCHEMA-002) ──
 
@@ -355,6 +359,35 @@ class TableContractValidatorTest {
                                 types, false)));
     }
 
+    // ── Execution_Intent LOG (REQ-EXE-004) ──
+
+    @Test
+    @DisplayName("Execution_Intent LOG without primary key and with instruction routing passes")
+    void executionIntentLogExactPasses() {
+        assertDoesNotThrow(() -> TableContractValidator.validateExecutionIntentLogTable(
+                executionIntent(EXECUTION_INTENT, null, List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("Execution_Intent LOG with a primary key is rejected")
+    void executionIntentLogPrimaryKeyRejected() {
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateExecutionIntentLogTable(
+                        executionIntent(EXECUTION_INTENT, List.of(INSTRUCTION_ID),
+                                List.of(INSTRUCTION_ID), 8)));
+    }
+
+    @Test
+    @DisplayName("Execution_Intent LOG with schema drift is rejected")
+    void executionIntentLogSchemaDriftRejected() {
+        List<String> shortTypes = new java.util.ArrayList<>(EXECUTION_INTENT_TYPES);
+        shortTypes.remove(21);
+        assertThrows(TableContractValidator.ContractViolation.class,
+                () -> TableContractValidator.validateExecutionIntentLogTable(
+                        executionIntent(EXECUTION_INTENT, null, List.of(INSTRUCTION_ID), 8,
+                                shortTypes, false)));
+    }
+
     // ── trade_instruction_state KV index (SCH-19, TRADE-SCHEMA-001) ──
 
     @Test
@@ -533,6 +566,19 @@ class TableContractValidatorTest {
     private static TableInfo tradeDecisions(String name, List<String> schemaPk,
             List<String> bucketKeys, int numBuckets) {
         return table(name, schemaPk, bucketKeys, numBuckets, TRADE_NAMES, TRADE_TYPES, null, true);
+    }
+
+    private static TableInfo executionIntent(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets) {
+        return table(name, schemaPk, bucketKeys, numBuckets, EXECUTION_INTENT_NAMES,
+                EXECUTION_INTENT_TYPES, null, true);
+    }
+
+    private static TableInfo executionIntent(String name, List<String> schemaPk,
+            List<String> bucketKeys, int numBuckets, List<String> columnTypes,
+            boolean pkNonNullable) {
+        return table(name, schemaPk, bucketKeys, numBuckets, EXECUTION_INTENT_NAMES,
+                EXECUTION_INTENT_TYPES, columnTypes, pkNonNullable);
     }
 
     private static TableInfo tradeDecisions(String name, List<String> schemaPk,

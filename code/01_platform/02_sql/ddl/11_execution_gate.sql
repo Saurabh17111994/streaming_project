@@ -2,7 +2,7 @@
 -- Owner: Executor
 -- Type: KV (primary key on execution_partition_id)
 -- Retention: current + history in audit
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: execution_partition_id, account_scope_id
 -- Schema version: 2
 

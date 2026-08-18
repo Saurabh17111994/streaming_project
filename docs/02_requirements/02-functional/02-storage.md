@@ -14,7 +14,7 @@ No table definition may use an overloaded `order_id`, assume broker sequence IDs
 - `speculated` or exact gap-range columns SHALL NOT exist in quarantine or discontinuity tables unless broker protocol evidence proves the required sequence semantics.
 - Quarantine tables SHALL NOT be silently discarded and SHALL NOT become executable state for any downstream component.
 - Source retention SHALL NOT expire a trading day's data while its EOD manifest is unverified, retryable, or under reconciliation.
-- Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be encrypted at rest in the lake tier and retained for seven years.
+- Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be immutable, encrypted, integrity-verifiable, access-controlled, and retained for at least one year or longer under the approved policy.
 - Every logical table SHALL carry an explicit schema version and one writer owner. A table with no declared owner is not ready for implementation.
 - Partial-update merge semantics SHALL NOT be used across column groups where writers are not the declared and tested owner of every updated column.
 - Atomic cross-table visibility SHALL NOT be claimed without a version-pinned connector test that proves the specific behavior.
@@ -73,7 +73,7 @@ Fluss metadata, tablet data, and replication configuration SHALL be version-pinn
 | ------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | LOG                 | Immutable event/audit append           | At-least-once unless a specific producer/dedup test proves stronger behavior                         |
 | KV                  | Current materialized operational state | Idempotent projection under versioned source events; partial-update only with tested merge semantics |
-| Execution audit LOG | Money-moving evidence                  | Immutable, encrypted lake retention for seven years                                                  |
+| Execution audit LOG | Money-moving evidence                  | Immutable, encrypted lake retention for at least one year under approved policy                     |
 
 ## REQ-FLS-003: Required logical tables
 
@@ -141,7 +141,7 @@ As the durable candle state, `feature_candles_15s` is an **authoritative Fluss s
 
 `Order_Lifecycle`, `Positions`, `Order_Correlation`, `Execution_Gate`, and `Execution_Attempts` are separate state aggregates. Partial update may be used only where columns have explicit owners and stale-update/version tests pass.
 
-`Execution_Audit` and money-moving postback/fill audit events SHALL be immutable and lake-tiered/encrypted for seven years. Operational projections may have shorter live retention only if their source audit allows complete rebuild.
+`Execution_Audit` and money-moving postback/fill audit events SHALL be immutable, integrity-verifiable, access-controlled, and lake-tiered/encrypted for at least one year under approved policy. Operational projections may have shorter live retention only if their source audit allows complete rebuild.
 
 ## REQ-FLS-010: Quarantine and discontinuities
 
@@ -207,4 +207,4 @@ Flink checkpoints SHALL NOT become a duplicate full copy of Fluss-owned Signal b
 
 ## REQ-FLS-013: Acceptance
 
-Storage tests SHALL prove schema/DDL parity, three-node replication and one-VM loss, partial-update ownership, stale update rejection, immutable event behavior, checkpoint/sink recovery, quarantine rebuild, projection-ledger recovery, EOD manifest validation/retry, three-day retention safety, seven-year encrypted audit retrieval, scope isolation, and schema migration/rollback.
+Storage tests SHALL prove schema/DDL parity, three-node replication and one-VM loss, partial-update ownership, stale update rejection, immutable event behavior, checkpoint/sink recovery, quarantine rebuild, projection-ledger recovery, EOD manifest validation/retry, three-day retention safety, policy-controlled encrypted audit retrieval for at least one year, scope isolation, and schema migration/rollback.

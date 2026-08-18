@@ -54,7 +54,7 @@ to `UNKNOWN`, quarantines the event, and halts affected order flow.
 
 Duplicate/out-of-order/no-sequence events, independent-write crash windows, missing mapping,
 quarantine, terminal-state regression, projection replay, first/partial/multiple fills, position
-creation/closure, rejected/cancelled/unknown status, and seven-year audit reconstruction tests
+creation/closure, rejected/cancelled/unknown status, and approved-policy audit reconstruction tests
 pass. Bridge order-updates decode and external-order adoption into the Nautilus OMS require
 dedicated adapter tests (canonical IDs in `11-testing-and-release.md` §Action Capture).
 

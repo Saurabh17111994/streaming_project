@@ -2,10 +2,10 @@
 -- Owner: Executor
 -- Type: KV (primary key on instruction_id, execution_attempt_id)
 -- Retention: active + reconciliation window (30 calendar days via table.log.ttl)
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: account_scope_id (R-145: column materialized — the header declared
 --   account scoping but the schema had no such column)
--- Schema version: 2
+-- Schema version: 2 (routing/encoding compatibility amendment; columns unchanged)
 --
 -- v2 (2026-08-03, review R-086): composite PK. A single instruction can be
 -- retried as multiple execution attempts, each producing a distinct
@@ -29,7 +29,8 @@ CREATE TABLE Order_Correlation (
     PRIMARY KEY (instruction_id, execution_attempt_id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '8',
-    'bucket.key' = 'instruction_id,execution_attempt_id',
+    'bucket.key' = 'instruction_id',
+    'table.kv.format-version' = '2',
     'table.log.ttl' = '30d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',

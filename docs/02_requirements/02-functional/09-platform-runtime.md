@@ -16,7 +16,7 @@ Compose behavior SHALL not be presented as proof of production HA.
 - TLS or an equivalent authenticated encrypted transport SHALL be mandatory for broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic. "Where supported" is not sufficient.
 - Flink checkpoints/savepoints SHALL use encrypted, versioned S3 storage. Local volumes are not production checkpoint durability.
 - Fluss data volumes SHALL be durable per workload node with tested replication/recovery. Three-node replication/quorum SHALL prevent replica co-location on a single VM.
-- Money-moving audit records SHALL be encrypted at rest in the lake tier and retained for seven years per the data requirements.
+- Money-moving audit records SHALL be encrypted at rest in the lake tier and retained for at least one year or longer under the approved data-retention policy.
 - Only explicitly required operator/UI/API endpoints SHALL be exposed through controlled ingress/firewall rules. Internal RPC, checkpoint, and service ports SHALL NOT be publicly exposed.
 - The observability VM SHALL NOT be required for order-safety correctness. Loss of the observability VM SHALL NOT authorize orders or erase execution audit.
 - Schema-breaking clean-break migrations are allowed only before live-money release and require destructive-change approval and reset/replay plan.
@@ -83,7 +83,7 @@ Rotation/revocation procedures cover broker credentials, Arrow REST keys, S3 cre
 
 - Flink checkpoints/savepoints use encrypted, versioned S3 storage.
 - Fluss data uses durable volumes per workload node with tested replication/recovery.
-- Iceberg/audit uses encrypted S3 with versioning/lifecycle policy compatible with seven-year audit retention.
+- Iceberg/audit uses encrypted S3 with immutable/versioned lifecycle policy compatible with the approved audit-retention period.
 - OpenObserve uses dedicated observability storage and its failure cannot authorize orders or erase execution audit.
 
 Local named volumes are not production durability.

@@ -1,0 +1,203 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
+
+const (
+	ProtocolVersion = 1
+	RecordCommand   = "execution_command"
+	RecordReport    = "execution_report"
+	OutcomeSuccess  = "SUCCESS"
+	OutcomeRejected = "REJECTED"
+	OutcomeUnknown  = "UNKNOWN"
+)
+
+const (
+	CommandPlace             = "place"
+	CommandModify            = "modify"
+	CommandCancel            = "cancel"
+	CommandQueryOrder        = "query-order"
+	CommandReconcileOrders   = "reconcile-orders"
+	CommandReconcileTrades   = "reconcile-trades"
+	CommandReconcilePosition = "reconcile-positions"
+)
+
+// CommandEnvelope is the private protocol between Nautilus and this bridge.
+// It deliberately carries platform identities separately; broker_order_id is
+// only present after Arrow has assigned it.
+type CommandEnvelope struct {
+	RecordType         string        `json:"record_type"`
+	ContractVersion    int           `json:"contract_version"`
+	RequestID          string        `json:"request_id"`
+	Command            string        `json:"command"`
+	InstructionID      string        `json:"instruction_id,omitempty"`
+	ExecutionAttemptID string        `json:"execution_attempt_id,omitempty"`
+	ClientOrderRef     string        `json:"client_order_ref,omitempty"`
+	BrokerOrderID      string        `json:"broker_order_id,omitempty"`
+	Order              *OrderCommand `json:"order,omitempty"`
+}
+
+// OrderCommand uses platform-neutral values. The adapter is the only place
+// that converts them into Arrow's string-valued request fields.
+type OrderCommand struct {
+	Exchange         string `json:"exchange"`
+	Symbol           string `json:"symbol"`
+	Quantity         string `json:"quantity"`
+	TransactionType  string `json:"transaction_type"`
+	OrderType        string `json:"order_type"`
+	Product          string `json:"product"`
+	Price            string `json:"price,omitempty"`
+	Validity         string `json:"validity"`
+	MarketProtection bool   `json:"market_protection,omitempty"`
+}
+
+// ReportEnvelope is returned synchronously for commands and is also sent on
+// the private event WebSocket for asynchronous Arrow order updates.
+type ReportEnvelope struct {
+	RecordType          string          `json:"record_type"`
+	ContractVersion     int             `json:"contract_version"`
+	RequestID           string          `json:"request_id,omitempty"`
+	Command             string          `json:"command"`
+	Outcome             string          `json:"outcome"`
+	Reason              string          `json:"reason,omitempty"`
+	InstructionID       string          `json:"instruction_id,omitempty"`
+	ExecutionAttemptID  string          `json:"execution_attempt_id,omitempty"`
+	ClientOrderRef      string          `json:"client_order_ref,omitempty"`
+	BrokerOrderID       string          `json:"broker_order_id,omitempty"`
+	ExchangeOrderID     string          `json:"exchange_order_id,omitempty"`
+	PostbackEventID     string          `json:"postback_event_id,omitempty"`
+	OrderStatus         string          `json:"order_status,omitempty"`
+	ReportType          string          `json:"report_type,omitempty"`
+	FillShares          string          `json:"fill_shares,omitempty"`
+	AveragePrice        string          `json:"average_price,omitempty"`
+	FillPrice           string          `json:"fill_price,omitempty"`
+	FillQuantity        string          `json:"fill_quantity,omitempty"`
+	FillTime            string          `json:"fill_time,omitempty"`
+	InstrumentToken     string          `json:"instrument_token,omitempty"`
+	ReceivedTsMs        int64           `json:"received_ts_ms"`
+	ResponseFingerprint string          `json:"response_fingerprint,omitempty"`
+	Data                json.RawMessage `json:"data,omitempty"`
+}
+
+var clientRefPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,16}$`)
+
+func validateClientOrderRef(ref string) error {
+	if !clientRefPattern.MatchString(ref) {
+		return fmt.Errorf("client_order_ref must contain 1-16 ASCII letters, digits, '.', '_' or '-'")
+	}
+	return nil
+}
+
+func validateCommand(c CommandEnvelope) error {
+	if c.RecordType != RecordCommand {
+		return fmt.Errorf("record_type must be %q", RecordCommand)
+	}
+	if c.ContractVersion != ProtocolVersion {
+		return fmt.Errorf("unsupported contract_version %d", c.ContractVersion)
+	}
+	if strings.TrimSpace(c.RequestID) == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	switch c.Command {
+	case CommandPlace, CommandModify:
+		if strings.TrimSpace(c.InstructionID) == "" {
+			return fmt.Errorf("instruction_id is required for %s", c.Command)
+		}
+		if strings.TrimSpace(c.ExecutionAttemptID) == "" {
+			return fmt.Errorf("execution_attempt_id is required for %s", c.Command)
+		}
+		if c.Order == nil {
+			return fmt.Errorf("order is required for %s", c.Command)
+		}
+		if c.Command == CommandPlace && strings.TrimSpace(c.BrokerOrderID) != "" {
+			return fmt.Errorf("broker_order_id is not allowed for place")
+		}
+		if c.Command == CommandModify && strings.TrimSpace(c.BrokerOrderID) == "" {
+			return fmt.Errorf("broker_order_id is required for modify")
+		}
+		if err := validateOrderCommand(*c.Order); err != nil {
+			return err
+		}
+		if err := validateClientOrderRef(c.ClientOrderRef); err != nil {
+			return err
+		}
+	case CommandCancel, CommandQueryOrder:
+		if strings.TrimSpace(c.BrokerOrderID) == "" {
+			return fmt.Errorf("broker_order_id is required for %s", c.Command)
+		}
+	case CommandReconcileOrders, CommandReconcileTrades, CommandReconcilePosition:
+	default:
+		return fmt.Errorf("unsupported command %q", c.Command)
+	}
+	return nil
+}
+
+func validateOrderCommand(o OrderCommand) error {
+	if strings.TrimSpace(o.Exchange) == "" || strings.EqualFold(o.Exchange, "INDEX") {
+		return fmt.Errorf("execution exchange must be non-empty and not INDEX")
+	}
+	if strings.TrimSpace(o.Symbol) == "" || strings.TrimSpace(o.Quantity) == "" {
+		return fmt.Errorf("order symbol and quantity are required")
+	}
+	if !allDigits(o.Quantity) || strings.TrimLeft(o.Quantity, "0") == "" {
+		return fmt.Errorf("quantity must be a positive integer string")
+	}
+	switch strings.ToUpper(strings.TrimSpace(o.TransactionType)) {
+	case "B", "S", "BUY", "SELL":
+	default:
+		return fmt.Errorf("transaction_type must be B, S, BUY, or SELL")
+	}
+	orderType := strings.ToUpper(strings.TrimSpace(o.OrderType))
+	switch orderType {
+	case "LMT", "MKT", "SL-LMT", "SL-MKT":
+	default:
+		return fmt.Errorf("unsupported order_type %q", o.OrderType)
+	}
+	if orderType == "LMT" && strings.TrimSpace(o.Price) == "" {
+		return fmt.Errorf("price is required for LMT")
+	}
+	if orderType == "MKT" && strings.TrimSpace(o.Price) != "" && strings.TrimSpace(o.Price) != "0" {
+		return fmt.Errorf("MKT price must be empty or 0")
+	}
+	switch strings.ToUpper(strings.TrimSpace(o.Product)) {
+	case "I", "C", "M":
+	default:
+		return fmt.Errorf("product must be I, C, or M")
+	}
+	switch strings.ToUpper(strings.TrimSpace(o.Validity)) {
+	case "DAY", "IOC":
+	default:
+		return fmt.Errorf("validity must be DAY or IOC")
+	}
+	return nil
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func nowMs() int64 { return time.Now().UnixMilli() }
+
+func fingerprint(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}

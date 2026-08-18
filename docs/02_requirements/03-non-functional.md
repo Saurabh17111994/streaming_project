@@ -27,7 +27,7 @@
 | ASM-NFR-005 | ~~OpenAlgo exposes deterministic REST order-submission responses~~ (obsolete — OpenAlgo removed per DEC-006). Arrow REST `POST /order/regular` returns deterministic order-submission responses and enough evidence to correlate broker order identity. | ASM-007 |
 | ASM-NFR-006 | The selected Fluss version supports BYTES payload, KV state tables, changelog images, three-node replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Fluss remote storage + rebuild from audit (Flink checkpoints hold only small working/recovery state — DEC-038)), retention extension, and lake tiering properties. | ASM-008 |
 | ASM-NFR-007 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | ASM-009 |
-| ASM-NFR-008 | Seven-year audit retention is acceptable for the applicable live-money jurisdiction and account model. | ASM-010 |
+| ASM-NFR-008 | The approved audit-retention policy, currently at least one year, is acceptable for the applicable live-money jurisdiction and account model. | ASM-010 |
 | ASM-NFR-009 | Fluss connector atomic visibility semantics are per-sink, not cross-sink. Consumers tolerate partial visibility when reading multiple LOG and KV tables from the same checkpoint boundary. | RISK-008 |
 | ASM-NFR-010 | The pre-production clean break permits replacing all stale physical DDLs without preserving compatibility with old consumers. | RISK-011 |
 
@@ -44,7 +44,7 @@ These behaviors are conscious trade-offs accepted by the platform:
 - **Pre-production clean break:** Stale schemas, outdated DDLs, and incompatible old consumer compatibility are not preserved. After go-live, schema changes follow the compatibility, replay, and rollback contract.
 - **RPO is per-boundary, not a single platform claim:** Recovery Point Objective is defined separately for raw packets, immutable instructions, postback audit, Executor attempts/audit, projections, and EOD data.
 - **Health is multidimensional:** A single green/red indicator cannot represent the platform. Liveness, readiness, job health, and trading readiness are separate dimensions.
-- **Seven-year audit is encryption-gated:** Money-moving audit records are encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before seven years requires policy change, legal-hold release, and two-person authorization.
+- **Audit retention is policy-gated:** Money-moving audit records are immutable and encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before the approved retention period requires policy change, applicable legal-hold release, and two-person authorization.
 - **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform’s theoretical cap ceiling is 90,000 ticks/s (3,000 × 30; sustained gate 50,000 per DEC-036), so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the ...
 
 ## Out of Scope
@@ -143,24 +143,24 @@ RPO/RTO evidence is produced per failure scenario; broad “HA” claims without
 
 - Eligible source/audit tables retain at least three complete trading days in Fluss.
 - Retention automatically extends while the relevant EOD manifest is unverified, retryable, or under reconciliation.
-- Execution, gate, order, fill, correlation, approval, and position-action audit records are encrypted in lake storage and retained seven years.
+- Execution, gate, order, fill, correlation, approval, and position-action audit records are encrypted in lake storage and retained for at least one year or longer under approved policy.
 - EOD commits include counts, ranges, schema versions, hashes/checksums, and verification state.
 - Operational state is rebuildable from immutable audit or has a tested backup/restore contract.
 
-### 3.4.1 Seven-year audit controls
+### 3.4.1 Approved audit-retention controls
 
-Execution, gate, order, fill, correlation, approval, and position-action audit records SHALL be retained seven years in encrypted lake storage with the following minimum controls:
+Execution, gate, order, fill, correlation, approval, and position-action audit records SHALL be retained for at least one year or longer under approved policy in encrypted lake storage with the following minimum controls:
 
 | Control | Requirement | Status |
 | --- | --- | --- |
-| WORM/immutability | S3 Object Lock in compliance mode or equivalent write-once-read-many on the 7-year audit prefix. **2026-08-14: the configured store is Cloudflare R2, which does NOT implement the S3 Object Lock API but DOES support 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API. An indefinite bucket-lock rule on the 7-year audit prefix satisfies this control on R2 (provisioning requires a Cloudflare API token, not the S3-compat keys).** | `OPEN` (R2 bucket-lock rule not yet applied, 2026-08-14) |
+| WORM/immutability | WORM-equivalent immutable storage on the approved audit prefix. **2026-08-14: the configured store is Cloudflare R2, which does not implement the S3 Object Lock API but does support bucket locks — prefix retention rules via the Cloudflare dashboard/Wrangler/API.** | `OPEN` (R2 bucket-lock rule not yet applied, 2026-08-14) |
 | Legal hold | Freeze/unfreeze procedure documented; hold preserves all versions within the hold scope; tested | `EVIDENCE-BLOCKED` |
 | Key rotation | Audit encryption keys rotate on the same schedule as production credential rotation; previous keys remain available for decryption | `EVIDENCE-BLOCKED` |
 | Access review | Audit-role access reviewed at least quarterly; every access is logged as an immutable audit event | `OPEN` |
 | Retrieval SLA | Any single audit record or logical transaction reconstructable within 15 minutes from cold storage | `EVIDENCE-BLOCKED` |
 | Export format | Audit exports use the reconciled Iceberg table format with content-hash verification; Parquet is an acceptable secondary format | `OPEN` |
 | Reconstruction integrity | Every audit event carries a content hash; EOD manifest hashes chain to individual event hashes; a reconstruction integrity test SHALL verify the hash chain end-to-end. **2026-08-14: `AuditHashChain` (event→manifest→root hash chain, unit-tested) is implemented; the EOD-manifest end-to-end proof still needs the EOD controller (SCH-23)** | `EVIDENCE-BLOCKED` (hash-chain core implemented 2026-08-14) |
-| Deletion | Audit deletion before seven years is prohibited unless an approved retention policy change, legal hold release, and two-person authorization are recorded as immutable deletion-evidence events. **2026-08-14: `AuditDeletionControl` implements this — two distinct authorized operators plus, inside the window, an approved policy change and a legal-hold release; every attempt emits an immutable deletion-evidence event** | `IMPLEMENTED` (2026-08-14, `AuditDeletionControl`) |
+| Deletion | Audit deletion before the approved retention period is prohibited unless an approved retention-policy change, applicable legal-hold release, and two-person authorization are recorded as immutable deletion-evidence events. **2026-08-14: `AuditDeletionControl` implements this — two distinct authorized operators plus, inside the window, an approved policy change and a legal-hold release; every attempt emits an immutable deletion-evidence event** | `IMPLEMENTED` (2026-08-14, `AuditDeletionControl`) |
 
 Compliance acceptance SHALL include: object-lock enforcement on a test prefix, legal-hold freeze/release cycle, key rotation without audit loss, access-review audit trail, retrieval SLA measurement, export-and-reconstruct integrity, and unauthorized-deletion rejection. **2026-08-14: on Cloudflare R2 the object-lock enforcement acceptance maps to 'bucket lock' rules (indefinite, audit prefix) applied via the Cloudflare dashboard/Wrangler/API; `audit_r2.py validate` verifies bucket/lifecycle/object-I/O via the S3 API and reads bucket-lock state via the Cloudflare API (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID).**
 

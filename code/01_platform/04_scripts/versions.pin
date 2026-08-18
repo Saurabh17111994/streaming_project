@@ -22,6 +22,16 @@ BROKER_PROTOCOL=go-arrow-v0.0.0-20260622-7cce1630 (module:github.com/arrow-trade
 ARROW_API_CONTRACT=v2026-05 (captured from Arrow_broker repo, docs/04_contracts/arrow_broker.md)
 SCHEMA_LIFECYCLE=v1 (all 6 schema-state classes + 5 evolution classes implemented)
 
+# Nautilus execution-service audit pin. The commit is reproducible but remains
+# deployment-blocked until the locked Rust service/API capability evidence is
+# accepted; do not replace it with a floating develop branch.
+NAUTILUS_COMMIT=74d57e7e055015a8d974a0cf047ac2e5139610b3
+NAUTILUS_WORKSPACE_VERSION=0.62.0
+NAUTILUS_RUST_TOOLCHAIN=1.97.1
+EXECUTION_BRIDGE_GO_TOOLCHAIN=1.24.5
+EXECUTION_BRIDGE_GO_IMAGE=golang:1.24.5-alpine
+EXECUTION_BRIDGE_SDK_TREE_SHA256=f622f8a9a0cf4916869184d423523f819bd42202c256462466bf621e5e3af368
+
 # ---- exact artifact digests (foundation L548: "Exact versions/digests are
 # recorded") ----
 # sha256 of the pinned Maven artifacts as installed in ~/.m2 (recorded 2026-08-13;

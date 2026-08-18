@@ -5,7 +5,7 @@
 -- Retention: ≥3 trading days — 5 calendar days via table.log.ttl (R-087:
 --   3 calendar days could contain only 1-2 trading days over a weekend/
 --   holiday; 5 calendar days always covers 3 trading days)
--- Lake: encrypted 7-year audit
+-- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: account_scope_id, execution_partition_id
 -- Schema version: 2
 

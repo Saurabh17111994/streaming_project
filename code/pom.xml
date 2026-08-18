@@ -19,6 +19,7 @@
          when their owning phase builds them. -->
     <module>common</module>
     <module>02_services/01_ingestion</module>
+    <module>02_services/06_execution_gateway</module>
   </modules>
 
   <properties>

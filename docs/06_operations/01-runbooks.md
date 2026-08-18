@@ -335,7 +335,7 @@ logs 30 days, metrics 90 days, traces 14 days, alert definitions 180 days.
   after any new metric family appears.
 - Alert rules are NOT streams: definitions + trigger history live in the O2
   meta store (`metadata.sqlite`), not subject to stream retention.
-- The seven-year money-moving audit retention is a SEPARATE S3/object-store
+- The policy-controlled money-moving audit retention is a SEPARATE S3/object-store
   control (EOD/lake tier) and must NEVER be attributed to OpenObserve.
 - When retention changes are needed: `PUT /api/{org}/streams/{stream}/settings`
   with `{"data_retention": N}` (partial update; other settings survive);

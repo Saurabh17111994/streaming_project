@@ -69,7 +69,7 @@ already emits all required fields plus optional `symbol/strategy/exception`.
 ## K. Retention
 
 - Logs 30d, Metrics 90d, Traces 14d, Alerts 180d.
-- **Note:** this does **not** satisfy the project's **7-year audit retention**
+- **Note:** this does **not** satisfy the project's separate policy-controlled audit retention
   requirement. Audit retention is a separate S3-backed store (deferred item);
   OpenObserve is the *live* observability backend only.
 
@@ -94,7 +94,7 @@ already emits all required fields plus optional `symbol/strategy/exception`.
   and recovery, retention, and collector/OpenObserve outage recovery require
   runtime evidence; source code or a configuration file alone is insufficient.
 - OpenObserve availability and delivery are live-observability concerns. The
-  seven-year audit-retention requirement remains a separate S3/object-store
+  audit-retention requirement remains a separate S3/object-store
   control and must not be marked complete from OpenObserve evidence.
 - The corrective implementation/evidence tracker for the candle replay and
   production-readiness work is the master dossier
@@ -133,7 +133,7 @@ readiness, and durability readiness.
 Credentials, original payloads, and unnecessary account identifiers must be
 redacted. Audit access must be role-restricted and audited. Execution, gate,
 order, fill, correlation, approval, reconciliation, and future position-action
-audit must be immutable, encrypted, and retained for seven years in a separate
+audit must be immutable, encrypted, and retained for at least one year or longer under approved policy in a separate
 S3/object-store-backed audit system.
 
 ### Acceptance

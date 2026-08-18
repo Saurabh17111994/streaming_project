@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Seven-year audit hash chain
- * (docs/08_implementation/01-foundation.md &rarr; "Seven-year audit boundary", orig L537;
+ * Policy-controlled audit hash chain
+ * (docs/08_implementation/01-foundation.md &rarr; "Approved audit-retention boundary";
  * docs/02_requirements/03-non-functional.md &sect;3.4.1 "Reconstruction integrity").
  *
  * <p>Every audit event carries a content hash. Each per-day manifest hashes its
