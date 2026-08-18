@@ -46,6 +46,15 @@ logs/ingestion.log
 .mimosa/
 .commandcode/
 
+# Go build artifacts (2026-08-18) — arrow-bridge and the faketool binary are
+# rebuilt by run-signal-chain-e2e.sh on every E2E run, so a committed binary
+# goes stale the moment the runner rebuilds it (the tracked copies were noise).
+# The sources (go-bridge/*.go, faketool/*.go) and golden testdata stay tracked.
+# `**/` forms: a slash in the middle of a pattern anchors it to this file's own
+# directory, so the artifact paths must be written depth-agnostically.
+**/arrow-bridge
+**/faketool/faketool
+
 # Eclipse/IDE metadata generated on this host.
 *.project
 *.classpath
