@@ -204,6 +204,61 @@ class FormingBarDetectionFunctionTest {
     }
 
     @Test
+    void driftingFeedFiresOncePerWarmWindow() throws Exception {
+        openHarness();
+        // Lookback highs/closes drift upward by 1 per window (100→102,
+        // 95→97) — a miniature of the deterministic P6 feed, whose per-window
+        // +50 paise high tick makes each window's forming close beat the
+        // previous lookback max. Emission profile: EVERY warm window qualifies
+        // once (up to N − lookback + 1 fires), not one fire ever.
+        sendCandle(T0 - 3 * WINDOW_MS, 100, 95);
+        sendCandle(T0 - 2 * WINDOW_MS, 101, 96);
+        sendCandle(T0 - WINDOW_MS, 102, 97);
+        // close 103 > maxHigh 102 by the drift increment — bullish (103 > 98),
+        // breakout, trend (103 * 3 > 288).
+        sendFormingBar(formingBar(7L, T0, 98, 103, 98, 103));
+        assertEquals(1, candidates(harness).size(),
+                "the drift close must beat the lookback max and fire");
+        // Fire-once per window: a higher close of the SAME window stays silent.
+        sendFormingBar(formingBar(7L, T0, 98, 104, 98, 104));
+        assertEquals(1, candidates(harness).size(),
+                "fire-once must still hold on the drifting feed");
+        // The NEXT window fires again — one fire per warm window, not one ever.
+        sendFormingBar(formingBar(7L, T0 + WINDOW_MS, 99, 104, 99, 104));
+        assertEquals(2, candidates(harness).size(),
+                "each warm window on a drifting feed fires exactly once");
+    }
+
+    @Test
+    void qualifyingTickBeforeWarmUpIsLostForThatWindow() throws Exception {
+        openHarness();
+        // Only 2 of the 3 required candles (FORMING_LOOKBACK_CANDLES=3 in the
+        // harness env) — the ring is one short.
+        sendCandle(T0 - 2 * WINDOW_MS, 100, 95);
+        sendCandle(T0 - WINDOW_MS, 100, 95);
+        // The window's ONLY qualifying instant (close 110 > maxHigh 100) is
+        // evaluated while not warm — no fire. The +50 tick is a single live
+        // instant; it never comes again for this window.
+        sendFormingBar(formingBar(7L, T0, 90, 110, 90, 110));
+        assertEquals(0, candidates(harness).size(),
+                "warm-up: the qualifying tick arrived before the ring was full");
+
+        // The 3rd candle now completes the ring, but this window's remaining
+        // updates (flat/bearish closes) never qualify — the warm-up race
+        // skips the window PERMANENTLY (the P6 emission-profile variance).
+        sendCandle(T0 - 3 * WINDOW_MS, 100, 95);
+        sendFormingBar(formingBar(7L, T0, 90, 100, 90, 100));
+        sendFormingBar(formingBar(7L, T0, 110, 110, 90, 90));
+        assertEquals(0, candidates(harness).size(),
+                "a window whose qualifying tick lost the warm-up race never fires");
+
+        // The NEXT window is eligible (the ring is warm now).
+        sendFormingBar(formingBar(7L, T0 + WINDOW_MS, 90, 120, 90, 120));
+        assertEquals(1, candidates(harness).size(),
+                "the next warm window must still fire");
+    }
+
+    @Test
     void warmUpRequiresLookbackHistory() throws Exception {
         openHarness();
         // Only 2 of the 3 required completed candles — no evaluation yet.

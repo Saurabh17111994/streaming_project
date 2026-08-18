@@ -41,12 +41,12 @@ that time" (e.g. "(2026-08-10: ... 21 tables ...)") — a distant date on the
 same line does NOT hide a stale code description.
 
 Test-count drift claims (same tiers, truth from the docs-audit C6 line,
-01-foundation.md L42 — common 341 / ingestion 234 / compute 292):
+01-foundation.md L42 — common 341 / ingestion 234 / compute 294):
 
   * test-count-stale -> "common N" / "ingestion N" / "compute N" (or
                         "N common/ingestion/compute tests") claims where N
                         differs from the C6 truth. The correct values
-                        (341/234/292) are filtered in code.
+                        (341/234/294) are filtered in code.
   * c6-triple-stale   -> "docs-audit C6 line N/N/N" citations where any of
                         the three counts (common/ingestion/compute) differs
                         from the C6 truth.
@@ -184,7 +184,7 @@ NUMERIC_CLAIM_TYPES = (
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
 # current docs-audit C6 truth (01-foundation.md L42: unit suites green
-# 341/234/292 — common/ingestion/compute; common +1 2026-08-18
+# 341/234/294 — common/ingestion/compute; common +1 2026-08-18
 # SlotAssignmentResolverTest.serializableRoundTrip — Item E safety-consumer
 # live run found SlotAssignmentResolver was not Serializable though carried
 # as a Flink operator field, fixed SlotAssignment extends Serializable +
@@ -194,10 +194,13 @@ NUMERIC_CLAIM_TYPES = (
 # swap — the expiry-index bucket test + the shared-expiry-timer test, then
 # −11 CHG-023 item-4 2026-08-17 StallGuardedSink removal — the watchdog
 # class + StallGuardedSinkTest (11) deleted; sinks are plain FlussSinks
-# with the Fluss client's own client.request-timeout as the stall bound).
-# The correct values (341/234/292) are filtered in code, so only stale
+# with the Fluss client's own client.request-timeout as the stall bound;
+# compute +2 2026-08-18 forming-bar emission-profile tests
+# (FormingBarDetectionFunctionTest.driftingFeedFiresOncePerWarmWindow +
+# qualifyingTickBeforeWarmUpIsLostForThatWindow — CHG-030 follow-up).
+# The correct values (341/234/294) are filtered in code, so only stale
 # counts fire.
-TEST_COUNT_TRUTH = {"common": 341, "ingestion": 234, "compute": 292}
+TEST_COUNT_TRUTH = {"common": 341, "ingestion": 234, "compute": 294}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",

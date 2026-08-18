@@ -46,11 +46,27 @@ import org.apache.flink.util.Collector;
  * <p><b>Fire-once per forming window — PLACEHOLDER-ONLY semantics.</b> The
  * detector fires at most one candidate per (instrument, forming window):
  * {@code forming-fired} {@code ValueState} records the fired window start and
- * is reset only when a new window's event arrives. This exists for
- * deterministic integration testing of THIS placeholder; it is NOT a semantic
- * of the forming-bar event contract or the handoff — future real strategies
+ * is reset only when a new window's event arrives. It is NOT a semantic of
+ * the forming-bar event contract or the handoff — future real strategies
  * remain free to react per update, revise, fire once, or fire many times. The
  * {@link FormingBar} event itself carries no fire-once encoding.
+ *
+ * <p><b>Emission profile — fire-once is deterministic, WHICH windows fire is
+ * not (warm-up race).</b> The lookback ring fills from the candle stream
+ * (input 2) racing the live forming-bar stream (input 1) at the {@code
+ * connect}, so whether window {@code w} fires depends on whether its
+ * {@code FORMING_LOOKBACK_CANDLES} prior candles reached the ring before
+ * {@code w}'s qualifying tick was evaluated. On a feed whose prices drift
+ * upward per window (e.g. the deterministic P6 feed's +50 paise high tick),
+ * the forming close briefly beats the lookback max HIGH for EVERY warm
+ * window, so up to {@code N − lookback + 1} warm windows fire once each; a
+ * window whose qualifying tick lost the warm-up race is skipped permanently
+ * (the tick is a single live instant). The observed forming-bar row count is
+ * therefore a scheduling-dependent subset of the warm windows (P6: ~14–18 of
+ * 18 per token), never a fixed number. Integration tests must not pin an
+ * exact forming-bar count (CHG-030 scopes them to the window-driven rule);
+ * unit tests pre-fill the lookback through the operator harness for
+ * determinism.
  *
  * <p>Fire-once survives checkpoint recovery (keyed {@code ValueState}, the
  * same mechanism as {@code CandleEmitFunction}'s emitted flag) — replayed
