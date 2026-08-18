@@ -10,7 +10,7 @@
 
 ## 1. Why this plan exists
 
-The 2026-08-15 audit verified that every requirement of `03-ingestion.md` is implemented and the suites are green (ingestion 193 at 2026-08-15 — now 234 /0/8-skips, common 340/0/1-skip, Go bridge PASS). The audit also found **coverage gaps** — behaviors that are implemented but not pinned by a test, or code paths that exist but are never exercised:
+The 2026-08-15 audit verified that every requirement of `03-ingestion.md` is implemented and the suites are green (ingestion 193 at 2026-08-15 — now 236/0/8-skips, common 341/0/1-skip, Go bridge PASS). The audit also found **coverage gaps** — behaviors that are implemented but not pinned by a test, or code paths that exist but are never exercised:
 
 | # | Gap | Severity | Detail |
 | --- | --- | --- | --- |
