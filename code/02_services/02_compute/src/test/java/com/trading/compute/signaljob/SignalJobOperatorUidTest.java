@@ -60,6 +60,15 @@ class SignalJobOperatorUidTest {
         EXPECTED_OPERATORS.put("candle-late-drop-counter", "candle-late-drop-counter");
         EXPECTED_OPERATORS.put("feature-candles-15s-sink", "feature-candles-15s-sink");
         EXPECTED_OPERATORS.put("signal-detection", "signal-detection");
+        // Forming-bar branch (Slice 2.2, 2026-08-16): builder -> detection ->
+        // writer -> sink carry pinned UIDs; added to the contract 2026-08-18
+        // (CHG-029) — the topology grew 10 -> 14 operators when forming-bar
+        // landed (04-signal-job.md JobGraphDump proof), but the pinned set
+        // was never extended, so the contract test failed on first live run.
+        EXPECTED_OPERATORS.put("forming-bar-builder", "forming-bar-builder");
+        EXPECTED_OPERATORS.put("forming-bar-detection", "forming-bar-detection");
+        EXPECTED_OPERATORS.put("forming-bar-writer", "forming-bar-writer");
+        EXPECTED_OPERATORS.put("forming-bar-sink", "forming-bar-sink");
         EXPECTED_OPERATORS.put("signal-candidates-sink", "signal-candidates-sink");
         EXPECTED_OPERATORS.put("canonical-signal-filter", "canonical-signal-filter");
         EXPECTED_OPERATORS.put("signal-candidates-current-sink", "signal-candidates-current-sink");

@@ -160,12 +160,15 @@
         </executions>
       </plugin>
       <!-- RocksDB 8.10 (frocksdbjni) on JDK 17 needs java.util AND java.nio opened
-           (the parent pluginManagement default opens only java.nio for Arrow). -->
+           (the parent pluginManagement default opens only java.nio for Arrow); the
+           java.util.concurrent.atomic opens is the CHG-029 Kryo fix — live jobs that
+           serialize BinaryRowData via Kryo fallback crash with InaccessibleObjectException
+           on AtomicBoolean.value without it (candle-15s -> candle-late-drop-counter). -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <argLine>-Dlog4j2.configurationFile=${project.build.testOutputDirectory}/log4j2.xml --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED</argLine>
+          <argLine>-Dlog4j2.configurationFile=${project.build.testOutputDirectory}/log4j2.xml --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED</argLine>
         </configuration>
       </plugin>
     </plugins>

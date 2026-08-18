@@ -604,12 +604,22 @@ class CandleRocksDbRestoreIntegrationTest {
         return map;
     }
 
+    /** Window-driven candidate ids only (forming-bar placeholder candidates excluded). */
     private static Set<String> candidateIds(ScratchSet s) throws Exception {
         Set<String> ids = new HashSet<>();
         for (InternalRow r : scanAll(s.cand(), s.candInfo())) {
-            ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            if (windowDriven(r)) {
+                ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            }
         }
         return ids;
+    }
+
+    /** True iff the signal row was emitted by the window-driven breakout rule. */
+    private static boolean windowDriven(InternalRow r) {
+        BinaryString ruleId = r.getString(SignalCandidatesTableColumns.RULE_ID);
+        return ruleId != null
+                && SignalCandidatesTableColumns.CANONICAL_RULE_ID.equals(ruleId.toString());
     }
 
     /** Scans every bucket of a table (P6 precedent). */

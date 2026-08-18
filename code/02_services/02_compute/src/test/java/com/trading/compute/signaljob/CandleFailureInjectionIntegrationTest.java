@@ -68,7 +68,10 @@ import org.slf4j.LoggerFactory;
  *   <li><b>P6.3 618</b> — watermark stall: with the feed stopped (under the 15s
  *       {@code SOURCE_IDLE_MS}), the watermark freezes and NOTHING closes (no phantom
  *       candles); resuming the feed closes exactly the windows whose end the watermark
- *       now passes — clean recovery, no duplicates.</li>
+ *       now passes — clean recovery, no duplicates. The candidate assertion is
+ *       scoped to the window-driven breakout rule: the tick-driven forming-bar
+ *       placeholder detector (2026-08-16) fires independently of the watermark
+ *       and is covered by its own unit tests.</li>
  *   <li><b>P6.3 623</b> — an event time at {@code Long.MAX_VALUE} is REJECTED by the
  *       validation gate end-to-end (no candle for token 2000) — the
  *       {@code event-time-overflow-window} guard that keeps Flink's
@@ -256,7 +259,8 @@ class CandleFailureInjectionIntegrationTest {
                             "window " + w + " close = last pre-stall tick");
                 }
             }
-            assertEquals(0, candidateIds(s).size(), "flat windows must not fire a signal");
+            assertEquals(0, candidateIds(s).size(),
+                    "flat windows must not fire a window-driven (breakout) signal");
 
             // P6.3 623, end-to-end: an event time at Long.MAX_VALUE must be REJECTED
             // by the validation gate (event-time-overflow-window guard) — it can
@@ -286,7 +290,7 @@ class CandleFailureInjectionIntegrationTest {
             assertEquals(20, logCount(s),
                     "post-resume LOG must stay at 20 — no duplicates, no continued growth");
             LOG.info("p63: stall freeze + resume + overflow-rejection verified — KV=20, "
-                    + "candidates=0, no TOKEN_BAD candle");
+                    + "window-driven candidates=0, no TOKEN_BAD candle");
             cancelAndFinish(job, "stall");
         } finally {
             cluster.after();
@@ -610,12 +614,22 @@ class CandleFailureInjectionIntegrationTest {
         return map;
     }
 
+    /** Window-driven candidate ids only (forming-bar placeholder candidates excluded). */
     private static Set<String> candidateIds(ScratchSet s) throws Exception {
         Set<String> ids = new HashSet<>();
         for (InternalRow r : scanAll(s.cand(), s.candInfo())) {
-            ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            if (windowDriven(r)) {
+                ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            }
         }
         return ids;
+    }
+
+    /** True iff the signal row was emitted by the window-driven breakout rule. */
+    private static boolean windowDriven(InternalRow r) {
+        BinaryString ruleId = r.getString(SignalCandidatesTableColumns.RULE_ID);
+        return ruleId != null
+                && SignalCandidatesTableColumns.CANONICAL_RULE_ID.equals(ruleId.toString());
     }
 
     /** Scans every bucket of a table (P6 precedent). */

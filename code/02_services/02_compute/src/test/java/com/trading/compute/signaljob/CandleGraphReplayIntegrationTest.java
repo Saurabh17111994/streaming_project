@@ -97,19 +97,29 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Assertions:
  * <ul>
- *   <li><b>P6.1</b> — phase 1: candle KV=46 rows (one per key), signal LOG=2
- *       rows (one per token), signal KV=2 keys. Phase 2 (full replay from the
- *       same raw LOG, fresh state): candle KV stays FROZEN at 46 (upsert
- *       convergence — replay re-emits the same keys, no duplicate rows),
- *       signal LOG grows to 4 (replay re-emits the two signals — the LOG twin
- *       is audit, it may grow), and the signal KV key count stays FROZEN at 2
- *       with unchanged content. Phase 3 (restore from the last completed
- *       checkpoint of phase 2 + 4 new ticks per token): candle KV grows to
- *       exactly 50 (46 old keys + the two pending w23 pusher ticks held in
- *       checkpointed window state + two w24 candles); signal LOG stays 4 and
- *       KV stays 2 (no new signal fires). An offset-0 fallback would re-emit
- *       the original 46 windows and reach 92 KV rows (46 keys re-upserted —
- *       no row growth, content unchanged).</li>
+ *   <li><b>P6.1</b> — phase 1: candle KV=46 rows (one per key),
+ *       window-driven signal LOG=2 rows (one per token), signal KV=2 keys.
+ *       Phase 2 (full replay from the same raw LOG, fresh state): candle KV
+ *       stays FROZEN at 46 (upsert convergence — replay re-emits the same
+ *       keys, no duplicate rows), window-driven signal LOG grows to 4 (replay
+ *       re-emits the two signals — the LOG twin is audit, it may grow), and
+ *       the signal KV key count stays FROZEN at 2 with canonical w22 content
+ *       (either of the two w22 candidates — see below). Phase 3 (restore from
+ *       the last completed checkpoint of phase 2 + 4
+ *       new ticks per token): candle KV grows to exactly 50 (46 old keys +
+ *       the two pending w23 pusher ticks held in checkpointed window state +
+ *       two w24 candles); window-driven signal LOG stays 4 and KV stays 2
+ *       (no new signal fires). An offset-0 fallback would re-emit the
+ *       original 46 windows and reach 92 KV rows (46 keys re-upserted — no
+ *       row growth, content unchanged).</li>
+ *
+ * <p>Since 2026-08-16 (Slice 2.2 forming-bar handoff) the SAME dual-sink
+ * also carries the tick-driven forming-bar placeholder candidates
+ * ({@code CANONICAL_FORMING_RULE_ID}): they land in the LOG and, being
+ * canonical, upsert the KV current-state as well. P6.1's signal counts and
+ * candidate-id assertions are therefore scoped to the window-driven
+ * {@code CANONICAL_RULE_ID} rows only; the forming-bar branch is covered by
+ * its own unit tests (FormingBarDetectionFunctionTest).
  *   <li><b>P6.2</b> — {@link SignalJob#preflightTableContracts} fails closed
  *       on: candle KV missing, candle KV schema drift (20-col raw as candle
  *       target), signal LOG missing/schema drift, signal KV current table
@@ -251,9 +261,10 @@ class CandleGraphReplayIntegrationTest {
         // ── Phase 1: first pass ────────────────────────────────────────────
         JobClient job1 = startJob(envFor(s, null), "p6-phase1");
         awaitLogCount(s, 46, "phase-1 KV = 46 rows", 180);
-        awaitSignalLogCount(s, 2, "phase-1 signal LOG = 2 rows", 120);
+        awaitSignalLogCount(s, 2, "phase-1 window-driven signal LOG = 2 rows", 120);
         awaitCurrentKeyCount(s, 2, "phase-1 signal KV = 2 keys", 120);
-        Map<Long, SignalCurrent> cur1 = readCurrentMap(s);
+        Map<Long, SignalCurrent> cur1 = awaitStableCurrent(s, 120);
+        assertCanonicalCurrent(s, cur1, "phase-1");
         Map<CandleKey, List<CandleRow>> log1 = readLogMap(s);
         assertFirstPass(s, log1);
         cancelAndFinish(job1, "phase1");
@@ -263,10 +274,14 @@ class CandleGraphReplayIntegrationTest {
         // ── Phase 2: full replay (fresh state, same raw LOG) ───────────────
         JobClient job2 = startJob(envFor(s, null), "p6-phase2");
         awaitTrue(() -> safe(() -> logCount(s) == 46), "phase-2 KV stays at 46 rows (replay upserts converge)", 180);
-        awaitSignalLogCount(s, 4, "phase-2 signal LOG = 4 rows (2 re-emitted)", 120);
+        awaitSignalLogCount(s, 4, "phase-2 window-driven signal LOG = 4 rows (2 re-emitted)", 120);
         awaitCurrentKeyCount(s, 2, "phase-2 signal KV stays at 2 keys", 120);
-        assertEquals(cur1, readCurrentMap(s),
-                "replay must leave the KV current rows unchanged (idempotent convergence)");
+        // Replay convergence: same two keys, canonical w22 content only. The
+        // two candidate producers (window-driven + forming-bar) union into the
+        // KV sink, so the final last-upsert per token is interleaving-dependent
+        // — content is scoped to the two w22 candidates, not pinned to an order.
+        Map<Long, SignalCurrent> cur2 = awaitStableCurrent(s, 120);
+        assertCanonicalCurrent(s, cur2, "phase-2");
         Map<CandleKey, List<CandleRow>> log2 = readLogMap(s);
         assertReplayConverges(s, log1, log2);
         String restore = awaitStableCheckpoint(s, job2.getJobID(), 180);
@@ -293,7 +308,7 @@ class CandleGraphReplayIntegrationTest {
             assertTrue(w24 != null && w24.size() == 1, "w24 must close exactly once for " + token);
             assertEquals(4, w24.get(0).tickCount(), "post-restore w24 must contain its four ticks");
         }
-        awaitSignalLogCount(s, 4, "phase-3 signal LOG must stay at 4 rows", 120);
+        awaitSignalLogCount(s, 4, "phase-3 window-driven signal LOG must stay at 4 rows", 120);
         awaitCurrentKeyCount(s, 2, "phase-3 signal KV must stay at 2 keys", 120);
         assertEquals(2, candidateIds(s).size(),
                 "the pending and flat windows must not fire a new signal");
@@ -313,7 +328,7 @@ class CandleGraphReplayIntegrationTest {
         appendFeed(s);
         JobClient job = startJob(envFor(s, null), "p6-data-quality");
         awaitLogCount(s, 46, "first-pass LOG = 46 rows", 180);
-        awaitSignalLogCount(s, 2, "data-quality signal LOG = 2 rows", 120);
+        awaitSignalLogCount(s, 2, "data-quality window-driven signal LOG = 2 rows", 120);
         awaitCurrentKeyCount(s, 2, "data-quality signal KV = 2 keys", 120);
 
         Map<CandleKey, List<CandleRow>> log = readLogMap(s);
@@ -812,12 +827,22 @@ class CandleGraphReplayIntegrationTest {
         return map;
     }
 
+    /** Window-driven candidate ids only (forming-bar placeholder candidates excluded). */
     private static Set<String> candidateIds(ScratchSet s) throws Exception {
         Set<String> ids = new HashSet<>();
         for (InternalRow r : scanAll(s.cand(), s.candInfo())) {
-            ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            if (windowDriven(r)) {
+                ids.add(r.getString(SignalCandidatesTableColumns.CANDIDATE_ID).toString());
+            }
         }
         return ids;
+    }
+
+    /** True iff the signal row was emitted by the window-driven breakout rule. */
+    private static boolean windowDriven(InternalRow r) {
+        BinaryString ruleId = r.getString(SignalCandidatesTableColumns.RULE_ID);
+        return ruleId != null
+                && SignalCandidatesTableColumns.CANONICAL_RULE_ID.equals(ruleId.toString());
     }
 
     /** Scans every bucket of a table (CountCandles probe precedent). */
@@ -837,8 +862,15 @@ class CandleGraphReplayIntegrationTest {
         return rows;
     }
 
+    /** Window-driven signal LOG rows only (forming-bar placeholder candidates excluded). */
     private static long signalLogRows(ScratchSet s) throws Exception {
-        return scanAll(s.cand(), s.candInfo()).size();
+        long count = 0;
+        for (InternalRow r : scanAll(s.cand(), s.candInfo())) {
+            if (windowDriven(r)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static long currentKeyCount(ScratchSet s) throws Exception {
@@ -855,6 +887,60 @@ class CandleGraphReplayIntegrationTest {
                             r.getLong(SignalCandidatesTableColumns.DETECTION_TS)));
         }
         return map;
+    }
+
+    /**
+     * P6.1 KV convergence: one row per token, each the canonical w22 candidate
+     * (the window-driven {@code breakout-20-bullish-trend} id at w22 end, or
+     * the forming-bar placeholder id fired mid-w22). The two candidate
+     * producers union into the KV sink, so the final last-upsert per token is
+     * interleaving-dependent — the assertion scopes to canonical w22 content
+     * (no growth, no stale windows) instead of pinning one ordering.
+     */
+    private static void assertCanonicalCurrent(ScratchSet s, Map<Long, SignalCurrent> cur,
+            String phase) {
+        assertEquals(2, cur.size(), phase + ": KV must hold one row per token");
+        for (long token : new long[] {TOKEN_A, TOKEN_B}) {
+            SignalCurrent row = cur.get(token);
+            assertNotNull(row, phase + ": KV row missing for token " + token);
+            String windowId = RULE_ID + "-" + token + "-" + (BASE + 23 * WINDOW_MS);
+            String formingId = SignalCandidatesTableColumns.CANONICAL_FORMING_RULE_ID
+                    + "-" + token + "-" + (BASE + 22 * WINDOW_MS);
+            assertTrue(row.candidateId().equals(windowId) || row.candidateId().equals(formingId),
+                    phase + ": token " + token + " must hold a canonical w22 candidate, got "
+                            + row.candidateId());
+            if (row.candidateId().equals(windowId)) {
+                assertEquals(BASE + 23 * WINDOW_MS, row.detectionTs(),
+                        phase + ": window-driven detection_ts must be w22 end");
+            } else {
+                assertTrue(row.detectionTs() >= BASE + 22 * WINDOW_MS
+                                && row.detectionTs() <= BASE + 23 * WINDOW_MS,
+                        phase + ": forming-bar detection_ts must fall inside w22, got "
+                                + row.detectionTs());
+            }
+        }
+    }
+
+    /**
+     * Reads the KV current-state until two consecutive polls (1 s apart) are
+     * identical — the last-upsert-wins projection must be fully settled before
+     * content is read (forming-bar candidates upsert the same PK rows, so
+     * the key count alone cannot pin the content).
+     */
+    private static Map<Long, SignalCurrent> awaitStableCurrent(ScratchSet s, long timeoutSeconds)
+            throws Exception {
+        Map<Long, SignalCurrent> prev = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            Map<Long, SignalCurrent> cur = readCurrentMap(s);
+            if (cur.equals(prev)) {
+                return cur;
+            }
+            prev = cur;
+            Thread.sleep(1_000L);
+        }
+        fail("KV current-state did not settle within " + timeoutSeconds + "s (last=" + prev + ")");
+        return null; // unreachable
     }
 
     private static CandleRow candleRow(InternalRow r) {
