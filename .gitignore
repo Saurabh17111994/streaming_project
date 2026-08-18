@@ -41,6 +41,11 @@ logs/ingestion.log
 .token-savior-cache.json
 .pi/
 
+# zcode hook tool-state (2026-08-18) — hook churn must never appear in git status.
+# Patterns without a leading slash match at any depth (code/**, docs/**).
+.mimosa/
+.commandcode/
+
 # Eclipse/IDE metadata generated on this host.
 *.project
 *.classpath
