@@ -23,8 +23,7 @@ identity mappings; reconciles uncertain broker outcomes; and writes only executi
   REST calls, and the go-arrow bridge SHALL be the only component within it that calls Arrow. No
   other component may submit broker orders.
 - The Execution Core SHALL NOT mutate strategy, candidate, ~~ranking,~~ or ~~instruction~~ fields
-  in any table. Execution status goes in execution-owned state only. **(Ranking/instruction feed
-  REMOVED 2026-08-15, CHG-005.)**
+  in any table. Execution status goes in execution-owned state only. **(Ranking/instruction feed REMOVED 2026-08-15, CHG-005.)**
 - Every money-moving call SHALL pass through the durable gate. A gate check that is skipped,
   stale, or bypassed is a release-blocking defect.
 - An unknown broker outcome SHALL halt the gate within five seconds of detection. Automatic retry

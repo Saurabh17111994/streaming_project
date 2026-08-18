@@ -23,6 +23,12 @@
 #     externalization landing, and the P11 status.
 #
 # Exit 0 only when all three layers pass. Run from the repo root.
+#
+# Boundary: this audit NEVER executes tests (no mvn/go/java). Executable test
+# pins — e.g. the CHG-015 SIGTERM-drain regression (ING-UNIT-023/024), the
+# Schema/Perf certification trio — are wired into run-monday-gates.sh
+# (make gate), the single canonical CI gate. A mvn step here would clobber the
+# surefire reports that Layer 1b's docs-audit C6 reads.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

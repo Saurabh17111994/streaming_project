@@ -8,8 +8,15 @@
 #      `faketool` build tag) and `go-bridge/arrow-bridge`; `go test` builds
 #      neither, so a clean checkout would fail the E2E gate.
 #   3. Full Java suite with ALL integration flags (needs local Fluss up)
+#   3b. CHG-015 SIGTERM-drain regression explicit (ING-UNIT-023/024) — the
+#      bridge's final tick-count report drained from stderr after the graceful
+#      SIGTERM path, pinned by name so the regression is a NAMED gate (both
+#      tests are default-run, but an explicit pin fails CI loudly if a future
+#      pom/surefire change silently drops or env-gates them)
 #   4. Python unit suites (tests/ — incl. the ING-TCP-002 reconcile-compare
-#      comparator suite) + docs-audit (all C-checks incl. C16 env-key drift)
+#      comparator suite) + the full doc audit (make full-audit: stale-claim
+#      scanner --upstream, docs-audit all C-checks incl. C16 env-key drift,
+#      DDL/manifest parity, beyond-scanner sweeps, dossier-trio coherence)
 #   4b. Entrypoint harness (ING-INT-006: test_docker_entrypoint.sh)
 #   5. Report PASS/FAIL with evidence file paths and a terminal status marker
 #
@@ -61,7 +68,7 @@ gate_fail() {
 }
 
 # ── 0. Static checks: bash -n + shellcheck on every script (Phase 8 G4) ─────
-echo "=== [1/11] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
+echo "=== [1/12] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
 STATIC_LOG="$OUT_DIR/static-checks.log"
 : >"$STATIC_LOG"
 STATIC_FAIL=0
@@ -104,7 +111,7 @@ fi
 echo "PASS: static checks (${#SCRIPTS[@]} scripts bash -n + shellcheck clean)" | tee -a "$SUMMARY"
 
 # ── 0b. Compose config validation (G4) ────────────────────────────────────────
-echo "=== [2/11] docker compose config ===" | tee -a "$SUMMARY"
+echo "=== [2/12] docker compose config ===" | tee -a "$SUMMARY"
 COMPOSE_FILE="$CODE_DIR/01_platform/01_docker/docker-compose.yml"
 if [ -f "$COMPOSE_FILE" ]; then
 	if ! docker compose -f "$COMPOSE_FILE" config >/dev/null 2>>"$STATIC_LOG"; then
@@ -119,8 +126,9 @@ fi
 # ── 0c. Python unit suites (tests/ — incl. ING-TCP-002 reconcile-compare) ────
 # The comparator underpins the count-based losslessness proof; a regression
 # could silently pass a reconcile. No cluster needed — synthetic fixtures only.
-# docs-audit C16 (env-key drift) runs in its own step after the Java gate.
-echo "=== [3/11] Python unit suites (reconcile-compare ING-TCP-002 + gate helpers) ===" | tee -a "$SUMMARY"
+# docs-audit C16 (env-key drift) runs inside the full doc audit step after the
+# Java gate.
+echo "=== [3/12] Python unit suites (reconcile-compare ING-TCP-002 + gate helpers) ===" | tee -a "$SUMMARY"
 PY_LOG="$OUT_DIR/python-tests.log"
 if ! timeout 300 python3 -m unittest discover -s "$SCRIPT_DIR/tests" -p "test_*.py" \
 	>"$PY_LOG" 2>&1; then
@@ -139,7 +147,7 @@ echo "PASS: python unit suites ($(grep -oE 'Ran [0-9]+ tests' "$PY_LOG" | head -
 # match the documented contract. Runs the entrypoint under env -i so a
 # polluted gate environment cannot mask a FATAL; bash -n + shellcheck on
 # this file run in the static stage above.
-echo "=== [4/11] Entrypoint harness (ING-INT-006) ===" | tee -a "$SUMMARY"
+echo "=== [4/12] Entrypoint harness (ING-INT-006) ===" | tee -a "$SUMMARY"
 ENTRYPOINT_LOG="$OUT_DIR/entrypoint.log"
 if ! bash "$SCRIPT_DIR/tests/test_docker_entrypoint.sh" >"$ENTRYPOINT_LOG" 2>&1; then
 	echo "FAIL: entrypoint harness — see $ENTRYPOINT_LOG" | tee -a "$SUMMARY"
@@ -148,7 +156,7 @@ fi
 echo "PASS: entrypoint harness (exit codes + messages)" | tee -a "$SUMMARY"
 
 # ── 1. Go suite with race detector (Phase 8: go test -race) ──────────────────
-echo "=== [5/11] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
+echo "=== [5/12] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
 if ! timeout "$GO_TIMEOUT_SEC" bash -c "cd '$BRIDGE_DIR' && go test -race -count=1 ./..."; then
 	echo "FAIL: Go suite failed or timed out — see $GO_LOG" | tee -a "$SUMMARY"
 	gate_fail
@@ -156,7 +164,7 @@ fi
 echo "PASS: Go suite (-race)" | tee -a "$SUMMARY"
 
 # ── 2. Build E2E test binaries (R-016) + docker build smoke ───────────────
-echo "=== [6/11] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
+echo "=== [6/12] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
 if ! (cd "$BRIDGE_DIR" &&
 	go build -tags faketool -o faketool/faketool ./faketool &&
 	go build -o arrow-bridge .); then
@@ -166,7 +174,7 @@ fi
 echo "PASS: E2E binaries built (faketool/faketool, arrow-bridge)" | tee -a "$SUMMARY"
 
 # ── 5. Docker build smoke (G4): ingestion image must build from the reactor root ──
-echo "=== [7/11] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
+echo "=== [7/12] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
 if command -v docker >/dev/null 2>&1 && [ -f "$CODE_DIR/02_services/01_ingestion/Dockerfile" ]; then
 	# The build needs network (base images + go/maven deps). Offline runs must
 	# not fail the gate on the network — but WITH images present, a build
@@ -191,7 +199,7 @@ else
 fi
 
 # ── 3. Full Java gate with ALL integration flags ──────────────────────────────
-echo "=== [8/11] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
+echo "=== [8/12] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_E2E=true INGESTION_INT_TEST_FLUSS=true \
 	INGESTION_INT_TEST_MANIFEST=true INGESTION_INT_TEST_PERF=true \
@@ -201,25 +209,30 @@ if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 fi
 echo "PASS: Java suite" | tee -a "$SUMMARY"
 
-# ── 3b. docs-audit (doc↔code truth gate, incl. C16 env-key drift) ───────────
-# Runs AFTER the Java gate so C6 (test counts vs surefire reports) sees fresh
-# results. C16 (ING-UNIT-019) pins that every documented env key in the
-# ingestion dossier's config contract is actually read by the code; a
-# comparator/env-key regression now fails CI instead of only local runs.
-echo "=== [9/11] docs-audit (doc↔code truth incl. C16 env-key drift) ===" | tee -a "$SUMMARY"
-AUDIT_LOG="$OUT_DIR/docs-audit.log"
-if ! timeout 300 python3 "$SCRIPT_DIR/docs_audit.py" >"$AUDIT_LOG" 2>&1; then
-	echo "FAIL: docs-audit — see $AUDIT_LOG" | tee -a "$SUMMARY"
+# ── 3b. Full doc audit (make full-audit: scanners + sweeps + trio) ──────────
+# Runs AFTER the Java gate so Layer 1b's docs-audit C6 (test counts vs surefire
+# reports) sees fresh results. full_audit.sh is the whole doc-truth command:
+# the three machine gates (stale-claim scanner --upstream — table kinds, phase
+# status, numeric drift, test counts, C6 triples; docs-audit incl. C16 env-key
+# drift + C14 change records; DDL/manifest parity) + the beyond-scanner sweeps
+# (live ranking/reservation claims, stale 'pending implementation' prose) + the
+# master-dossier trio coherence. Wired here so the beyond-scanner sweeps can't
+# rot undetected — they silently drifted at HEAD once (CHG-026/027 era) because
+# only the machine gates were ever run in CI.
+echo "=== [9/12] full doc audit (make full-audit: scanners + sweeps + trio coherence) ===" | tee -a "$SUMMARY"
+AUDIT_LOG="$OUT_DIR/full-audit.log"
+if ! timeout 300 bash "$SCRIPT_DIR/full_audit.sh" >"$AUDIT_LOG" 2>&1; then
+	echo "FAIL: full doc audit — see $AUDIT_LOG" | tee -a "$SUMMARY"
 	gate_fail
 fi
-if ! grep -q "all checks pass" "$AUDIT_LOG"; then
-	echo "FAIL: docs-audit did not report all-checks-pass — see $AUDIT_LOG" | tee -a "$SUMMARY"
+if ! grep -q "FULL-AUDIT: all layers green" "$AUDIT_LOG"; then
+	echo "FAIL: full doc audit did not report all-layers-green — see $AUDIT_LOG" | tee -a "$SUMMARY"
 	gate_fail
 fi
-echo "PASS: docs-audit (incl. C16 env-key drift, C14 change records)" | tee -a "$SUMMARY"
+echo "PASS: full doc audit (stale claims + doc↔code truth + DDL parity + sweeps + trio, incl. C16 env-key drift)" | tee -a "$SUMMARY"
 
 # ── 3c. DDL apply exit-code contract smoke (scratch catalogs) ────────────────
-echo "=== [10/11] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
+echo "=== [10/12] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
 DDL_SMOKE_LOG="$OUT_DIR/ddl-smoke.log"
 DDL_SMOKE_TIMEOUT_SEC="${DDL_SMOKE_TIMEOUT_SEC:-1800}"
 # Env-gated: SKIPPED (exit 0) when FLUSS_BOOTSTRAP is unset; any deviation from
@@ -246,7 +259,7 @@ fi
 echo "PASS: evidence ownership check (container-written records group-writable)" | tee -a "$SUMMARY"
 
 # ── 4. Schema agreement + perf certification explicit gates (G5) ─────────────
-echo "=== [11/11] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
+echo "=== [11/12] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
 SCHEMA_PERF_LOG="$OUT_DIR/schema-perf.log"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_PERF=true \
@@ -262,6 +275,31 @@ if ! grep -q "BUILD SUCCESS" "$SCHEMA_PERF_LOG"; then
 fi
 echo "PASS: SchemaAgreementTest + PerfBaselineTest (certification gates)" | tee -a "$SUMMARY"
 
+# ── 3d. CHG-015 SIGTERM-drain regression explicit (ING-UNIT-023/024) ────────
+# The bridge's final arrow-tick-counts report must be drained from stderr after
+# the graceful SIGTERM path — both the in-process shutdown() path (ING-UNIT-023
+# BridgeShutdownRegressionTest) and the REAL JVM shutdown-hook path with a
+# spawned driver + real SIGTERM + exit 143 (ING-UNIT-024 BridgeShutdownHookTest).
+# Both are default-run (already covered by step 8's full-module gate); this
+# explicit pin makes the CHG-015 regression a NAMED gate — a future pom/surefire
+# change that silently drops or env-gates them now fails CI instead of quietly
+# shrinking the plain suite. Cluster-free: scripted fake bridge, no Fluss, no
+# Go binaries (runs on a bare checkout). POSIX-only (SIGTERM semantics).
+echo "=== [12/12] SIGTERM-drain regression explicit (ING-UNIT-023/024, CHG-015) ===" | tee -a "$SUMMARY"
+SHUTDOWN_LOG="$OUT_DIR/shutdown-regression.log"
+if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
+	mvn -o test -pl 02_services/01_ingestion -am \
+	-Dtest='BridgeShutdownRegressionTest,BridgeShutdownHookTest' \
+	-Dsurefire.failIfNoSpecifiedTests=false" >"$SHUTDOWN_LOG" 2>&1; then
+	echo "FAIL: SIGTERM-drain regression (ING-UNIT-023/024) — see $SHUTDOWN_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+if ! grep -q "BUILD SUCCESS" "$SHUTDOWN_LOG"; then
+	echo "FAIL: SIGTERM-drain regression did not report BUILD SUCCESS — see $SHUTDOWN_LOG" | tee -a "$SUMMARY"
+	gate_fail
+fi
+echo "PASS: SIGTERM-drain regression (ING-UNIT-023 in-process + ING-UNIT-024 real hook)" | tee -a "$SUMMARY"
+
 echo "=== ALL GATES PASSED ===" | tee -a "$SUMMARY"
 echo "GATE RESULT: PASS" | tee -a "$SUMMARY"
 echo "Evidence:" | tee -a "$SUMMARY"
@@ -270,6 +308,7 @@ echo "  Python suites: $PY_LOG" | tee -a "$SUMMARY"
 echo "  Entrypoint: $ENTRYPOINT_LOG" | tee -a "$SUMMARY"
 echo "  Go:   $GO_LOG" | tee -a "$SUMMARY"
 echo "  Java: $JAVA_LOG" | tee -a "$SUMMARY"
-echo "  docs-audit: $AUDIT_LOG" | tee -a "$SUMMARY"
+echo "  full doc audit: $AUDIT_LOG" | tee -a "$SUMMARY"
 echo "  DDL smoke: $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
 echo "  Schema/Perf: $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
+echo "  SIGTERM-drain: $SHUTDOWN_LOG" | tee -a "$SUMMARY"

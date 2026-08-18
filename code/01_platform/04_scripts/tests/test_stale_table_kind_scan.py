@@ -1,0 +1,129 @@
+"""Unit tests for the stale-claim scanner's live-claim hardening (2026-08-18,
+CHG-033 follow-up): "now/current N" claims must read as CURRENT state
+regardless of nearby date markers, and bare "now N/M/K" suite-triple claims
+are a distinct failing claim type (the 340/234 masking class).
+
+Run via: python3 -m unittest discover -s code/01_platform/04_scripts/tests
+"""
+
+import pathlib
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import stale_table_kind_scan as s
+
+
+def scan_text(text: str) -> list:
+    """Scan a single synthetic markdown file and return its hits."""
+    with tempfile.TemporaryDirectory() as d:
+        path = pathlib.Path(d) / "synthetic.md"
+        path.write_text(text, encoding="utf-8")
+        return s.scan_file(path)
+
+
+def claim_tiers(hits: list) -> set:
+    """{(claim_type, tier_label)} over the hits."""
+    labels = {v: k for k, v in s.TIER_RANK.items()}
+    return {(t, labels[r]) for r, _, t, _, _ in hits}
+
+
+class LiveClaimClassificationTests(unittest.TestCase):
+    """The masking class: a live "now/current N" count next to an unrelated
+    date marker must NOT be read as "at that time"."""
+
+    def test_now_claim_next_to_date_is_live_stale(self):
+        # The exact 2026-08-18 masking case — the "now" clause carries both a
+        # bare suite triple (234/0/8) and a module count (common 340), each of
+        # which used to ride on the adjacent 2026-08-15 marker.
+        hits = scan_text(
+            "The 2026-08-15 audit verified the suites are green — "
+            "now 234 /0/8-skips, common 340/0/1-skip, Go bridge PASS.\n")
+        tiers = claim_tiers(hits)
+        # "common 340" — a live count, must be LIVE-STALE, never LINE-ANNOTATED.
+        self.assertIn(("test-count-stale", "LIVE-STALE"), tiers)
+        # "now 234 /0/8-skips" — the bare suite triple, a distinct failing type.
+        self.assertIn(("live-count-stale", "LIVE-STALE"), tiers)
+        self.assertNotIn(("test-count-stale", "LINE-ANNOTATED"), tiers)
+
+    def test_number_first_live_claim_unmasked(self):
+        # "current ... N common" (number-first) was invisible to the old regex;
+        # now it is a claim AND a live claim.
+        hits = scan_text(
+            "the current default-run totals are 340 common / 0 failures / 1 skip\n")
+        self.assertIn(("test-count-stale", "LIVE-STALE"), claim_tiers(hits))
+
+    def test_truth_live_counts_are_filtered(self):
+        # Once fixed to the current truth, the same constructions stay silent.
+        hits = scan_text(
+            "The 2026-08-15 audit verified the suites are green — "
+            "now 236/0/8-skips, common 341/0/1-skip, Go bridge PASS.\n")
+        self.assertEqual(hits, [])
+        hits = scan_text(
+            "the current default-run totals are 341 common / 0 failures / 1 skip\n")
+        self.assertEqual(hits, [])
+
+    def test_dated_claim_without_live_marker_stays_annotated(self):
+        # A genuinely dated measurement keeps the LINE-ANNOTATED tier.
+        hits = scan_text("fresh runs 2026-08-13: ingestion 180/0/7 skipped, all green\n")
+        self.assertEqual(claim_tiers(hits),
+                         {("test-count-stale", "LINE-ANNOTATED")})
+
+    def test_c6_citation_not_double_fired(self):
+        # "current truth is 341/236/294" is a C6-triple citation (checked by
+        # C6_TRIPLE_CLAIM_TYPES), not a suite-triple live claim.
+        hits = scan_text(
+            "the current truth is 341/236/294 (docs-audit C6 line 341/236/294)\n")
+        self.assertEqual(hits, [])
+
+    def test_now_that_is_not_a_live_marker(self):
+        hits = scan_text("now that the suite is common 341/0/1, nothing fires 2026-08-13\n")
+        self.assertEqual(hits, [])
+
+    def test_status_word_current_is_not_live(self):
+        # "manifest is current" is a status word, not a live-count modifier —
+        # the nearby "21 tables as of … — now 24" claim stays date-annotated.
+        hits = scan_text(
+            "manifest is current, no DDL drift detected "
+            "(21 tables as of 2026-08-10 — now 24)\n")
+        self.assertEqual(claim_tiers(hits),
+                         {("tables-count-stale", "LINE-ANNOTATED")})
+
+    def test_now_has_prose_is_not_live(self):
+        # "now has an implementing test (suite 330/0/17)" — the triple is too
+        # far from the temporal "now" (gap > 25 chars) to be a live claim.
+        hits = scan_text(
+            "the full required set now has an implementing test "
+            "(suite 330/0/17). Covered 2026-08-17\n")
+        self.assertEqual(hits, [])
+
+
+class LiveClaimVerdictTests(unittest.TestCase):
+    """End-to-end: a stale live claim fails the gate; a clean tree passes."""
+
+    def _main(self, *argv: str) -> int:
+        old = sys.argv
+        sys.argv = ["stale_table_kind_scan.py", *argv]
+        try:
+            return s.main()
+        finally:
+            sys.argv = old
+
+    def test_stale_live_claim_fails_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d) / "live.md").write_text(
+                "suites green (ingestion 193 at 2026-08-15 — now 234 /0/8-skips, "
+                "common 340/0/1-skip)\n", encoding="utf-8")
+            self.assertEqual(self._main("--dir", d), 1)
+
+    def test_clean_tree_passes_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d) / "clean.md").write_text(
+                "suites green (ingestion 193 at 2026-08-15 — now 236/0/8-skips, "
+                "common 341/0/1-skip)\n", encoding="utf-8")
+            self.assertEqual(self._main("--dir", d), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

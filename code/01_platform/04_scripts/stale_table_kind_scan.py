@@ -208,7 +208,7 @@ TEST_COUNT_CLAIM_TYPES = (
         "test-count-stale",
         re.compile(
             r"\b(common|ingestion|compute)\s+\*{0,2}(\d{2,4})\b(?!\s+tables?)"
-            r"|\b(\d{2,4})\s+(common|ingestion|compute)\s+tests?\b",
+            r"|\b(\d{2,4})\s+(common|ingestion|compute)\b",
             re.IGNORECASE,
         ),
     ),
@@ -219,6 +219,50 @@ TEST_COUNT_CLAIM_TYPES = (
 # truth-filter compares every component in code, so a citation only fires when
 # at least one count has drifted.
 C6_TRIPLE_TRUTH = (341, 236, 294)
+
+# Current suite triples per module ("N run / 0 failures / M skips") — bare
+# N/0/M-skips claims carry no module word, so they need their own truth.
+SUITE_TRIPLE_TRUTH = {"common": (341, 0, 1), "ingestion": (236, 0, 8), "compute": (294, 0, 17)}
+
+# A "now/current N" count claim reads as CURRENT state regardless of any
+# nearby date marker (2026-08-18 masking class, CHG-033 follow-up): the
+# date-window annotation let stale live counts like "now 234 /0/8-skips,
+# common 340/0/1-skip" ride on an adjacent 2026-08-15 marker. A live marker
+# within LIVE_WINDOW_CHARS before a claim forces the failing LIVE-STALE tier.
+LIVE_WINDOW_CHARS = 60
+LIVE_MARKER = re.compile(r"\b(?:now|currently|current)\b(?!\s+that)", re.IGNORECASE)
+
+# "current" used as a STATUS word ("manifest is current", "the manifest is
+# current") is not a live-count modifier — the count claim it sits near is
+# dated by its own "as of"/date clause and must keep the date annotation.
+LIVE_MARKER_BAD = re.compile(
+    r"\b(?:is|are|was|were|as|manifest|remain|remains|stays)\s+current\b",
+    re.IGNORECASE,
+)
+
+
+def live_marker_in(text: str) -> bool:
+    """True when a genuine live-count marker ("now/current N") appears in
+    ``text`` — "current" as a predicate/status word is not one."""
+    for m in LIVE_MARKER.finditer(text):
+        if m.group(0).lower() == "current" and LIVE_MARKER_BAD.search(
+                text[max(0, m.start() - 24): m.end()]):
+            continue
+        return True
+    return False
+
+# Bare "now N/M/K" suite-triple claims (no module word) — the 234-masking
+# class. "C6 line N/N/N" citations are checked by C6_TRIPLE_CLAIM_TYPES.
+LIVE_SUITE_TRIPLE_CLAIM_TYPES = (
+    (
+        "live-count-stale",
+        re.compile(
+            r"\b(?:now|currently|current)\b(?!\s+that)[^.,;)\n]{0,25}?"
+            r"(\d{2,4})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
 C6_TRIPLE_CLAIM_TYPES = (
     (
         "c6-triple-stale",
@@ -310,7 +354,8 @@ BANNER_MARKER = re.compile(
 HEADING_KIND = re.compile(r"^#{1,6}\s+(LOG|KV)\s+contract\b", re.IGNORECASE)
 HEADING_LOOKAHEAD = 6
 
-TIER_RANK = {"UNANNOTATED": 0, "SECTION-ANNOTATED": 1, "LINE-ANNOTATED": 2, "DOC-ANNOTATED": 3}
+TIER_RANK = {"LIVE-STALE": 0, "UNANNOTATED": 1, "SECTION-ANNOTATED": 2,
+             "LINE-ANNOTATED": 3, "DOC-ANNOTATED": 4}
 
 # ---------------------------------------------------------------------------
 # DDL + manifest verification (--ddl): the 2026-08-13 re-scope table kinds as
@@ -461,6 +506,13 @@ def classify_numeric(lines: list[str], idx: int, claim_type: str, m: re.Match,
     """Classification for numeric-drift claims: a date/historical marker within
     NUMERIC_WINDOW chars of the count token annotates it as 'at that time'."""
     line = lines[idx]
+    # A "now/current N" claim is a live current-state claim: a live marker
+    # before the count overrides the date-window annotation (the masking
+    # class — a stale live count parked next to an unrelated date was read as
+    # "at that time").
+    before = line[max(0, m.start() - LIVE_WINDOW_CHARS): m.start()]
+    if live_marker_in(before):
+        return "LIVE-STALE"
     window = line[max(0, m.start() - NUMERIC_WINDOW): m.end() + NUMERIC_WINDOW]
     if NUMERIC_MARKER.search(window):
         return "LINE-ANNOTATED"
@@ -551,7 +603,9 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
             for m in rx.finditer(line):
                 tier = classify_numeric(lines, i, claim_type, m, heading_marker,
                                         banner_ctx, doc_hist)
-                key = (i + 1, claim_type, "")
+                # the tier is part of the key: a dated measurement and a live
+                # count for the same module on one line are distinct claims
+                key = (i + 1, claim_type, "", tier)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -570,9 +624,11 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                     continue
                 tier = classify_numeric(lines, i, claim_type, m, heading_marker,
                                         banner_ctx, doc_hist)
-                # per-module dedup: a line may carry several module counts
-                # ("common 112, compute 184") — each is its own claim
-                key = (i + 1, claim_type, mod)
+                # per-module dedup with tier: a line may carry several module
+                # counts ("common 112, compute 184"), and a dated measurement
+                # must not hide a live ("now/current N") count for the same
+                # module on the same line
+                key = (i + 1, claim_type, mod, tier)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -588,12 +644,30 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                     continue
                 tier = classify_numeric(lines, i, claim_type, m, heading_marker,
                                         banner_ctx, doc_hist)
-                key = (i + 1, claim_type, "")
+                key = (i + 1, claim_type, "", tier)
                 if key in seen:
                     continue
                 seen.add(key)
                 hits.append((TIER_RANK[tier], i + 1, claim_type, line.strip(),
                              "truth: 341/236/294 common/ingestion/compute (docs-audit C6)"))
+
+        # Bare "now/current N/M/K" suite-triple claims (no module word) — a
+        # live current-state claim; always the failing LIVE-STALE tier (there
+        # is no date-marker annotation for a bare "now N" clause).
+        for claim_type, rx in LIVE_SUITE_TRIPLE_CLAIM_TYPES:
+            for m in rx.finditer(line):
+                nums = tuple(int(m.group(i)) for i in (1, 2, 3))
+                if nums == C6_TRIPLE_TRUTH:
+                    continue  # a "C6 line N/N/N" citation, checked separately
+                if nums in SUITE_TRIPLE_TRUTH.values():
+                    continue
+                key = (i + 1, claim_type, "", "LIVE-STALE")
+                if key in seen:
+                    continue
+                seen.add(key)
+                hits.append((TIER_RANK["LIVE-STALE"], i + 1, claim_type, line.strip(),
+                             "truth: current suite triples common 341/0/1, "
+                             "ingestion 236/0/8, compute 294/0/17 (docs-audit C6)"))
 
     # Section-heading kind assertions: "### LOG/KV contract" headings that
     # introduce a now-contradictory table within the following few lines.
@@ -719,37 +793,42 @@ def main() -> int:
     print("  claims: table kinds (feature_candles_15s-as-LOG | Signal_Candidates-as-KV |")
     print("           feature_candles_15s_current-mentioned) | phase status (forming-bar-postponed |")
     print("           ranking-reservation-postponed | trade-decisions-active) | numeric drift")
-    print("           (tables-count-stale | acceptance-count-stale | test-count-stale | c6-triple-stale)")
+    print("           (tables-count-stale | acceptance-count-stale | test-count-stale | c6-triple-stale |")
+    print("            live-count-stale)")
     if doc_hist_files:
         print("  whole-doc historical banners: " + ", ".join(doc_hist_files))
 
-    labels = {0: "UNANNOTATED", 1: "SECTION-ANNOTATED", 2: "LINE-ANNOTATED", 3: "DOC-ANNOTATED"}
+    labels = {0: "LIVE-STALE", 1: "UNANNOTATED", 2: "SECTION-ANNOTATED",
+              3: "LINE-ANNOTATED", 4: "DOC-ANNOTATED"}
     for rank, label in labels.items():
         tier_hits = [h for h in all_hits if h[0] == rank]
         if not tier_hits:
             continue
-        if rank >= 2 and not args.all:
+        if rank >= 3 and not args.all:
             continue
         print()
         if rank == 0:
-            print(f"== {label} — reads as current design, review ==")
+            print("== LIVE-STALE — 'now/current' count claim reads as current state, review ==")
         elif rank == 1:
-            print(f"== {label} — covered by a section heading/banner marker, spot-check ==")
+            print("== UNANNOTATED — reads as current design, review ==")
+        elif rank == 2:
+            print("== SECTION-ANNOTATED — covered by a section heading/banner marker, spot-check ==")
         else:
-            print(f"== {label} — explicitly marked, informational ==")
+            print("== LINE/DOC-ANNOTATED — explicitly marked, informational ==")
         for _, f, lineno, claim_type, text, note in tier_hits:
             suffix = f"  [{note}]" if note else ""
             print(f"{f}:{lineno}  {claim_type}  | {clip(text)}{suffix}")
 
-    n_un = counts.get(0, 0)
+    n_fail = counts.get(0, 0) + counts.get(1, 0)
     print()
-    print(f"SUMMARY: {n_un} UNANNOTATED | {counts.get(1, 0)} SECTION-ANNOTATED | "
-          f"{counts.get(2, 0)} LINE-ANNOTATED | {counts.get(3, 0)} DOC-ANNOTATED")
-    if n_un:
-        print("VERDICT: un-annotated stale claims found (exit 1)")
+    print(f"SUMMARY: {counts.get(0, 0)} LIVE-STALE | {counts.get(1, 0)} UNANNOTATED | "
+          f"{counts.get(2, 0)} SECTION-ANNOTATED | {counts.get(3, 0)} LINE-ANNOTATED | "
+          f"{counts.get(4, 0)} DOC-ANNOTATED")
+    if n_fail:
+        print("VERDICT: live/un-annotated stale claims found (exit 1)")
     else:
-        print("VERDICT: no un-annotated stale table-kind, phase-status, or numeric-drift claims (exit 0)")
-    return 1 if n_un else 0
+        print("VERDICT: no stale table-kind, phase-status, or numeric-drift claims (exit 0)")
+    return 1 if n_fail else 0
 
 
 if __name__ == "__main__":

@@ -5,8 +5,9 @@
 #   Stage 0a Python unit suites (tests/ — incl. the ING-TCP-002
 #            reconcile-compare comparator) — fast static fail before builds
 #   Stage 1  Monday verification gates (Go -race, E2E binaries, docker build
-#            smoke, Java full gate FLUSS+MANIFEST+PERF+E2E, docs-audit incl.
-#            C16 env-key drift, schema/perf cert)
+#            smoke, Java full gate FLUSS+MANIFEST+PERF+E2E, full doc audit
+#            incl. C16 env-key drift + beyond-scanner sweeps, schema/perf
+#            cert, SIGTERM-drain regression)
 #   Stage 2  100-cycle reconnect marathon (wall clock, REAL backoff) against
 #            the fake HFT broker on the host — journal + FD/thread evidence
 #   Stage 3  Container runtime run — ingestion image in compose against the
