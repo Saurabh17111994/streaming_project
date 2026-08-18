@@ -42,12 +42,17 @@ Arrow market-data WebSocket
       ├─ candidate audit
       ├─ Signal_Candidates LOG
       ├─ Signal_Candidates_current KV
-          → Executor durable order gate
-          → Arrow REST (POST /order/regular)
-          → broker
+          → immutable execution intent
+          → Nautilus Execution Service
+              ├─ OMS · risk · portfolio/position engine · reconciliation
+              ├─ custom gate · fencing · Fluss projections
+              └─ ExecutionClient → localhost go-arrow bridge
+                  → Arrow REST (POST /order/regular)
+                  → broker
 
 Arrow broker postback stream
-  → Action Capture
+  → go-arrow bridge
+  → Nautilus Execution Service
       ├─ immutable Fills LOG
       ├─ Order_Lifecycle KV
       ├─ Postback_Projection_Ledger
@@ -56,12 +61,13 @@ Arrow broker postback stream
           ↕
       Babysitter Flink job (MVP strict no-op)
           → future structured Position_Actions
-          → Executor gate
+          → custom gate → Nautilus OMS
 
 Safety controls:
-  Signal/Action Capture/platform health/operators
+  Signal/capture path/platform health/operators
       → Safety_Halt_Requests
-      → Executor (idempotent scoped gate action)
+      → custom execution control layer
+          → Nautilus gate enforcement (idempotent scoped action)
 
 Eligible immutable events → EOD controller → verified Iceberg/S3 manifest
 All components → OpenObserve plus local durable execution audit
@@ -76,10 +82,13 @@ There are exactly two Flink jobs in MVP: the Signal job and the Babysitter job. 
 | Ingestion | Broker connection, decode, normalization, packet preservation, fingerprinting, discontinuity evidence | Candles, strategy, broker orders |
 | Fluss | Tables, DDL, distribution, replication, retention, changelog, lake tiering | Strategy rules and broker calls |
 | Signal Flink job | Computes/operates: dedup, candles, forming bars, candidates — durable dedup/candle/signal state is Fluss-owned (DEC-038); Flink keeps only bounded working + recovery state (**ranking/reservations/instructions REMOVED 2026-08-15, CHG-005**) | Arrow REST calls and authoritative fills |
-| Action Capture | Postback intake, immutable fill audit, order lifecycle, correlation quarantine. Position projector runs in-process | Strategy and order submission |
-| Position projector | Fill-derived `Positions` aggregate (runs inside Action Capture process for MVP) | Raw order lifecycle authority |
+| Nautilus Execution Service | Authoritative order lifecycle, fills, positions, PnL, reconciliation, risk, and event processing; projects execution state to Fluss | Strategy and market-data ingestion |
+| go-arrow bridge | Arrow authentication, order REST, order-update WebSocket, and broker reads | Strategy, gate decisions, and position arithmetic |
+| Execution control/projection glue | Fluss intent intake, gate, attempts, correlation, fencing, quarantine, and projections | Independent OMS or position arithmetic |
+| Action Capture | Historical name for the capture path now implemented within the Nautilus Execution Service | Strategy and independent order submission |
+| Position projector | Historical name for the fill-derived projection now provided by Nautilus and materialized into Fluss | Raw order lifecycle authority |
 | Babysitter | Position observation; no-op in MVP; future structured actions | New entry signals, lifecycle authority, direct broker calls |
-| Executor | Durable gate, attempts, identity mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls | Strategy, authoritative fill capture |
+| Executor | Historical name for the order path now implemented by Nautilus plus custom execution control glue | Strategy, direct Arrow REST calls, independent OMS or position authority |
 | EOD controller | Manifest creation, verification, retry/backoff, retention extension, expiry protection. NSE offload after 4 PM IST, MCX after 11:30 PM IST | Broker connection or strategy decisions |
 | Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Operational telemetry and alert delivery | Trading decisions or durable execution evidence |
@@ -134,6 +143,9 @@ Compose is not evidence of production HA. Production must prove three-node Fluss
 - Data and interfaces: [04-data.md](../02_requirements/04-data.md), [05-interfaces.md](../02_requirements/05-interfaces.md)
 - Operational requirements: [06-operational.md](../02_requirements/06-operational.md)
 - Build contracts: [00-index.md](../04_contracts/00-index.md)
+- Detailed Nautilus operating model (ownership, topology, boundary contracts, trade flows,
+  position management, migration roadmap, non-goals):
+  [05-execution-core.md](../08_implementation/05-execution-core.md#recommended-operating-model)
 
 ## Recovery and durability architecture
 
@@ -197,15 +209,15 @@ The architecture mandates these logical tables before physical DDL generation:
 | `Ranking_Results` | ~~LOG~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Trade_Decisions` | ~~Immutable feed~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Portfolio_Reservations` | ~~KV/logical state~~ | ~~Signal job~~ — **REMOVED 2026-08-15 (CHG-005)** |
-| `Fills` | LOG | Action Capture |
-| `Order_Lifecycle` | KV | Action Capture |
-| `Positions` | KV | Position projector |
-| `Postback_Projection_Ledger` | KV | Action Capture |
-| `Postback_Quarantine` | LOG | Action Capture |
-| `Execution_Gate` | KV | Executor |
-| `Execution_Attempts` | KV | Executor |
-| `Order_Correlation` | KV | Executor |
-| `Execution_Audit` | LOG | Executor |
+| `Fills` | LOG | Nautilus Execution Service projection glue |
+| `Order_Lifecycle` | KV | Nautilus Execution Service projection glue |
+| `Positions` | KV | Nautilus Execution Service projection glue |
+| `Postback_Projection_Ledger` | KV | Nautilus Execution Service projection glue |
+| `Postback_Quarantine` | LOG | Nautilus Execution Service projection glue |
+| `Execution_Gate` | KV | Custom execution control glue |
+| `Execution_Attempts` | KV | Custom execution control glue |
+| `Order_Correlation` | KV | Custom execution control glue |
+| `Execution_Audit` | LOG | Nautilus service + custom control projection |
 | `Safety_Halt_Requests` | KV | Authorized components |
 | `suspected_discontinuities` | LOG | Ingestion |
 | `ingestion_quarantine` | LOG | Ingestion |

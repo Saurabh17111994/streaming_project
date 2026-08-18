@@ -40,11 +40,11 @@ Flink managed state and Fluss sink guarantees are exactly-once only at the teste
 
 Ingestion is one Java 17 service process from binary WebSocket decode through the supported Fluss 0.9.1-incubating Java client append path. The Arrow HFT market-data WebSocket (`wss://socket.arrow.trade`) uses a binary protocol with 2 modes (LTPC 40B, Full 196B), little-endian integers, zstd-compressed inbound, prices in **paise** (÷100 for rupees). No JSON on the market-data stream. Auth via `appID` + `token` query params, subscribe via JSON token IDs (≤1024 per connection, ≤512 per request). Heartbeat: client sends `PONG` text every 3s, stall timeout 15s. (The Standard feed `wss://ds.arrow.trade` was removed 2026-08-14.)
 
-**No OpenAlgo.** The Executor calls Arrow's native REST API directly. (DEC-006, 2026-07-23)
+**No OpenAlgo.** DEC-006's direct-Executor wording is superseded by DEC-041/DEC-042: the Nautilus Execution Service commands a localhost-only go-arrow bridge, and only that bridge calls Arrow's native REST API.
 
-## Executor and Arrow REST
+## Nautilus Execution Service and Arrow REST
 
-The Executor is the only component permitted to initiate money-moving calls. It calls Arrow's REST API directly:
+The integrated Execution Core is the only platform domain permitted to initiate money-moving calls. Nautilus runs as a separate long-lived Rust-native service and owns the live OMS, position/portfolio calculations, risk checks, fill handling, and reconciliation. A custom Nautilus `ExecutionClient` maps native commands and reports to a localhost-only go-arrow bridge. Only the bridge holds Arrow credentials and physically calls the REST/WebSocket APIs:
 
 - `POST /order/regular` — place order. Request: `{exchange, symbol, quantity, transactionType: "B"/"S", order: "LMT"/"MKT", product: "I"/"C"/"M", price, validity: "DAY"/"IOC", remarks (max 16 chars), mpp (bool)}`. Response: `{status:"success", data:{orderNo, requestTime}}`.
 - `GET /user/orders` — order book (reconciliation).
@@ -58,9 +58,11 @@ The Executor is the only component permitted to initiate money-moving calls. It 
 - MKT orders: disabled by default; use `mpp:true` for upper-limit routing.
 - Order lifecycle: PENDING → OPEN → COMPLETE (filled) / CANCELLED / REJECTED. `reportType` gives finer detail.
 
-Postbacks arrive via a separate WebSocket (`wss://order-updates.arrow.trade`) — see Action Capture.
+Postbacks arrive through a separate WebSocket (`wss://order-updates.arrow.trade`) consumed by the bridge and normalized into Nautilus execution reports/events.
 
-The Executor durably persists an attempt and deterministic `client_order_ref` before a call. Timeout, disconnect, malformed response, crash window, or ambiguous response produces `UNKNOWN`, halts the gate, and requires reconciliation before retry.
+Custom execution control glue durably persists an attempt, deterministic `client_order_ref`, gate epoch, and fencing token before Nautilus commands the bridge. Timeout, disconnect, malformed response, crash window, or ambiguous response produces `UNKNOWN`, halts the gate, and requires Nautilus/Arrow reconciliation before retry.
+
+Nautilus is authoritative for live order, fill, position, PnL, and reconciliation behavior. Fluss remains the durable integration plane for immutable intent, safety control state, execution attempts/correlation, and queryable projections. Flink and Fluss SHALL NOT implement a competing production OMS or position engine. The Nautilus event store is an additional execution-history and replay boundary; its early-alpha status requires dedicated durability, verification, backup, and recovery evidence before it can satisfy the seven-year authoritative-audit requirement by itself.
 
 ## EOD controller
 

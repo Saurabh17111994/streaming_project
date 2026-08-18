@@ -35,11 +35,260 @@ three: the OMS (order lifecycle), the position engine, reconciliation, fill dedu
 store. Three dossiers forced duplicated state machines, duplicated config, and three test
 surfaces for one execution domain. This dossier is the single build contract.
 
+## Recommended operating model
+
+This is the normative explanation of how Nautilus complements the existing Flink/Fluss platform.
+
+| Responsibility | System | Meaning |
+| --- | --- | --- |
+| Decide | Flink + Fluss | Process market data, compute candles/signals, and publish durable execution intent |
+| Execute | Nautilus Execution Service | Manage orders, fills, positions, PnL, risk, reconciliation, and execution history |
+| Control and integrate | Custom glue + go-arrow bridge | Enforce safety/fencing, translate protocols, and project execution state into Fluss |
+
+> Flink produces trade intent. Nautilus manages execution reality.
+
+Flink must not call Arrow, and Fluss must not become a second order or position engine. Nautilus
+must run as a long-lived service so its OMS, cache, event processing, reconciliation context, and
+position state survive individual instruction messages. Starting a new Nautilus process for every
+order is prohibited because it loses state continuity and increases crash-window risk.
+
+### Ownership matrix
+
+| Domain | Single owner | Other components may |
+| --- | --- | --- |
+| Raw market-data ingestion | Ingestion | Read raw data and health evidence |
+| Candle and signal computation | Signal Flink job | Consume signal outputs |
+| Execution intent | Immutable Fluss intent stream | Read and validate |
+| Live order lifecycle | Nautilus OMS | Consume projected state |
+| Fill application and deduplication | Nautilus execution/portfolio path | Consume projected fills |
+| Position quantity, side, average price, and PnL | Nautilus Portfolio/Position engine | Consume position events |
+| Broker reconciliation | Nautilus reconciliation through the adapter | Request or observe reconciliation |
+| Gate, approvals, and fencing | Custom execution control glue | Nautilus must obey the result |
+| Arrow credentials and network access | go-arrow bridge | No other service may reach Arrow |
+| Queryable execution projections | Nautilus projection boundary into Fluss | Read projections |
+| Position observation | Babysitter | Emit no actions in MVP |
+
+### What each system must not do
+
+| Component | Must not implement |
+| --- | --- |
+| Signal Flink job | Broker calls, broker order lifecycle, broker-derived positions, or execution retries |
+| Fluss | A competing OMS, position calculator, or broker command executor |
+| Babysitter | Direct Arrow calls or a separate exit-order path |
+| Custom projection code | A second position arithmetic engine or a second fill-deduplication engine |
+| Nautilus adapter | Platform gate policy hidden inside broker-status mapping |
+| go-arrow bridge | Strategy decisions, position arithmetic, or gate authorization |
+
+## Service topology
+
+```text
+Signal Flink job
+    │ immutable execution intent
+    ▼
+Fluss intent stream
+    │
+    ▼
+Nautilus Execution Service
+    ├─ Fluss intent consumer and schema validator
+    ├─ custom gate, attempts, correlation, and fencing
+    ├─ Nautilus OMS, risk, portfolio, position, and reconciliation engines
+    ├─ Nautilus event store
+    └─ Fluss projection writers
+            │ local authenticated protocol
+            ▼
+    go-arrow bridge
+    ├─ Arrow authentication and token refresh
+    ├─ place/modify/cancel REST calls
+    ├─ order-update WebSocket
+    └─ orders/trades/positions/account reads
+            │ TLS
+            ▼
+        Arrow broker
+```
+
+| Deployment option | Decision | Reason |
+| --- | --- | --- |
+| Embed Nautilus in a Flink task | Reject | Different lifecycle, failure model, language runtime, and checkpoint boundary |
+| Start Nautilus once per order | Reject | Loses OMS/cache/reconciliation continuity |
+| Run one shared process for all accounts immediately | Defer | Efficient, but increases scope isolation and fencing complexity |
+| Run one long-lived Nautilus instance per execution partition | Recommend initially | Simple ownership, restart, fencing, and account isolation |
+| Run Nautilus as a separate Docker service | Recommend | Isolates money-moving operations and credentials from Flink |
+| Use Python only as the first control-plane prototype | Accept for discovery | Useful for adapter proof; production runtime should follow the native Rust service boundary |
+
+## Boundary contracts
+
+### Flink/Fluss to Nautilus
+
+The input is an immutable, versioned execution-intent record. It is not a broker request body and
+it is not the retired ranking-era `Trade_Decisions` feed.
+
+| Field group | Required content |
+| --- | --- |
+| Identity | `instruction_id`, `trade_context_id`, `account_scope_id`, `execution_partition_id` |
+| Instrument | Canonical platform instrument identity and broker mapping version |
+| Order | Side, quantity, order type, price if applicable, time-in-force, product/exchange |
+| Safety | Signal/source version, creation time, expiry time, request hash |
+| Replay | Schema version, strategy version, supersession/cancellation information |
+
+The reader validates schema, scope, expiry, request hash, identity uniqueness, and source
+continuity before creating a Nautilus order. A repeated `instruction_id` with different content is
+a contract violation: quarantine, audit, halt, and no broker call.
+
+### Nautilus to go-arrow bridge
+
+The bridge protocol maps native Nautilus execution commands to the already pinned Go SDK. Nautilus
+does not hold Arrow credentials or implement Arrow-specific authentication.
+
+| Nautilus | Bridge |
+| --- | --- |
+| `ClientOrderId` | Deterministic `client_order_ref` carried in Arrow `remarks` |
+| `InstrumentId` | Arrow exchange/symbol/token mapping |
+| `OrderSide` | Arrow buy/sell value |
+| `OrderType` | Arrow market/limit/trigger value |
+| `Quantity`, `Price` | Arrow quantity and price fields with exact decimal conversion |
+| Submit/modify/cancel command | Local bridge request |
+| Order/fill/account/position report | Normalized bridge event consumed by Nautilus |
+
+The bridge is loopback-only in local mode and service-network restricted in production. It is the
+only process containing Arrow credentials and the only process with broker network access.
+
+### Nautilus to Fluss
+
+Nautilus emits execution events. Projection glue converts them into Fluss records:
+
+| Nautilus event | Fluss projection |
+| --- | --- |
+| Fill event | `Fills` LOG |
+| Order lifecycle event | `Order_Lifecycle` KV |
+| Position event | `Positions` KV |
+| Command/report/audit event | `Execution_Audit` LOG |
+| Attempt transition | `Execution_Attempts` KV |
+| Verified identity mapping | `Order_Correlation` KV |
+| Projection progress | `Postback_Projection_Ledger` KV |
+| Unknown or unmapped evidence | `Postback_Quarantine` LOG |
+
+These are durable read models and integration surfaces. They do not authorize a second execution
+effect and they do not replace Nautilus as the live execution authority.
+
+## Identity mapping
+
+The platform must preserve separate identities throughout the flow.
+
+| Identity | Owner | Purpose |
+| --- | --- | --- |
+| `candidate_id` | Signal job | Detected setup/evidence record |
+| `instruction_id` | Signal/intent writer | Immutable platform execution intent |
+| `execution_attempt_id` | Custom execution control | One submission attempt for an instruction |
+| `client_order_ref` | Custom execution control | Deterministic broker-facing reference |
+| `broker_order_id` | Arrow | Broker-authoritative order identity |
+| Nautilus `ClientOrderId` | Nautilus adapter | Native order identity used by the OMS |
+| Nautilus `TradeId` | Nautilus | Native fill identity |
+| `position_id` | Nautilus position projection | Fill-derived exposure aggregate |
+| `trade_context_id` | Platform | Groups entry, trim, and exit orders |
+| `postback_event_id` | Capture boundary | One received broker update |
+| `halt_request_id` | Safety control | One durable safety-halt request |
+
+Never use a generic `order_id` across these domains. A trim, exit, or re-entry is a new broker
+order linked to the same trade context; it is not a mutation of the original order identity.
+
+## End-to-end trade flows
+
+### Normal accepted trade
+
+| Step | Component | Action |
+| ---: | --- | --- |
+| 1 | Signal Flink job | Detects a valid setup |
+| 2 | Fluss | Stores immutable execution intent |
+| 3 | Execution reader | Validates intent, identity, expiry, and scope |
+| 4 | Safety control | Checks gate state, epoch, and fencing token |
+| 5 | Nautilus | Creates the native order and applies native risk checks |
+| 6 | ExecutionClient | Converts the order to a bridge command |
+| 7 | go-arrow bridge | Calls Arrow REST |
+| 8 | Arrow | Returns a verified acceptance or rejection |
+| 9 | Nautilus | Emits order lifecycle events and persists execution history |
+| 10 | Arrow WebSocket | Publishes order updates and fills |
+| 11 | Nautilus | Applies updates, deduplicates fills, updates the position and PnL |
+| 12 | Projection glue | Writes Fluss execution projections |
+| 13 | Babysitter | Observes the projected position; emits zero actions in MVP |
+
+### Unknown broker outcome
+
+| Step | Component | Action |
+| ---: | --- | --- |
+| 1 | Bridge | Times out, disconnects, or returns an unclassifiable response |
+| 2 | Adapter/control | Classifies the attempt as `UNKNOWN`, never as rejection |
+| 3 | Safety control | Moves the gate to `HALTED` and blocks new submissions |
+| 4 | Nautilus | Preserves the unresolved order and event history |
+| 5 | Reconciliation | Queries Arrow orders, trades, positions, and order detail |
+| 6 | Nautilus | Applies only verified reconciliation reports |
+| 7 | Projection glue | Records the outcome, evidence, and resolution |
+| 8 | Operators | Review the evidence and perform the required approvals |
+
+An unknown attempt is never blindly retried. A retry requires proof that the broker did not accept
+the original request or an evidence-approved broker idempotency mechanism.
+
+## Position-management model
+
+Nautilus owns the position calculation path:
+
+```text
+Arrow fill report
+    → Nautilus order event
+    → Nautilus position engine
+    → quantity, side, average price, realized/unrealized PnL
+    → Fluss Positions projection
+    → Babysitter observation
+```
+
+| Position behavior | Owner |
+| --- | --- |
+| Open a position | Nautilus position engine |
+| Add to a position | Nautilus position engine |
+| Partially reduce a position | Nautilus position engine |
+| Close a position | Nautilus position engine |
+| Long/short/net calculation | Nautilus position engine |
+| Average entry/exit arithmetic | Nautilus position engine |
+| Realized and unrealized PnL | Nautilus portfolio engine |
+| Broker position reconciliation | Nautilus reconciliation |
+| Decide whether an exit should be requested | Babysitter/strategy layer, future scope |
+| Authorize the exit | Custom gate and fencing |
+| Submit the exit order | Nautilus OMS through the same adapter path |
+
+The current Java position projector is a migration and differential-test reference only. It must
+not remain a second production authority after Nautilus parity is proven.
+
+## Migration and proof roadmap
+
+| Phase | Deliverable | Release gate |
+| --- | --- | --- |
+| 1. Boundary freeze | Intent schema, identities, ownership, gate contract, projection schemas | No duplicate authority in documents or code |
+| 2. Offline adapter | Platform intent to Nautilus order; fake bridge; recorded updates/fills | Deterministic lifecycle and position parity |
+| 3. Mock broker | Place, modify, cancel, reject, partial fill, disconnect, restart | No duplicate order across crash windows |
+| 4. Fluss integration | Intent consumer, projections, ledger, gate, fencing | Restart-safe command and projection recovery |
+| 5. Arrow sandbox | Real request/status/update/fill/reconciliation behavior | Arrow protocol evidence complete |
+| 6. Shadow mode | Read-only broker reports and Nautilus state comparison | Broker and Nautilus positions converge |
+| 7. Controlled enablement | Two-person approval, rollback, audit, operational runbook | Live-money approval package complete |
+
+## Explicit non-goals
+
+The following must not be built as part of the Nautilus integration:
+
+| Non-goal | Reason |
+| --- | --- |
+| Java OMS | Duplicates Nautilus order lifecycle |
+| Separate Java production position projector | Creates competing position truth |
+| Direct Arrow calls from Flink | Couples strategy to money movement |
+| Direct Arrow calls from Fluss clients | Bypasses the execution service and safety gate |
+| Independent retry engine | Can duplicate an unknown broker order |
+| Independent fill-deduplication engine | Conflicts with Nautilus reconciliation |
+| Independent PnL calculator | Can disagree with Nautilus position arithmetic |
+| Babysitter direct broker path | Bypasses OMS, risk, gate, and audit |
+
 ## Architecture
 
 ```text
-Fluss (Signal_Candidates / future decision rows · Safety_Halt_Requests · owned state tables)
-   │  Fluss reader (custom glue — tails trade rows, issues Nautilus order commands)
+Fluss (immutable execution intent · Safety_Halt_Requests · owned control/projection tables)
+   │  Fluss reader (custom glue — tails execution intent, issues Nautilus order commands)
    ▼
 Nautilus Engine            ← the execution/position core
    │  OMS · position engine · risk engine · event store · reconciliation · fill dedup
@@ -53,18 +302,19 @@ Arrow broker (edge.arrow.trade)
 
 **Single-writer principle:** the go-arrow bridge is the only component with broker credentials and
 the only component that can physically reach Arrow. Nautilus commands the bridge; nothing else can.
-**Truth-authority (open decision):** Nautilus is event-store-authoritative for order/position
-state; the Fluss `Fills`/`Order_Lifecycle`/`Positions`/`Execution_*` tables are projected from its
-event store (read models), or Fluss stays authoritative and Nautilus is a disposable calculator
-behind it. The dossiers' DEC-038 philosophy (Fluss = durable authoritative state) favors the
-latter; the engine favors the former. **This choice must be recorded as a decision before
-implementation.**
+**Truth-authority (resolved by DEC-042):** Nautilus is authoritative for live order/fill/position
+behavior and reconciliation. Its event processing is the execution state machine; Fluss stores
+immutable execution intent, custom control state, and projections of Nautilus events for platform
+consumers. The Fluss projections are durable read models and integration surfaces, not a second
+production OMS or position engine. The Nautilus event store is an execution-history and replay
+boundary, but its current early-alpha status requires dedicated durability, backup, verification,
+and recovery evidence before it can independently satisfy the seven-year audit requirement.
 
 ## Component map
 
 | Component | Responsibility | Source |
 | --- | --- | --- |
-| Fluss reader | Tail trade-row tables; issue Nautilus order commands; validate schema/version; fail closed on discontinuity | **Custom glue** |
+| Fluss reader | Tail immutable execution-intent rows; issue validated Nautilus order commands; validate schema/version; fail closed on discontinuity | **Custom glue** |
 | Nautilus OMS | Order lifecycle state machine, order types, contingency (OTO/OCO/OUO), duplicate suppression, multi-client routing | Nautilus (`execution`/`model` crates) |
 | Nautilus position engine | Fill-derived position state, weighted entry/exit, PnL, FLAT/OPEN/REDUCING/CLOSED, `trade_context_id` grouping | Nautilus (`portfolio`/`model`) |
 | Nautilus risk engine | Pre-trade checks: price/quantity/expiry validation, rate limits, max notional, trading-state kill switch | Nautilus (`risk`) |
@@ -328,7 +578,7 @@ all broker calls remain disabled until the release evidence package approves ena
    `05-babysitter.md`, `06-action-capture.md`, `07-executor.md`, requirements
    `02-functional/05/06/07`, and DEC-006 are re-scoped to the Nautilus + go-arrow bridge design
    (dated banners in each file).
-2. **Truth authority:** Nautilus event store vs Fluss tables — must be decided (see Architecture).
+2. **~~Truth authority~~ — RESOLVED 2026-08-19 (DEC-042):** Nautilus owns live execution behavior; Fluss owns immutable intent, control state, and queryable projections. The Nautilus event store's production durability and seven-year retention evidence remain open gates.
 3. **Broker evidence:** Arrow sandbox order round-trip (place → update stream → fill), REST
    reconciliation endpoints, and client-reference echo (Level 3) remain the live-money gates.
 4. **Existing code:** the Flink `BabysitterJob` scaffold and the `common` Agent-2 safety-core

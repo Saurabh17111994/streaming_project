@@ -25,10 +25,10 @@ Fluss coordinator/tablets ─ZooKeeper client (2181)─► ZooKeeper ensemble
 ZooKeeper ensemble members ─2888/3888─► ZooKeeper peers (leader election, quorum)
 Flink JobManagers ─ZooKeeper client (2181)─► ZooKeeper ensemble (HA leadership)
 Signal and Babysitter jobs ─version-pinned connector─► Fluss
-Arrow postback endpoint ─TLS─► Action Capture
-Executor ─Fluss changelog─► execution inputs/state
-Executor ─evidence-approved REST/TLS─► Arrow REST ─► broker
-Signal/Action Capture/platform health/operators ─Safety_Halt_Requests─► Executor
+Arrow postback endpoint ─TLS─► go-arrow bridge ─local protocol─► Nautilus Execution Service
+Nautilus Execution Service ─Fluss changelog─► execution intent/control state
+Nautilus ExecutionClient ─local authenticated protocol─► go-arrow bridge ─TLS─► Arrow REST ─► broker
+Signal/capture path/platform health/operators ─Safety_Halt_Requests─► custom execution control
 EOD controller ──► Fluss source + S3/lake
 All components ─supported telemetry protocol─► OpenObserve
 Operators ─controlled authenticated interface─► gate/reconciliation controls
@@ -40,14 +40,15 @@ Exact ports, endpoint paths, authentication fields, compression, subscription li
 
 Production exposes only explicitly required operator, health, or API endpoints through controlled ingress and firewall rules. Fluss tablet/internal RPC, ZooKeeper client/peer ports (2181/2888/3888 — internal-only, never publicly exposed), checkpoint storage, service-to-service data paths, and execution state are not publicly exposed.
 
-The observability VM cannot authorize orders, change the Executor gate, or erase execution audit if OpenObserve is unavailable. Local UI exposure is for development only and is not a production security model.
+The observability VM cannot authorize orders, change the Nautilus execution gate, or erase execution audit if OpenObserve is unavailable. Local UI exposure is for development only and is not a production security model.
 
 ## Identity and authorization boundaries
 
 - Ingestion can append to market-data tables and write discontinuity/quarantine evidence.
 - Signal jobs can write signal/candle outputs and their checkpoint state. (**Ranking/instruction outputs REMOVED 2026-08-15, CHG-005.**)
-- Action Capture can append postback audit, update lifecycle/position projections, and write quarantine.
-- Executor can read immutable instructions, consume safety-halt requests, and write only execution-owned state.
+- The go-arrow bridge can hold broker credentials, consume Arrow postbacks, and call Arrow.
+- Nautilus Execution Service can consume immutable intent, apply OMS/position/risk/reconciliation behavior, and emit execution events.
+- Custom execution control/projection glue can consume safety-halt requests and write execution-owned control state and Fluss projections.
 - EOD controller owns manifest creation/verification and retention extension.
 - Babysitter reads `Positions` and writes no action in MVP.
 - Operators can perform authenticated reconciliation/approval operations but cannot bypass the gate with an unaudited call.
@@ -59,7 +60,7 @@ All service identities are least-privilege and separate. Exact Fluss ACLs, mTLS 
 
 - Broker disconnect or authentication exhaustion makes the affected service not ready and alerts operations.
 - Fluss unavailability or append uncertainty follows the component retry policy, exposes uncertainty, and prevents false loss claims.
-- Changelog discontinuity, checkpoint failure affecting order correctness, or durable Executor state loss halts new money-moving calls.
+- Changelog discontinuity, checkpoint failure affecting order correctness, or durable Nautilus/control state loss halts new money-moving calls.
 - OpenObserve outage does not erase local durable audit; lack of required observability can make the platform not ready for live-money operation.
 - Safety-halt request path must remain available through a degraded network or Executor independently falls back to local health detection.
 

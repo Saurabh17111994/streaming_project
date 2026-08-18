@@ -48,3 +48,13 @@ This project layer standardizes the following decisions:
 - Best-effort bounded tick deduplication using an event fingerprint when no broker sequence is available
 - Explicit order-gate safe-halt and broker reconciliation
 - Honest distinction between exactly-once stream state and external broker side effects
+
+## Nautilus execution model
+
+The platform's execution and position authority is the **Nautilus Execution Service** (a separate
+long-lived service complementing Flink/Fluss — see
+[DEC-042](./04-decisions.md#dec-042) and the detailed operating model in
+[`docs/08_implementation/05-execution-core.md`](../08_implementation/05-execution-core.md#recommended-operating-model)).
+The one-sentence contract: **Flink produces trade intent; Nautilus manages execution reality.**
+Flink/Fluss SHALL NOT implement a second OMS or position engine, and only the go-arrow bridge may
+reach Arrow.

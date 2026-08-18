@@ -149,11 +149,17 @@ Resume requires:
 The second approval transitions `APPROVAL_PENDING` to `ENABLED`. Automatic resume is prohibited.
 Approvals and denied/unauthorized attempts are immutable audit events.
 
-## REQ-EXE-004: Immutable instruction intake — REMOVED (CHG-005, 2026-08-15)
+## REQ-EXE-004: Immutable execution-intent intake (reinstated by DEC-042)
 
-**REMOVED from scope 2026-08-15 (CHG-005, not deferred) with the `Trade_Decisions` decision feed
-(REQ-FLS-008).** The order path no longer consumes immutable instruction records in the current
-scope.
+The Nautilus Execution Service SHALL consume a durable, immutable execution-intent stream from
+Fluss. This stream is distinct from the retired `Trade_Decisions` ranking feed: it carries only a
+validated platform execution request after Signal-job strategy processing. The service SHALL
+validate schema/version, scope, expiry, identity, request hash, supersession, and duplicate
+semantics before creating a Nautilus order. A repeated `instruction_id` with different content is
+a contract violation and SHALL be quarantined, audited, and halted.
+
+The service SHALL NOT mutate the source intent or strategy fields. Execution state and outcomes
+are written only to execution-owned control tables and Nautilus-derived Fluss projections.
 
 ## REQ-EXE-005: Attempt protocol
 

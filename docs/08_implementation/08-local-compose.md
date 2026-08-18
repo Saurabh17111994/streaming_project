@@ -26,9 +26,8 @@ Fluss coordinator/tablet
 Flink JobManager/TaskManager
 Signal and Babysitter job submitter
 Ingestion
-Action Capture/position projector
-Executor
-Arrow REST sandbox adapter
+Nautilus Execution Service
+go-arrow bridge / Arrow REST sandbox adapter
 OpenObserve
 ```
 
@@ -38,11 +37,17 @@ Local volumes and one-node services are intentional development simplifications.
 
 - All images and dependencies use explicit development versions; no `latest` default.
 - All required tables are created from the validated schema manifest or the environment is clearly marked schema-unready.
-- Executor starts `HALTED`.
+- Nautilus Execution Service starts `HALTED`.
+- The go-arrow bridge is the only service with Arrow credentials or Arrow network access.
+- Nautilus owns the live OMS/position state; Fluss execution tables are written only by the projection boundary.
 - Broker calls point only to sandbox/simulation unless an explicit non-default test profile is selected.
 - Production credentials, audit buckets, checkpoints, and endpoints are rejected.
 - Services expose liveness and readiness separately.
 - Job submitter installs exactly Signal and Babysitter jobs and verifies both are running/checkpointing.
+
+The full Nautilus operating model behind these runtime contracts — service topology, boundary
+contracts, identity mapping, trade flows, and the migration roadmap — is documented in
+[`05-execution-core.md`](./05-execution-core.md#recommended-operating-model).
 
 ### Configuration application
 
@@ -67,10 +72,11 @@ A repository file that is not mounted or passed to a process is not effective co
 | Flink JobManager | REST/RPC responds | Job submission accepted |
 | Flink TaskManager | Task slot responds | Required jobs have resources |
 | Ingestion | Event loop responds | Manifest/subscriptions/append/clock/telemetry pass |
-| Action Capture | Event loop responds | Postback schema, Fluss, projection backlog pass |
+| Nautilus Execution Service | Event loop responds | Native engine, Fluss intent/projection path, gate, and event-store readiness pass |
+| go-arrow bridge | Process responds | Sandbox connectivity and order-update stream contract pass; no live order |
 | Compute submitter | Process responds | Both jobs running/checkpointing |
 | Babysitter job | Job running | Input schema/offset/checkpoint pass; no-op guard active |
-| Executor | Process responds | Durable state known, gate known, never implies ENABLED |
+| Execution control | Process responds | Durable state known, gate known, never implies ENABLED |
 | Arrow REST | Sandbox API responds | Contract probe passes; no live order |
 | OpenObserve | API responds | Telemetry delivery or approved local degradation |
 
@@ -102,7 +108,7 @@ Bind operator interfaces to localhost by default. Do not expose Fluss internal R
 4. Validate schema manifest and required tables.
 5. Start jobs and verify actual job IDs/status/checkpoints.
 6. Start data services and validate subscriptions/projections.
-7. Start Executor in `HALTED`.
+7. Start Nautilus Execution Service in `HALTED` and start the go-arrow bridge with sandbox-only credentials.
 8. Run simulation/sandbox reconciliation before any controlled test enablement.
 
 ### JVM and memory configuration

@@ -12,12 +12,17 @@ Arrow HFT market-data WebSocket (wss://socket.arrow.trade, binary; Standard feed
       ├─ forming-bar signal detection
       ├─ Signal_Candidates LOG
       ├─ Signal_Candidates_current KV
-          → Executor / durable order gate
-          → Arrow REST (POST /order/regular)
-          → Arrow broker
+          → Fluss immutable execution intent
+          → Nautilus Execution Service
+              ├─ OMS, risk, portfolio/position engine, reconciliation
+              ├─ custom gate/fencing and Fluss projection sinks
+              └─ Nautilus ExecutionClient → localhost go-arrow bridge
+                  → Arrow REST (POST /order/regular)
+                  → Arrow broker
 
 Arrow order-updates WebSocket (wss://order-updates.arrow.trade, JSON)
-  → Action Capture
+  → go-arrow bridge order-update intake
+      → Nautilus Execution Service
       ├─ Fills LOG
       ├─ Order_Lifecycle KV
       ├─ Positions KV (fill-derived)
@@ -38,9 +43,12 @@ All services → OpenObserve
 | Ingestion | Decode, normalize, fingerprint, append raw ticks, report suspected discontinuities | Business enrichment, candle aggregation, order placement |
 | Fluss storage | Table schemas, distribution, retention, changelog and lake tiering | Strategy rules or broker calls |
 | Signal Flink job | Dedup, candles, forming-bar detection, candidate audit (**ranking/winner output REMOVED 2026-08-15, CHG-005**) | Broker REST side effects, fill lifecycle |
-| Action Capture | Broker postback ingestion, immutable fill log, order lifecycle updates | Strategy, position decisions, order submission |
+| Nautilus Execution Service | Authoritative order lifecycle, fills, positions, PnL, reconciliation, risk, event processing, and execution projections | Strategy computation, market-data ingestion, direct Arrow network access |
+| go-arrow bridge | Arrow authentication, REST order calls, order-update WebSocket, broker reads | Strategy, gate decisions, position arithmetic |
+| Execution control glue | Fluss instruction intake, durable gate, attempts, correlation, fencing, quarantine, and projection orchestration | Order arithmetic, broker protocol implementation |
+| Action Capture | Historical name for the capture path now implemented inside the Nautilus Execution Service | Strategy, position decisions, independent order state machine |
 | Babysitter Flink job | Post-entry position-management decisions | New entry signals, authoritative order lifecycle |
-| Executor | Changelog consumption, durable order gate, idempotency, reconciliation, Arrow REST calls (`POST /order/regular`) | Strategy, fill-state authority |
+| Executor | Historical name for the order path now implemented by Nautilus plus custom execution control glue | Strategy, direct Arrow REST calls, independent OMS or position state |
 | Arrow REST | Broker order entry and management (`https://edge.arrow.trade`) | Fluss consumption, strategy, fill capture, gate decisions |
 | OpenObserve | Logs, metrics, traces, operational alerting | Trading decisions |
 
@@ -60,9 +68,10 @@ Persist the mapping between these identities before treating an order as safely 
 
 Order lifecycle and position lifecycle are different aggregates:
 
-- **Order lifecycle:** `SUBMITTING`, `PENDING`, `PARTIAL`, `FILLED`, `CANCELLED`, `REJECTED`, `UNKNOWN`; keyed by `broker_order_id`.
-- **Position lifecycle:** `FLAT`, `OPEN`, `REDUCING`, `CLOSED`; keyed by `position_id` or trade context and derived from related fills.
-- **Order gate:** `ENABLED`, `HALTED`, `RECONCILING`; owned and enforced by the Executor.
+- **Order lifecycle:** Nautilus OMS state, normalized to `SUBMITTING`, `PENDING`, `PARTIAL`, `FILLED`, `CANCELLED`, `REJECTED`, `UNKNOWN`; keyed by `broker_order_id`.
+- **Position lifecycle:** Nautilus position state, normalized to `FLAT`, `OPEN`, `REDUCING`, `CLOSED`, `UNKNOWN`; keyed by `position_id` and linked to `trade_context_id`.
+- **Execution authority:** Nautilus is authoritative for live order/fill/position state; Fluss contains durable projections for platform consumers.
+- **Order gate:** `ENABLED`, `HALTED`, `RECONCILING`, `APPROVAL_PENDING`; owned by custom execution control glue and enforced before Nautilus commands the bridge.
 
 `partial_update` protects independent column groups from clobbering. It does not by itself solve stale writes, ordering within one column group, broker-side idempotency, or external REST atomicity.
 
@@ -80,3 +89,6 @@ The production topology is not proven merely by running three processes. Failure
 - Data flow and interfaces: [`../02_requirements/05-interfaces.md`](../02_requirements/05-interfaces.md)
 - Data ownership: [`../02_requirements/04-data.md`](../02_requirements/04-data.md)
 - Runtime details: [`../02_requirements/02-functional/09-platform-runtime.md`](../02_requirements/02-functional/09-platform-runtime.md)
+- Detailed Nautilus operating model (ownership matrix, service topology, boundary contracts,
+  identity mapping, trade flows, position management, migration roadmap):
+  [`../08_implementation/05-execution-core.md`](../08_implementation/05-execution-core.md#recommended-operating-model)

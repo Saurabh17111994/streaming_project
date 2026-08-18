@@ -47,7 +47,7 @@ The platform separates the **data path** from the **order path**:
 
 - Multi-broker support
 - BSE, BFO, NCD, and BCD derivatives and currency segments
-- OpenAlgo; the platform calls Arrow's REST and WebSocket APIs directly
+- OpenAlgo; the platform uses Nautilus for execution/position management and reaches Arrow only through the localhost go-arrow bridge
 - Charting and end-user notification features
 - 250+ feature columns and pattern-feature libraries
 - Real-time gap reconciliation

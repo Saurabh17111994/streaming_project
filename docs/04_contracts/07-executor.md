@@ -22,9 +22,9 @@ single-writer boundary.
 
 ## Inputs and owned state
 
-Inputs: durable `Safety_Halt_Requests`; future immutable `Position_Actions`; lifecycle/position/
-changelog health for validation. (**Trade_Decisions REMOVED 2026-08-15, CHG-005 — decision feed
-out of scope.**)
+Inputs: durable immutable execution-intent rows; durable `Safety_Halt_Requests`; future immutable
+`Position_Actions`; lifecycle/position/changelog health for validation. The execution-intent stream
+is distinct from the retired ranking-era `Trade_Decisions` feed.
 
 Owned Fluss state: `Execution_Gate`, `Execution_Attempts`, `Order_Correlation`, and immutable
 `Execution_Audit`. The Execution Core never mutates strategy fields.

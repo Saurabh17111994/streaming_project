@@ -40,9 +40,9 @@ All services → OpenObserve
 | Fluss coordinator/tablets | Metadata, storage, replication, changelogs, lake tiering |
 | Flink control/workers | Run the Signal and Babysitter jobs |
 | Ingestion | Evidence-approved market stream decode and raw append |
-| Action Capture/position projector | Postback evidence, correlation, lifecycle, fill-derived positions |
+| Nautilus Execution Service + projection glue | Postback evidence, Nautilus OMS/position/reconciliation, and Fluss execution projections |
 | EOD controller | Manifest creation, verification, retry/backoff, retention extension |
-| Executor | Durable gate, attempts, mappings, reconciliation, fencing, safety-halt consumption, Arrow REST calls |
+| Custom execution control + Nautilus ExecutionClient | Durable gate, attempts, mappings, fencing, safety-halt consumption, and bridge commands |
 | OpenObserve | Logs, metrics, traces, alerts |
 | Operators/reconciliation control | Authenticated gate reconciliation and two-person approval |
 

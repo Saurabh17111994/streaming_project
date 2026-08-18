@@ -21,17 +21,23 @@ Arrow market-data stream
       ├─ Business Logic candidate detection (keyed by instrument_token)
       ├─ Signal_Candidates LOG
       ├─ Signal_Candidates_current KV
-  → Executor
-      ├─ verify durable gate state/epoch
-      ├─ verify durable gate state/epoch
-      ├─ persist execution_attempt_id, request hash, client_order_ref
-      ├─ fence one active owner per execution_partition_id
-      └─ call Arrow REST only while ENABLED
+  → immutable execution intent in Fluss
+  → Nautilus Execution Service
+      ├─ validate intent and custom gate/fencing state
+      ├─ create and manage native Nautilus order state
+      ├─ apply native Nautilus risk checks
+      ├─ persist execution attempt/correlation projections
+      └─ command localhost go-arrow bridge only while ENABLED
+  → go-arrow bridge
   → Arrow REST (POST /order/regular)
   → broker
 ```
 
-**State boundary (DEC-038, 2026-08-14):** the Signal Flink job computes; Fluss owns the authoritative durable hot state. Fluss: fingerprint-dedup KV state table (new, when implemented), `feature_candles_15s` KV (durable candles), `Signal_Candidates` LOG + `Signal_Candidates_current` KV (durable signals). Flink: source offsets, watermarks, window/lateness timers, in-flight accumulators, dedup working cache, signal ring buffers. Flink checkpoints are small and are not a second copy of the Fluss-owned business state.
+**State boundary (DEC-038, DEC-042; current design):** the Signal Flink job computes; Fluss owns the authoritative durable hot state for Signal-job business state.
+
+Fluss durable candle state: `feature_candles_15s` KV. Durable signal state is split between the immutable candidate event stream and its current-state projection. Flink owns source offsets, watermarks, window/lateness timers, in-flight accumulators, dedup keyed state, and signal ring buffers. Flink checkpoints are small and are not a second copy of Fluss-owned Signal business state. Execution state is separate: Nautilus owns live order/fill/position behavior and event processing; Fluss stores immutable intent, control state, and projections of Nautilus execution events.
+
+The candidate event stream is `Signal_Candidates` LOG and the current-state projection is `Signal_Candidates_current` KV.
 
 ~~Ranking consumes typed in-process candidate/state snapshots. It does not read `Signal_Candidates` from Fluss, create a second evaluation window, or run as a separate job~~ — **REMOVED 2026-08-15 (CHG-005).**
 
@@ -83,15 +89,17 @@ Business Logic appends an immutable `Signal_Candidates` event for every detected
 
 ```text
 Arrow broker postback stream
-  → Action Capture
+  → go-arrow bridge order-update intake
+  → Nautilus Execution Service
       ├─ preserve original payload and hash
       ├─ assign postback_event_id and bounded fingerprint
       ├─ correlate by broker_order_id mapping,
       │  verified echoed client_order_ref, or approved reconciliation
       ├─ record Postback_Projection_Ledger step
       ├─ append immutable Fills event
-      ├─ update Order_Lifecycle KV
-      ├─ update fill-derived Positions KV
+      ├─ apply Nautilus OMS/position/reconciliation logic
+      ├─ project Order_Lifecycle KV
+      ├─ project fill-derived Positions KV
       └─ quarantine missing, ambiguous, or invalid correlation
   → Restart scanner
       ├─ scan incomplete Postback_Projection_Ledger records
@@ -108,11 +116,11 @@ Audit append, lifecycle projection, position projection, and quarantine writes a
 
 Order lifecycle and position lifecycle are distinct:
 
-- `Order_Lifecycle` is keyed by `broker_order_id` and owned by Action Capture.
-- `Positions` is keyed by `position_id`, linked by `trade_context_id`, and derived from uniquely correlated fills.
+- `Order_Lifecycle` is keyed by `broker_order_id` and projected from the Nautilus OMS.
+- `Positions` is keyed by `position_id`, linked by `trade_context_id`, and projected from the Nautilus position engine after uniquely correlated fills.
 - Conflicting or regressive evidence moves affected state to `UNKNOWN` and halts affected order/action flow.
 
-Future `Position_Actions` are immutable structured records and pass through the same Executor gate, attempt, correlation, and reconciliation path. Free-form action strings are prohibited.
+Future `Position_Actions` are immutable structured records and pass through the same custom gate, attempt, correlation, Nautilus OMS, and reconciliation path. Free-form action strings are prohibited.
 
 ## Table ownership and consumers
 
@@ -126,16 +134,16 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | `Ranking_Results` | ~~LOG~~ | ~~Signal job~~ | ~~Audit/lake~~ | ~~Immutable; EOD Iceberg~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Trade_Decisions` | ~~Immutable feed~~ | ~~Signal job~~ | ~~Executor~~ | ~~Replay/reconciliation buffer~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `Portfolio_Reservations` | ~~KV/logical state~~ | ~~Signal job~~ | ~~Executor/reconciliation~~ | ~~Active + rebuild window~~ — **REMOVED 2026-08-15 (CHG-005)** |
-| `Postback_Projection_Ledger` | KV | Action Capture | Recovery scanner | Incomplete + recovery window |
+| `Postback_Projection_Ledger` | KV | Nautilus Execution Service projection glue | Recovery scanner | Incomplete + recovery window |
 | `Safety_Halt_Requests` | KV | Authorized components | Executor | Safety/reconciliation window |
-| `Fills` | LOG | Action Capture | Projection/audit | Immutable; encrypted seven-year audit |
-| `Order_Lifecycle` | KV | Action Capture | Executor/operations | Current state; rebuildable |
-| `Positions` | KV | Position projector | Babysitter/Executor | Current state; rebuildable |
-| `Execution_Gate` | KV | Executor | Executor/control plane | Current state plus immutable audit |
-| `Execution_Attempts` | KV | Executor | Executor/reconciliation | Active/reconciliation window |
-| `Order_Correlation` | KV | Executor | Executor/Action Capture | Active/reconciliation window |
-| `Execution_Audit` | LOG | Executor | Operations/audit | Encrypted seven-year audit |
-| `Postback_Quarantine` | LOG | Action Capture | Reconciliation | Until disposition plus evidence retention |
+| `Fills` | LOG | Nautilus Execution Service projection glue | Projection/audit | Immutable; encrypted seven-year audit |
+| `Order_Lifecycle` | KV | Nautilus Execution Service projection glue | Babysitter/operations | Current state; rebuildable from Nautilus event history |
+| `Positions` | KV | Nautilus Execution Service projection glue | Babysitter/operations | Current state; rebuildable from Nautilus event history |
+| `Execution_Gate` | KV | Custom execution control glue | Nautilus service/control plane | Current state plus immutable audit |
+| `Execution_Attempts` | KV | Custom execution control glue | Nautilus service/reconciliation | Active/reconciliation window |
+| `Order_Correlation` | KV | Custom execution control glue | Nautilus service/capture path | Active/reconciliation window |
+| `Execution_Audit` | LOG | Nautilus service plus custom control projection | Operations/audit | Encrypted seven-year audit |
+| `Postback_Quarantine` | LOG | Nautilus Execution Service projection glue | Reconciliation | Until disposition plus evidence retention |
 | `suspected_discontinuities` | LOG | Ingestion | Operations | Investigation window |
 | `ingestion_quarantine` | LOG | Ingestion | Operations/quarantine review | Investigation window (2d TTL) |
 | `instruments` | Manifest | Operators | Ingestion | Current and prior versions |
@@ -150,8 +158,8 @@ Future `Position_Actions` are immutable structured records and pass through the 
 | Compute deduplication | Bounded best-effort fingerprinting |
 | Flink managed state/sinks | Exactly-once only where pinned tests prove it |
 | Multiple Fluss outputs | Partial visibility unless tested otherwise |
-| Instruction/action → Executor | At-least-once with durable identity/request-hash guard |
-| Executor → Arrow REST / broker | At-least-once or unknown; reconcile before retry |
+| Instruction/action → Nautilus Execution Service | At-least-once with durable identity/request-hash guard |
+| Nautilus → Arrow REST / broker | At-least-once or unknown; reconcile before retry |
 | Postback projections | At-least-once input and idempotent/versioned projection |
 
 ## Live-to-lake flow
@@ -164,7 +172,7 @@ A source day cannot expire while its manifest is unverified, retryable, or under
 
 ## Safe-halt coupling
 
-The Signal job, Action Capture, projections, and observability do not place orders directly. They publish durable `Safety_Halt_Requests` to the Executor, which consumes them idempotently, validates scope/source/version, applies or rejects the halt, increments the gate epoch, and writes immutable audit evidence.
+The Signal job, capture path, projections, and observability do not place orders directly. They publish durable `Safety_Halt_Requests` to the custom execution control layer, which consumes them idempotently, validates scope/source/version, applies or rejects the halt, increments the gate epoch, and prevents the Nautilus service from commanding the bridge until the gate is explicitly enabled.
 
 Unknown broker outcome, duplicate risk, ~~stale reservation~~, missing correlation, changelog discontinuity, checkpoint failure affecting order correctness, unresolved fill, failed reconciliation, unauthorized action, or security incident transitions the gate to `HALTED` and blocks new calls within five seconds. **(Stale-reservation clause REMOVED 2026-08-15, CHG-005.)** Executor also independently detects stale mandatory health if the halt-request stream is unavailable.
 

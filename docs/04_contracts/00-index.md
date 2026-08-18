@@ -41,3 +41,9 @@ The identity model is:
 Generic `order_id` is prohibited across domain boundaries.
 
 Every contract must define its owner, inputs, outputs, state/identity rules, delivery guarantee, failure behavior, observability, and acceptance evidence. Exact external protocol values, connector semantics, and unsupported DDL properties remain evidence-gated until pinned tests pass.
+
+The full normative explanation of how Nautilus complements these contracts — ownership matrix,
+service topology, boundary contracts, identity mapping, normal/unknown trade flows, the
+position-management model, the migration roadmap, and explicit non-goals — lives in
+[`docs/08_implementation/05-execution-core.md`](../08_implementation/05-execution-core.md#recommended-operating-model).
+The executor contract above is its broker-facing boundary; it is not a second execution engine.
