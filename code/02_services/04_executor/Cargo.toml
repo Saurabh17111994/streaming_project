@@ -28,6 +28,7 @@ nautilus-model = { git = "https://github.com/nautechsystems/nautilus_trader", re
 nautilus-event-store = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 nautilus-portfolio = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 nautilus-risk = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-sandbox = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs"] }
 anyhow = "1"
@@ -53,6 +54,10 @@ codegen-units = 1
 [[bin]]
 name = "nautilus-execution-service"
 path = "src/main.rs"
+
+[[bin]]
+name = "t9-paper"
+path = "src/bin/t9_paper.rs"
 
 [workspace]
 # The service is a single-crate workspace (Nautilus is consumed as external git deps).
