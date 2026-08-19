@@ -149,4 +149,28 @@ mod tests {
         assert!(!g.can_execute());
         assert_eq!(g.safety_halt_count(), 1);
     }
+
+    #[test]
+    fn gate_cannot_skip_steps_or_silently_regress() {
+        // T5 reconciliation (CHG-044): no jump may skip a step and no sanctioned
+        // backward step exists other than the safety halt — matching the Java
+        // canonical GateState.legalTargets().
+        let mut g = Gate::new();
+        // HALTED -> APPROVAL_PENDING skips RECONCILING.
+        assert!(g.transition(ExecState::ApprovalPending).is_err());
+        // HALTED -> ENABLED skips the whole enablement path.
+        assert!(g.transition(ExecState::Enabled).is_err());
+        g.transition(ExecState::Reconciling).unwrap();
+        // APPROVAL_PENDING -> RECONCILING silently regresses instead of halting.
+        assert!(g.transition(ExecState::Reconciling).is_err());
+        g.transition(ExecState::ApprovalPending).unwrap();
+        // APPROVAL_PENDING -> RECONCILING is illegal from here too.
+        assert!(g.transition(ExecState::Reconciling).is_err());
+        g.transition(ExecState::Enabled).unwrap();
+        assert!(g.can_execute());
+        // ENABLED can only go to HALTED (safety halt).
+        assert!(g.transition(ExecState::Reconciling).is_err());
+        g.safety_halt();
+        assert_eq!(g.state(), ExecState::Halted);
+    }
 }
