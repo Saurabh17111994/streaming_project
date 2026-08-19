@@ -63,5 +63,9 @@ path = "src/bin/t9_paper.rs"
 name = "t9-paper-25"
 path = "src/bin/t9_paper_25.rs"
 
+[[bin]]
+name = "t9-paper-25-full"
+path = "src/bin/t9_paper_25_full.rs"
+
 [workspace]
 # The service is a single-crate workspace (Nautilus is consumed as external git deps).
