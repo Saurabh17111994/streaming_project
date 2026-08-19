@@ -69,7 +69,12 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 			}
 			continue
 		}
-		backoff = time.Second
+		// Reset after a healthy connect. Reset to the caller-supplied initial
+		// backoff (production passes time.Second; deterministic tests pass a
+		// millisecond) rather than a hard-coded one second, so the reconnect
+		// interval honours the configured value instead of racing callers that
+		// intentionally shrink it for reproducible lifecycle tests.
+		backoff = initialBackoff
 		updates := make(chan map[string]any, 16)
 		errors := make(chan error, 1)
 		readCtx, cancel := context.WithCancel(ctx)
@@ -97,7 +102,25 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 				if err != nil && onError != nil {
 					onError(err)
 				}
-				closed = true
+				// A broker can deliver a burst of reports and then disconnect
+				// (e.g. fills followed by an immediate socket drop). The reader
+				// sequenced those reports into `updates` before it signalled the
+				// termination, so drain them here rather than drop a valid
+				// postback merely because the close arrived in the same select.
+				for ctx.Err() == nil {
+					select {
+					case drained := <-updates:
+						dreport := NormalizeOrderUpdate(drained)
+						if err := publish(dreport); err != nil && onError != nil {
+							onError(err)
+						}
+					default:
+						closed = true
+					}
+					if closed {
+						break
+					}
+				}
 			case <-ctx.Done():
 				closed = true
 			}
