@@ -19,6 +19,8 @@ description = "Long-lived Nautilus execution/position authority; gateway-backend
 license = "LGPL-3.0-or-later"
 
 [dependencies]
+rust_decimal = "1"
+nautilus-core = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 nautilus-common = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 nautilus-live = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
 nautilus-execution = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }

@@ -11,9 +11,7 @@ use async_trait::async_trait;
 use tracing::debug;
 
 use super::client::{BridgeClient, BridgeReportStream};
-use super::protocol::{
-    Command, CommandEnvelope, ReportEnvelope, RECORD_REPORT,
-};
+use super::protocol::{Command, CommandEnvelope, ReportEnvelope, RECORD_REPORT};
 
 /// Scripted synchronous reply for the next command.
 #[derive(Debug, Clone)]
@@ -104,7 +102,12 @@ impl FakeBridge {
         format!("BRK-{:04}", self.counter)
     }
 
-    fn make_success(&self, cmd: Command, request_id: &str, broker_order_id: &str) -> ReportEnvelope {
+    fn make_success(
+        &self,
+        cmd: Command,
+        request_id: &str,
+        broker_order_id: &str,
+    ) -> ReportEnvelope {
         ReportEnvelope {
             record_type: RECORD_REPORT.to_string(),
             contract_version: 1,
@@ -157,7 +160,10 @@ impl BridgeClient for FakeBridge {
 
         let script = self.scripts.pop_front();
         let Some(script) = script else {
-            return Err(anyhow!("fake bridge: unexpected command {}", envelope.command));
+            return Err(anyhow!(
+                "fake bridge: unexpected command {}",
+                envelope.command
+            ));
         };
 
         let cmd = envelope
@@ -208,10 +214,7 @@ impl FakeBridge {
     ) -> anyhow::Result<ReportEnvelope> {
         match cmd {
             Command::Place => {
-                let order = envelope
-                    .order
-                    .as_ref()
-                    .context("place requires an order")?;
+                let order = envelope.order.as_ref().context("place requires an order")?;
                 let broker_order_id = self.next_broker_id();
                 self.orders.insert(
                     broker_order_id.clone(),
@@ -283,12 +286,16 @@ impl FakeBridge {
                     ..ReportEnvelope::default()
                 })
             }
-            _ => Err(anyhow!("fake bridge: scripted Accept for non-order command")),
+            _ => Err(anyhow!(
+                "fake bridge: scripted Accept for non-order command"
+            )),
         }
     }
 
     fn emit_fill(&self, envelope: &CommandEnvelope) {
-        let Some(order) = envelope.order.as_ref() else { return };
+        let Some(order) = envelope.order.as_ref() else {
+            return;
+        };
         let broker_order_id = self
             .orders
             .get(&envelope.client_order_ref)
@@ -326,7 +333,9 @@ impl FakeBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::protocol::{Command, OrderCommand, OrderType, Product, TransactionType, Validity};
+    use crate::bridge::protocol::{
+        Command, OrderCommand, OrderType, Product, TransactionType, Validity,
+    };
 
     fn place_env() -> CommandEnvelope {
         CommandEnvelope {
@@ -369,9 +378,15 @@ mod tests {
         let mut env = place_env();
         env.command = Command::Place.as_str().to_string();
         let rej = b.send_command(env.clone()).await.unwrap();
-        assert_eq!(rej.outcome(), Some(crate::bridge::protocol::ReportOutcome::Rejected));
+        assert_eq!(
+            rej.outcome(),
+            Some(crate::bridge::protocol::ReportOutcome::Rejected)
+        );
         let unk = b.send_command(env).await.unwrap();
-        assert_eq!(unk.outcome(), Some(crate::bridge::protocol::ReportOutcome::Unknown));
+        assert_eq!(
+            unk.outcome(),
+            Some(crate::bridge::protocol::ReportOutcome::Unknown)
+        );
     }
 
     #[tokio::test]

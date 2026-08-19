@@ -8,9 +8,9 @@ pub mod client;
 pub mod fake;
 pub mod protocol;
 
-pub use client::BridgeClient;
+pub use client::{BridgeClient, BridgeReportStream};
 pub use fake::FakeBridge;
 pub use protocol::{
-    Command, CommandEnvelope, OrderCommand, OrderCommandError, OrderType, Product, PROTOCOL_VERSION,
-    RECORD_COMMAND, RECORD_REPORT, ReportEnvelope, ReportOutcome, TransactionType, Validity,
+    Command, CommandEnvelope, OrderCommand, OrderCommandError, OrderType, Product, ReportEnvelope,
+    ReportOutcome, TransactionType, Validity, PROTOCOL_VERSION, RECORD_COMMAND, RECORD_REPORT,
 };
