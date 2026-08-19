@@ -1,0 +1,6 @@
+# Pin the Nautilus execution-service build to the audited toolchain
+# (see versions.pin: NAUTILUS_RUST_TOOLCHAIN=1.97.1).
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
