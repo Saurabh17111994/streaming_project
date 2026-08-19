@@ -4,4 +4,5 @@
 //! execution/position authority. See `../README.md` and the implementation plan.
 
 pub mod bridge;
+pub mod execution;
 pub mod gate;

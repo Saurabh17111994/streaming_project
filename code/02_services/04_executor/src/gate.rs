@@ -93,12 +93,12 @@ impl Gate {
     /// Returns `InvalidTransition` if `from -> to` is not sanctioned.
     pub fn transition(&mut self, to: ExecState) -> Result<(), InvalidTransition> {
         let from = self.state;
-        let sanctioned = match (from, to) {
+        let sanctioned = matches!(
+            (from, to),
             (ExecState::Halted, ExecState::Reconciling)
-            | (ExecState::Reconciling, ExecState::ApprovalPending)
-            | (ExecState::ApprovalPending, ExecState::Enabled) => true,
-            _ => false,
-        };
+                | (ExecState::Reconciling, ExecState::ApprovalPending)
+                | (ExecState::ApprovalPending, ExecState::Enabled)
+        );
         if !sanctioned {
             return Err(InvalidTransition { from, to });
         }
