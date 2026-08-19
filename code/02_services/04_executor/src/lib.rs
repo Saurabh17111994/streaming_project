@@ -1,8 +1,7 @@
-//! Nautilus execution service library crate.
-//!
-//! Replaces the retired Python executor scaffold (see `legacy_python/`) with a long-lived Rust
-//! execution/position authority. See `../README.md` and the implementation plan.
-
 pub mod bridge;
+pub mod config;
+pub mod engine;
 pub mod execution;
 pub mod gate;
+pub mod health;
+pub mod shutdown;
