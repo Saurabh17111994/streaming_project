@@ -491,6 +491,8 @@ public final class DdlBootstrap {
                     Map.entry("trade_instruction_state",
                             kvTable("instruction_id")),
                     Map.entry("eod_offload_state",
-                            kvTable("record_id"))
+                            kvTable("record_id")),
+                    Map.entry("Execution_Intent_Processed",
+                            TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(8, "instruction_id").build())
             );
 }
