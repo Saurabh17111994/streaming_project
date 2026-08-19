@@ -1003,16 +1003,24 @@ reachability remains a T8 completion criterion because those peer services do no
 | --- | --- | --- | --- |
 | Pinned SDK HTTP fixture | **PASS** — `TestFakeArrowHTTPBroker` | The real SDK adapter sends authenticated place, modify, cancel, query, order-book, trade-book, and position requests to the expected paths; `remarks`/broker ID mapping remains intact | Local fixture is not Arrow sandbox evidence |
 | Outcome matrix | **PASS** — rejection, timeout, malformed success, and ambiguous error tests | Documented rejection is `REJECTED`; timeout/malformed/ambiguous outcomes are never converted to success; place is not retried | Broker-side error semantics still need sandbox confirmation |
-| Order-update WebSocket fixture | **PASS** — `TestFakeArrowWebSocketLifecycleAndReconnect` | Ack/open, partial fill, complete fill, cancel, reject, unknown status, malformed keepalive text, duplicate identity, out-of-order delivery, close, and reconnect are exercised; reconnect emits observation only | Fixture uses the bridge seam rather than a live Arrow socket |
-| Race/lifecycle suite | **PASS** — 24 Go tests via `go test -race ./...`; `go vet ./...` | Request handling, reconnect backoff, event identity, and fake broker behavior are race-clean offline | No Rust/Java caller is connected yet |
-| Bridge image | **PASS** — `docker compose --profile execution-t3 build execution-bridge` | The code-root build context, pinned Go builder image, vendored SDK replacement, and non-root runtime image build successfully | Image digest is not yet recorded in T0 evidence |
+| Order-update WebSocket fixture | **PASS** — `TestFakeArrowWebSocketLifecycleAndReconnect` (re-verified 2026-08-19) | Ack/open, partial fill, complete fill, cancel, reject, unknown status, malformed keepalive text, duplicate identity, out-of-order delivery, close, and reconnect are exercised; reconnect emits observation only | Fixture uses the bridge seam rather than a live Arrow socket. A reconnect flakiness bug was root-caused and fixed in this pass: the loop drained buffered postbacks on disconnect and reset the reconnect interval to the caller-supplied backoff instead of a hard-coded 1s; the fixture is now deterministic at 30/30 runs |
+| Race/lifecycle suite | **PASS** — 24 Go tests via `go test -race ./...`; `go vet ./...` (re-verified 2026-08-19, now genuinely race-clean after the reconnect fix above) | Request handling, reconnect backoff, event identity, and fake broker behavior are race-clean offline | No Rust/Java caller is connected yet |
+| Bridge image | **PASS** — `docker compose --profile execution-t3 build execution-bridge` builds (re-verified 2026-08-19, exit 0; image `01_docker-execution-bridge` sha `804a96d4…`) | The code-root build context, pinned Go builder image, vendored SDK replacement, and non-root runtime image build successfully | Image digest is not yet recorded in T0 evidence |
 | Resolved network policy | **PASS** — `execution_network_check.py` plus 5 unit tests | `execution-net` is internal; only `execution-bridge` joins `arrow-egress`; no bridge host port; order credentials are rejected outside the ingestion market-data exception | Static/resolved policy is not a cross-container reachability probe |
-| Disabled runtime profile | **PASS** — profile health probe and network inspection | Bridge joins exactly `execution-net` and `arrow-egress`; `/healthz` is UP while `/readyz` returns 503 in default `disabled` mode | Fake profile does not authorize execution and has no real Arrow endpoint |
+| Disabled runtime profile | **PASS** — profile health probe and network inspection (re-verified 2026-08-19: `/healthz`→200 `status: UP`, `/readyz`→503 `ready: false, reason: broker_disabled`, `credentials_in_process:false`/`arrow_route_in_process:false`) | Bridge joins exactly `execution-net` and `arrow-egress`; `/healthz` is UP while `/readyz` returns 503 in default `disabled` mode | Fake profile does not authorize execution and has no real Arrow endpoint |
 
 The phase-2 output guarantee is therefore **offline fake/network evidence complete**. T3 remains
 partial by design: real sandbox authentication/re-authentication is blocked, gateway/Rust runtime
 route probes belong to T8, and real broker/reconciliation evidence belongs to T9. No test in this
 phase places a real order or accepts production credentials.
+
+**Re-verification note (2026-08-19):** all seven evidence rows above were re-run and confirmed in a
+single pass — 24 Go tests race-clean with `go vet` clean; the WebSocket lifecycle fixture driven
+30/30 without a flaky failure after the reconnect fix; the `execution-t3` image built with exit 0;
+the five network-isolation unit tests and the live resolved-network-policy gate both passed; and a
+`disabled`-mode probe returned `/healthz` 200 (`status: UP`) with `/readyz` 503
+(`ready: false, reason: broker_disabled`). Nothing in this phase validates a live Arrow order or
+accepts production credentials.
 
 ### Task 4 — Replace the executor scaffold with a Rust Nautilus service — **NOT IMPLEMENTED**
 
