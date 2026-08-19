@@ -7,12 +7,10 @@
 pub mod client;
 pub mod fake;
 pub mod protocol;
-pub mod transport;
 
-pub use client::{BridgeClient, BridgeReportStream};
-pub use fake::{CommandScript, FakeBridge};
+pub use client::BridgeClient;
+pub use fake::FakeBridge;
 pub use protocol::{
-    Command, CommandEnvelope, OrderCommand, OrderCommandError, OrderType, Product, ReportEnvelope,
-    ReportOutcome, TransactionType, Validity, PROTOCOL_VERSION, RECORD_COMMAND, RECORD_REPORT,
+    Command, CommandEnvelope, OrderCommand, OrderCommandError, OrderType, Product, PROTOCOL_VERSION,
+    RECORD_COMMAND, RECORD_REPORT, ReportEnvelope, ReportOutcome, TransactionType, Validity,
 };
-pub use transport::HttpBridgeClient;

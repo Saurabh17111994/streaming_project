@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use tracing::debug;
 
 use super::client::{BridgeClient, BridgeReportStream};
-use super::protocol::{Command, CommandEnvelope, ReportEnvelope, RECORD_REPORT};
+use super::protocol::{
+    Command, CommandEnvelope, ReportEnvelope, RECORD_REPORT,
+};
 
 /// Scripted synchronous reply for the next command.
 #[derive(Debug, Clone)]
@@ -67,7 +69,6 @@ pub struct FakeBridge {
     reports_rx: Option<BridgeReportStream>,
     orders: HashMap<String, OrderRecord>,
     counter: u64,
-    commands: u64,
     scripts: VecDeque<CommandScript>,
     emit_fill_after_place: bool,
 }
@@ -80,15 +81,9 @@ impl FakeBridge {
             reports_rx: None,
             orders: HashMap::new(),
             counter: 0,
-            commands: 0,
             scripts: VecDeque::new(),
             emit_fill_after_place: false,
         }
-    }
-
-    /// Total number of commands received (place/modify/cancel/query/reconcile).
-    pub fn command_count(&self) -> u64 {
-        self.commands
     }
 
     /// Queues a scripted reply for the next `send_command` call (consumed in FIFO order).
@@ -109,21 +104,13 @@ impl FakeBridge {
         format!("BRK-{:04}", self.counter)
     }
 
-    fn make_success(
-        &self,
-        cmd: Command,
-        envelope: &CommandEnvelope,
-        broker_order_id: &str,
-    ) -> ReportEnvelope {
+    fn make_success(&self, cmd: Command, request_id: &str, broker_order_id: &str) -> ReportEnvelope {
         ReportEnvelope {
             record_type: RECORD_REPORT.to_string(),
             contract_version: 1,
-            request_id: envelope.request_id.clone(),
+            request_id: request_id.to_string(),
             command: cmd.as_str().to_string(),
             outcome: "SUCCESS".to_string(),
-            // Arrow echoes `remarks` (= our client_order_ref) on every postback; the fake
-            // bridge mirrors that so the service can correlate reports back to orders.
-            client_order_ref: envelope.client_order_ref.clone(),
             broker_order_id: broker_order_id.to_string(),
             ..ReportEnvelope::default()
         }
@@ -168,14 +155,9 @@ impl BridgeClient for FakeBridge {
             .validate()
             .map_err(|e| anyhow!("invalid command: {e}"))?;
 
-        self.commands += 1;
-
         let script = self.scripts.pop_front();
         let Some(script) = script else {
-            return Err(anyhow!(
-                "fake bridge: unexpected command {}",
-                envelope.command
-            ));
+            return Err(anyhow!("fake bridge: unexpected command {}", envelope.command));
         };
 
         let cmd = envelope
@@ -191,7 +173,6 @@ impl BridgeClient for FakeBridge {
                 command: cmd.as_str().to_string(),
                 outcome: "REJECTED".to_string(),
                 reason,
-                client_order_ref: envelope.client_order_ref.clone(),
                 broker_order_id: envelope.broker_order_id.clone(),
                 ..ReportEnvelope::default()
             }),
@@ -202,7 +183,6 @@ impl BridgeClient for FakeBridge {
                 command: cmd.as_str().to_string(),
                 outcome: "UNKNOWN".to_string(),
                 reason,
-                client_order_ref: envelope.client_order_ref.clone(),
                 broker_order_id: envelope.broker_order_id.clone(),
                 ..ReportEnvelope::default()
             }),
@@ -228,7 +208,10 @@ impl FakeBridge {
     ) -> anyhow::Result<ReportEnvelope> {
         match cmd {
             Command::Place => {
-                let order = envelope.order.as_ref().context("place requires an order")?;
+                let order = envelope
+                    .order
+                    .as_ref()
+                    .context("place requires an order")?;
                 let broker_order_id = self.next_broker_id();
                 self.orders.insert(
                     broker_order_id.clone(),
@@ -242,7 +225,7 @@ impl FakeBridge {
                         price: order.price.clone(),
                     },
                 );
-                Ok(self.make_success(Command::Place, &envelope, &broker_order_id))
+                Ok(self.make_success(Command::Place, &envelope.request_id, &broker_order_id))
             }
             Command::Modify => {
                 // Re-record the referenced order; report success with the same broker id.
@@ -253,7 +236,11 @@ impl FakeBridge {
                 if let Some(order) = &envelope.order {
                     record.price = order.price.clone();
                 }
-                Ok(self.make_success(Command::Modify, &envelope, &envelope.broker_order_id))
+                Ok(self.make_success(
+                    Command::Modify,
+                    &envelope.request_id,
+                    &envelope.broker_order_id,
+                ))
             }
             Command::Cancel => {
                 let record = self
@@ -268,13 +255,16 @@ impl FakeBridge {
                     request_id: envelope.request_id.clone(),
                     command: Command::Cancel.as_str().to_string(),
                     outcome: "SUCCESS".to_string(),
-                    client_order_ref: envelope.client_order_ref.clone(),
                     broker_order_id: envelope.broker_order_id.clone(),
                     order_status: Some(FakeOrderStatus::Canceled.as_str().to_string()),
                     report_type: Some("order_canceled".to_string()),
                     ..ReportEnvelope::default()
                 });
-                Ok(self.make_success(Command::Cancel, &envelope, &envelope.broker_order_id))
+                Ok(self.make_success(
+                    Command::Cancel,
+                    &envelope.request_id,
+                    &envelope.broker_order_id,
+                ))
             }
             Command::QueryOrder => {
                 let record = self
@@ -287,23 +277,18 @@ impl FakeBridge {
                     request_id: envelope.request_id.clone(),
                     command: Command::QueryOrder.as_str().to_string(),
                     outcome: "SUCCESS".to_string(),
-                    client_order_ref: envelope.client_order_ref.clone(),
                     broker_order_id: record.broker_order_id.clone(),
                     order_status: Some(record.status.as_str().to_string()),
                     report_type: Some("order_status".to_string()),
                     ..ReportEnvelope::default()
                 })
             }
-            _ => Err(anyhow!(
-                "fake bridge: scripted Accept for non-order command"
-            )),
+            _ => Err(anyhow!("fake bridge: scripted Accept for non-order command")),
         }
     }
 
     fn emit_fill(&self, envelope: &CommandEnvelope) {
-        let Some(order) = envelope.order.as_ref() else {
-            return;
-        };
+        let Some(order) = envelope.order.as_ref() else { return };
         let broker_order_id = self
             .orders
             .get(&envelope.client_order_ref)
@@ -324,9 +309,6 @@ impl FakeBridge {
             request_id: envelope.request_id.clone(),
             command: Command::Place.as_str().to_string(),
             outcome: "SUCCESS".to_string(),
-            // Echo `remarks` (= client_order_ref) so the service can correlate the
-            // asynchronous fill back to the order (Arrow postback contract).
-            client_order_ref: envelope.client_order_ref.clone(),
             broker_order_id,
             order_status: Some(FakeOrderStatus::Filled.as_str().to_string()),
             report_type: Some("order_filled".to_string()),
@@ -344,9 +326,7 @@ impl FakeBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::protocol::{
-        Command, OrderCommand, OrderType, Product, TransactionType, Validity,
-    };
+    use crate::bridge::protocol::{Command, OrderCommand, OrderType, Product, TransactionType, Validity};
 
     fn place_env() -> CommandEnvelope {
         CommandEnvelope {
@@ -389,15 +369,9 @@ mod tests {
         let mut env = place_env();
         env.command = Command::Place.as_str().to_string();
         let rej = b.send_command(env.clone()).await.unwrap();
-        assert_eq!(
-            rej.outcome(),
-            Some(crate::bridge::protocol::ReportOutcome::Rejected)
-        );
+        assert_eq!(rej.outcome(), Some(crate::bridge::protocol::ReportOutcome::Rejected));
         let unk = b.send_command(env).await.unwrap();
-        assert_eq!(
-            unk.outcome(),
-            Some(crate::bridge::protocol::ReportOutcome::Unknown)
-        );
+        assert_eq!(unk.outcome(), Some(crate::bridge::protocol::ReportOutcome::Unknown));
     }
 
     #[tokio::test]
@@ -408,111 +382,5 @@ mod tests {
         let mut env = place_env();
         env.command = Command::Place.as_str().to_string();
         assert!(b.send_command(env).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn place_modify_cancel_roundtrip_echoes_client_order_ref() {
-        let mut b = FakeBridge::new();
-        b.connect().await.unwrap();
-        b.script(CommandScript::Accept); // place
-        b.script(CommandScript::Accept); // modify
-        b.script(CommandScript::Accept); // cancel
-        b.script(CommandScript::Accept); // query
-
-        // Place: returns a broker id and echoes our `remarks` (= client_order_ref).
-        let mut place = place_env();
-        place.command = Command::Place.as_str().to_string();
-        let placed = b.send_command(place).await.unwrap();
-        assert!(placed.is_success());
-        let broker_id = placed.broker_order_id.clone();
-        assert!(!broker_id.is_empty());
-        assert_eq!(placed.client_order_ref, "CLIENT-1");
-
-        // Modify: references the broker id, echoes the same client_order_ref.
-        let mut modify = CommandEnvelope::new(Command::Modify, "req-2");
-        modify.client_order_ref = "CLIENT-1".into();
-        modify.instruction_id = "inst-1".into();
-        modify.execution_attempt_id = "att-1".into();
-        modify.broker_order_id = broker_id.clone();
-        modify.order = Some(
-            OrderCommand::new("NFO", "NIFTY")
-                .with_quantity("10")
-                .with_side(TransactionType::Buy)
-                .with_order_type(OrderType::Lmt)
-                .with_product(Product::Cash)
-                .with_validity(Validity::Day)
-                .with_price("99"),
-        );
-        let modified = b.send_command(modify).await.unwrap();
-        assert!(modified.is_success());
-        assert_eq!(modified.broker_order_id, broker_id);
-        assert_eq!(modified.client_order_ref, "CLIENT-1");
-
-        // Cancel: the order flips to CANCELED and an async report (with remarks echo)
-        // lands on the report stream.
-        let mut cancel = CommandEnvelope::new(Command::Cancel, "req-3");
-        cancel.client_order_ref = "CLIENT-1".into();
-        cancel.broker_order_id = broker_id.clone();
-        let canceled = b.send_command(cancel).await.unwrap();
-        assert!(canceled.is_success());
-        assert_eq!(canceled.client_order_ref, "CLIENT-1");
-
-        let mut reports = b.take_reports().expect("report stream available");
-        let report = reports.try_recv().expect("canceled report emitted");
-        assert_eq!(report.report_type.as_deref(), Some("order_canceled"));
-        assert_eq!(report.order_status.as_deref(), Some("CANCELED"));
-        assert_eq!(report.broker_order_id, broker_id);
-        assert_eq!(report.client_order_ref, "CLIENT-1");
-
-        // Query confirms the lifecycle closed at CANCELED.
-        let mut query = CommandEnvelope::new(Command::QueryOrder, "req-4");
-        query.client_order_ref = "CLIENT-1".into();
-        query.broker_order_id = broker_id;
-        let queried = b.send_command(query).await.unwrap();
-        assert_eq!(queried.order_status.as_deref(), Some("CANCELED"));
-        assert_eq!(queried.client_order_ref, "CLIENT-1");
-
-        assert_eq!(b.command_count(), 4);
-    }
-
-    #[tokio::test]
-    async fn fill_report_echoes_client_order_ref() {
-        let mut b = FakeBridge::new();
-        b.connect().await.unwrap();
-        b.script(CommandScript::AcceptThenFill);
-
-        let mut place = place_env();
-        place.command = Command::Place.as_str().to_string();
-        let reply = b.send_command(place).await.unwrap();
-        assert!(reply.is_success());
-        assert_eq!(reply.client_order_ref, "CLIENT-1");
-        let broker_id = reply.broker_order_id;
-
-        let mut reports = b.take_reports().expect("report stream available");
-        let fill = reports.try_recv().expect("async fill report emitted");
-        assert_eq!(fill.report_type.as_deref(), Some("order_filled"));
-        assert_eq!(fill.order_status.as_deref(), Some("FILLED"));
-        // Arrow postback contract: the fill must echo our `remarks` (= client_order_ref)
-        // so the service can correlate it back to the placed order.
-        assert_eq!(fill.client_order_ref, "CLIENT-1");
-        assert_eq!(fill.broker_order_id, broker_id);
-        assert_eq!(fill.fill_quantity.as_deref(), Some("10"));
-        assert_eq!(fill.fill_price.as_deref(), Some("100"));
-    }
-
-    #[tokio::test]
-    async fn command_count_tracks_all_commands() {
-        let mut b = FakeBridge::new();
-        b.connect().await.unwrap();
-        assert_eq!(b.command_count(), 0);
-        for _ in 0..3 {
-            b.script(CommandScript::Accept);
-        }
-        let mut env = place_env();
-        env.command = Command::Place.as_str().to_string();
-        b.send_command(env.clone()).await.unwrap();
-        b.send_command(env.clone()).await.unwrap();
-        b.send_command(env).await.unwrap();
-        assert_eq!(b.command_count(), 3);
     }
 }

@@ -41,9 +41,6 @@ impl Command {
         }
     }
 
-    /// Reasoned `from_str` mirrors the Go bridge's wire classification (returns `Option`, not
-    /// `FromStr`), so the trait-impl lint is intentionally suppressed.
-    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "place" => Some(Self::Place),
@@ -81,7 +78,6 @@ impl ReportOutcome {
         }
     }
 
-    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "SUCCESS" => Some(Self::Success),
@@ -181,7 +177,7 @@ impl fmt::Display for OrderCommandError {
 impl std::error::Error for OrderCommandError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OrderCommand {
     pub exchange: String,
     pub symbol: String,
@@ -259,11 +255,7 @@ impl OrderCommand {
         }
         match self.transaction_type.to_uppercase().as_str() {
             "B" | "S" | "BUY" | "SELL" => {}
-            _ => {
-                return Err(OrderCommandError(
-                    "transaction_type must be B, S, BUY, or SELL".to_string(),
-                ))
-            }
+            _ => return Err(OrderCommandError("transaction_type must be B, S, BUY, or SELL".to_string())),
         }
         match self.order_type.to_uppercase().as_str() {
             "LMT" | "MKT" | "SL-LMT" | "SL-MKT" => {}
@@ -276,9 +268,7 @@ impl OrderCommand {
             && !self.price.trim().is_empty()
             && self.price.trim() != "0"
         {
-            return Err(OrderCommandError(
-                "MKT price must be empty or 0".to_string(),
-            ));
+            return Err(OrderCommandError("MKT price must be empty or 0".to_string()));
         }
         match self.product.to_uppercase().as_str() {
             "I" | "C" | "M" => {}
@@ -300,7 +290,7 @@ fn all_digits(s: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommandEnvelope {
     #[serde(default)]
     pub record_type: String,
@@ -339,9 +329,7 @@ impl CommandEnvelope {
     /// Validates the envelope against the bridge's constraints.
     pub fn validate(&self) -> Result<(), OrderCommandError> {
         if self.record_type != RECORD_COMMAND {
-            return Err(OrderCommandError(
-                "record_type must be execution_command".to_string(),
-            ));
+            return Err(OrderCommandError("record_type must be execution_command".to_string()));
         }
         if self.contract_version != PROTOCOL_VERSION {
             return Err(OrderCommandError(format!(
@@ -354,12 +342,7 @@ impl CommandEnvelope {
         }
         let cmd = match Command::from_str(&self.command) {
             Some(c) => c,
-            None => {
-                return Err(OrderCommandError(format!(
-                    "unsupported command {}",
-                    self.command
-                )))
-            }
+            None => return Err(OrderCommandError(format!("unsupported command {}", self.command))),
         };
         match cmd {
             Command::Place | Command::Modify => {
@@ -380,14 +363,10 @@ impl CommandEnvelope {
                     .as_ref()
                     .ok_or_else(|| OrderCommandError("order is required".to_string()))?;
                 if cmd == Command::Place && !self.broker_order_id.trim().is_empty() {
-                    return Err(OrderCommandError(
-                        "broker_order_id is not allowed for place".to_string(),
-                    ));
+                    return Err(OrderCommandError("broker_order_id is not allowed for place".to_string()));
                 }
                 if cmd == Command::Modify && self.broker_order_id.trim().is_empty() {
-                    return Err(OrderCommandError(
-                        "broker_order_id is required for modify".to_string(),
-                    ));
+                    return Err(OrderCommandError("broker_order_id is required for modify".to_string()));
                 }
                 order.validate()?;
                 validate_client_order_ref(&self.client_order_ref)?;
@@ -424,7 +403,7 @@ fn validate_client_order_ref(r: &str) -> Result<(), OrderCommandError> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct ReportEnvelope {
     #[serde(default)]
     pub record_type: String,
@@ -502,8 +481,8 @@ mod tests {
         o.validate().unwrap();
         let v = serde_json::to_value(&o).unwrap();
         assert_eq!(v["exchange"], "NFO");
-        assert_eq!(v["transaction_type"], "BUY");
-        assert_eq!(v["order_type"], "LMT");
+        assert_eq!(v["transactionType"], "BUY");
+        assert_eq!(v["orderType"], "LMT");
         assert_eq!(v["product"], "C");
         assert_eq!(v["validity"], "DAY");
         // MKT with a price is invalid

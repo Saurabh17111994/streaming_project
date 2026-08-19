@@ -1,17 +1,7 @@
-pub mod bootstrap;
-pub mod clockwatch;
-pub mod durable;
+//! Nautilus execution service library crate.
+//!
+//! Replaces the retired Python executor scaffold (see `legacy_python/`) with a long-lived Rust
+//! execution/position authority. See `../README.md` and the implementation plan.
+
 pub mod bridge;
-pub mod config;
-pub mod engine;
-pub mod execution;
-pub mod executiongate;
 pub mod gate;
-pub mod gateway_protocol;
-pub mod health;
-pub mod http;
-pub mod projection;
-pub mod resilience;
-pub mod shutdown;
-pub mod t9paper;
-pub mod telemetry;
