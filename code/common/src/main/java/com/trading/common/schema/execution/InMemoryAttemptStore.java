@@ -1,9 +1,11 @@
 package com.trading.common.schema.execution;
 
+import com.trading.common.model.AttemptPhase;
 import com.trading.common.schema.ownership.ColumnOwnership;
 import com.trading.common.schema.ownership.ExecutionAttemptsColumnOwnership;
 import com.trading.common.schema.ownership.ExecutionAttemptsColumns;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -49,23 +51,40 @@ import java.util.Set;
  * the {@code 04_executor} module; transitions only ever touch phase/phase_epoch —
  * call-evidence columns (outcome, submitted/terminal timestamps, broker order id)
  * belong to the broker-adapter's group and are never written here.
+ *
+ * <p>Since T5 (CHG-044) the legal matrices are no longer hand-maintained maps:
+ * they are derived from the canonical {@link AttemptPhase#legalTargets} matrix
+ * so the validator, this store, and the Rust gate can never disagree again.
+ * The submission path keeps UNKNOWN's exits out (they are reconciliation-only).
  */
 public final class InMemoryAttemptStore implements AttemptStore {
 
     private static final ColumnOwnership MATRIX = ExecutionAttemptsColumnOwnership.MATRIX;
     private static final String WRITER = ExecutionAttemptsColumnOwnership.WRITER_ATTEMPT_STORE;
 
-    /** Submission-path legal transitions (dossier). UNKNOWN exits live in RESOLVE. */
-    private static final Map<String, Set<String>> SUBMIT_TRANSITIONS = Map.of(
-            AttemptRecord.PHASE_PREPARED, Set.of(AttemptRecord.PHASE_SUBMITTING),
-            AttemptRecord.PHASE_SUBMITTING, Set.of(AttemptRecord.PHASE_ACCEPTED,
-                    AttemptRecord.PHASE_REJECTED, AttemptRecord.PHASE_CANCELLED,
-                    AttemptRecord.PHASE_UNKNOWN));
+    /** Submission-path legal transitions (dossier). Derived from the canonical
+     * matrix, minus the reconciliation-only UNKNOWN exits. */
+    private static final Map<String, Set<String>> SUBMIT_TRANSITIONS = deriveTransitions(false);
 
     /** Reconciliation-path legal transitions (explicit result only). */
-    private static final Map<String, Set<String>> RESOLVE_TRANSITIONS = Map.of(
-            AttemptRecord.PHASE_UNKNOWN, Set.of(AttemptRecord.PHASE_ACCEPTED,
-                    AttemptRecord.PHASE_REJECTED, AttemptRecord.PHASE_CANCELLED));
+    private static final Map<String, Set<String>> RESOLVE_TRANSITIONS = deriveTransitions(true);
+
+    private static Map<String, Set<String>> deriveTransitions(boolean reconciliation) {
+        Map<String, Set<String>> out = new HashMap<>();
+        for (AttemptPhase from : AttemptPhase.values()) {
+            Set<String> targets = new HashSet<>();
+            for (AttemptPhase to : from.legalTargets()) {
+                boolean onlyReconcile = from.isReconciliationSource();
+                if (onlyReconcile == reconciliation) {
+                    targets.add(to.name());
+                }
+            }
+            if (!targets.isEmpty()) {
+                out.put(from.name(), Set.copyOf(targets));
+            }
+        }
+        return Map.copyOf(out);
+    }
 
     private final ColumnOwnership matrix;
     private final Map<String, AttemptRecord> byAttemptId = new LinkedHashMap<>();
@@ -115,7 +134,8 @@ public final class InMemoryAttemptStore implements AttemptStore {
                 request.executionAttemptId(), request.accountScopeId(),
                 request.instructionId(), request.actionId(),
                 request.executionPartitionId(), request.requestHash(),
-                request.clientOrderRef(), request.gateEpoch(), request.nowTs());
+                request.clientOrderRef(), request.gateFenceToken(),
+                request.gateEpoch(), request.nowTs());
 
         // Guard on every mutation: the mutable group this store writes must
         // still belong to the attempt-store (and none of it be identity).

@@ -2,7 +2,7 @@ package com.trading.common.schema.ownership;
 
 /**
  * Writer/column ownership matrix for Execution_Attempts
- * ({@code code/01_platform/02_sql/ddl/12_execution_attempts.sql} v2, SCH-15).
+ * ({@code code/01_platform/02_sql/ddl/12_execution_attempts.sql} v3, SCH-15).
  *
  * <p>Executor is the sole table owner (contract docs/04_contracts/07-executor.md;
  * {@link com.trading.common.ownership.OwnershipMatrix} row "order
@@ -24,9 +24,10 @@ package com.trading.common.schema.ownership;
  *
  * <p>Identity columns — the PK {@code execution_attempt_id}, account /
  * instruction / partition scope, {@code request_hash} + {@code client_order_ref}
- * (deterministic attempt identity), {@code gate_epoch} (stored at creation),
- * and {@code schema_version} — are written once at PREPARED and never
- * partial-updated.
+ * (deterministic attempt identity), the authorization pair {@code gate_epoch} +
+ * {@code gate_fence_token} (the exact fence token that authorized the attempt,
+ * stored at creation, CHG-044), and {@code schema_version} — are written once at
+ * PREPARED and never partial-updated.
  */
 public final class ExecutionAttemptsColumnOwnership {
 
@@ -37,7 +38,8 @@ public final class ExecutionAttemptsColumnOwnership {
     public static final String WRITER_ATTEMPT_STORE = "executor:attempt-store";
     public static final String WRITER_BROKER_ADAPTER = "executor:broker-adapter";
 
-    /** Identity: 0-6 (PK + scope + request identity) + 8 (gate_epoch) + 18 (schema_version). */
+    /** Identity: 0-6 (PK + scope + request identity) + 8 (gate_epoch) + 18-19
+     * (schema_version, gate_fence_token — authorization captured at creation). */
     private static final int[] IDENTITY = {
             ExecutionAttemptsColumns.EXECUTION_ATTEMPT_ID,
             ExecutionAttemptsColumns.ACCOUNT_SCOPE_ID,
@@ -47,12 +49,13 @@ public final class ExecutionAttemptsColumnOwnership {
             ExecutionAttemptsColumns.REQUEST_HASH,
             ExecutionAttemptsColumns.CLIENT_ORDER_REF,
             ExecutionAttemptsColumns.GATE_EPOCH,
-            ExecutionAttemptsColumns.SCHEMA_VERSION
+            ExecutionAttemptsColumns.SCHEMA_VERSION,
+            ExecutionAttemptsColumns.GATE_FENCE_TOKEN
     };
 
     public static final ColumnOwnership MATRIX = new ColumnOwnership(
             TABLE_NAME,
-            ExecutionAttemptsColumns.SCHEMA_VERSION_V2,
+            ExecutionAttemptsColumns.SCHEMA_VERSION_V3,
             OWNER,
             ExecutionAttemptsColumns.NAMES,
             IDENTITY,

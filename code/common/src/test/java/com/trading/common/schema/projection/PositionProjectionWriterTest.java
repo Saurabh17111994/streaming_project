@@ -1,0 +1,74 @@
+package com.trading.common.schema.projection;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.trading.common.model.PositionState;
+import com.trading.common.schema.position.PositionSnapshot;
+import org.junit.jupiter.api.Test;
+
+class PositionProjectionWriterTest {
+
+    private static final long NOW = 1000L;
+
+    private static NautilusPositionEvent event(long seq, String side, long open, long closed,
+            PositionState state) {
+        return new NautilusPositionEvent(
+                "pos-1", "tc-1", "acc-1", 1001L, "CME", "wti", side, state,
+                open, closed, 1000L, 900L, "evt-" + seq, seq, NOW);
+    }
+
+    @Test
+    void serializesNautilusEventWithoutRecomputing() {
+        NautilusPositionEvent e = event(1L, "BUY", 10, 0, PositionState.OPEN);
+        PositionProjectionWriter.PositionWriteResult r = PositionProjectionWriter.apply(null, e, NOW);
+        assertThat(r.outcome()).isEqualTo(PositionProjectionWriter.Outcome.APPLIED);
+        // open/closed/avg are carried unchanged from Nautilus — not recomputed.
+        assertThat(r.snapshot().openQuantity()).isEqualTo(10);
+        assertThat(r.snapshot().closedQuantity()).isEqualTo(0);
+        assertThat(r.snapshot().averageEntryPaise()).isEqualTo(1000L);
+        assertThat(r.snapshot().state()).isEqualTo(PositionState.OPEN);
+        assertThat(r.snapshot().sourceVersion()).isEqualTo(1L);
+    }
+
+    @Test
+    void duplicateVersionNoOp() {
+        NautilusPositionEvent e = event(1L, "BUY", 10, 0, PositionState.OPEN);
+        PositionProjectionWriter.PositionWriteResult first = PositionProjectionWriter.apply(null, e, NOW);
+        PositionProjectionWriter.PositionWriteResult dupe = PositionProjectionWriter.apply(
+                first.snapshot(), e, NOW);
+        assertThat(dupe.outcome()).isEqualTo(PositionProjectionWriter.Outcome.DUPLICATE);
+    }
+
+    @Test
+    void staleVersionRejected() {
+        NautilusPositionEvent newer = event(2L, "BUY", 10, 0, PositionState.OPEN);
+        PositionProjectionWriter.PositionWriteResult first = PositionProjectionWriter.apply(null, newer, NOW);
+        NautilusPositionEvent older = event(1L, "BUY", 5, 0, PositionState.OPEN);
+        PositionProjectionWriter.PositionWriteResult stale = PositionProjectionWriter.apply(
+                first.snapshot(), older, NOW);
+        assertThat(stale.outcome()).isEqualTo(PositionProjectionWriter.Outcome.STALE);
+    }
+
+    @Test
+    void inconsistentEventIsViolation() {
+        // open=5 closed=5 with state OPEN contradicts the derived reading => violation.
+        NautilusPositionEvent bad = new NautilusPositionEvent(
+                "pos-1", "tc-1", "acc-1", 1001L, "CME", "wti", "BUY",
+                PositionState.OPEN, 5, 5, 1000L, 900L, "evt-1", 1L, NOW);
+        PositionProjectionWriter.PositionWriteResult r = PositionProjectionWriter.apply(null, bad, NOW);
+        assertThat(r.outcome()).isEqualTo(PositionProjectionWriter.Outcome.VIOLATION);
+        assertThat(r.reason()).isEqualTo(QuarantineReason.POSITION_VIOLATION);
+    }
+
+    @Test
+    void conflictVersionIsViolation() {
+        NautilusPositionEvent e1 = event(1L, "BUY", 10, 0, PositionState.OPEN);
+        PositionProjectionWriter.PositionWriteResult first = PositionProjectionWriter.apply(null, e1, NOW);
+        NautilusPositionEvent conflicting = new NautilusPositionEvent(
+                "pos-1", "tc-1", "acc-1", 1001L, "CME", "wti", "BUY",
+                PositionState.OPEN, 20, 0, 1000L, 900L, "evt-DIFFERENT", 1L, NOW);
+        PositionProjectionWriter.PositionWriteResult r =
+                PositionProjectionWriter.apply(first.snapshot(), conflicting, NOW);
+        assertThat(r.outcome()).isEqualTo(PositionProjectionWriter.Outcome.VIOLATION);
+    }
+}

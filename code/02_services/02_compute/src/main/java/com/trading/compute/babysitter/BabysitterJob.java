@@ -1,50 +1,70 @@
 package com.trading.compute.babysitter;
 
+import com.trading.common.schema.position.PositionSnapshot;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.configuration.CheckpointingOptions;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.legacy.SinkFunction;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.types.RowKind;
+import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.FlussSource;
+import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Babysitter Flink job — MVP strict no-op (DEC-017).
+ * Babysitter Flink job — read-only {@code Positions} observer (Task 7 of
+ * docs/08_implementation/19-nautilus-execution-service-implementation-plan.md,
+ * DEC-017).
  *
- * <p>Consumes versioned {@code Positions} changelog and checkpointed observation
- * state. Emits zero {@code Position_Actions} records for every input in MVP.
- * {@code POSITION_ACTIONS_ENABLED} is hard-coded {@code false}; any attempt to
- * enable it at startup SHALL fail closed.
+ * <p>Replaces the MVP marker source with a versioned {@code Positions} KV
+ * changelog source: full snapshot+changelog offsets
+ * ({@code OffsetsInitializer.full()}), current-value {@code RowKind} filtering
+ * (INSERT/UPDATE_AFTER), a keyed observation operator that retains the latest
+ * validated version/freshness metadata per {@code position_id} in checkpointed
+ * {@code ValueState}, and a deliberate no-op terminal sink. The job
+ * checkpoints observation state, so a restored run continues from the last
+ * accepted version instead of losing it.
+ *
+ * <p>Emits zero {@code Position_Actions} records for every input in MVP.
+ * {@code POSITION_ACTIONS_ENABLED} must be unset or {@code false}; any attempt
+ * to enable it fails startup (with the same R-286 trimming that guards the
+ * legacy shell). Missing/malformed source config fails closed at startup.
  *
  * <p>Safety rule: the Babysitter never calls the Arrow REST API or any broker
- * endpoint directly. Babysitter health never implies Executor trading readiness.
+ * endpoint directly, and it never writes lifecycle/position/execution tables —
+ * it observes {@code Positions} only. Babysitter health never implies
+ * Executor trading readiness.
  *
- * <p>See docs/08_implementation/05-execution-core.md (Babysitter — position observation) for the
- * full implementation
- * contract.
+ * <p>See docs/08_implementation/05-execution-core.md (Babysitter — position
+ * observation) for the full implementation contract.
  */
 public final class BabysitterJob {
 
     private static final Logger LOG = LoggerFactory.getLogger(BabysitterJob.class);
 
-    /** Hard-coded false for MVP per DEC-017; cannot be overridden. */
-    private static final boolean POSITION_ACTIONS_ENABLED = false;
+    /** Pinned source UID; replaced the MVP {@code babysitter-mvp-source}. */
+    static final String SOURCE_UID = "positions-changelog";
 
     private BabysitterJob() {
         // utility class
     }
 
-    /**
-     * MVP entry point. Validates the action flag, sets up the checkpointed
-     * Flink job, consumes Positions changelog, and emits zero actions.
-     */
+    /** Production entry point: build and submit the Positions observer. */
     public static void main(String[] args) throws Exception {
-        // Fail closed if anyone tries to override the action flag.
-        // R-286: trim the env value — ' false ' or 'false\n' from config-file
-        // exports previously triggered the guard spuriously.
-        validateActionFlag(System.getenv("POSITION_ACTIONS_ENABLED"));
+        // Fail closed on the action flag + required configuration.
+        BabysitterConfig config = BabysitterConfig.fromEnv();
         LOG.info(
-            "babysitter: starting MVP no-op job (POSITION_ACTIONS_ENABLED={})",
-            POSITION_ACTIONS_ENABLED
-        );
-        buildTopology().execute("Babysitter MVP no-op job");
+            "babysitter: starting Positions observer "
+                    + "(POSITION_ACTIONS_ENABLED={}, database={}, table={}, checkpointDir={}, "
+                    + "checkpointIntervalMs={}, freshnessThresholdMs={})",
+            config.actionEnabled(), config.database(), config.table(), config.checkpointDir(),
+            config.checkpointIntervalMs(), config.freshnessThresholdMs());
+        buildTopology(config).execute("Babysitter Positions observer");
     }
 
     /**
@@ -53,49 +73,90 @@ public final class BabysitterJob {
      * every variant without a Flink cluster.
      */
     static void validateActionFlag(String envValue) {
-        if (envValue != null
-                && !"false".equalsIgnoreCase(envValue.trim())) {
-            throw new IllegalStateException(
-                "POSITION_ACTIONS_ENABLED must be false in MVP; got '" + envValue + "'"
-            );
-        }
+        BabysitterConfig.parseActionEnabled(envValue);
     }
 
     /**
-     * Builds the MVP no-op topology (marker source → no-op map → discard)
-     * without submitting it. Package-private so BAB-UNIT-001 can inspect the
-     * generated graph and assert zero {@code Position_Actions} operators.
+     * Builds the full production topology — real {@code FlussSource} over
+     * {@code Positions} (snapshot+changelog), checkpointing, then the shared
+     * observation pipeline. Submitting this connects to the Fluss cluster
+     * (fail-fast if unreachable or the table is missing).
      */
-    static StreamExecutionEnvironment buildTopology() {
+    static StreamExecutionEnvironment buildTopology(BabysitterConfig config) {
+        // Checkpoint storage is a deployment property; point local/dev runs at
+        // a durable directory (mirrors the proven SignalJob CHECKPOINT_DIR
+        // pattern) so a restart can restore observation state.
+        Configuration flinkConfig = new Configuration();
+        if (config.checkpointDir() != null) {
+            flinkConfig.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, config.checkpointDir());
+        }
         StreamExecutionEnvironment env =
-            StreamExecutionEnvironment.getExecutionEnvironment();
+                StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
+        env.enableCheckpointing(config.checkpointIntervalMs());
 
-        // R-120: Flink's StreamGraphGenerator rejects a topology with no
-        // operators ("No operators defined in streaming topology"). Wire a
-        // minimal marker source -> no-op map -> discard sink so the MVP job
-        // submits; the real Positions-changelog source replaces this per the
-        // implementation dossier.
-        // Explicit operator names + UIDs pin the restore anchors
-        // (CHECKPOINT-RESTORE-001 / DEC-035) so a future topology change
-        // cannot silently drift them.
-        env.fromElements(0L)
-                .name("babysitter-mvp-source")
-                .uid("babysitter-mvp-source")
-                .map(value -> {
-                    // MVP no-op marker: never produces Position_Actions.
-                    return value;
-                })
-                .name("babysitter-mvp-marker")
-                .uid("babysitter-mvp-marker")
-                .map(value -> (Void) null)
-                .name("babysitter-mvp-discard")
-                .uid("babysitter-mvp-discard");
+        FlussSource<RowData> source = FlussSource.<RowData>builder()
+                .setBootstrapServers(config.bootstrapServers())
+                .setDatabase(config.database())
+                .setTable(config.table())
+                .setStartingOffsets(OffsetsInitializer.full())
+                .setDeserializationSchema(new RowDataDeserializationSchema())
+                .build();
 
-        // TODO: wire Positions changelog source, observation state,
-        //   checkpointing, and zero-action emission per the implementation
-        //   dossier (docs/08_implementation/05-execution-core.md — Babysitter section).
+        DataStream<RowData> positions = env.fromSource(
+                        source, WatermarkStrategy.noWatermarks(), SOURCE_UID)
+                .uid(SOURCE_UID);
 
+        attachObservationPipeline(positions, config);
         return env;
+    }
+
+    /**
+     * Cluster-free observation pipeline: RowKind filter → validated snapshot
+     * deserializer → keyed observation operator (checkpointed ValueState) →
+     * deliberate no-op discard. Separated so a unit test can attach the exact
+     * production operators to an in-memory {@code Positions} stand-in and
+     * inspect the {@code StreamGraph} without a cluster.
+     */
+    static void attachObservationPipeline(DataStream<RowData> positions,
+            BabysitterConfig config) {
+        positions
+                .filter(BabysitterJob::isCurrentValueRow)
+                .name("babysitter-rowkind-filter")
+                .uid("babysitter-rowkind-filter")
+                .flatMap(new PositionsRowDeserializer())
+                .name("babysitter-position-deserialize")
+                .uid("babysitter-position-deserialize")
+                .keyBy(PositionSnapshot::positionId)
+                .process(new PositionsObservationOperator())
+                .name("babysitter-position-observation")
+                .uid("babysitter-position-observation")
+                .addSink(new BabysitterDiscardSink())
+                .name("babysitter-discard")
+                .uid("babysitter-discard");
+    }
+
+    /** INSERT and UPDATE_AFTER carry the current full row; BEFORE/DELETE are skipped. */
+    static boolean isCurrentValueRow(RowData row) {
+        RowKind kind = row.getRowKind();
+        return kind == RowKind.INSERT || kind == RowKind.UPDATE_AFTER;
+    }
+
+    /**
+     * Deliberate no-op terminal boundary: receives nothing (the observation
+     * operator never emits) and would only discard anyway. Guarantees the
+     * graph has a sink node with no Action Capture / Arrow / lifecycle /
+     * position / execution output behind it.
+     */
+    @SuppressWarnings("deprecation") // SinkFunction (legacy package) is the standard 2.2.1 no-op sink
+    public static final class BabysitterDiscardSink implements SinkFunction<Void> {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public void invoke(Void value, Context context) {
+            // Intentionally empty: no Position_Actions, no persistence, no
+            // broker call. The Babysitter is a read-only observer.
+        }
     }
 }

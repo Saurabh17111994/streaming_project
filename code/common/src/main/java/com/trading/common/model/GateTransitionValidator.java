@@ -1,8 +1,5 @@
 package com.trading.common.model;
 
-import java.util.EnumSet;
-import java.util.Set;
-
 /**
  * Runtime validator for {@link GateState} and {@link AttemptPhase} transitions.
  *
@@ -16,37 +13,26 @@ import java.util.Set;
  *   <li>Stale-epoch requests are rejected without side-effects</li>
  * </ul>
  *
- * <p>Source: docs/08_implementation/01-foundation.md &rarr;
- * "Table categories and invariants" (L434) + "Order safety invariant" (L699).
+ * <p>The legal matrices are not defined here: {@link AttemptPhase#legalTargets}
+ * and {@link GateState#legalTargets} are the single source of truth (T5
+ * reconciliation, CHG-044). The one canonical table is shared by this validator,
+ * the attempt-store writer, and the Rust gate, so no runtime task can start
+ * while two different meanings exist for the same transition.
+ *
+ * <p>Corrected vs the pre-T5 matrix: ACCEPTED &rarr; REJECTED is now rejected
+ * (ACCEPTED is terminal per the attempt-store's TERMINAL_PHASES); terminal
+ * phases can no longer become UNKNOWN; PREPARED can no longer go to CANCELLED
+ * or UNKNOWN (its only exit is SUBMITTING); HALTED &rarr; APPROVAL_PENDING and
+ * APPROVAL_PENDING &rarr; RECONCILING are rejected (they skip the only
+ * enablement path / silently re-reconcile instead of halting).
+ *
+ * <p>Source: docs/08_implementation/05-execution-core.md &rarr; "State machines"
+ * and "Attempt protocol"; docs/08_implementation/01-foundation.md &rarr;
+ * "Order safety invariant" (orig L699).
  */
 public final class GateTransitionValidator {
 
     private GateTransitionValidator() {}
-
-    // ---- GateState transitions ----
-
-    /** Legal source states for each gate target state. */
-    private static final Set<GateState> LEGAL_TO_HALTED = EnumSet.of(
-            GateState.RECONCILING, GateState.APPROVAL_PENDING, GateState.ENABLED);
-    private static final Set<GateState> LEGAL_TO_RECONCILING = EnumSet.of(
-            GateState.HALTED, GateState.APPROVAL_PENDING);
-    private static final Set<GateState> LEGAL_TO_APPROVAL_PENDING = EnumSet.of(
-            GateState.RECONCILING, GateState.HALTED);
-    private static final Set<GateState> LEGAL_TO_ENABLED = EnumSet.of(
-            GateState.APPROVAL_PENDING);
-
-    // ---- AttemptPhase transitions ----
-
-    private static final Set<AttemptPhase> LEGAL_TO_SUBMITTING = EnumSet.of(
-            AttemptPhase.PREPARED);
-    private static final Set<AttemptPhase> LEGAL_TO_ACCEPTED = EnumSet.of(
-            AttemptPhase.SUBMITTING);
-    private static final Set<AttemptPhase> LEGAL_TO_REJECTED = EnumSet.of(
-            AttemptPhase.SUBMITTING, AttemptPhase.ACCEPTED);
-    private static final Set<AttemptPhase> LEGAL_TO_CANCELLED = EnumSet.of(
-            AttemptPhase.PREPARED, AttemptPhase.SUBMITTING);
-    /** Any phase can transition to UNKNOWN (network failure, timeout, crash). */
-    private static final Set<AttemptPhase> LEGAL_TO_UNKNOWN = EnumSet.allOf(AttemptPhase.class);
 
     /**
      * Validate a gate-state transition.
@@ -80,8 +66,8 @@ public final class GateTransitionValidator {
                     "idempotent: already in " + targetState);
         }
 
-        // 3. Check legal transition
-        boolean legal = isLegalGateTransition(currentState, targetState);
+        // 3. Check legal transition against the canonical matrix.
+        boolean legal = currentState.legalTargets().contains(targetState);
         if (!legal) {
             return GateResult.rejected(currentState, targetState,
                     "illegal transition: " + currentState + " → " + targetState);
@@ -101,9 +87,12 @@ public final class GateTransitionValidator {
     /**
      * Validate an attempt-phase transition.
      *
-     * <p>Every attempt transition must be auditable. UNKNOWN transitions are
-     * always legal (any phase can become UNKNOWN on network/crash failure)
-     * but the caller must record the reason.
+     * <p>Every attempt transition must be auditable. Only SUBMITTING can become
+     * UNKNOWN (network failure, timeout, crash); terminal phases never become
+     * UNKNOWN. UNKNOWN &rarr; ACCEPTED / REJECTED / CANCELLED is legal in the
+     * full matrix but is <b>reconciliation-only</b> — callers must route it
+     * through {@code resolveUnknown}, never through the submission path
+     * (see {@link #isReconciliationOnly}).
      *
      * @param currentPhase the attempt's current phase
      * @param targetPhase  the desired target phase
@@ -121,7 +110,7 @@ public final class GateTransitionValidator {
                     "idempotent: already in " + targetPhase);
         }
 
-        boolean legal = isLegalAttemptTransition(currentPhase, targetPhase);
+        boolean legal = AttemptPhase.isLegal(currentPhase, targetPhase);
         if (!legal) {
             return AttemptResult.rejected(currentPhase, targetPhase, reason,
                     "illegal transition: " + currentPhase + " → " + targetPhase);
@@ -131,31 +120,28 @@ public final class GateTransitionValidator {
                 "legal transition: " + currentPhase + " → " + targetPhase);
     }
 
-    // ---- internal helpers ----
-
-    private static boolean isLegalGateTransition(GateState from, GateState to) {
-        Set<GateState> legalSources = switch (to) {
-            case HALTED -> LEGAL_TO_HALTED;
-            case RECONCILING -> LEGAL_TO_RECONCILING;
-            case APPROVAL_PENDING -> LEGAL_TO_APPROVAL_PENDING;
-            case ENABLED -> LEGAL_TO_ENABLED;
-        };
-        return legalSources.contains(from);
+    /**
+     * Whether {@code from -> to} is legal <b>only</b> through the explicit
+     * reconciliation path (UNKNOWN &rarr; terminal). Callers that must separate
+     * the submission path from reconciliation (the attempt-store writer, the
+     * durable command gate) use this to route UNKNOWN exits through
+     * {@code resolveUnknown} instead of the submission path.
+     */
+    public static boolean isReconciliationOnly(AttemptPhase from, AttemptPhase to) {
+        return from != null && from.isReconciliationSource()
+                && from.legalTargets().contains(to);
     }
 
-    private static boolean isLegalAttemptTransition(AttemptPhase from, AttemptPhase to) {
-        Set<AttemptPhase> legalSources = switch (to) {
-            case SUBMITTING -> LEGAL_TO_SUBMITTING;
-            case ACCEPTED -> LEGAL_TO_ACCEPTED;
-            case REJECTED -> LEGAL_TO_REJECTED;
-            case UNKNOWN -> LEGAL_TO_UNKNOWN;
-            case CANCELLED -> LEGAL_TO_CANCELLED;
-            // R-044: PREPARED is the initial phase — no incoming transitions.
-            // The old `default -> Set.of(from)` made any from-state "legal"
-            // for a PREPARED target, which is never correct.
-            default -> Set.of();
-        };
-        return legalSources.contains(from);
+    /** Canonical terminal-phase check (ACCEPTED / REJECTED / CANCELLED). */
+    public static boolean isTerminal(AttemptPhase phase) {
+        return phase != null && phase.isTerminal();
+    }
+
+    // ---- internal helpers ----
+
+    /** Whether the gate has a sanctioned non-idempotent road to the target. */
+    static boolean isLegalGateTransition(GateState from, GateState to) {
+        return from != null && from.legalTargets().contains(to);
     }
 
     // ---- result types ----

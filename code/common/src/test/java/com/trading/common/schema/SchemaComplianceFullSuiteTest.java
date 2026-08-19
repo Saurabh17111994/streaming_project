@@ -100,7 +100,7 @@ class SchemaComplianceFullSuiteTest {
         .isTrue();
     SchemaManifest manifest =
         new ObjectMapper().readValue(Files.readAllBytes(manifestPath), SchemaManifest.class);
-    assertThat(manifest.tables).hasSize(25);
+    assertThat(manifest.tables).hasSize(26);
     Map<String, String> boundaries = new HashMap<>();
     for (SchemaManifestEntry e : manifest.tables) {
       assertThat(e.ddlSha256).as(e.tableName + " ddl_sha256").isNotBlank();

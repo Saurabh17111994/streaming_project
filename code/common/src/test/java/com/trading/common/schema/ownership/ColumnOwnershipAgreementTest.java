@@ -34,7 +34,7 @@ class ColumnOwnershipAgreementTest {
             Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
 
     private record TableCase(String label, ColumnOwnership matrix, String ddlFile,
-                             String schemaVersionHeader) {
+                             String schemaVersionHeader, String schemaVersion) {
         @Override
         public String toString() {
             return label;
@@ -44,11 +44,13 @@ class ColumnOwnershipAgreementTest {
     static Stream<TableCase> tables() {
         return Stream.of(
                 new TableCase("Order_Lifecycle", OrderLifecycleColumnOwnership.MATRIX,
-                        "09_order_lifecycle.sql", "Schema version: 2"),
+                        "09_order_lifecycle.sql", "Schema version: 2", "2"),
                 new TableCase("Positions", PositionsColumnOwnership.MATRIX,
-                        "10_positions.sql", "Schema version: 2"),
+                        "10_positions.sql", "Schema version: 2", "2"),
+                new TableCase("Execution_Gate", ExecutionGateColumnOwnership.MATRIX,
+                        "11_execution_gate.sql", "Schema version: 3", "3"),
                 new TableCase("Execution_Attempts", ExecutionAttemptsColumnOwnership.MATRIX,
-                        "12_execution_attempts.sql", "Schema version: 2"));
+                        "12_execution_attempts.sql", "Schema version: 3", "3"));
     }
 
     private static List<String> ddlColumnNames(String ddlFile) throws IOException {
@@ -117,7 +119,7 @@ class ColumnOwnershipAgreementTest {
     void schemaVersionHeaderMatchesMatrix(TableCase tc) throws IOException {
         String ddl = Files.readString(DDL_DIR.resolve(tc.ddlFile()), StandardCharsets.UTF_8);
         assertThat(ddl).containsIgnoringCase(tc.schemaVersionHeader);
-        assertThat(tc.matrix().schemaVersion()).isEqualTo("2");
+        assertThat(tc.matrix().schemaVersion()).isEqualTo(tc.schemaVersion);
     }
 
     @ParameterizedTest

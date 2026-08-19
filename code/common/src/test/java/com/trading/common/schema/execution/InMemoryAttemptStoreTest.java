@@ -24,6 +24,7 @@ class InMemoryAttemptStoreTest {
     private static final String ACCOUNT = "acc-1";
     private static final String PARTITION = "p-1";
     private static final long GATE_EPOCH = 7L;
+    private static final long GATE_FENCE = 42L;
     private static final long NOW_TS = 1_700_000_000_000L;
 
     private final AtomicInteger halts = new AtomicInteger();
@@ -37,13 +38,13 @@ class InMemoryAttemptStoreTest {
     private static AttemptStore.PrepareRequest req(String attemptId, String instructionId,
                                                    String requestHash) {
         return new AttemptStore.PrepareRequest(attemptId, ACCOUNT, instructionId, null,
-                PARTITION, requestHash, "E" + attemptId, GATE_EPOCH, NOW_TS);
+                PARTITION, requestHash, "E" + attemptId, GATE_FENCE, GATE_EPOCH, NOW_TS);
     }
 
     private static AttemptRecord preparedRecord(String attemptId, String instructionId,
                                                 String requestHash) {
         return AttemptRecord.prepared(attemptId, ACCOUNT, instructionId, null, PARTITION,
-                requestHash, "E" + attemptId, GATE_EPOCH, NOW_TS);
+                requestHash, "E" + attemptId, GATE_FENCE, GATE_EPOCH, NOW_TS);
     }
 
     // ── prepare / replay / identity guard ──────────────────────────────────
@@ -59,11 +60,12 @@ class InMemoryAttemptStoreTest {
         assertThat(a.accountScopeId()).isEqualTo(ACCOUNT);
         assertThat(a.executionPartitionId()).isEqualTo(PARTITION);
         assertThat(a.gateEpoch()).isEqualTo(GATE_EPOCH);
+        assertThat(a.gateFenceToken()).isEqualTo(GATE_FENCE);
         assertThat(a.phase()).isEqualTo(AttemptRecord.PHASE_PREPARED);
         assertThat(a.phaseEpoch()).isZero();
         assertThat(a.retryAttempt()).isZero();
         assertThat(a.preparedTs()).isEqualTo(NOW_TS);
-        assertThat(a.schemaVersion()).isEqualTo("2");
+        assertThat(a.schemaVersion()).isEqualTo(ExecutionAttemptsColumns.SCHEMA_VERSION_V3);
         // call-evidence group is null until the broker adapter reports
         assertThat(a.brokerOrderId()).isNull();
         assertThat(a.outcome()).isNull();
@@ -140,6 +142,19 @@ class InMemoryAttemptStoreTest {
         assertThat(acc.outcome()).isEqualTo(AttemptStore.TransitionOutcome.APPLIED);
         assertThat(acc.record().phaseEpoch()).isEqualTo(3);
         assertThat(store.attemptById("a-1").phase()).isEqualTo(AttemptRecord.PHASE_ACCEPTED);
+    }
+
+    @Test
+    void gateFenceTokenAndEpochAreImmutableIdentity() {
+        // The authorization pair (gate_epoch, gate_fence_token) is captured at
+        // PREPARED and never rewritten (dossier "PREPARED (... gate epoch +
+        // fence)"); transitions must preserve it byte-for-byte.
+        store.prepare(req("a-1", "ins-1", "h-1"));
+        store.transition("a-1", 0, AttemptRecord.PHASE_SUBMITTING);
+        store.transition("a-1", 1, AttemptRecord.PHASE_ACCEPTED);
+        AttemptRecord a = store.attemptById("a-1");
+        assertThat(a.gateEpoch()).isEqualTo(GATE_EPOCH);
+        assertThat(a.gateFenceToken()).isEqualTo(GATE_FENCE);
     }
 
     @Test
@@ -270,6 +285,7 @@ class InMemoryAttemptStoreTest {
                 ExecutionAttemptsColumns.REQUEST_HASH,
                 ExecutionAttemptsColumns.CLIENT_ORDER_REF,
                 ExecutionAttemptsColumns.GATE_EPOCH,
+                ExecutionAttemptsColumns.GATE_FENCE_TOKEN,
                 ExecutionAttemptsColumns.SCHEMA_VERSION))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("identity");
@@ -316,6 +332,7 @@ class InMemoryAttemptStoreTest {
                         ExecutionAttemptsColumns.REQUEST_HASH,
                         ExecutionAttemptsColumns.CLIENT_ORDER_REF,
                         ExecutionAttemptsColumns.GATE_EPOCH,
+                        ExecutionAttemptsColumns.GATE_FENCE_TOKEN,
                         ExecutionAttemptsColumns.PHASE,          // drifted to identity
                         ExecutionAttemptsColumns.SCHEMA_VERSION},
                 new ColumnOwnership.Writer(ExecutionAttemptsColumnOwnership.WRITER_ATTEMPT_STORE,

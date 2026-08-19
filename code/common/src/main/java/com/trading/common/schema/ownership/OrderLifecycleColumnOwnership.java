@@ -4,9 +4,10 @@ package com.trading.common.schema.ownership;
  * Writer/column ownership matrix for Order_Lifecycle
  * ({@code code/01_platform/02_sql/ddl/09_order_lifecycle.sql} v2, SCH-15).
  *
- * <p>Action Capture is the sole owner (its {@code lifecycle-projector} mints
- * and updates the row; {@link com.trading.common.ownership.OwnershipMatrix}
- * row "order lifecycle"). Identity columns — the composite PK
+ * <p>The Nautilus projection boundary (T6, CHG-045) is the sole owner (its
+ * {@code lifecycle-serializer} mints and updates the row from normalized
+ * Nautilus events; {@link com.trading.common.ownership.OwnershipMatrix} row
+ * "order lifecycle"). Identity columns — the composite PK
  * {@code (account_scope_id, broker_order_id)} plus the correlation results
  * {@code instruction_id}/{@code execution_attempt_id}/{@code trade_context_id}
  * and {@code schema_version} — are written once at projection creation and are
@@ -20,8 +21,8 @@ public final class OrderLifecycleColumnOwnership {
     private OrderLifecycleColumnOwnership() {}
 
     public static final String TABLE_NAME = "Order_Lifecycle";
-    public static final String OWNER = "action-capture";
-    public static final String WRITER_LIFECYCLE_PROJECTOR = "action-capture:lifecycle-projector";
+    public static final String OWNER = "nautilus-projection";
+    public static final String WRITER_LIFECYCLE_PROJECTOR = "nautilus-projection:lifecycle-serializer";
 
     /** Identity: 0-4 (composite PK + correlation identity) + 14 (schema_version). */
     private static final int[] IDENTITY = {

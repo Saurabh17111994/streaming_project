@@ -130,13 +130,13 @@
     {
       "table_name": "Execution_Gate",
       "ddl_path": "11_execution_gate.sql",
-      "ddl_sha256": "366fc4725c0b10aaa771a386fdbbe6064bc179d307675afae9e25c182384d35d",
+      "ddl_sha256": "bc201fd81e3f548cb3d70b884375addfe6829b2ff94ab36665049d587cb6f06d",
       "table_kind": "KV",
       "primary_key": "execution_partition_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
       "validated_matrix": "VM-FLUSS-SRV-005",
-      "schema_version": "2",
+      "schema_version": "3",
       "writer_owner": "Executor",
       "retention_policy": "30d",
       "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
@@ -144,13 +144,13 @@
     {
       "table_name": "Execution_Attempts",
       "ddl_path": "12_execution_attempts.sql",
-      "ddl_sha256": "7ea884a76244e15159960eaa24fd67660981f69ad73bae8ebc512f5ee69133bb",
+      "ddl_sha256": "e94db3479b067a44f0a0e432dd2e7e9a2e51668639e33e1b87bd3803b5381154",
       "table_kind": "KV",
       "primary_key": "execution_attempt_id",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
       "validated_matrix": "VM-FLUSS-SRV-005",
-      "schema_version": "2",
+      "schema_version": "3",
       "writer_owner": "Executor",
       "retention_policy": "30d",
       "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"

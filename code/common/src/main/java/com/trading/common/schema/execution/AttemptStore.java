@@ -51,6 +51,7 @@ public interface AttemptStore {
             String executionPartitionId,
             String requestHash,
             String clientOrderRef,
+            long gateFenceToken,
             long gateEpoch,
             long nowTs) {}
 

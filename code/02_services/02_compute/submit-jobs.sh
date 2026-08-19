@@ -100,6 +100,32 @@ wait_for_running() {
 	return 1
 }
 
+# T8 (Phase 5): local readiness must reflect a completed checkpoint, not just a
+# RUNNING job. Poll the Flink REST checkpoints endpoint for the durable
+# checkpoint COUNTER (counts.completed) and fail closed if neither job reaches
+# one completed checkpoint within the timeout — a job that runs but never
+# checkpoints is not locally ready (checkpoint/restore evidence is a T8 exit
+# gate). The compute container never receives Arrow credentials/env (see the
+# compose service), so execution intent stays disabled for both jobs.
+wait_for_checkpoint() {
+	local job_id="$1"
+	local job_name="$2"
+	local completed=""
+
+	for _ in $(seq 1 30); do
+		completed=$(curl -fsS "http://${JM}/jobs/${job_id}/checkpoints" 2>/dev/null \
+			| sed -n 's/.*"counts":{[^}]*"completed":\([0-9][0-9]*\).*/\1/p')
+		if [ -n "${completed}" ] && [ "${completed}" -gt 0 ]; then
+			echo "compute: ${job_name} completed ${completed} checkpoint(s) (${job_id})"
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "compute: FATAL — ${job_name} did not complete a checkpoint within timeout (last completed=${completed:-0})" >&2
+	return 1
+}
+
 submit_job() {
 	local job_name="$1"
 	local entry_class="$2"
@@ -119,9 +145,11 @@ submit_job() {
 	fi
 
 	wait_for_running "${job_id}" "${job_name}"
+	wait_for_checkpoint "${job_id}" "${job_name}"
 }
 
 submit_job "signal-job-compute" "com.trading.compute.signaljob.SignalJob"
 submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob"
 
 echo "compute: Signal and Babysitter jobs submitted and RUNNING"
+echo "compute: both jobs reach RUNNING and complete at least one durable checkpoint (T8 local readiness gate)"

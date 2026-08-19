@@ -5,14 +5,17 @@ import java.util.Set;
 
 /**
  * Immutable Execution_Attempts row
- * ({@code code/01_platform/02_sql/ddl/12_execution_attempts.sql} v2), in DDL
+ * ({@code code/01_platform/02_sql/ddl/12_execution_attempts.sql} v3), in DDL
  * column order — the executor attempt protocol's durable record
  * (docs/08_implementation/05-execution-core.md &rarr; "Attempt protocol").
  *
  * <p>Identity columns are fixed at minting and never rewritten: an attempt's
  * {@code execution_attempt_id}, scope, {@code request_hash}, and
- * {@code client_order_ref} identify it for its whole life. The mutable group
- * ({@code phase}/{@code phase_epoch}/{@code retry_attempt}) is owned by the
+ * {@code client_order_ref}, plus the authorization captured at creation —
+ * {@code gate_epoch} and {@code gate_fence_token} (the exact fence token that
+ * was validated before the bridge call, T5/CHG-044) — identify it for its
+ * whole life. The mutable group ({@code phase}/{@code phase_epoch}/
+ * {@code retry_attempt}) is owned by the
  * attempt-store; the call-evidence group (broker order id, outcome,
  * submitted/terminal timestamps, response summary) is owned by the
  * broker-adapter (see {@code ExecutionAttemptsColumnOwnership}).
@@ -25,6 +28,7 @@ public record AttemptRecord(
         String executionPartitionId,
         String requestHash,
         String clientOrderRef,
+        long gateFenceToken,
         String brokerOrderId,
         long gateEpoch,
         String phase,
@@ -54,16 +58,19 @@ public record AttemptRecord(
      * prepared_ts = nowTs, call-evidence columns null). Caller supplies the
      * deterministic identities — including {@code execution_attempt_id} and
      * {@code client_order_ref} — per the dossier (no UUID / wall-clock inside
-     * the store).
+     * the store). The {@code gateFenceToken} is the durable fence token that
+     * authorized this attempt (persisted at PREPARED, exactly as the dossier's
+     * "PREPARED (request hash + client ref + gate epoch + fence)").
      */
     public static AttemptRecord prepared(String executionAttemptId, String accountScopeId,
                                          String instructionId, String actionId,
                                          String executionPartitionId, String requestHash,
-                                         String clientOrderRef, long gateEpoch, long nowTs) {
+                                         String clientOrderRef, long gateFenceToken,
+                                         long gateEpoch, long nowTs) {
         return new AttemptRecord(executionAttemptId, accountScopeId, instructionId, actionId,
-                executionPartitionId, requestHash, clientOrderRef, null, gateEpoch,
+                executionPartitionId, requestHash, clientOrderRef, gateFenceToken, null, gateEpoch,
                 PHASE_PREPARED, 0L, null, null, nowTs, null, null, null, 0,
-                ExecutionAttemptsColumns.SCHEMA_VERSION_V2);
+                ExecutionAttemptsColumns.SCHEMA_VERSION_V3);
     }
 
     /**
@@ -76,7 +83,7 @@ public record AttemptRecord(
             throw new IllegalArgumentException("phase must be non-blank");
         }
         return new AttemptRecord(executionAttemptId, accountScopeId, instructionId, actionId,
-                executionPartitionId, requestHash, clientOrderRef, brokerOrderId, gateEpoch,
+                executionPartitionId, requestHash, clientOrderRef, gateFenceToken, brokerOrderId, gateEpoch,
                 newPhase, phaseEpoch + 1, outcome, outcomeDetail, preparedTs, submittedTs,
                 terminalTs, brokerResponseSummary, retryAttempt, schemaVersion);
     }

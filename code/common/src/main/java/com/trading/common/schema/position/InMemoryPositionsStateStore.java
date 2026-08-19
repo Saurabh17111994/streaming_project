@@ -1,6 +1,9 @@
 package com.trading.common.schema.position;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -22,5 +25,12 @@ public final class InMemoryPositionsStateStore implements PositionsStateStore {
 
     public int size() {
         return byPositionId.size();
+    }
+
+    /** All snapshots sorted by position id (deterministic introspection). */
+    public List<PositionSnapshot> all() {
+        return byPositionId.values().stream()
+                .sorted(Comparator.comparing(PositionSnapshot::positionId))
+                .toList();
     }
 }

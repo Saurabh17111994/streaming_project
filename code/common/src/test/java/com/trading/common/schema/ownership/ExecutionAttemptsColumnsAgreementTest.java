@@ -16,10 +16,11 @@ import org.junit.jupiter.api.Test;
 /**
  * SCH-15 cross-boundary pin: {@link ExecutionAttemptsColumns} must stay a
  * faithful mirror of {@code code/01_platform/02_sql/ddl/12_execution_attempts.sql}
- * v2 — 19 columns, names in DDL order, per-column type roots, per-column
+ * v3 — 20 columns, names in DDL order, per-column type roots, per-column
  * nullability — plus the KV contract the ownership matrix relies on: PK
  * exactly {@code [execution_attempt_id]}, routing on the same key, and the
- * v2 monotonic {@code phase_epoch} (R-234 stale-phase protection).
+ * v2 monotonic {@code phase_epoch} (R-234 stale-phase protection) and the v3
+ * durable {@code gate_fence_token} authorization column (CHG-044, T5).
  */
 class ExecutionAttemptsColumnsAgreementTest {
 
@@ -50,7 +51,7 @@ class ExecutionAttemptsColumnsAgreementTest {
     }
 
     @Test
-    void ddlDeclares19ColumnsInPinnedOrder() throws IOException {
+    void ddlDeclares20ColumnsInPinnedOrder() throws IOException {
         List<Column> cols = parseColumns();
         assertThat(cols).hasSize(ExecutionAttemptsColumns.FIELD_COUNT);
         assertThat(cols.stream().map(Column::name).toArray(String[]::new))
@@ -87,9 +88,25 @@ class ExecutionAttemptsColumnsAgreementTest {
     }
 
     @Test
-    void schemaVersionHeaderIsV2() throws IOException {
+    void schemaVersionHeaderIsV3() throws IOException {
         String ddl = Files.readString(DDL_DIR.resolve(DDL_FILE), StandardCharsets.UTF_8);
-        assertThat(ddl).containsIgnoringCase("Schema version: 2");
-        assertThat(ExecutionAttemptsColumns.SCHEMA_VERSION_V2).isEqualTo("2");
+        assertThat(ddl).containsIgnoringCase("Schema version: 3");
+        assertThat(ExecutionAttemptsColumns.SCHEMA_VERSION_V3).isEqualTo("3");
+    }
+
+    @Test
+    void durableFenceAuthorizationColumnPersistsFenceToken() throws IOException {
+        String ddl = Files.readString(DDL_DIR.resolve(DDL_FILE), StandardCharsets.UTF_8);
+        // The gate_epoch authorization identity must be paired with the exact
+        // fence token that authorized the attempt (dossier "gate epoch + fence").
+        assertThat(ddl).containsIgnoringCase("gate_fence_token")
+                .containsIgnoringCase("BIGINT")
+                .containsIgnoringCase("NOT NULL");
+        // schema_version is the trailing column (repo convention); the fence
+        // authorization identity sits immediately before it.
+        assertThat(ExecutionAttemptsColumns.SCHEMA_VERSION)
+                .isEqualTo(ExecutionAttemptsColumns.FIELD_COUNT - 1);
+        assertThat(ExecutionAttemptsColumns.GATE_FENCE_TOKEN)
+                .isEqualTo(ExecutionAttemptsColumns.SCHEMA_VERSION - 1);
     }
 }

@@ -4,24 +4,25 @@ package com.trading.common.schema.ownership;
  * Writer/column ownership matrix for Positions
  * ({@code code/01_platform/02_sql/ddl/10_positions.sql} v2, SCH-15).
  *
- * <p>The position projector runs in-process within Action Capture (contract
- * docs/04_contracts/06-action-capture.md) and is the sole owner
- * ({@link com.trading.common.ownership.OwnershipMatrix} row "position
- * aggregate"). Identity columns — {@code position_id} (PK), the account /
- * instrument / exchange / symbol / side scope, {@code created_ts}, and
- * {@code schema_version} — are written once at minting and never
- * partial-updated. The mutable group (state, the quantity pair, average
- * prices, per-event version evidence, {@code last_update_ts}) is owned by one
- * writer; v2 removed the derived {@code current_quantity} precisely so no
- * partial update can corrupt one side of the quantity pair.
+ * <p>The Nautilus projection boundary (T6, CHG-045) is the sole writer: it
+ * serializes authoritative Nautilus position events into the row and performs
+ * <b>no</b> position/PnL arithmetic (Nautilus is the only production
+ * calculator; the Java {@code PositionProjector} classes are retained strictly
+ * as a differential test oracle). Identity columns — {@code position_id} (PK),
+ * the account / instrument / exchange / symbol / side scope,
+ * {@code created_ts}, and {@code schema_version} — are written once at minting
+ * and never partial-updated. The mutable group (state, the quantity pair,
+ * average prices, per-event version evidence, {@code last_update_ts}) is owned
+ * by one writer; v2 removed the derived {@code current_quantity} precisely so
+ * no partial update can corrupt one side of the quantity pair.
  */
 public final class PositionsColumnOwnership {
 
     private PositionsColumnOwnership() {}
 
     public static final String TABLE_NAME = "Positions";
-    public static final String OWNER = "action-capture";
-    public static final String WRITER_POSITION_PROJECTOR = "action-capture:position-projector";
+    public static final String OWNER = "nautilus-projection";
+    public static final String WRITER_POSITION_PROJECTOR = "nautilus-projection:position-serializer";
 
     /** Identity: 0-6 (PK + scope) + 14 (created_ts) + 16 (schema_version). */
     private static final int[] IDENTITY = {

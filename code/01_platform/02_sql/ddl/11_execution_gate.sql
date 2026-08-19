@@ -4,7 +4,24 @@
 -- Retention: current + history in audit
 -- Lake: encrypted immutable audit under approved policy (one-year minimum target)
 -- Scope: execution_partition_id, account_scope_id
--- Schema version: 2
+-- Schema version: 3
+--
+-- v2 history: state/epoch/approvals plus evidence hash.
+--
+-- v3 (2026-08-20, CHG-044, T5): added the fencing representation the epoch-only
+-- DDL previously lacked — explicit `owner_instance_id` (the fenced executor
+-- instance that holds the partition lease), `fence_token` (monotonically
+-- increasing per partition, never reused), `fence_acquired_ts` /
+-- `fence_lost_ts` (acquisition and loss evidence), `lease_expires_ts`, and
+-- `approved_evidence_hash` (the exact evidence hash both approvals covered, so
+-- an epoch change or a new evidence package invalidates old approvals).
+-- `epoch` remains the gate-generation value and is NOT a substitute for the
+-- fence token: the fence token is the per-partition owner sequence that must
+-- still be valid immediately before every authorized bridge command.
+-- Writers: gate-transition (state/epoch/reason/detection_time/evidence_hash/
+-- transition_ts), gate-fence (owner/fence/lease columns), gate-approvals
+-- (approval_1/approval_2/approved_evidence_hash). See
+-- ExecutionGateColumnOwnership (SCH-15).
 
 CREATE TABLE Execution_Gate (
     execution_partition_id  STRING      NOT NULL,
@@ -17,6 +34,12 @@ CREATE TABLE Execution_Gate (
     approval_1              STRING,
     approval_2              STRING,
     transition_ts           BIGINT      NOT NULL,
+    owner_instance_id       STRING,
+    fence_token             BIGINT,
+    fence_acquired_ts       BIGINT,
+    lease_expires_ts        BIGINT,
+    fence_lost_ts           BIGINT,
+    approved_evidence_hash  STRING,
     schema_version          STRING      NOT NULL,
     PRIMARY KEY (execution_partition_id) NOT ENFORCED
 ) WITH (
