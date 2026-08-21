@@ -23,7 +23,7 @@
 | ID | Task | Depends on | Status |
 | --- | --- | --- | --- |
 | `A1` | Sandbox auth + auto re-auth harness | — | DONE* |
-| `A2` | Paper-order placement smoke (full chain, sandbox) | A1 BLOCKED: market-hours (harness buildable now) |
+| `A2` | Paper-order placement smoke (full chain, sandbox) | A2.5 harness staged (CHG-084, JVM-parity); 🔒 live run: A1 gate enable + A2.3 sandbox config + T4 bridge wiring |
 | `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 BLOCKED: market-hours + A2 |
 | `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | DONE* |
 | `A5` | Reconciliation read-back (DEC-023) | A3+A4 BLOCKED: market-hours + A3/A4 |
@@ -43,7 +43,7 @@
 | `C4` | SIG-PERF-001 50k baseline unblocked | C3 | DONE |
 | `C5` | 🔒 Scale-path decision record | C5.1 DONE (CHG-081); 🔒 C5.2 OPEN: awaiting human choice |
 | `D1` | 🔒 VM provisioning + agent-verifiable checklist | D1.1+D1.2 DONE (CHG-082); 🔒 D1.3 OPEN: awaiting human VM provisioning |
-| `D2` | Swarm bootstrap + stack deploy | D1 BLOCKED: needs prod VMs (single-node mimic OK) |
+| `D2` | Swarm bootstrap + stack deploy | D2.1 selfcheck PASS (CHG-085); 🔒 DEPLOY=1 needs D1.3 prod VMs |
 | `D3` | SWARM-* HA tests live (M3 quorum) | D2 BLOCKED: needs prod VMs |
 | `D4` | FAIL-VM-LOSS-60000-001 drill | D3 BLOCKED: needs prod VMs |
 | `D5` | PERF-PROD-60000-001 (p99 < 100 ms @ 50k) | C4+D3 BLOCKED: needs prod VMs |
@@ -54,7 +54,7 @@
 | `E3` | Release evidence package assembly | E1+E2 | DONE |
 | `E4` | Docs consistency reconciliation | E3 | DONE |
 | `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 BLOCKED: awaiting human review |
-| `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | 🔒 CF token BLOCKED: awaiting human CF token |
+| `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | E5b.2 staged (CHG-083, parity-proven); 🔒 E5b.1+E5b.4 BLOCKED: awaiting human CF token |
 | `E5c` | Missing named E2E fixture artifacts | E2 | DONE |
 | `E6` | Final verification | E5 | DONE |
 
@@ -67,7 +67,7 @@
 | ID | Do now | Waits for |
 | --- | --- | --- |
 | `A1` | auto-re-auth code + unit tests (fake clock) | one live re-auth check (auth endpoint works off-hours) |
-| `A2` | sandbox-order integration harness + contract checks | 🔒 credentials + market hours (no fills while closed) |
+| `A2` | sandbox-order integration harness + contract checks | harness staged (CHG-084); 🔒 credentials + market hours + T4 wiring (no fills while closed) |
 | `A4` | error-path evidence: 401 auth-fail, 15 s UNKNOWN timeout | success-response half of matrix |
 | `B6` | assemble DEC-044 checklist doc | ✅ B6.1 assembled (CHG-080); 🔒 B6.2 Saurabh signature |
 | `C5` | draft scale-decision CHG record | ✅ C5.1 drafted (CHG-081); 🔒 C5.2 premium-vs-multi-connection choice |
@@ -216,7 +216,7 @@ This plan closes the remaining gaps in five phases:
 - [ ] `A2.2` Stand up compose with `--profile execution-t3`; confirm `gateway:9180/healthz` 200, `nautilus:9190/healthz` reports `HALTED`, `bridge:8787/healthz` reports `UP disabled` until approval.
 - [ ] `A2.3` Place ONE sandbox order `BI-EQ x1` via `POST /v1/intents` with `T9_APPROVED_BY=saurabh` + sandbox broker config (`execution-auth-001` token pattern, len 238 proven live 2026-08-21).
 - [ ] `A2.4` Assert: Arrow returns `broker_order_id`; `Execution_Intent` LOG + `Order_Lifecycle` KV + `Execution_Attempts` KV populated; `client_order_ref` echoed.
-- [ ] `A2.5` Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel.
+- [x] `A2.5` Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel. (CHG-084: `t9_order_sandbox.py` + `tests/test_12_t9_order_sandbox.py` — t8 12/12 reuse, 20 offline checks, gateway-envelope signing port pinned to a REAL JVM run of `GatewayProtocol.java`, BI-EQ x1 payload schema, DDL poll columns, `T9_APPROVED_BY` fail-closed gate; live leg implemented but honestly classified `LIVE-CHAIN-UNWIRED` (exit 3) until A2.3/A2.4 + T4 bridge wiring land. pytest 11/11, full suite 351.)
 - [ ] `A2.6` Run `python3 code/01_platform/04_scripts/t8_sandbox_contract_check.py` (expect 12/12) + the new test.
 - [ ] `A2.7` Evidence `logs/tracker-14/t9-order-sandbox-<yyyymmdd>.md` + `CHG-058`.
 **DoD:** one sandbox order placed end-to-end; attempt/lifecycle tables populated; cancel succeeds; no real order possible without `T9_APPROVED_BY`.
@@ -380,7 +380,7 @@ This plan closes the remaining gaps in five phases:
 **DoD:** checklist + checker exist; human provisions.
 
 ### Task D2 — Swarm bootstrap + stack deploy
-- [ ] `D2.1` `make stack-selfcheck` (single-node mimic) passes; then `make stack-config DEPLOY=1` on the real swarm once D1 done.
+- [x] `D2.1` first half — `make stack-selfcheck` (single-node mimic) passes. (CHG-085: real daemon, rc=0; node labelled `role=worker`+`observability=true`; `docker stack config` compiles `docker-stack.yml`; `make test-09` 25/25; evidence `logs/nautilus-execution/d2-stack-selfcheck-20260821.md`.) — 🔒 second half `make stack-config DEPLOY=1` on the real swarm waits for D1.3.
 - [ ] `D2.2` Verify `docker-stack.yml` (already present) uses role-label placement, encrypted overlays, external secrets, durable volumes, pinned digests.
 - [ ] `D2.3` Evidence `logs/tracker-14/d2-swarm-deploy-<yyyymmdd>.md` + `CHG-073`.
 **DoD:** prod stack deploys; no hostname-pinned placement.
@@ -442,8 +442,8 @@ This plan closes the remaining gaps in five phases:
 ### Task E5b — Audit legal-hold / immutability evidence (Cloudflare R2)
 **Why:** Money-path audit must be provably immutable and retrievable. On R2 the WORM mechanism is prefix bucket-locks (S3 Object Lock API is unsupported — outside our control); the API token for programmatic verification was never issued.
 - [ ] `E5b.1` 🔒 Human creates a scoped Cloudflare API token (R2 read + retention admin).
-- [ ] `E5b.2` Agent extends `code/01_platform/04_scripts/audit_r2.py` (or adds `r2_legal_hold_check.py`) to verify: prefix retention rules active on audit buckets, retrieval of a sampled object, hash-chain spot check against `AuditHashChain`.
-- [ ] `E5b.3` Record limitation honestly: R2 bucket-locks ≠ S3 Object Lock; document residual risk in the CHG.
+- [x] `E5b.2` Agent extends `code/01_platform/04_scripts/audit_r2.py` (or adds `r2_legal_hold_check.py`) to verify: prefix retention rules active on audit buckets, retrieval of a sampled object, hash-chain spot check against `AuditHashChain`. (CHG-083: new `r2_legal_hold_check.py` — bucket-lock via CF API, sampled retrieval, byte-exact AuditHashChain Python port cross-verified against a real JVM run; `--chain-dir` offline + `--self-check` + `--validate`; 10 tests PASS, full suite 340. Live `--validate` run deferred to token.)
+- [x] `E5b.3` Record limitation honestly: R2 bucket-locks ≠ S3 Object Lock; document residual risk in the CHG. (CHG-083 §3 + auto-emitted into evidence records.)
 - [ ] `E5b.4` Evidence `logs/tracker-14/e5b-legalhold-<yyyymmdd>.md` + next free `CHG-*`.
 **DoD:** retention rules verified programmatically; retrieval + integrity sampled; limitation documented.
 
