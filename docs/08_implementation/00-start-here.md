@@ -73,19 +73,21 @@ A dossier may be Design-ready, Evidence-blocked, and Live-money blocked simultan
 
 The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementation-ready`, `Evidence-blocked`, `Validated`, `Superseded`) is superseded by the 4-dimension banner above. Existing dossiers using the old vocabulary remain valid until their next revision.
 
-## Current readiness
+## Current readiness — reconciled 2026-08-21 (E4)
 
 | Area | Design status | Implementation status | Evidence status | Live-money status |
 | --- | --- | --- | --- | --- |
 | Architecture and ownership | Design-ready | Implemented | Tested-in-sandbox | Blocked |
-| Broker protocols | Evidence-blocked | Implementing | Untested | Blocked |
-| DDL/schema | Design-ready | Implementing | Untested | Blocked |
-| Ingestion | Design-ready | Implemented | Tested-in-sandbox | Blocked |
-| Signal job | Design-ready | Implementing (Slice 1 + Slice 2.1 MVP detection live-verified; candle tables converted to **KV-only** 2026-08-13 — `feature_candles_15s` KV PK `(instrument_token, window_start)`, see `04-signal-job.md` banner; 188 compute tests green + 7-test gated battery, re-measured 2026-08-15) | Tested-in-sandbox (Slice 1 smoke + SAFETY-INT-001 + Slice 2.1 live + candle conversion battery 2026-08-13) | Blocked |
-| Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-18) | Draft (upstream re-scoped 2026-08-18, CHG-028) | Not-implemented | Untested | Blocked |
-| Local runtime | Design-ready | Implementing | Tested-in-sandbox | Blocked |
-| Production runtime | Design-ready | Not-implemented | Untested | Blocked |
-| Test/evidence program | Design-ready | Implementing | Tested-in-sandbox | Blocked |
+| Broker protocols | Design-ready | Implemented (error half VERIFIED: TOTP `execution-auth-001` len 238 + re-auth `reauth.go` + Arrow REST error 401/UNKNOWN/duplicate — `a1-*`/`a4-*`; success half `BI-EQ ×1` waits market-hours A2) | Tested-in-sandbox (error half) | Blocked |
+| DDL/schema | Design-ready | Implemented (26 tables, `ddl_sha256` + `compatibility_class`, composite-PK matrix, 21/21 live on dev Fluss) | Tested-in-sandbox (`compat-fluss-*` + matrix verifier + live DDL drills) | Blocked |
+| Ingestion | Design-ready | Implemented (576 tests 236/340; losslessness + 1800 s soak proven) | Tested-in-sandbox (10,716 rows fake→Fluss, 49k tps synthetic envelope, `full-audit` C6 `341/236/319`) | Blocked |
+| Signal job | Design-ready | Implemented (Slice 1 candles + Slice 2.1 signal LIVE smoke — 205k candles/1,074 instruments/48 ckpt; `SIG-FAIL-001` ckpt-failure + `feature_candles_15s` KV-only) | Tested-in-sandbox (envelope + `make gate`/`full-audit` green) | Blocked |
+| Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-21) | Design-ready (re-scoped CHG-028) | Implemented (WP-0..8 DONE: `LiveNodeRuntime` 1800 s soak B1, crash fence B2, gate lifecycle B3, durable 4 clients B7, clock drift B8; multi-conn C1..C4 synthetic `48,660 tps`; T9 `BI-EQ ×1` live order pending market-hours) | Tested-in-sandbox (148 Rust lib + 18.7 s/1.12 s Go + 246 Java; `make gate` 12/12 2026-08-21) | Blocked |
+| Local runtime | Design-ready | Implemented (`t8` 12/12 + `execution_network_check` PASS on `--profile execution-t3`; Swarm duties on holder) | Tested-in-sandbox | Blocked |
+| Production runtime | Design-ready | Not-implemented (needs prod VMs D1 — `BLOCKED: needs prod VMs`) | Untested (`PERF-PROD-60000`/`FAIL-VM-LOSS`/`DR-001..006`/`D7` await prod stack) | Blocked |
+| Test/evidence program | Design-ready | Implemented (`RELEASE_EVIDENCE_2026-08-21.md` + 13-item package; every AC has a pointer — E5c; `full-audit`/`pin-check`/`cep-check` green) | Tested-in-sandbox (`make gate` 2026-08-21 `ALL GATES PASSED`) | Blocked |
+
+> **E4 note (2026-08-21, CHG-078):** this table is the single `Current readiness` truth for the laptop-now cut. Live-money stays `Blocked` for every row until E5 single-operator (Saurabh, DEC-044) sign-off. `Production runtime` honest `Not-implemented/Untested` — requires the VM era (`D1→D7`). No row is claimed `Production-validated` on a laptop.
 
 ## Mandatory implementation order
 

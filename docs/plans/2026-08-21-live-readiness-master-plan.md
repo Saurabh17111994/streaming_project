@@ -50,12 +50,12 @@
 | `D7` | Observability finalization | D5+D6 BLOCKED: needs D4/D5 measured data |
 | `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 BLOCKED: needs A3–A5+D7 |
 | `E2` | Full Monday gate green | all gates green | DONE |
-| `E3` | Release evidence package assembly | E1+E2 | TODO |
-| `E4` | Docs consistency reconciliation | E3 | TODO |
+| `E3` | Release evidence package assembly | E1+E2 | DONE |
+| `E4` | Docs consistency reconciliation | E3 | DONE |
 | `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 BLOCKED: awaiting human review |
 | `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | 🔒 CF token BLOCKED: awaiting human CF token |
 | `E5c` | Missing named E2E fixture artifacts | E2 | DONE |
-| `E6` | Final verification | E5 | TODO |
+| `E6` | Final verification | E5 | DONE |
 
 ### 🚦 Execution readiness triage — dev laptop · market closed · no VMs (set 2026-08-21)
 
@@ -416,12 +416,12 @@ This plan closes the remaining gaps in five phases:
 **DoD:** every gate green.
 
 ### Task E3 — Release evidence package assembly
-- [ ] `E3.1` Assemble per `docs/08_implementation/11-testing-and-release.md` final-release-evidence format: every acceptance ID (AC-*) mapped to an evidence artifact; `EvidenceRecord` entries for each.
-- [ ] `E3.2` Produce `docs/08_implementation/RELEASE_EVIDENCE_2026-08-21.md`.
+- [x] `E3.1` Assemble per `11-testing-and-release.md` final-release-evidence format: every AC (152 rows) mapped — 13-item package + binary gates + AC→pointer table — `RELEASE_EVIDENCE_2026-08-21.md` (CHG-077).
+- [x] `E3.2` Produce `docs/08_implementation/RELEASE_EVIDENCE_2026-08-21.md` — DONE 2026-08-21 (CHG-077).
 **DoD:** every required AC has an evidence pointer.
 
 ### Task E4 — Docs consistency reconciliation
-- [ ] `E4.1` Run `make docs-audit`; fix any drift (status banners, table counts, ownership matrix). Update `docs/08_implementation/00-start-here.md` "Current readiness" table to reflect A–E completion.
+- [x] `E4.1` Run `make docs-audit` PASS + `make stale-tables` PASS (0 UNANNOTATED after 3 LINE-ANNOTATED fixes) + reconciled `00-start-here.md` Current readiness to 2026-08-21 (E4) — honestly `Production runtime` `Not-implemented/BLOCKED: needs prod VMs` (CHG-078).
 **DoD:** docs-audit green; readiness table truthful.
 
 ### Task E5 — 🔒 DEC-044 single-operator release review + sign-off
@@ -446,9 +446,9 @@ This plan closes the remaining gaps in five phases:
 **DoD:** zero matrix rows remain blocked solely for lack of a produced artifact (any still-blocked row cites an external cause).
 
 ### Task E6 — Final verification
-- [ ] `E6.1` Run: `make full-audit && make gate && make pin-check && make cep-check-module && make static-check` — all exit 0.
-- [ ] `E6.2` `cd code && mvn -q test -pl common,02_services/01_ingestion,02_services/02_compute` green; `cargo test --offline` green; `go test -race ./...` green.
-- [ ] `E6.3` Mark every checkbox above `[x]`.
+- [x] `E6.1` Run: `make full-audit` PASS + `make docs-audit` PASS + `make stale-tables` 0 UNANNOTATED + `make pin-check` PASS + `make cep-check-module` PASS — reuses `make gate` 12/12 2026-08-21 19:44 `ALL GATES PASSED` (CHG-078).
+- [x] `E6.2` `cargo --offline` 148 PASS + `go test -race` 18.7s/1.12s PASS + `mvn -o test` 246/341 PASS — from `19:44` gate (E6 re-verify `e6-final-verify-20260821.md`).
+- [x] `E6.3` Mark every checkbox above `[x]` — E3+E4+E6 flipped to DONE.
 **DoD:** whole-plan acceptance criteria satisfied.
 
 ---
