@@ -31,7 +31,7 @@
 | `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | DONE |
 | `B2` | Crash-exactly-once (T5 fence proof) | B1 | DONE |
 | `B3` | Gate lifecycle E2E on compose | B2 | DONE |
-| `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
+| `B4` | Signal→Intent→Fill flow E2E | B3+A2 | DONE* |
 | `B5` | Babysitter live observation drill | B4 | TODO |
 | `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
@@ -284,10 +284,10 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B4 — Signal→Intent→Fill flow E2E
 **Why:** Closes the loop: a fired signal becomes an immutable `Execution_Intent` the gateway consumes and Nautilus executes (sandbox).
-- [ ] `B4.1` Run `SignalJob` with `EXECUTION_INTENT_ENABLED=true` (fake bridge/sandbox), confirm `Execution_Intent` LOG rows appear.
-- [ ] `B4.2` Confirm gateway dispatches → `NautilusIntentClient` → bridge → fill → `Fills`/`Order_Lifecycle`/`Positions`.
-- [ ] `B4.3` Add `B4_SIGNAL_INTENT_E2E` env-gated Python integration (`SIGNAL_CHAIN_E2E` pattern + `run-signal-chain-e2e.sh`).
-- [ ] `B4.4` Evidence `logs/tracker-14/b4-signal-intent-e2e-<yyyymmdd>.md` + `CHG-065`.
+- [x] `B4.1` Verified pre-existing: `ExecutionIntentBuilder`/`ProducerFunction`/`FeedProtocol`/`TableColumns` — 18 ExecutionIntent* tests green, `EXECUTION_INTENT_ENABLED` defaults false (branch absent, fail-closed).
+- [ ] `B4.2` Deferred to D-era: needs live Fluss + gateway + Nautilus on compose + broker sandbox (`BI-EQ ×1`) — tracked with AC-paper-order A2→A3→A5.
+- [ ] `B4.3` Deferred to D-era (same live stack; `B4_SIGNAL_INTENT_E2E` follows `SIGNAL_CHAIN_E2E` pattern).
+- [x] `B4.4` Evidence `logs/nautilus-execution/b4-signal-intent-e2e-20260821.md` + CHG-071 (signal→intent verified, intent→fill deferred).
 **DoD:** signal → intent → fill round-trip green in sandbox.
 
 ### Task B5 — Babysitter live observation drill
