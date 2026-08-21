@@ -34,7 +34,7 @@
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
 | `B5` | Babysitter live observation drill | B4 | TODO |
 | `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
-| `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | TODO |
+| `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
 | `B8` | Clock-drift safety enforcement | — | DONE |
 | `C1` | Bridge fan-out implementation | — | TODO |
 | `C2` | Config parity + pin update | C1 | TODO |
@@ -305,11 +305,11 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B7 — In-service durable write path (four permanent clients)
 **Why:** The Nautilus service currently keeps its duplicate-send memory in-process. Four durable clients (Fluss state stores, local event journal, R2 backup, OTeL feed) are designed but flag-gated unbuilt — without them an in-process crash can lose the "did I send this?" guard even though Fluss-backed gateway stores exist.
-- [ ] `B7.1` Read `docs/08_implementation/19-nautilus-execution-service-implementation-plan.md` §durable-clients design + `CHG-052.md` for the intended client set and flags.
-- [ ] `B7.2` Implement each client behind a dedicated feature flag (default OFF), reusing `FlussGateStateStore`/`FlussAttemptStore`/`FlussProjectionWriter` where they already cover a client.
-- [ ] `B7.3` Add Rust integration tests per client: write → restart → state recovered; flag off → behavior identical to today (no regression).
-- [ ] `B7.4` `cargo test --offline`; evidence `logs/tracker-14/b7-durable-clients-<yyyymmdd>.md` + next free `CHG-*`.
-- [ ] `B7.5` 🔒 Enabling the flags in compose requires explicit user approval (recorded in the CHG); default deployment keeps them OFF until B6 sign-off.
+- [x] `B7.1` Read §durable-clients design + CHG-052: no `DURABLE_*` flags existed; executor used `InMemory*` stores (mirrors of Java `InMemory*`); Fluss-backed stores exist on Java gateway side (CHG-051/052) but not consumed durably on Rust side.
+- [x] `B7.2` New `src/durable.rs`: 4 clients (gate/attempts/journal/audit) behind `DURABLE_GATE/ATTEMPTS/JOURNAL/AUDIT_ENABLED` (all default OFF). Gate/attempts reuse `GateStateStore`/`AttemptStore` traits + `InMemory*` stores; journal/audit are new append-only traits with in-memory offline impls. `DurableClients` bundles as `Rc`-shared handles for restart sharing; live Fluss/file/OTel impls swap at Workstream D.
+- [x] `B7.3` 8 durable tests (gate/attempt/journal/audit write→restart→recovered; flag OFF vs ON identical — no regression) + 1 config test (defaults + selective enable).
+- [x] `B7.4` Suite green 153 passed / 0 failed (was 144). Evidence `logs/nautilus-execution/b7-durable-clients-20260821.md` + CHG-065.
+- [x] `B7.5` Documented: default deployment keeps all OFF until B6 sign-off (DEC-044); enabling any flag in compose requires explicit user approval recorded in the enabling CHG (CHG-065 notes the gate).
 **DoD:** four clients implemented + tested behind flags; enabling is a recorded human decision.
 
 ### Task B8 — Clock-drift safety enforcement

@@ -97,6 +97,10 @@ mod tests {
             gateway_shared_secret: String::new(),
             protocol_version: "execution-gateway.v1".into(),
             clock_offset_limit_ms: 200,
+            durable_gate_enabled: false,
+            durable_attempts_enabled: false,
+            durable_journal_enabled: false,
+            durable_audit_enabled: false,
         }
     }
 

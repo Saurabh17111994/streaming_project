@@ -16,6 +16,12 @@ pub struct ServiceConfig {
     pub listen_addr: String,
     pub gateway_shared_secret: String,
     pub protocol_version: String,
+    /// Durable write-path flags (B7) — each client behind a dedicated flag, default OFF.
+    /// Enabling requires explicit user approval (recorded in the CHG per B7.5).
+    pub durable_gate_enabled: bool,
+    pub durable_attempts_enabled: bool,
+    pub durable_journal_enabled: bool,
+    pub durable_audit_enabled: bool,
     /// Max |host-clock offset vs UTC| in ms before the drift monitor safety-halts (B8).
     /// Mirrors compose `CLOCK_OFFSET_LIMIT_MS` (ingestion default 200 — see CHG-064).
     pub clock_offset_limit_ms: i64,
@@ -63,6 +69,10 @@ impl ServiceConfig {
                 .map(|v| v.parse::<i64>())
                 .transpose()?
                 .unwrap_or(200),
+            durable_gate_enabled: get("DURABLE_GATE_ENABLED").map(|v| v == "true").unwrap_or(false),
+            durable_attempts_enabled: get("DURABLE_ATTEMPTS_ENABLED").map(|v| v == "true").unwrap_or(false),
+            durable_journal_enabled: get("DURABLE_JOURNAL_ENABLED").map(|v| v == "true").unwrap_or(false),
+            durable_audit_enabled: get("DURABLE_AUDIT_ENABLED").map(|v| v == "true").unwrap_or(false),
         })
     }
 
@@ -93,6 +103,10 @@ mod tests {
     fn halted_default() {
         let c = ServiceConfig {
             clock_offset_limit_ms: 200,
+            durable_gate_enabled: false,
+            durable_attempts_enabled: false,
+            durable_journal_enabled: false,
+            durable_audit_enabled: false,
             gateway_endpoint: "http://gw:8080".into(),
             bridge_endpoint: "http://bridge:8787".into(),
             log_level: "info".into(),
@@ -174,6 +188,20 @@ mod tests {
         assert_eq!(c.clock_offset_limit_ms, 200);
         let c = ServiceConfig::from_iter(kv(&[("CLOCK_OFFSET_LIMIT_MS", "350")])).unwrap();
         assert_eq!(c.clock_offset_limit_ms, 350);
+    }
+
+    #[test]
+    fn durable_flags_default_off_and_selective_enable() {
+        let c = ServiceConfig::from_iter(kv(&[])).unwrap();
+        assert!(!c.durable_gate_enabled);
+        assert!(!c.durable_attempts_enabled);
+        assert!(!c.durable_journal_enabled);
+        assert!(!c.durable_audit_enabled);
+        let c = ServiceConfig::from_iter(kv(&[("DURABLE_GATE_ENABLED", "true"), ("DURABLE_JOURNAL_ENABLED", "true")])).unwrap();
+        assert!(c.durable_gate_enabled);
+        assert!(!c.durable_attempts_enabled);
+        assert!(c.durable_journal_enabled);
+        assert!(!c.durable_audit_enabled);
     }
 
 }
