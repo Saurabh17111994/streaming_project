@@ -1,0 +1,314 @@
+package com.trading.execution.gateway;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.CloseableIterator;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+/** B4.2 HALTED-path E2E (non-market half): an immutable Execution_Intent reaches
+ *  the real gateway reader and is DEFERRED — never executed — while the gate is
+ *  not ENABLED and no durable fence token exists. This is the consumer-side
+ *  wall of the B4.2 chain: intent exists in Fluss, the real IntentReader +
+ *  DurableIntentDispatcher + NautilusIntentClient path runs, and the outcome is
+ *  fail-closed (Result.DEFERRED, readiness not protocol/fluss-ready, zero
+ *  Execution_Attempts / Order_Lifecycle rows, intent NOT committed to
+ *  Execution_Intent_Processed so it stays replayable). No broker, no market
+ *  hours, no sandbox credentials — runs whenever FLUSS_BOOTSTRAP is set (the
+ *  same env gate as the T2 durable-replay evidence). Scratch DB, dropped at end. */
+@Tag("integration")
+class B4HaltedIntentConsumeDeferE2ETest {
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+    private static final String ACCOUNT = "b4halt-acct";
+    private static final String PARTITION = "b4halt-part";
+    private static final String HALTED_REASON_FENCE =
+            "durable fence token is not available";
+
+    @Test
+    void haltedGateDefersIntentWithoutSideEffects() {
+        String bootstrap = System.getenv("FLUSS_BOOTSTRAP");
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                bootstrap != null && !bootstrap.isBlank(),
+                "set FLUSS_BOOTSTRAP for live B4.2 HALTED-path evidence");
+        assertTimeoutPreemptively(Duration.ofSeconds(120), () -> {
+            String db = "b4_halted_" + System.nanoTime();
+            Configuration conf = new Configuration();
+            conf.setString("bootstrap.servers", bootstrap);
+            try (Connection conn = ConnectionFactory.createConnection(conf);
+                 Admin admin = conn.getAdmin()) {
+                admin.createDatabase(db, DatabaseDescriptor.EMPTY, false)
+                        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                try {
+                    createIntentLog(admin, conn, db);
+                    createIntentProcessedKv(admin, conn, db);
+                    createExecutionGate(admin, conn, db);   // EMPTY — gate not ENABLED
+                    createAttempts(admin, conn, db);        // EMPTY — nothing may land here
+                    createOrderLifecycle(admin, conn, db);  // EMPTY
+                    GatewayConfig config = config(db);
+                    GatewayReadiness readiness = new GatewayReadiness();
+
+                    try (FlussControlStateStore controls = FlussControlStateStore.open(config)) {
+                        NautilusIntentClient sink = new NautilusIntentClient(config, controls, readiness);
+
+                        // 1. An immutable intent row is already in the LOG (as the signal job writes it).
+                        Table table = conn.getTable(TablePath.of(db, "Execution_Intent"));
+                        String id = "halt-instr-0001";
+                        String hash = "aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb";
+                        AppendWriter w = table.newAppend().createWriter();
+                        w.append(intentRow(id, hash))
+                                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                        w.flush();
+
+                        // 2. The real reader runs the real consume path.
+                        List<String> violations = new ArrayList<>();
+                        try (IntentReader reader = IntentReader.open(
+                                config, sink, violations::add)) {
+                            reader.subscribeFromBeginning();
+                            int accepted = 0;
+                            for (int i = 0; i < 40; i++) {
+                                accepted += reader.poll(Duration.ofMillis(250));
+                                if (accepted > 0) break;
+                            }
+                            // HALTED wall: the intent is consumed but NEVER handed off.
+                            assertThat(accepted)
+                                    .as("a HALTED gate must hand off nothing")
+                                    .isZero();
+                            assertThat(violations).as("valid intent must not violate")
+                                    .isEmpty();
+                        }
+
+                        // 3. The fail-closed observable state (readiness contract).
+                        GatewayReadiness.Snapshot snap = readiness.snapshot();
+                        assertThat(snap.protocolReady())
+                                .as("no durable fence token -> protocol not ready")
+                                .isFalse();
+                        assertThat(snap.flussReady())
+                                .as("gate lookup did not find an ENABLED row")
+                                .isFalse();
+                        assertThat(snap.executionReady())
+                                .as("gate HALTED means execution not ready")
+                                .isFalse();
+
+                        // 4. Forward() itself must answer DEFERRED (direct contract).
+                        assertThat(sink.forward(IntentReader.decode(intentRow(id, hash), 0L)))
+                                .isEqualTo(IntentSink.Result.DEFERRED);
+
+                        // 5. No execution side effects anywhere:
+                        //    Execution_Attempts empty, Order_Lifecycle empty,
+                        //    intent NOT marked processed (stays replayable).
+                        assertThat(tableRowCount(conn, db, "Execution_Attempts"))
+                                .as("no Execution_Attempts while HALTED").isZero();
+                        assertThat(tableRowCount(conn, db, "Order_Lifecycle"))
+                                .as("no Order_Lifecycle while HALTED").isZero();
+                        assertThat(durableRecord(conn, db, id))
+                                .as("DEFERRED intents must not be committed as processed")
+                                .isNull();
+                    }
+                } finally {
+                    try {
+                        admin.dropDatabase(db, false, false)
+                                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                    } catch (Exception ignored) {
+                        // best-effort scratch cleanup
+                    }
+                }
+            }
+        });
+    }
+
+    private static GatewayConfig config(String db) {
+        Map<String, String> m = new HashMap<>();
+        m.put("FLUSS_BOOTSTRAP", System.getenv("FLUSS_BOOTSTRAP"));
+        m.put("FLUSS_DATABASE", db);
+        m.put("EXECUTION_INTENT_TABLE", "Execution_Intent");
+        m.put("EXECUTION_GATE_TABLE", "Execution_Gate");
+        m.put("EXECUTION_ATTEMPTS_TABLE", "Execution_Attempts");
+        m.put("ORDER_CORRELATION_TABLE", "Order_Correlation");
+        m.put("PROJECTION_LEDGER_TABLE", "Postback_Projection_Ledger");
+        m.put("SAFETY_HALT_TABLE", "Safety_Halt_Requests");
+        m.put("GATEWAY_BIND_HOST", "127.0.0.1");
+        m.put("GATEWAY_BIND_PORT", "9180");
+        m.put("NAUTILUS_PRIVATE_ENDPOINT", "http://127.0.0.1:9190/v1/intents");
+        m.put("GATEWAY_PROTOCOL_VERSION", "execution-gateway.v1");
+        m.put("GATEWAY_SHARED_SECRET", "private");
+        m.put("GATEWAY_REQUEST_TIMEOUT_MS", "2000");
+        m.put("GATEWAY_POLL_TIMEOUT_MS", "250");
+        m.put("ACCOUNT_SCOPE_ID", ACCOUNT);
+        m.put("EXECUTION_PARTITION_ID", PARTITION);
+        return GatewayConfig.from(m);
+    }
+
+    /** Execution_Intent LOG — 22 columns, mirror of 27_execution_intent.sql. */
+    private static void createIntentLog(Admin admin, Connection conn, String db) throws Exception {
+        Schema schema = Schema.newBuilder()
+                .column("instruction_id", DataTypes.STRING())
+                .column("candidate_id", DataTypes.STRING())
+                .column("trade_context_id", DataTypes.STRING())
+                .column("account_scope_id", DataTypes.STRING())
+                .column("execution_partition_id", DataTypes.STRING())
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("exchange", DataTypes.STRING())
+                .column("symbol", DataTypes.STRING())
+                .column("side", DataTypes.STRING())
+                .column("quantity", DataTypes.BIGINT())
+                .column("order_type", DataTypes.STRING())
+                .column("limit_price_paise", DataTypes.BIGINT())
+                .column("product_type", DataTypes.STRING())
+                .column("time_in_force", DataTypes.STRING())
+                .column("strategy_id", DataTypes.STRING())
+                .column("strategy_version", DataTypes.STRING())
+                .column("configuration_version", DataTypes.STRING())
+                .column("created_ts", DataTypes.BIGINT())
+                .column("expiry_ts", DataTypes.BIGINT())
+                .column("request_hash", DataTypes.STRING())
+                .column("supersedes_instruction_id", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING())
+                .build();
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(schema).distributedBy(8, "instruction_id").build();
+        admin.createTable(TablePath.of(db, "Execution_Intent"), td, false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** Execution_Intent_Processed KV — the durable dedup index (28_ DDL). */
+    private static void createIntentProcessedKv(Admin admin, Connection conn, String db) throws Exception {
+        Schema schema = Schema.newBuilder()
+                .column("instruction_id", DataTypes.STRING())
+                .column("request_hash", DataTypes.STRING())
+                .column("handed_off_ts", DataTypes.BIGINT())
+                .column("source_log_offset", DataTypes.BIGINT())
+                .column("schema_version", DataTypes.STRING())
+                .primaryKey("instruction_id")
+                .build();
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(schema).distributedBy(8, "instruction_id").build();
+        admin.createTable(TablePath.of(db, "Execution_Intent_Processed"), td, false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** Execution_Gate KV — created EMPTY (no row): the HALTED default. */
+    private static void createExecutionGate(Admin admin, Connection conn, String db) throws Exception {
+        Schema schema = Schema.newBuilder()
+                .column("execution_partition_id", DataTypes.STRING())
+                .column("account_scope_id", DataTypes.STRING())
+                .column("state", DataTypes.STRING())
+                .column("epoch", DataTypes.BIGINT())
+                .column("reason", DataTypes.STRING())
+                .column("detection_time", DataTypes.BIGINT())
+                .column("evidence_hash", DataTypes.STRING())
+                .column("transition_ts", DataTypes.BIGINT())
+                .column("owner_instance_id", DataTypes.STRING())
+                .column("fence_token", DataTypes.BIGINT())
+                .column("fence_acquired_ts", DataTypes.BIGINT())
+                .column("lease_expires_ts", DataTypes.BIGINT())
+                .column("fence_lost_ts", DataTypes.BIGINT())
+                .column("approved_evidence_hash", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING())
+                .primaryKey("execution_partition_id")
+                .build();
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(schema).distributedBy(8, "execution_partition_id").build();
+        admin.createTable(TablePath.of(db, "Execution_Gate"), td, false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** Execution_Attempts KV — EMPTY; nothing may be written while HALTED. */
+    private static void createAttempts(Admin admin, Connection conn, String db) throws Exception {
+        Schema schema = Schema.newBuilder()
+                .column("execution_attempt_id", DataTypes.STRING())
+                .column("prepared_ts", DataTypes.BIGINT())
+                .column("submitted_ts", DataTypes.BIGINT())
+                .primaryKey("execution_attempt_id")
+                .build();
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(schema).distributedBy(8, "execution_attempt_id").build();
+        admin.createTable(TablePath.of(db, "Execution_Attempts"), td, false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** Order_Lifecycle KV — EMPTY; nothing may be written while HALTED. */
+    private static void createOrderLifecycle(Admin admin, Connection conn, String db) throws Exception {
+        Schema schema = Schema.newBuilder()
+                .column("account_scope_id", DataTypes.STRING())
+                .column("broker_order_id", DataTypes.STRING())
+                .column("normalized_state", DataTypes.STRING())
+                .primaryKey("account_scope_id", "broker_order_id")
+                .build();
+        TableDescriptor td = TableDescriptor.builder()
+                .schema(schema).distributedBy(8, "account_scope_id").build();
+        admin.createTable(TablePath.of(db, "Order_Lifecycle"), td, false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** A canonical, validator-passing intent row (mirror of the signal-job write). */
+    private static GenericRow intentRow(String id, String hash) {
+        long now = System.currentTimeMillis();
+        return GenericRow.of(bs(id), bs("cand-b4-1"), bs("tc-b4-1"), bs(ACCOUNT), bs(PARTITION),
+                762583L, bs("NSE"), bs("BI-EQ"), bs("BUY"), 1L, bs("MARKET"),
+                null, bs("CNC"), bs("DAY"), bs("strat-b4"), bs("v1"), bs("cfg-b4-20260821"),
+                now, null, bs(hash), null, bs("1"));
+    }
+
+    private static BinaryString bs(String s) {
+        return s == null ? null : BinaryString.fromString(s);
+    }
+
+    private static int tableRowCount(Connection conn, String db, String tableName) throws Exception {
+        Table table = conn.getTable(TablePath.of(db, tableName));
+        var info = table.getTableInfo();
+        int n = 0;
+        for (int bucket = 0; bucket < info.getNumBuckets(); bucket++) {
+            try (BatchScanner scanner = table.newScan().limit(Integer.MAX_VALUE)
+                    .createBatchScanner(new TableBucket(info.getTableId(), bucket));
+                 CloseableIterator<InternalRow> it = scanner.pollBatch(TIMEOUT)) {
+                while (it.hasNext()) {
+                    it.next();
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
+    /** Returns the stored request_hash for an instruction_id, or null (not processed). */
+    private static String durableRecord(Connection conn, String db, String id) throws Exception {
+        Table table = conn.getTable(TablePath.of(db, "Execution_Intent_Processed"));
+        var info = table.getTableInfo();
+        for (int bucket = 0; bucket < info.getNumBuckets(); bucket++) {
+            try (BatchScanner scanner = table.newScan().limit(Integer.MAX_VALUE)
+                    .createBatchScanner(new TableBucket(info.getTableId(), bucket));
+                 CloseableIterator<InternalRow> it = scanner.pollBatch(TIMEOUT)) {
+                while (it.hasNext()) {
+                    InternalRow r = it.next();
+                    if (id.equals(r.getString(0).toString())) {
+                        return r.getString(1).toString();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+}

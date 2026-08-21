@@ -286,7 +286,7 @@ This plan closes the remaining gaps in five phases:
 ### Task B4 — Signal→Intent→Fill flow E2E
 **Why:** Closes the loop: a fired signal becomes an immutable `Execution_Intent` the gateway consumes and Nautilus executes (sandbox).
 - [x] `B4.1` Verified pre-existing: `ExecutionIntentBuilder`/`ProducerFunction`/`FeedProtocol`/`TableColumns` — 18 ExecutionIntent* tests green, `EXECUTION_INTENT_ENABLED` defaults false (branch absent, fail-closed).
-- [ ] `B4.2` Deferred to D-era: needs live Fluss + gateway + Nautilus on compose + broker sandbox (`BI-EQ ×1`) — tracked with AC-paper-order A2→A3→A5.
+- [x] `B4.2` PARTIAL (non-market half): live Fluss + real gateway + real compute on compose proven 2026-08-21 — `B4SignalIntentE2ETest` (compute: enabled → Signal_Candidates + immutable Execution_Intent, canonical; disabled-by-default → zero intents) + `B4HaltedIntentConsumeDeferE2ETest` (gateway: intent → DEFERRED fail-closed, zero Execution_Attempts/Order_Lifecycle) — see `logs/nautilus-execution/b4-halted-e2e-20260821.md` + CHG-087, runner `code/01_platform/04_scripts/run-b4-halted-e2e.sh`. REMAINING: full fill leg (attempts → Order_Lifecycle → Fills) — still gated on broker sandbox (`BI-EQ ×1`) with AC-paper-order A2→A3→A5.
 - [ ] `B4.3` Deferred to D-era (same live stack; `B4_SIGNAL_INTENT_E2E` follows `SIGNAL_CHAIN_E2E` pattern).
 - [x] `B4.4` Evidence `logs/nautilus-execution/b4-signal-intent-e2e-20260821.md` + CHG-071 (signal→intent verified, intent→fill deferred).
 **DoD:** signal → intent → fill round-trip green in sandbox.
