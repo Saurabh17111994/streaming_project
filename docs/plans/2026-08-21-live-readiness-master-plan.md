@@ -48,7 +48,7 @@
 | `D4` | FAIL-VM-LOSS-60000-001 drill | D3 BLOCKED: needs prod VMs |
 | `D5` | PERF-PROD-60000-001 (p99 < 100 ms @ 50k) | C4+D3 BLOCKED: needs prod VMs |
 | `D6` | Disaster drills DR-001..006 on prod stack | D2 | TODO |
-| `D7` | Observability finalization | D5+D6 BLOCKED: needs D4/D5 measured data |
+| `D7` | Observability finalization | dashboards seeded locally (CHG-086, `make seed-dashboards`); 🔒 thresholds need D4/D5 measured data + OPS-FAIL-001 drill |
 | `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 BLOCKED: needs A3–A5+D7 |
 | `E2` | Full Monday gate green | all gates green | DONE |
 | `E3` | Release evidence package assembly | E1+E2 | DONE |
@@ -406,7 +406,7 @@ This plan closes the remaining gaps in five phases:
 **DoD:** all Item F drills green on prod stack.
 
 ### Task D7 — Observability finalization
-- [ ] `D7.1` Set alert thresholds from measured data (D5/D4); seed prod OpenObserve dashboards (`seed_dashboards.py`); verify O2 outage leaves durable local audit (`OPS-FAIL-001`).
+- [ ] `D7.1` Set alert thresholds from measured data (D5/D4) 🔒 still open; **seed prod OpenObserve dashboards (`seed_dashboards.py`) — DONE locally (CHG-086: `make seed-dashboards` rc=0, idempotent untouched=4, corpus verified live with no semantic drift; evidence `logs/nautilus-execution/d7-dashboards-prep-20260821.md`)**; verify O2 outage leaves durable local audit (`OPS-FAIL-001`) 🔒 live drill still open.
 - [ ] `D7.2` Evidence `logs/tracker-14/d7-observability-<yyyymmdd>.md` + `CHG-078`.
 **DoD:** thresholds data-derived; dashboards live; O2-independent audit proven.
 

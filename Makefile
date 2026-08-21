@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config seed-dashboards
 
 help:
 	@echo "Targets:"
@@ -70,6 +70,7 @@ help:
 	@echo "              role=worker+observability, then docker stack config. DEPLOY=1 also runs"
 	@echo "              docker stack deploy -c docker-stack.yml prod; DOWN=0 leaves it up (M2 gate)"
 	@echo "  stack-config  compile-only via docker stack config (needs docker; catches schema errors)"
+	@echo "  seed-dashboards  idempotent OpenObserve dashboard provisioning (D7); needs O2_PASSWORD"
 
 env:
 	@if [ ! -f code/01_platform/01_docker/.env ]; then \
@@ -194,6 +195,15 @@ stack-selfcheck:
 # to actually deploy the prod stack from the same command.
 stack-config:
 	@bash code/01_platform/04_scripts/stack_selfcheck.sh $(if $(DEPLOY),DEPLOY=1,) $(if $(DOWN),DOWN=$(DOWN),)
+
+# Idempotent OpenObserve dashboard provisioning (D7): ensures every dashboard
+# in code/01_platform/01_docker/openobserve/dashboards/ exists in the local O2
+# org. O2_PASSWORD must be in the environment (from .env — never defaulted by
+# the tool; exit 2 otherwise). O2_API_URL defaults to http://localhost:5080.
+# Example: O2_PASSWORD=$(grep ^O2_PASSWORD= code/01_platform/01_docker/.env | cut -d= -f2) make seed-dashboards
+seed-dashboards:
+	@python3 code/01_platform/04_scripts/seed_dashboards.py $(ARGS)
+
 ddl-apply-smoke:
 	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py
 
