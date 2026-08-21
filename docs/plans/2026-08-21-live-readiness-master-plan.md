@@ -28,7 +28,7 @@
 | `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
 | `A5` | Reconciliation read-back (DEC-023) | A3+A4 BLOCKED: market-hours + A3/A4 |
 | `A6` | Phase A gate | A1–A5 | TODO |
-| `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | IN-PROGRESS |
+| `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | DONE |
 | `B2` | Crash-exactly-once (T5 fence proof) | B1 | DONE |
 | `B3` | Gate lifecycle E2E on compose | B2 | TODO |
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
@@ -262,8 +262,8 @@ This plan closes the remaining gaps in five phases:
 ### Task B1 — `LiveNodeRuntime` long-run soak (FakeBridge)
 **Why:** The run loop exists (`engine.rs` `LiveNodeRuntime`) but needs a stability soak to catch leaks/hangs before real wiring.
 - [x] `B1.1` Add soak test in `code/02_services/04_executor/tests/live_node_soak.rs` (as `live_node_runtime_sustained_soak`, env-tunable `SOAK_SECS`, default 30 s dev leg / 1800 s evidence leg): gate-boots-HALTED, liveness sampling, clean stop via handle, duplicate-run guard, fd/RSS leak bounds. Validation leg green; full suite 131 lib + integration targets green.
-- [ ] `B1.2` `cargo test --offline --test LiveNodeRuntimeSoakTest`.
-- [ ] `B1.3` Evidence `logs/tracker-14/b1-livenode-soak-<yyyymmdd>.md` + `CHG-062`.
+- [x] `B1.2` Evidence leg: `SOAK_SECS=1800 cargo test --offline --test live_node_soak` — exit 0 in 1810.01 s (boot 12:23:40Z → stop signal at exactly 1800 s → graceful shutdown). Dev leg + full suite green (136/0).
+- [x] `B1.3` Evidence `logs/nautilus-execution/b1-livenode-soak-20260821.md` + CHG-062 filed.
 **DoD:** soak green; leaks = 0; duplicate-run guard proven.
 
 ### Task B2 — Crash-exactly-once (T5 fence proof)
