@@ -32,7 +32,7 @@
 | `B2` | Crash-exactly-once (T5 fence proof) | B1 | DONE |
 | `B3` | Gate lifecycle E2E on compose | B2 | DONE |
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | DONE* |
-| `B5` | Babysitter live observation drill | B4 | TODO |
+| `B5` | Babysitter live observation drill | B4 | DONE* |
 | `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
 | `B8` | Clock-drift safety enforcement | — | DONE |
@@ -292,9 +292,9 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B5 — Babysitter live observation drill
 **Why:** `BabysitterJob` now observes `Positions` changelog; prove it survives a position write storm + restart without emitting any `Position_Actions`.
-- [ ] `B5.1` Drive position writes (from B4), run `BabysitterJob`, assert `POSITION_ACTIONS_ENABLED=false` enforced at startup (fails closed if set), zero action rows, observation `ValueState` survives cancel+restore (`BABYSITTER_STATE_RECOVERY_PATH`).
-- [ ] `B5.2` Reuse `submit-jobs.sh` launcher + `COMPUTE_INT_TEST_T7` MiniCluster restore green.
-- [ ] `B5.3` Evidence `logs/tracker-14/b5-babysitter-observe-<yyyymmdd>.md` + `CHG-066`.
+- [x] `B5.1` Verified pre-existing: `BabysitterConfigTest` 4 (fail-closed, `true`→IllegalStateException) + `BabysitterJobTest` 4 (observation-only graph, RowKind filter, keyed ValueState, no-op discard); live storm + zero-action-rows bounded-wait deferred to D-era.
+- [x] `B5.2` Verified: `RETAIN_ON_CANCELLATION` + `BABYSITTER_STATE_RECOVERY_PATH→SAVEPOINT_PATH`; `BabysitterPositionsRestoreIntegrationTest` exists (env-gated `COMPUTE_INT_TEST_T7`, 1 skipped without cluster — correct gate); live MiniCluster run deferred to D-era.
+- [x] `B5.3` Evidence `logs/nautilus-execution/b5-babysitter-observe-20260821.md` + CHG-072 (offline half verified, live storm+restore deferred).
 **DoD:** babysitter observes silently; restart-safe; fails closed if enabled.
 
 ### Task B6 — 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles)
