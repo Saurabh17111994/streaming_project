@@ -22,7 +22,7 @@
 
 | ID | Task | Depends on | Status |
 | --- | --- | --- | --- |
-| `A1` | Sandbox auth + auto re-auth harness | — | TODO |
+| `A1` | Sandbox auth + auto re-auth harness | — | DONE* |
 | `A2` | Paper-order placement smoke (full chain, sandbox) | A1 BLOCKED: market-hours (harness buildable now) |
 | `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 BLOCKED: market-hours + A2 |
 | `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
@@ -202,11 +202,11 @@ This plan closes the remaining gaps in five phases:
 
 ### Task A1 — Sandbox auth + auto re-auth harness
 **Why:** Login (TOTP) is proven live, but automatic re-auth on token expiry (T3) was deferred; the round-trip needs a stable session.
-- [ ] `A1.1` Read `code/02_services/06_execution_bridge/go-bridge/broker.go` + `fake_arrow_broker_test.go` to confirm the auth interface and the existing re-auth stub.
-- [ ] `A1.2` Implement automatic re-auth on 401/`token_expired`: refresh TOTP, retry once, then surface `UP disabled` via `/healthz` if refresh fails (do NOT loop forever).
-- [ ] `A1.3` Add Go test `TestSandboxAutoReauth` in `go-bridge/broker_test.go`: fake clock expiry → exactly one re-auth → success; repeated failure → `/healthz` reports disabled, no order attempted.
-- [ ] `A1.4` Run `cd code/02_services/06_execution_bridge/go-bridge && go test -race -run TestSandboxAutoReauth ./...`.
-- [ ] `A1.5` Write evidence `logs/tracker-14/t9-sandbox-reauth-<yyyymmdd>.md` + `CHG-057` record.
+- [x] `A1.1` Read `broker.go` + `fake_arrow_broker_test.go`: no re-auth stub existed — `classifySDKError` treated 401 as UNKNOWN but never retried; `brokerFromEnvironment` did `AutoLogin` once at startup only.
+- [x] `A1.2` New `reauth.go` (`ReauthBroker`: one `reauth` + one retry, then `broker_disabled` + `IsDisabled()`), `server.go` health now returns `UP disabled` + 503 when `ReauthBroker` is disabled, `main.go` live mode wraps `ArrowBroker` with a fresh-TOTP `AutoLogin` closure.
+- [x] `A1.3` New `broker_reauth_test.go` (`TestSandboxAutoReauth` 4 legs: one_reauth_then_success, reauth_failure_then_disabled, second_401_after_reauth_also_disabled, non_auth_error_no_reauth — `countingBroker` + injected `reauth`, no real Arrow).
+- [x] `A1.4` `go test -race -run TestSandboxAutoReauth` PASS (1.01s, 4/4) + full bridge suite PASS (0.11s).
+- [x] `A1.5` Evidence `logs/nautilus-execution/a1-sandbox-reauth-20260821.md` + CHG-074; live `AutoLogin` round-trip against sandbox auth endpoint (needs `ARROW_*` creds, off-hours) deferred.
 **DoD:** re-auth unit-tested; `/healthz` reflects disabled on auth failure; no test regression.
 
 ### Task A2 — Paper-order placement smoke (full chain, sandbox)

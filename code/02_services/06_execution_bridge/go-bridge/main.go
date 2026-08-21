@@ -80,8 +80,19 @@ func brokerFromEnvironment(mode string) (Broker, *arrow.Client, error) {
 				return nil, nil, fmt.Errorf("Arrow authentication failed")
 			}
 		}
-		broker, err := NewArrowBroker(client)
-		return broker, client, err
+		inner, err := NewArrowBroker(client)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Auto re-auth on 401/token_expired: refresh TOTP, retry once.
+		broker := NewReauthBroker(inner, func(ctx context.Context) error {
+			user, password, totp := os.Getenv("ARROW_USER_ID"), os.Getenv("ARROW_PASSWORD"), os.Getenv("ARROW_TOTP_KEY")
+			if user == "" || password == "" || totp == "" {
+				return fmt.Errorf("missing AutoLogin credentials for re-auth")
+			}
+			return client.AutoLogin(user, password, totp)
+		})
+		return broker, client, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported EXECUTION_BRIDGE_MODE %q", mode)
 	}

@@ -198,6 +198,10 @@ func resultToReport(c CommandEnvelope, result BrokerResult) ReportEnvelope {
 }
 
 func (s *BridgeServer) writeHealth(w http.ResponseWriter, readiness bool) {
+	brokerDisabled := false
+	if rb, ok := s.broker.(*ReauthBroker); ok && rb.IsDisabled() {
+		brokerDisabled = true
+	}
 	value := map[string]any{
 		"record_type":            "execution_bridge_health",
 		"contract_version":       ProtocolVersion,
@@ -206,17 +210,22 @@ func (s *BridgeServer) writeHealth(w http.ResponseWriter, readiness bool) {
 		"credentials_in_process": s.mode == "live",
 		"arrow_route_in_process": s.mode == "live",
 	}
+	if brokerDisabled {
+		value["status"] = "UP disabled"
+	}
 	if readiness {
 		// A disabled bridge is intentionally healthy but not ready for broker
 		// commands. Live enablement is a separate gate owned by the execution
 		// service, not implied by process readiness.
-		value["ready"] = s.mode != "disabled"
-		if s.mode == "disabled" {
+		value["ready"] = s.mode != "disabled" && !brokerDisabled
+		if s.mode == "disabled" || brokerDisabled {
 			value["reason"] = "broker_disabled"
 		}
 	}
 	status := http.StatusOK
-	if readiness && s.mode == "disabled" {
+	if value["status"] == "UP disabled" {
+		status = http.StatusServiceUnavailable
+	} else if readiness && s.mode == "disabled" {
 		status = http.StatusServiceUnavailable
 	}
 	s.writeJSON(w, status, value)
