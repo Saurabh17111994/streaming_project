@@ -173,7 +173,7 @@ public final class IngestionConfig {
         b.arrowMaxFutureEventSkewMs = requiredLong(env, "ARROW_MAX_FUTURE_EVENT_SKEW_MS", errors);
 
         // ---- HFT connection policy (plan §IngestionConfig — exact values) ----
-        b.arrowHftConnections = exactInt(env, "ARROW_HFT_CONNECTIONS", 1, errors);
+        b.arrowHftConnections = intRange(env, "ARROW_HFT_CONNECTIONS", 1, 1, 3, errors);
         b.arrowHftMaxTokensPerConnection = exactInt(env, "ARROW_HFT_MAX_TOKENS_PER_CONNECTION", 1024, errors);
         b.arrowHftMaxTokensPerRequest = exactInt(env, "ARROW_HFT_MAX_TOKENS_PER_REQUEST", 512, errors);
         b.arrowHftHeartbeatSeconds = exactInt(env, "ARROW_HFT_HEARTBEAT_SECONDS", 3, errors);

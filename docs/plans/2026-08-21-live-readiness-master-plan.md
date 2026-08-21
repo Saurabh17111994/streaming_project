@@ -37,7 +37,7 @@
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
 | `B8` | Clock-drift safety enforcement | — | DONE |
 | `C1` | Bridge fan-out plug-and-play (1→3) | — | DONE |
-| `C2` | Config parity + pin update | C1 | TODO |
+| `C2` | Config parity + pin update | C1 | DONE |
 | `C3` | Losslessness re-validation at scale | C1+C2 | TODO |
 | `C4` | SIG-PERF-001 50k baseline unblocked | C3 | TODO |
 | `C5` | 🔒 Scale-path decision record | 🔒 C4 BLOCKED: awaiting human decision |
@@ -337,9 +337,9 @@ This plan closes the remaining gaps in five phases:
 
 ### Task C2 — Config parity + pin update
 **Why:** Project requires Java↔Go config parity (`ING-UNIT-018` pattern); new keys must be mirrored and rejected consistently.
-- [ ] `C2.1` Add `ARROW_HFT_CONNECTIONS`, `ARROW_HFT_MAX_TOKENS_PER_CONNECTION` to the parity table in `ConfigParityTest` (Java) and `hft_policy_test.go` (Go); reject non-integer/out-of-range with Go FATAL 2 / Java throw.
-- [ ] `C2.2` Confirm `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` still flow through `hftRange`/`hftPin`.
-- [ ] `C2.3` Evidence + `CHG-069`.
+- [x] `C2.1` Parity table lifted: Go `hft_policy_test.go` 1,1,1,1→-1,1,1,3 and Java `ConfigParityTest.java` 1,1,1,1→-1,1,1,3; rejection updated to 4/abc (range 1..3). IngestionConfig.java exactInt→intRange(1..3).
+- [x] `C2.2` Both sides now flow through hftRange/intRange (CONNECTIONS 1..3, LATENCY 50..60_000); rejects 0/4/abc symmetrically.
+- [x] `C2.3` Java BUILD SUCCESS + Go PASS (18.6s); Rust 153/0 unaffected. Evidence `logs/nautilus-execution/c2-config-parity-20260821.md` + CHG-067.
 **DoD:** parity tests green; divergent config fails in both languages.
 
 ### Task C3 — Losslessness re-validation at scale

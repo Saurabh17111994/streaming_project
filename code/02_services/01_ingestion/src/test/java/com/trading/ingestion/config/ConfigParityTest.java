@@ -28,7 +28,7 @@ class ConfigParityTest {
 
     /** Must stay in lockstep with the {@code hftPolicyTable} in hft_policy_test.go. */
     private static final List<Policy> TABLE = List.of(
-            new Policy("ARROW_HFT_CONNECTIONS", 1, 1, 1, 1),
+            new Policy("ARROW_HFT_CONNECTIONS", -1, 1, 1, 3),
             new Policy("ARROW_HFT_LATENCY_MS", -1, 50, 50, 60_000),
             new Policy("ARROW_HFT_MAX_TOKENS_PER_CONNECTION", 1024, 1024, 1024, 1024),
             new Policy("ARROW_HFT_MAX_TOKENS_PER_REQUEST", 512, 512, 512, 512),
