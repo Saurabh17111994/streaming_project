@@ -6,6 +6,7 @@
 
 use anyhow::{ensure, Result};
 
+use crate::clockwatch::{DriftMonitor, DriftStatus};
 use crate::config::ServiceConfig;
 use crate::engine::EngineFactory;
 use crate::gate::{ExecState, Gate};
@@ -68,6 +69,13 @@ impl Runtime {
         http::health_json(&self.state)
     }
 
+    /// Samples clock drift and enforces it on the gate (B8): `Beyond`/`Unmeasurable`
+    /// trigger `safety_halt()`; recovery is only ever via the sanctioned human path.
+    /// The live NTP source is wired in Workstream D behind `OffsetSource`.
+    pub fn enforce_clock_drift(&mut self, monitor: &mut DriftMonitor) -> DriftStatus {
+        monitor.enforce(&mut self.gate)
+    }
+
     /// Starts graceful shutdown: `/readyz` returns 503 while draining.
     pub fn begin_shutdown(&self) {
         self.state.set_draining(true);
@@ -88,6 +96,7 @@ mod tests {
             listen_addr: "127.0.0.1:8787".into(),
             gateway_shared_secret: String::new(),
             protocol_version: "execution-gateway.v1".into(),
+            clock_offset_limit_ms: 200,
         }
     }
 

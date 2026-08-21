@@ -16,6 +16,9 @@ pub struct ServiceConfig {
     pub listen_addr: String,
     pub gateway_shared_secret: String,
     pub protocol_version: String,
+    /// Max |host-clock offset vs UTC| in ms before the drift monitor safety-halts (B8).
+    /// Mirrors compose `CLOCK_OFFSET_LIMIT_MS` (ingestion default 200 — see CHG-064).
+    pub clock_offset_limit_ms: i64,
 }
 
 impl ServiceConfig {
@@ -56,6 +59,10 @@ impl ServiceConfig {
             protocol_version: get("GATEWAY_PROTOCOL_VERSION")
                 .unwrap_or("execution-gateway.v1")
                 .to_string(),
+            clock_offset_limit_ms: get("CLOCK_OFFSET_LIMIT_MS")
+                .map(|v| v.parse::<i64>())
+                .transpose()?
+                .unwrap_or(200),
         })
     }
 
@@ -85,6 +92,7 @@ mod tests {
     #[test]
     fn halted_default() {
         let c = ServiceConfig {
+            clock_offset_limit_ms: 200,
             gateway_endpoint: "http://gw:8080".into(),
             bridge_endpoint: "http://bridge:8787".into(),
             log_level: "info".into(),
@@ -159,4 +167,13 @@ mod tests {
         let c = ServiceConfig::from_iter(kv(&[("EXECUTOR_LISTEN_ADDR", "not-an-addr")])).unwrap();
         assert!(c.listen_addr().is_err());
     }
+    #[test]
+    fn clock_offset_limit_defaults_and_overrides() {
+        // Default mirrors compose CLOCK_OFFSET_LIMIT_MS=200 (B8 / CHG-064).
+        let c = ServiceConfig::from_iter(kv(&[])).unwrap();
+        assert_eq!(c.clock_offset_limit_ms, 200);
+        let c = ServiceConfig::from_iter(kv(&[("CLOCK_OFFSET_LIMIT_MS", "350")])).unwrap();
+        assert_eq!(c.clock_offset_limit_ms, 350);
+    }
+
 }

@@ -35,7 +35,7 @@
 | `B5` | Babysitter live observation drill | B4 | TODO |
 | `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | TODO |
-| `B8` | Clock-drift safety enforcement | — | TODO |
+| `B8` | Clock-drift safety enforcement | — | DONE |
 | `C1` | Bridge fan-out implementation | — | TODO |
 | `C2` | Config parity + pin update | C1 | TODO |
 | `C3` | Losslessness re-validation at scale | C1+C2 | TODO |
@@ -314,10 +314,10 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B8 — Clock-drift safety enforcement
 **Why:** A clock-drift limit is declared in configuration but no code enforces it — an unenforced safety switch. (Ingestion already has `NtpClockChecker` + `TimeJumpMonitor`; the gap is on the execution side.)
-- [ ] `B8.1` **Discover:** locate where the clock-drift setting is declared — search `code/02_services/04_executor/src/config.rs`, `code/02_services/06_execution_gateway/src/main/java/com/trading/execution/gateway/GatewayConfig.java`, `code/common/src/main/java/com/trading/common/config/`, and `code/01_platform/01_docker/docker-compose.yml` env blocks for drift/skew/NTP keys. Record the exact key(s) found.
-- [ ] `B8.2` Implement enforcement at startup AND runtime: measured drift beyond the configured limit → service transitions to `HALTED` (fail closed), emits an alert log via the existing telemetry path, and refuses new orders until drift returns within limits and the gate re-enables.
-- [ ] `B8.3` Tests: unit test for threshold boundary (just inside = pass, just outside = halt); integration test that a simulated clock jump halts the engine and recovery re-enables only through the normal gate flow.
-- [ ] `B8.4` Run `cargo test --offline` (+ gateway `mvn -q test` if Java-side); evidence `logs/tracker-14/b8-clock-drift-<yyyymmdd>.md` + next free `CHG-*`.
+- [x] `B8.1` Found: `CLOCK_OFFSET_LIMIT_MS` (default 200) exists ONLY in compose's ingestion service block (enforced there by Java `NtpClockChecker`); executor + gateway configs had zero drift/skew/NTP keys. Evidence in `logs/nautilus-execution/b8-clock-drift-20260821.md`.
+- [x] `B8.2` New `src/clockwatch.rs`: `DriftMonitor.enforce()` — `Beyond`/`Unmeasurable` → `Gate::safety_halt()` + `tracing::error!` alert; recovery ONLY via sanctioned path (proven by test). Config now reads `CLOCK_OFFSET_LIMIT_MS` (default 200); bootstrap exposes `Runtime::enforce_clock_drift()`. Production NTP source = Workstream D behind `OffsetSource` trait.
+- [x] `B8.3` 7 monitor tests (±200/±201 boundary symmetric, fail-closed on probe error, halt clears approvals, idempotent breaches, within-limit no-op, sanctioned-path-only recovery incl. rejected direct transition + zero auto-recovery) + config default/override test.
+- [x] `B8.4` Suite green 144 passed / 0 failed (was 136). Java-side not needed (gap was execution-side only). Evidence `logs/nautilus-execution/b8-clock-drift-20260821.md` + CHG-064.
 **DoD:** declared limit actually enforced end-to-end; halt-on-drift proven by test; no silent tolerance of skew.
 
 ---

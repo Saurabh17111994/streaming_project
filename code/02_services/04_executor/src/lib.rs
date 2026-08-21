@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod clockwatch;
 pub mod bridge;
 pub mod config;
 pub mod engine;
