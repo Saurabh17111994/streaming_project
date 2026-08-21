@@ -18,44 +18,74 @@
 4. Never delete a row. Add discovered work as a new numbered task (`Task B9 — …`) + row here.
 5. After each session: run `make full-audit` — if red, fix doc/count drift before closing.
 
-**Status legend:** `TODO` · `IN-PROGRESS` · `DONE` · `BLOCKED: reason` · `SKIPPED: CHG-ref`
+**Status legend:** `TODO` (ready to execute) · `IN-PROGRESS` · `DONE` · `BLOCKED: reason` (`market-hours`, `needs prod VMs`, `awaiting human`) · `SKIPPED: CHG-ref`
 
 | ID | Task | Depends on | Status |
 | --- | --- | --- | --- |
 | `A1` | Sandbox auth + auto re-auth harness | — | TODO |
-| `A2` | Paper-order placement smoke (full chain, sandbox) | A1 | TODO |
-| `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 | TODO |
+| `A2` | Paper-order placement smoke (full chain, sandbox) | A1 BLOCKED: market-hours (harness buildable now) |
+| `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 BLOCKED: market-hours + A2 |
 | `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
-| `A5` | Reconciliation read-back (DEC-023) | A3+A4 | TODO |
+| `A5` | Reconciliation read-back (DEC-023) | A3+A4 BLOCKED: market-hours + A3/A4 |
 | `A6` | Phase A gate | A1–A5 | TODO |
 | `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | TODO |
 | `B2` | Crash-exactly-once (T5 fence proof) | B1 | TODO |
 | `B3` | Gate lifecycle E2E on compose | B2 | TODO |
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
 | `B5` | Babysitter live observation drill | B4 | TODO |
-| `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 | TODO |
+| `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | TODO |
 | `B8` | Clock-drift safety enforcement | — | TODO |
 | `C1` | Bridge fan-out implementation | — | TODO |
 | `C2` | Config parity + pin update | C1 | TODO |
 | `C3` | Losslessness re-validation at scale | C1+C2 | TODO |
 | `C4` | SIG-PERF-001 50k baseline unblocked | C3 | TODO |
-| `C5` | 🔒 Scale-path decision record | 🔒 C4 | TODO |
-| `D1` | 🔒 VM provisioning + agent-verifiable checklist | 🔒 human VMs | TODO |
-| `D2` | Swarm bootstrap + stack deploy | D1 | TODO |
-| `D3` | SWARM-* HA tests live (M3 quorum) | D2 | TODO |
-| `D4` | FAIL-VM-LOSS-60000-001 drill | D3 | TODO |
-| `D5` | PERF-PROD-60000-001 (p99 < 100 ms @ 50k) | C4+D3 | TODO |
+| `C5` | 🔒 Scale-path decision record | 🔒 C4 BLOCKED: awaiting human decision |
+| `D1` | 🔒 VM provisioning + agent-verifiable checklist | 🔒 human VMs BLOCKED: awaiting human VM provisioning |
+| `D2` | Swarm bootstrap + stack deploy | D1 BLOCKED: needs prod VMs (single-node mimic OK) |
+| `D3` | SWARM-* HA tests live (M3 quorum) | D2 BLOCKED: needs prod VMs |
+| `D4` | FAIL-VM-LOSS-60000-001 drill | D3 BLOCKED: needs prod VMs |
+| `D5` | PERF-PROD-60000-001 (p99 < 100 ms @ 50k) | C4+D3 BLOCKED: needs prod VMs |
 | `D6` | Disaster drills DR-001..006 on prod stack | D2 | TODO |
-| `D7` | Observability finalization | D5+D6 | TODO |
-| `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 | TODO |
+| `D7` | Observability finalization | D5+D6 BLOCKED: needs D4/D5 measured data |
+| `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 BLOCKED: needs A3–A5+D7 |
 | `E2` | Full Monday gate green | all gates green | TODO |
 | `E3` | Release evidence package assembly | E1+E2 | TODO |
 | `E4` | Docs consistency reconciliation | E3 | TODO |
-| `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 | TODO |
-| `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | 🔒 CF token | TODO |
+| `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 BLOCKED: awaiting human review |
+| `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | 🔒 CF token BLOCKED: awaiting human CF token |
 | `E5c` | Missing named E2E fixture artifacts | E2 | TODO |
 | `E6` | Final verification | E5 | TODO |
+
+### 🚦 Execution readiness triage — dev laptop · market closed · no VMs (set 2026-08-21)
+
+**✅ Implementable NOW on this laptop** — B1, B2, B3, B4, B5, B7, B8, C1, C2, C3, C4, E2, E5c
+(all run on FakeBridge / synthetic frames / local compose / dev cluster — zero live-market or VM need)
+
+**🟡 PREP-only now** — build code/tests/harness/docs today, real execution waits:
+| ID | Do now | Waits for |
+| --- | --- | --- |
+| `A1` | auto-re-auth code + unit tests (fake clock) | one live re-auth check (auth endpoint works off-hours) |
+| `A2` | sandbox-order integration harness + contract checks | 🔒 credentials + market hours (no fills while closed) |
+| `A4` | error-path evidence: 401 auth-fail, 15 s UNKNOWN timeout | success-response half of matrix |
+| `B6` | assemble DEC-044 checklist doc | 🔒 Saurabh signature |
+| `C5` | draft scale-decision CHG record | 🔒 premium-vs-multi-connection choice |
+| `D1` | `PROD_VM_PROVISIONING.md` + `prod_node_check.py` | 🔒 you creating the VMs |
+| `D6` | re-run drills on local compose (already green there) | prod-stack rerun |
+| `E4` | docs-audit hygiene pass | final truthfulness flip post-phases |
+
+**❌ Blocked outright**
+| IDs | Blocker |
+| --- | --- |
+| A3, A5 | real fill needed → market hours (+A2 done) |
+| D2-real, D3, D4, D5 | real multi-VM rig — laptop cannot honestly produce these numbers |
+| D7 | needs D4/D5 measurements as input |
+| E1 | rows wait on A3–A5 + D7 |
+| E3, E6 | wait on everything above |
+| E5b, E5, PC items | 🔒 human token / sign-offs / purchases |
+
+**Suggested order for a laptop session:** B1→B2→B8→B7 → C1→C2 → B3→B4→B5 → C3→C4 (long, background) → E2→E5c → A1-code/B6/C5/D1/E4 drafts. Afterward only two bundles remain: **one market-session batch** (A1-live → A2 → A3 → A5 → A4-success) and **the VM era** (D1→…→D7).
+
 
 **Progress:** 0 / 34 tasks done · AC criteria 0 / 7 met
 
