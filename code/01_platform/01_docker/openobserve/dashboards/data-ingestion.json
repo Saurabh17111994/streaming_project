@@ -1,0 +1,248 @@
+{
+  "version": 8,
+  "title": "Market Data Ingestion",
+  "description": "Feed health: throughput, losslessness counters, reconnects, clock offset, manifest completeness.",
+  "folder_id": "default",
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "1",
+          "type": "line",
+          "title": "Tick throughput (count/sec)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 1
+          }
+        },
+        {
+          "id": "2",
+          "type": "line",
+          "title": "Emitted-tick counters vs sink rows (losslessness)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, sum(emitted_ticks) AS y FROM \"metrics\" WHERE service = 'ingestion' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 2
+          }
+        },
+        {
+          "id": "3",
+          "type": "bar",
+          "title": "Reconnect events / connection epochs",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%reconnect%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 3
+          }
+        },
+        {
+          "id": "4",
+          "type": "line",
+          "title": "Clock offset (ms)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(clock_offset_ms) AS y FROM \"metrics\" WHERE service = 'ingestion' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 64,
+            "h": 8,
+            "i": 4
+          }
+        },
+        {
+          "id": "5",
+          "type": "bar",
+          "title": "Subscribe-ack completeness (100% = full manifest)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(subscription_completeness) AS y FROM \"metrics\" WHERE service = 'ingestion' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 8,
+            "w": 64,
+            "h": 8,
+            "i": 5
+          }
+        },
+        {
+          "id": "6",
+          "type": "table",
+          "title": "Ingestion log tail",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT _timestamp, service, log FROM \"logs\" WHERE service = 'ingestion' ORDER BY _timestamp DESC LIMIT 100",
+              "customQuery": true,
+              "fields": {
+                "stream": "logs",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "logs"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 8,
+            "w": 64,
+            "h": 8,
+            "i": 6
+          }
+        }
+      ]
+    }
+  ]
+}

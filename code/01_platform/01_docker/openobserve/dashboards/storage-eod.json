@@ -1,0 +1,170 @@
+{
+  "version": 8,
+  "title": "Storage and EOD",
+  "description": "Fluss append/fetch latency, checkpoint health, EOD offload state.",
+  "folder_id": "default",
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "1",
+          "type": "line",
+          "title": "Fluss append latency (ms) p50/p95/p99",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(append_latency_p99) AS y FROM \"metrics\" WHERE service = 'fluss' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 1
+          }
+        },
+        {
+          "id": "2",
+          "type": "line",
+          "title": "Fluss fetch latency (ms)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(fetch_latency_p99) AS y FROM \"metrics\" WHERE service = 'fluss' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 2
+          }
+        },
+        {
+          "id": "3",
+          "type": "bar",
+          "title": "Checkpoint failures / restart count",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%checkpoint%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 3
+          }
+        },
+        {
+          "id": "4",
+          "type": "table",
+          "title": "EOD offload state",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT _timestamp, table_name, status FROM \"logs\" WHERE service = 'eod' ORDER BY _timestamp DESC LIMIT 50",
+              "customQuery": true,
+              "fields": {
+                "stream": "logs",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "logs"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 192,
+            "h": 10,
+            "i": 4
+          }
+        }
+      ]
+    }
+  ]
+}

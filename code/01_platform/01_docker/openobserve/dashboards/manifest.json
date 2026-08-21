@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "created": "2026-08-21",
+  "note": "Dashboard version record (10-observability.md: 'A dashboard is not release evidence unless its record identifies the measurement boundary, workload, duration, UTC clock source/offset, exact software versions, sample count, and whether failures or restarts are included.'). Queries are bound to the O2 canonical streams the OTel collector routes to: 'metrics' (OTLP + Flink Prometheus remote-write) and 'logs' (filelog via O2 header routing). Panels render empty until their data source exports; the EXECUTOR OTLP export lands via the telemetry.rs TelemetrySink seam.",
+  "dashboards": [
+    {
+      "title": "Safe to Trade",
+      "file": "safe-to-trade.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-21",
+      "measurement_boundary": "global (operator): execution gate + order flow + data-feed health + system state",
+      "workload": "all services (EXECUTOR/ingestion/Flink/Fluss/hosts)",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp; offset panel bound to service clock_offset_ms",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes — panel 2 (unresolved/unknown) and log tails explicitly capture failures",
+      "streams": ["metrics", "logs"],
+      "software_versions": "OpenObserve v0.91.5-amd64 (compose OPENOBSERVE_IMAGE); dashboard API v8"
+    },
+    {
+      "title": "Orders and Fills",
+      "file": "order-execution.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-21",
+      "measurement_boundary": "execution_partition: order lifecycle, broker confirmations (fills/cancels/rejects), gate state",
+      "workload": "EXECUTOR + execution bridge",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes — reject/unknown panel and executor log tail",
+      "streams": ["metrics", "logs"],
+      "software_versions": "OpenObserve v0.91.5-amd64; nautilus-execution-service crate (pinned 74d57e7e)"
+    },
+    {
+      "title": "Market Data Ingestion",
+      "file": "data-ingestion.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-21",
+      "measurement_boundary": "instrument: feed throughput, losslessness counters, reconnects, clock offset, subscription completeness",
+      "workload": "ingestion bridge + IngestionService (1,024-instrument / single-connection testing envelope)",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp; clock-offset panel bound to service clock_offset_ms",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes — reconnect/epoch panel and ingestion log tail",
+      "streams": ["metrics", "logs"],
+      "software_versions": "OpenObserve v0.91.5-amd64; go-bridge (Go SDK pin GO_ARROW_SDK_VERSION)"
+    },
+    {
+      "title": "Storage and EOD",
+      "file": "storage-eod.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-21",
+      "measurement_boundary": "global: Fluss append/fetch latency, checkpoint health, EOD offload state",
+      "workload": "Fluss coordinator/tablet + Flink jobs",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes — checkpoint-failure panel and Fluss log tail",
+      "streams": ["metrics", "logs"],
+      "software_versions": "OpenObserve v0.91.5-amd64; Fluss client pinned in ingestion Cargo/pom"
+    }
+  ]
+}
