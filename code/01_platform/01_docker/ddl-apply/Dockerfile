@@ -30,6 +30,7 @@ WORKDIR /src
 COPY code/pom.xml /src/code/pom.xml
 COPY code/common/pom.xml /src/code/common/pom.xml
 COPY code/02_services/01_ingestion/pom.xml /src/code/02_services/01_ingestion/pom.xml
+COPY code/02_services/06_execution_gateway/pom.xml /src/code/02_services/06_execution_gateway/pom.xml
 # Best-effort dependency pre-fetch (layer cache). go-offline also resolves
 # test-scoped transitives of fluss-client's pom, which flaky networks can
 # truncate — tolerate that; `package` below fetches exactly what common needs.

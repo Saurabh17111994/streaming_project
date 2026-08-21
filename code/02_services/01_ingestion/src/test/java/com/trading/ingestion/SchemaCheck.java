@@ -26,7 +26,7 @@ public final class SchemaCheck {
                     var info = c.getTable(TablePath.of("default", name)).getTableInfo();
                     int cols = info.getRowType().getFieldCount();
                     String status = switch (name) {
-                        case "raw_table_1" -> cols == 28 ? "✅" : "❌ expected 28";
+                        case "raw_table_1" -> cols == 20 ? "✅" : "❌ expected 20 (DDL v2, R-054/R-231: quote/option columns removed)";
                         case "Postback_Quarantine" -> cols == 18 ? "✅" : "❌ expected 18";
                         case "suspected_discontinuities" -> cols == 15 ? "✅" : "❌ expected 15";
                         default -> "";

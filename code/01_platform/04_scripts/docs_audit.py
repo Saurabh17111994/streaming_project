@@ -115,7 +115,7 @@ def c1_manifest():
     if m is None:
         return check("C1 manifest readable", False, p)
     tables = m.get("tables", [])
-    check("C1 manifest has 25 tables", len(tables) == 25, f"got {len(tables)}")
+    check("C1 manifest has 26 tables", len(tables) == 26, f"got {len(tables)}")
     bad_sha = [t["table_name"] for t in tables if not t.get("ddl_sha256")]
     bad_compat = [t["table_name"] for t in tables if not t.get("compatibility_class")]
     bad_routing = [
@@ -309,8 +309,11 @@ DECISIONS_PATH = os.path.join(DOCS_DIR, "01_project", "04-decisions.md")
 
 # Baseline agreed 2026-08-14 (DEC-039) — bump these when the matrix
 # legitimately grows and update the doc's Coverage summary / Summary tables.
+# 2026-08-21: EB 13 -> 10 — AC-ING-001/003/005 proven PASSED (ING-E2E-001
+# full fake-broker acceptance + live Fluss round-trip; reconciliation of the
+# Summary table rows to match; NI unchanged 139).
 EXPECTED_AC_TOTAL = 152
-EXPECTED_EB_TOTAL = 13
+EXPECTED_EB_TOTAL = 10
 EXPECTED_NI_TOTAL = 139
 
 REQ_FILES = {  # domain (as used in the matrix tables) -> (prefix, requirement file)
@@ -599,9 +602,9 @@ def c9_dec039_invariants():
     ) or ""
     check("C9 ledger live-in-dev evidence", "Postback_Projection_Ledger 705" in foundation)
 
-    # --- DEC-038 dedup + SCH-19 index + SCH-23 EOD + REQ-EXE-004 intent DDL; 25 DDLs ---
+    # --- DEC-038 dedup + SCH-19 index + SCH-23 EOD + REQ-EXE-004 intent DDL; 26 DDLs ---
     sqls = sorted(f for f in os.listdir(DDL_DIR) if f.endswith(".sql"))
-    check("C9 DDL count = 25", len(sqls) == 25, f"got {len(sqls)}")
+    check("C9 DDL count = 26", len(sqls) == 26, f"got {len(sqls)}")
     check(
         "C9 dedup DDL on file",
         os.path.exists(os.path.join(DDL_DIR, "24_fingerprint_dedup.sql")),

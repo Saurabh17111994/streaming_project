@@ -105,11 +105,13 @@ class ProdHardeningTest(unittest.TestCase):
         self.assertIn("filelog", ct)
 
     def test_PROD_010_gate_monotonic_and_safety_halt_only_regress(self):
-        """PROD-010: gate HALTED→RECONCILING→APPROVAL→ENABLED, only safety_halt regresses."""
+        """PROD-010: gate HALTED→RECONCILING→APPROVAL_PENDING→ENABLED, only safety_halt regresses."""
         src = GATE_RS.read_text()
-        self.assertIn("Halted, ExecState::Reconciling", src)
-        self.assertIn("Reconciling, ExecState::ApprovalPending", src)
-        self.assertIn("ApprovalPending, ExecState::Enabled", src)
+        # DEC-044 form (2026-08-21): sanctioned transitions are a `matches!` tuple list;
+        # `Enabled` is NOT in that list — it is reachable only via Gate::enable after approval.
+        self.assertIn("(ExecState::Halted, ExecState::Reconciling)", src)
+        self.assertIn("(ExecState::Reconciling, ExecState::ApprovalPending)", src)
+        self.assertIn("Gate::enable", src)
         self.assertIn("safety_halt", src)
         # illegal jumps must error (covers 005 regress)
         self.assertIn("InvalidTransition", src)
