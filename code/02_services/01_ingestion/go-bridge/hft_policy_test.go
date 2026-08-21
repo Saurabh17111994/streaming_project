@@ -27,7 +27,7 @@ type hftPolicy struct {
 }
 
 var hftPolicyTable = []hftPolicy{
-	{"ARROW_HFT_CONNECTIONS", 1, 1, 1, 1},
+	{"ARROW_HFT_CONNECTIONS", -1, 1, 1, 3},
 	{"ARROW_HFT_LATENCY_MS", -1, 50, 50, 60_000},
 	{"ARROW_HFT_MAX_TOKENS_PER_CONNECTION", 1024, 1024, 1024, 1024},
 	{"ARROW_HFT_MAX_TOKENS_PER_REQUEST", 512, 512, 512, 512},
@@ -136,7 +136,7 @@ func TestHFTPolicyParityRejects(t *testing.T) {
 	}
 	cases := []struct{ key, value string }{
 		// One rejected value per key (pin+1 / below-range).
-		{"ARROW_HFT_CONNECTIONS", "2"},
+		{"ARROW_HFT_CONNECTIONS", "4"},
 		{"ARROW_HFT_LATENCY_MS", "49"},
 		{"ARROW_HFT_MAX_TOKENS_PER_CONNECTION", "1025"},
 		{"ARROW_HFT_MAX_TOKENS_PER_REQUEST", "513"},
@@ -186,7 +186,12 @@ func TestIngUnit020MissingAppIdAndFatalMessages(t *testing.T) {
 			logf := func(format string, args ...any) {
 				fmt.Fprintf(os.Stderr, "arrow-bridge: "+format+"\n", args...)
 			}
-			hftRange(logf, os.Getenv("GO_ING_UNIT_020_KEY"), 50, 50, 60_000)
+			key := os.Getenv("GO_ING_UNIT_020_KEY")
+			if key == "ARROW_HFT_CONNECTIONS" {
+				hftRange(logf, key, 1, 1, 3)
+			} else {
+				hftRange(logf, key, 50, 50, 60_000)
+			}
 		}
 		return
 	}
@@ -206,12 +211,12 @@ func TestIngUnit020MissingAppIdAndFatalMessages(t *testing.T) {
 			wantStderr: "arrow-bridge: missing required env: ARROW_APP_ID",
 		},
 		{
-			name:       "ARROW_HFT_CONNECTIONS=2",
-			env:        []string{"ARROW_HFT_CONNECTIONS=2"},
-			mode:       "pin",
+			name:       "ARROW_HFT_CONNECTIONS=4",
+			env:        []string{"ARROW_HFT_CONNECTIONS=4"},
+			mode:       "range",
 			key:        "ARROW_HFT_CONNECTIONS",
 			wantExit:   2,
-			wantStderr: "arrow-bridge: FATAL: ARROW_HFT_CONNECTIONS=2 \u2014 pinned to 1",
+			wantStderr: "arrow-bridge: FATAL: ARROW_HFT_CONNECTIONS=4 \u2014 must be in range 1..3",
 		},
 		{
 			name:       "ARROW_HFT_LATENCY_MS=49",

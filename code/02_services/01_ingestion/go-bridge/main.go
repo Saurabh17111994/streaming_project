@@ -122,10 +122,12 @@ func main() {
 		os.Exit(exitFatalStart)
 	}
 	logf("%d instruments", len(tokens))
-	// ARROW_HFT_CONNECTIONS is pinned to 1 (production policy permits exactly
-	// one Arrow HFT socket); hftPin exits FATAL on any other value, including
-	// a non-integer that the old inline parse silently ignored.
-	slotCount := hftPin(logf, "ARROW_HFT_CONNECTIONS", 1)
+	// ARROW_HFT_CONNECTIONS is tunable 1..MaxHFTConnections (C1 plug-and-play):
+	// default 1 preserves today's single-socket behavior; 2-3 enable the
+	// multi-connection fan-out for the full 2,433-instrument manifest when
+	// the Premium subscription allows concurrent sessions. Out-of-range or
+	// non-integer values exit FATAL (hftRange).
+	slotCount := hftRange(logf, "ARROW_HFT_CONNECTIONS", 1, 1, MaxHFTConnections)
 	plan, err := BuildSubscriptionPlan(tokens, slotCount, MaxHFTTokensPerConnection, MaxHFTTokensPerRequest)
 	if err != nil {
 		logf("FATAL: invalid subscription plan: %v", err)
