@@ -10,8 +10,10 @@ pub type BridgeReportStream = tokio::sync::mpsc::UnboundedReceiver<ReportEnvelop
 
 /// A client of the Go bridge.
 ///
-/// T4 scope is the in-process `FakeBridge`; the production WebSocket/HTTP adapter is added in a
-/// later phase. Every implementation must be usable from a single-threaded (non-`Send`)
+/// T4 scope is the in-process `FakeBridge` (default offline slice); the production HTTP/WS
+/// adapter (`bridge/transport.rs`) implements the full contract including the `/v1/events`
+/// report intake with reconnect. Every implementation must be usable from a single-threaded
+/// (non-`Send`)
 /// Nautilus runtime context, so report consumption is exposed as an owned receiver that a
 /// caller-owned task processes.
 #[async_trait]

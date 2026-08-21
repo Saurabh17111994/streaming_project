@@ -42,7 +42,7 @@ impl Backoff {
     /// Delay (ms) for the current attempt, then advances. Attempt 0 == `base_ms`; the
     /// delay doubles each step and saturates at `cap_ms`.
     pub fn next_delay_ms(&mut self) -> u64 {
-        let shift = (self.attempt as u32).min(16);
+        let shift = self.attempt.min(16);
         let d = self.base_ms.saturating_mul(1u64 << shift);
         self.attempt = self.attempt.wrapping_add(1);
         d.min(self.cap_ms)
@@ -378,7 +378,7 @@ mod tests {
         c.record_failure(0);
         assert_eq!(c.state(), BreakerState::Open);
         assert!(!c.allow_call(0)); // still within cooldown
-        // After cooldown, exactly one probe is allowed -> HalfOpen.
+                                   // After cooldown, exactly one probe is allowed -> HalfOpen.
         assert!(c.allow_call(100));
         assert_eq!(c.state(), BreakerState::HalfOpen);
         // A successful probe closes the breaker.
@@ -416,7 +416,11 @@ mod tests {
         // Re-executing the SAME logical call returns Duplicate and does NOT re-invoke.
         let r = o.execute("k1", || 0, &mut attempt);
         assert_eq!(r, Err(RetryError::Duplicate));
-        assert_eq!(calls.get(), 1, "a done key is never re-invoked (RESILIENCE-007)");
+        assert_eq!(
+            calls.get(),
+            1,
+            "a done key is never re-invoked (RESILIENCE-007)"
+        );
     }
 
     // --- RESILIENCE-003 (orchestrator): transient failures retried until success ---
@@ -462,7 +466,10 @@ mod tests {
         };
         let r = o.execute("k3", || 0, &mut attempt);
         assert_eq!(r, Err(RetryError::Exhausted { attempts: 4 }));
-        assert_eq!(attempts, 4, "retry storm is hard-bounded (RESILIENCE-001/003)");
+        assert_eq!(
+            attempts, 4,
+            "retry storm is hard-bounded (RESILIENCE-001/003)"
+        );
     }
 
     // --- RESILIENCE-004 (orchestrator): breaker short-circuits further calls ---
@@ -521,7 +528,11 @@ mod tests {
         let (v, attempts) = o.execute_async(|| now, &mut attempt).await.unwrap();
         assert_eq!(v, 42);
         assert_eq!(attempts, 3);
-        assert_eq!(calls.get(), 3, "transient errs are re-invoked, then success");
+        assert_eq!(
+            calls.get(),
+            3,
+            "transient errs are re-invoked, then success"
+        );
     }
 
     // --- async live-path retry: budget exhaustion surfaces, never retries forever ---
@@ -538,9 +549,7 @@ mod tests {
         let attempts = Cell::new(0u32);
         let mut attempt = || {
             attempts.set(attempts.get() + 1);
-            async move {
-                Err::<i64, AttemptError>(AttemptError::Transient("down".into()))
-            }
+            async move { Err::<i64, AttemptError>(AttemptError::Transient("down".into())) }
         };
         let r = o.execute_async(|| 0, &mut attempt).await;
         assert_eq!(r, Err(RetryError::Exhausted { attempts: 4 }));

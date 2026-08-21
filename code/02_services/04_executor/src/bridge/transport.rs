@@ -11,17 +11,35 @@
 //! The HTTP hop is a deliberately small client: the bridge is loopback-only and the server is a
 //! controlled peer, so a minimal HTTP/1.1 client (content-length / chunked / read-to-close
 //! framing) avoids pulling a full `reqwest` dependency tree.
+//!
+//! The `/v1/events` intake is an equally small RFC 6455 client (no `tungstenite`): it performs
+//! the upgrade handshake by hand, decodes text frames into [`ReportEnvelope`]s, answers server
+//! pings with masked pongs, and hands envelopes to a caller-owned [`BridgeReportStream`]. The
+//! intake task runs autonomously and reconnects with backoff when the bridge closes the socket
+//! (the Go server's own ping/pong keepalive is honored, so a long-lived quiet market never
+//! trips a read timeout at either side).
 
 use std::io;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 
 use super::client::{BridgeClient, BridgeReportStream};
 use super::protocol::{CommandEnvelope, ReportEnvelope};
+
+// --- RFC 6455 opcodes (subset we speak: text, ping, pong, close). ---
+const OP_TEXT: u8 = 0x1;
+const OP_CLOSE: u8 = 0x8;
+const OP_PING: u8 = 0x9;
+const OP_PONG: u8 = 0xA;
+/// Frames larger than this are treated as corrupt and drop the connection (reconnect).
+const MAX_WS_FRAME: usize = 1 << 20;
 
 /// A parsed HTTP/1.1 response (status + headers + raw body).
 struct HttpResponse {
@@ -183,12 +201,274 @@ fn parse_chunked_body(data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+// --- WebSocket report intake (minimal RFC 6455 client) ------------------------
+
+struct WsFrame {
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+fn parse_ws_url(url: &str) -> Result<(String, u16, String)> {
+    let rest = url
+        .strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("bridge ws url must be ws:// or http:// (loopback only): {url}")
+        })?;
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    anyhow::ensure!(
+        !authority.contains('@'),
+        "bridge ws url must not contain credentials: {url}"
+    );
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse::<u16>()?),
+        None => (authority.to_string(), 8787),
+    };
+    Ok((host, port, path))
+}
+
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(BASE64_ALPHABET[((n >> 18) & 63) as usize] as char);
+        out.push(BASE64_ALPHABET[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            BASE64_ALPHABET[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            BASE64_ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Deterministic-per-process xorshift* filled from wall-clock + pid. Sufficient for the
+/// Sec-WebSocket-Key nonce and frame masks (the Go server performs no entropy check).
+fn ws_random_bytes(n: usize) -> Vec<u8> {
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xa2ba40bc2e01u64)
+        ^ ((std::process::id() as u64) << 32);
+    (0..n)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect()
+}
+
+/// Reads one complete WebSocket frame. Applies the mask when the peer masked the payload
+/// (client→server frames are masked by RFC 6455; server→client frames are not).
+async fn read_ws_frame(stream: &mut TcpStream) -> Result<WsFrame> {
+    let mut hdr = [0u8; 2];
+    stream.read_exact(&mut hdr).await?;
+    let opcode = hdr[0] & 0x0F;
+    let masked = hdr[1] & 0x80 != 0;
+    let mut len = (hdr[1] & 0x7F) as u64;
+    if len == 126 {
+        let mut b = [0u8; 2];
+        stream.read_exact(&mut b).await?;
+        len = u16::from_be_bytes(b) as u64;
+    } else if len == 127 {
+        let mut b = [0u8; 8];
+        stream.read_exact(&mut b).await?;
+        len = u64::from_be_bytes(b);
+    }
+    anyhow::ensure!(len as usize <= MAX_WS_FRAME, "websocket frame too large");
+    let mask = if masked {
+        let mut m = [0u8; 4];
+        stream.read_exact(&mut m).await?;
+        Some(m)
+    } else {
+        None
+    };
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload).await?;
+    if let Some(m) = mask {
+        for (i, b) in payload.iter_mut().enumerate() {
+            *b ^= m[i % 4];
+        }
+    }
+    Ok(WsFrame { opcode, payload })
+}
+
+/// Writes one WebSocket frame from a client (always masked per RFC 6455).
+async fn write_client_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> Result<()> {
+    let mask = ws_random_bytes(4);
+    let mut out = Vec::with_capacity(14 + payload.len());
+    out.push(0x80 | opcode); // FIN + opcode
+    match payload.len() {
+        0..=125 => out.push(0x80 | payload.len() as u8),
+        126..=0xFFFF => {
+            out.push(0x80 | 126);
+            out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        _ => {
+            out.push(0x80 | 127);
+            out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+        }
+    }
+    out.extend_from_slice(&mask);
+    for (i, b) in payload.iter().enumerate() {
+        out.push(b ^ mask[i % 4]);
+    }
+    stream.write_all(&out).await?;
+    Ok(())
+}
+
+/// Performs the RFC 6455 upgrade on an established TCP stream.
+///
+/// Mirrors the Go bridge's expectations exactly: `Authorization: Bearer <token>` (the server
+/// rejects otherwise) and **no** `Origin` header (the server's `CheckOrigin` only admits
+/// browser-free clients).
+async fn ws_handshake(
+    stream: &mut TcpStream,
+    host: &str,
+    port: u16,
+    path: &str,
+    auth_token: &str,
+) -> Result<()> {
+    let key = base64_encode(&ws_random_bytes(16));
+    let request = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: {host}:{port}\r\n\
+         Authorization: Bearer {auth_token}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: {key}\r\n\
+         Sec-WebSocket-Version: 13\r\n\
+         \r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+    stream.flush().await?;
+
+    let mut reply = Vec::new();
+    let mut byte = [0u8; 1];
+    while !reply.windows(4).any(|w| w == b"\r\n\r\n") && reply.len() < 16_384 {
+        if stream.read(&mut byte).await? == 0 {
+            anyhow::bail!("connection closed during websocket upgrade");
+        }
+        reply.push(byte[0]);
+    }
+    anyhow::ensure!(
+        reply.starts_with(b"HTTP/1.1 101"),
+        "websocket upgrade rejected: {}",
+        String::from_utf8_lossy(&reply[..reply.len().min(120)])
+    );
+    Ok(())
+}
+
+/// Runs one lifeline of the `/v1/events` stream, returning when the socket closes, times out,
+/// or the caller's receiver is dropped. The caller decides whether (and how long) to back off.
+async fn ws_stream_once(
+    url: &str,
+    auth_token: &str,
+    tx: &UnboundedSender<ReportEnvelope>,
+    read_timeout: Duration,
+) -> Result<()> {
+    let (host, port, path) = parse_ws_url(url)?;
+    let addrs = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .with_context(|| format!("resolve bridge host {host}:{port}"))?;
+    let addr = addrs
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("bridge ws host {host}:{port} resolved to nothing"))?;
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .with_context(|| format!("connect to bridge ws {addr}"))?;
+    stream.set_nodelay(true)?;
+    ws_handshake(&mut stream, &host, port, &path, auth_token).await?;
+
+    loop {
+        let frame = match tokio::time::timeout(read_timeout, read_ws_frame(&mut stream)).await {
+            Err(_) => return Ok(()), // silent for too long (bridge ping cadence missed)
+            Ok(Err(_)) => return Ok(()), // bridge closed or frame corrupt
+            Ok(Ok(frame)) => frame,
+        };
+        match frame.opcode {
+            OP_TEXT => {
+                if let Ok(envelope) = serde_json::from_slice::<ReportEnvelope>(&frame.payload) {
+                    if tx.send(envelope).is_err() {
+                        return Ok(()); // caller dropped the receiver (shutdown)
+                    }
+                }
+                // A malformed frame is ignored, not fatal: the bridge never emits one in
+                // normal operation, and dropping the connection would reorder nothing.
+            }
+            OP_PING => {
+                if write_client_ws_frame(&mut stream, OP_PONG, &frame.payload)
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+            OP_PONG => {} // we never send pings; ignore
+            OP_CLOSE => {
+                let _ = write_client_ws_frame(&mut stream, OP_CLOSE, &frame.payload).await;
+                return Ok(());
+            }
+            _ => {} // continuation/binary frames are outside the bridge contract
+        }
+    }
+}
+
+/// Background intake task: connects to `/v1/events` and reconnects with exponential backoff
+/// (capped at [`HttpBridgeClient::reconnect_max`]`-equivalent`) until the receiver is dropped.
+async fn report_intake_loop(
+    url: String,
+    auth_token: String,
+    tx: UnboundedSender<ReportEnvelope>,
+    reconnect_min: Duration,
+    reconnect_max: Duration,
+    read_timeout: Duration,
+) {
+    let mut delay = reconnect_min;
+    loop {
+        if tx.is_closed() {
+            return;
+        }
+        let clean = ws_stream_once(&url, &auth_token, &tx, read_timeout)
+            .await
+            .is_ok();
+        tokio::time::sleep(delay).await;
+        delay = if clean {
+            reconnect_min
+        } else {
+            (delay * 2).min(reconnect_max)
+        };
+    }
+}
+
 /// Production HTTP/WS [`BridgeClient`] targeting the Go execution bridge.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct HttpBridgeClient {
     base_url: String,
     auth_token: String,
     connected: bool,
+    reports_tx: Option<UnboundedSender<ReportEnvelope>>,
+    intake: Option<JoinHandle<()>>,
+    reconnect_min: Duration,
+    reconnect_max: Duration,
+    read_timeout: Duration,
 }
 
 impl HttpBridgeClient {
@@ -197,7 +477,22 @@ impl HttpBridgeClient {
             base_url,
             auth_token,
             connected: false,
+            reports_tx: None,
+            intake: None,
+            reconnect_min: Duration::from_millis(500),
+            reconnect_max: Duration::from_secs(10),
+            // The Go bridge pings every 20 s and expects a pong within its 60 s read window;
+            // honouring a wider window here means we only drop a truly dead lifeline.
+            read_timeout: Duration::from_secs(65),
         }
+    }
+
+    /// Test-facing knobs: shrink the reconnect backoff so reconnect tests run in milliseconds.
+    #[cfg(test)]
+    fn with_reconnect(mut self, min: Duration, max: Duration) -> Self {
+        self.reconnect_min = min;
+        self.reconnect_max = max;
+        self
     }
 }
 
@@ -222,6 +517,13 @@ impl BridgeClient for HttpBridgeClient {
 
     async fn disconnect(&mut self) -> Result<()> {
         self.connected = false;
+        // Stop the intake task; dropping the sender also unblocks its `tx.is_closed()` check.
+        if let Some(tx) = self.reports_tx.take() {
+            drop(tx);
+        }
+        if let Some(task) = self.intake.take() {
+            task.abort();
+        }
         Ok(())
     }
 
@@ -241,9 +543,26 @@ impl BridgeClient for HttpBridgeClient {
     }
 
     fn take_reports(&mut self) -> Option<BridgeReportStream> {
-        // The WebSocket report stream is surfaced as a caller-owned receiver by the node wiring
-        // in a later step (T4 report intake). The synchronous command path is proven here.
-        None
+        if self.reports_tx.is_some() {
+            return None; // the stream has already been taken
+        }
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let url = format!("{}/v1/events", self.base_url.trim_end_matches('/'));
+        let token = self.auth_token.clone();
+        let min = self.reconnect_min;
+        let max = self.reconnect_max;
+        let read_timeout = self.read_timeout;
+        let intake = tokio::spawn(report_intake_loop(
+            url,
+            token,
+            tx.clone(),
+            min,
+            max,
+            read_timeout,
+        ));
+        self.reports_tx = Some(tx);
+        self.intake = Some(intake);
+        Some(rx)
     }
 }
 
@@ -254,9 +573,209 @@ mod tests {
         Command, CommandEnvelope, OrderCommand, OrderType, Product, ReportEnvelope, ReportOutcome,
         TransactionType, Validity, PROTOCOL_VERSION, RECORD_COMMAND, RECORD_REPORT,
     };
+    use anyhow::Result;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    const WS_101: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\n\
+Upgrade: websocket\r\n\
+Connection: Upgrade\r\n\
+Sec-WebSocket-Accept: x\r\n\r\n";
+
+    /// Reads an HTTP head (up to CRLFCRLF) from the raw socket — used by the in-test server.
+    async fn read_http_head(stream: &mut TcpStream) -> String {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") && buf.len() < 16_384 {
+            if stream.read(&mut byte).await.unwrap() == 0 {
+                break;
+            }
+            buf.push(byte[0]);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Writes a server→client frame (never masked, per RFC 6455).
+    async fn write_server_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> Result<()> {
+        let mut out = vec![0x80 | opcode];
+        match payload.len() {
+            0..=125 => out.push(payload.len() as u8),
+            126..=0xFFFF => {
+                out.push(126);
+                out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+            }
+            _ => {
+                out.push(127);
+                out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+            }
+        }
+        out.extend_from_slice(payload);
+        stream.write_all(&out).await?;
+        Ok(())
+    }
+
+    fn ws_report(ref_id: &str, report_type: &str, status: &str) -> String {
+        serde_json::json!({
+            "record_type": RECORD_REPORT,
+            "contract_version": PROTOCOL_VERSION,
+            "client_order_ref": ref_id,
+            "broker_order_id": format!("BROKER-{ref_id}"),
+            "order_status": status,
+            "report_type": report_type,
+            "fill_price": "120.5",
+            "fill_quantity": "10",
+            "instrument_token": "26000",
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn intake_delivers_report_envelope_over_ws() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = read_http_head(&mut stream).await;
+            assert!(
+                head.starts_with("GET /v1/events HTTP/1.1"),
+                "upgrade path: {head}"
+            );
+            assert!(head.contains("Upgrade: websocket"));
+            assert!(head.contains("Connection: Upgrade"));
+            assert!(head.contains("Sec-WebSocket-Version: 13"));
+            assert!(
+                head.contains("Authorization: Bearer tok_123"),
+                "bearer auth on ws"
+            );
+            assert!(
+                !head.contains("\r\nOrigin:"),
+                "CheckOrigin forbids Origin header"
+            );
+            stream.write_all(WS_101).await.unwrap();
+            write_server_frame(
+                &mut stream,
+                OP_TEXT,
+                ws_report("REF-1", "order_filled", "FILLED").as_bytes(),
+            )
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        });
+
+        let mut client =
+            HttpBridgeClient::new(format!("http://127.0.0.1:{port}"), "tok_123".to_string());
+        let mut rx = client.take_reports().expect("report stream");
+        let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timeout waiting for report")
+            .expect("report stream closed unexpectedly");
+        assert_eq!(envelope.client_order_ref, "REF-1");
+        assert_eq!(envelope.report_type.as_deref(), Some("order_filled"));
+        assert_eq!(envelope.order_status.as_deref(), Some("FILLED"));
+        assert_eq!(envelope.fill_quantity.as_deref(), Some("10"));
+        assert_eq!(envelope.broker_order_id, "BROKER-REF-1");
+        let _ = client.disconnect().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn intake_reconnects_after_server_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            // Lifeline 1: deliver one fill, then slam the door.
+            let (mut s1, _) = listener.accept().await.unwrap();
+            read_http_head(&mut s1).await;
+            s1.write_all(WS_101).await.unwrap();
+            write_server_frame(
+                &mut s1,
+                OP_TEXT,
+                ws_report("REF-A", "order_filled", "FILLED").as_bytes(),
+            )
+            .await
+            .unwrap();
+            drop(s1);
+            // Lifeline 2: the client must come back with a fresh handshake.
+            let (mut s2, _) = listener.accept().await.unwrap();
+            let head2 = read_http_head(&mut s2).await;
+            assert!(
+                head2.starts_with("GET /v1/events HTTP/1.1"),
+                "reconnect handshake: {head2}"
+            );
+            s2.write_all(WS_101).await.unwrap();
+            write_server_frame(
+                &mut s2,
+                OP_TEXT,
+                ws_report("REF-B", "order_canceled", "CANCELED").as_bytes(),
+            )
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        });
+
+        let mut client =
+            HttpBridgeClient::new(format!("http://127.0.0.1:{port}"), "tok_123".to_string())
+                .with_reconnect(Duration::from_millis(25), Duration::from_millis(100));
+        let mut rx = client.take_reports().expect("report stream");
+        let a = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timeout waiting for REF-A")
+            .expect("stream closed");
+        assert_eq!(a.client_order_ref, "REF-A");
+        assert_eq!(a.order_status.as_deref(), Some("FILLED"));
+        let b = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timeout waiting for REF-B after reconnect")
+            .expect("stream closed");
+        assert_eq!(b.client_order_ref, "REF-B");
+        assert_eq!(b.order_status.as_deref(), Some("CANCELED"));
+        // No duplicate deliveries after the reconnect.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "no duplicate envelopes after reconnect"
+        );
+        let _ = client.disconnect().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn intake_answers_server_ping_with_pong() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_head(&mut stream).await;
+            stream.write_all(WS_101).await.unwrap();
+            // The Go bridge pings every 20 s; the client must answer with a masked pong.
+            write_server_frame(&mut stream, OP_PING, b"hb")
+                .await
+                .unwrap();
+            let pong = read_ws_frame(&mut stream).await.unwrap();
+            assert_eq!(pong.opcode, OP_PONG, "client must answer ping with pong");
+            assert_eq!(pong.payload, b"hb");
+            write_server_frame(
+                &mut stream,
+                OP_TEXT,
+                ws_report("REF-P", "order_filled", "FILLED").as_bytes(),
+            )
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        });
+
+        let mut client =
+            HttpBridgeClient::new(format!("http://127.0.0.1:{port}"), "tok_123".to_string());
+        let mut rx = client.take_reports().expect("report stream");
+        let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timeout waiting for fill after ping/pong")
+            .expect("stream closed");
+        assert_eq!(envelope.client_order_ref, "REF-P");
+        let _ = client.disconnect().await;
+        server.await.unwrap();
+    }
 
     fn command_env() -> CommandEnvelope {
         CommandEnvelope {

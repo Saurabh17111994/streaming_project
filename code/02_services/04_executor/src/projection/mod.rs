@@ -865,21 +865,39 @@ mod tests {
     fn fill_event_validate_rejects_negative_and_empty() {
         // Zero / negative quantity, negative price, empty id are all rejected (STATE-*).
         let zq = fill(1, Side::Buy, 0, 1000);
-        assert!(zq.validate().unwrap_err().contains("fill_qty must be positive"));
+        assert!(zq
+            .validate()
+            .unwrap_err()
+            .contains("fill_qty must be positive"));
         let nq = fill(1, Side::Buy, -3, 1000);
-        assert!(nq.validate().unwrap_err().contains("fill_qty must be positive"));
+        assert!(nq
+            .validate()
+            .unwrap_err()
+            .contains("fill_qty must be positive"));
         let np = fill(1, Side::Buy, 10, -1);
-        assert!(np.validate().unwrap_err().contains("fill_price_paise must be >= 0"));
+        assert!(np
+            .validate()
+            .unwrap_err()
+            .contains("fill_price_paise must be >= 0"));
         let mut eid = fill(1, Side::Buy, 10, 1000);
         eid.position_id = String::new();
-        assert!(eid.validate().unwrap_err().contains("position_id is required"));
+        assert!(eid
+            .validate()
+            .unwrap_err()
+            .contains("position_id is required"));
     }
 
     #[test]
     fn position_snapshot_validate_rejects_cross_and_negative_quantity() {
         // open < closed is a cross -> invalid; negative open -> invalid (CORR-011 invariant).
-        assert!(snapshot_with(10, 20).validate().unwrap_err().contains("quantity invariant"));
-        assert!(snapshot_with(-5, 0).validate().unwrap_err().contains("quantity invariant"));
+        assert!(snapshot_with(10, 20)
+            .validate()
+            .unwrap_err()
+            .contains("quantity invariant"));
+        assert!(snapshot_with(-5, 0)
+            .validate()
+            .unwrap_err()
+            .contains("quantity invariant"));
         let ok = snapshot_with(10, 4);
         assert!(ok.validate().is_ok());
         assert_eq!(ok.current_quantity(), 6);
@@ -910,19 +928,52 @@ mod tests {
         assert_eq!(derive(10, 4, true), PositionState::Reducing);
         assert_eq!(derive(4, 4, true), PositionState::Closed);
         assert_eq!(derive(-1, 0, false), PositionState::Unknown); // negative -> Unknown
-        // legal forward transitions + re-entry (CORR-009/010 monotonic)
-        assert!(is_legal_transition(PositionState::Flat, PositionState::Open));
-        assert!(is_legal_transition(PositionState::Open, PositionState::Reducing));
-        assert!(is_legal_transition(PositionState::Open, PositionState::Closed));
-        assert!(is_legal_transition(PositionState::Reducing, PositionState::Open));
-        assert!(is_legal_transition(PositionState::Reducing, PositionState::Closed));
-        assert!(is_legal_transition(PositionState::Closed, PositionState::Open)); // re-entry
-        assert!(is_legal_transition(PositionState::Open, PositionState::Open)); // self
-        // illegal / regressive
-        assert!(!is_legal_transition(PositionState::Flat, PositionState::Reducing));
-        assert!(!is_legal_transition(PositionState::Flat, PositionState::Closed));
-        assert!(!is_legal_transition(PositionState::Open, PositionState::Flat)); // cannot regress to Flat
-        assert!(!is_legal_transition(PositionState::Open, PositionState::Unknown)); // Unknown forbidden
+                                                                  // legal forward transitions + re-entry (CORR-009/010 monotonic)
+        assert!(is_legal_transition(
+            PositionState::Flat,
+            PositionState::Open
+        ));
+        assert!(is_legal_transition(
+            PositionState::Open,
+            PositionState::Reducing
+        ));
+        assert!(is_legal_transition(
+            PositionState::Open,
+            PositionState::Closed
+        ));
+        assert!(is_legal_transition(
+            PositionState::Reducing,
+            PositionState::Open
+        ));
+        assert!(is_legal_transition(
+            PositionState::Reducing,
+            PositionState::Closed
+        ));
+        assert!(is_legal_transition(
+            PositionState::Closed,
+            PositionState::Open
+        )); // re-entry
+        assert!(is_legal_transition(
+            PositionState::Open,
+            PositionState::Open
+        )); // self
+            // illegal / regressive
+        assert!(!is_legal_transition(
+            PositionState::Flat,
+            PositionState::Reducing
+        ));
+        assert!(!is_legal_transition(
+            PositionState::Flat,
+            PositionState::Closed
+        ));
+        assert!(!is_legal_transition(
+            PositionState::Open,
+            PositionState::Flat
+        )); // cannot regress to Flat
+        assert!(!is_legal_transition(
+            PositionState::Open,
+            PositionState::Unknown
+        )); // Unknown forbidden
     }
 
     #[test]
@@ -946,7 +997,10 @@ mod tests {
             FeedOutcome::Duplicate
         );
         let s2 = driver.snapshot(POSITION_ID).unwrap();
-        assert_eq!(&s1, s2, "re-apply must not change the authoritative projection");
+        assert_eq!(
+            &s1, s2,
+            "re-apply must not change the authoritative projection"
+        );
     }
     // --------------------------------------------------------------------------
     // CORR-013 — source-of-truth consistency. The projection is a pure function of the
@@ -957,16 +1011,42 @@ mod tests {
     #[test]
     fn corr013_projection_is_pure_function_of_authority_events() {
         let mut driver = PositionProjectorDriver::new();
-        let key = PositionKey { account_scope_id: "acc-1".into(), instrument_token: 1001, side: Side::Buy };
-        assert_eq!(driver.feed_on_key(&key, &fill(3, Side::Buy, 10, 1000), NOW).outcome, FeedOutcome::Applied);
+        let key = PositionKey {
+            account_scope_id: "acc-1".into(),
+            instrument_token: 1001,
+            side: Side::Buy,
+        };
+        assert_eq!(
+            driver
+                .feed_on_key(&key, &fill(3, Side::Buy, 10, 1000), NOW)
+                .outcome,
+            FeedOutcome::Applied
+        );
         let s = driver.snapshot(POSITION_ID).unwrap().clone();
-        assert_eq!(s.current_quantity(), s.open_quantity - s.closed_quantity, "size must be derived");
+        assert_eq!(
+            s.current_quantity(),
+            s.open_quantity - s.closed_quantity,
+            "size must be derived"
+        );
         // A REGRESSION (older version, different event) or duplicate must never overwrite
         // the authority's last-blessed state.
-        assert_eq!(driver.feed_on_key(&key, &fill(2, Side::Buy, 99, 1000), NOW).outcome, FeedOutcome::Violation);
-        assert_eq!(driver.feed_on_key(&key, &fill(3, Side::Buy, 99, 1000), NOW).outcome, FeedOutcome::Duplicate);
+        assert_eq!(
+            driver
+                .feed_on_key(&key, &fill(2, Side::Buy, 99, 1000), NOW)
+                .outcome,
+            FeedOutcome::Violation
+        );
+        assert_eq!(
+            driver
+                .feed_on_key(&key, &fill(3, Side::Buy, 99, 1000), NOW)
+                .outcome,
+            FeedOutcome::Duplicate
+        );
         let s2 = driver.snapshot(POSITION_ID).unwrap();
-        assert_eq!(&s, s2, "projection must stay a pure function of authority events (CORR-013)");
+        assert_eq!(
+            &s, s2,
+            "projection must stay a pure function of authority events (CORR-013)"
+        );
     }
 
     // --------------------------------------------------------------------------
@@ -993,18 +1073,38 @@ mod tests {
     #[test]
     fn fence011_late_duplicate_response_cannot_corrupt_state() {
         let mut driver = PositionProjectorDriver::new();
-        let key = PositionKey { account_scope_id: "acc-1".into(), instrument_token: 1001, side: Side::Buy };
-        assert_eq!(driver.feed_on_key(&key, &fill(5, Side::Buy, 10, 1000), NOW).outcome, FeedOutcome::Applied);
+        let key = PositionKey {
+            account_scope_id: "acc-1".into(),
+            instrument_token: 1001,
+            side: Side::Buy,
+        };
+        assert_eq!(
+            driver
+                .feed_on_key(&key, &fill(5, Side::Buy, 10, 1000), NOW)
+                .outcome,
+            FeedOutcome::Applied
+        );
         let s = driver.snapshot(POSITION_ID).unwrap().clone();
         assert_eq!(s.open_quantity, 10);
         // Late re-delivery of the SAME response -> Duplicate; a STALE content-matching
         // copy (same event id, older sequence) -> Stale. Neither may double-count.
-        assert_eq!(driver.feed_on_key(&key, &fill(5, Side::Buy, 10, 1000), NOW).outcome, FeedOutcome::Duplicate);
+        assert_eq!(
+            driver
+                .feed_on_key(&key, &fill(5, Side::Buy, 10, 1000), NOW)
+                .outcome,
+            FeedOutcome::Duplicate
+        );
         let mut stale = fill(5, Side::Buy, 10, 1000);
         stale.source_sequence = 4; // same event, older version -> content matches -> Stale
-        assert_eq!(driver.feed_on_key(&key, &stale, NOW).outcome, FeedOutcome::Stale);
+        assert_eq!(
+            driver.feed_on_key(&key, &stale, NOW).outcome,
+            FeedOutcome::Stale
+        );
         let after = driver.snapshot(POSITION_ID).unwrap();
-        assert_eq!(&s, after, "late responses may not double-count / corrupt state (FENCE-011)");
+        assert_eq!(
+            &s, after,
+            "late responses may not double-count / corrupt state (FENCE-011)"
+        );
         assert_eq!(after.open_quantity, 10);
     }
 
@@ -1014,14 +1114,28 @@ mod tests {
     // --------------------------------------------------------------------------
     #[test]
     fn dr007_replay_twice_produces_identical_state() {
-        let log = [fill(1, Side::Buy, 10, 1000), fill(2, Side::Buy, 5, 1100), fill(3, Side::Sell, 8, 1050)];
+        let log = [
+            fill(1, Side::Buy, 10, 1000),
+            fill(2, Side::Buy, 5, 1100),
+            fill(3, Side::Sell, 8, 1050),
+        ];
         let mut a = PositionProjectorDriver::new();
         let mut b = PositionProjectorDriver::new();
-        let key = PositionKey { account_scope_id: "acc-1".into(), instrument_token: 1001, side: Side::Buy };
-        for f in &log { a.feed_on_key(&key, f, NOW); }
-        for f in &log { b.feed_on_key(&key, f, NOW); }
+        let key = PositionKey {
+            account_scope_id: "acc-1".into(),
+            instrument_token: 1001,
+            side: Side::Buy,
+        };
+        for f in &log {
+            a.feed_on_key(&key, f, NOW);
+        }
+        for f in &log {
+            b.feed_on_key(&key, f, NOW);
+        }
         // And repeat the whole log a second time on B (idempotent repeat, EOD-002).
-        for f in &log { b.feed_on_key(&key, f, NOW); }
+        for f in &log {
+            b.feed_on_key(&key, f, NOW);
+        }
         assert_eq!(
             a.snapshot(POSITION_ID).unwrap(),
             b.snapshot(POSITION_ID).unwrap(),
@@ -1041,15 +1155,25 @@ mod tests {
             fill(3, Side::Sell, 8, 1050),
             fill(4, Side::Sell, 7, 1060),
         ];
-        let key = PositionKey { account_scope_id: "acc-1".into(), instrument_token: 1001, side: Side::Buy };
+        let key = PositionKey {
+            account_scope_id: "acc-1".into(),
+            instrument_token: 1001,
+            side: Side::Buy,
+        };
 
         let mut uninterrupted = PositionProjectorDriver::new();
-        for f in &full { uninterrupted.feed_on_key(&key, f, NOW); }
+        for f in &full {
+            uninterrupted.feed_on_key(&key, f, NOW);
+        }
 
         // Interrupted halfway, then resumed with the remainder.
         let mut interrupted = PositionProjectorDriver::new();
-        for f in &full[..2] { interrupted.feed_on_key(&key, f, NOW); }
-        for f in &full[2..] { interrupted.feed_on_key(&key, f, NOW); }
+        for f in &full[..2] {
+            interrupted.feed_on_key(&key, f, NOW);
+        }
+        for f in &full[2..] {
+            interrupted.feed_on_key(&key, f, NOW);
+        }
 
         assert_eq!(
             uninterrupted.snapshot(POSITION_ID).unwrap(),
@@ -1057,5 +1181,4 @@ mod tests {
             "interrupted rebuild must resume to the uninterrupted state (DR-008/EOD-003)"
         );
     }
-
 }

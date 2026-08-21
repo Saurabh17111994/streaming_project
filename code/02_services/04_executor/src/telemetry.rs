@@ -164,11 +164,15 @@ mod tests {
         assert!(s2.order_submitted >= s1.order_submitted);
         // And the cumulative total only grows (no counter ever decreases).
         let total = |s: &MetricsSnapshot| {
-            s.order_submitted + s.order_denied + s.order_rejected + s.gate_safety_halt
-                + s.report_received + s.unresolved_attempt + s.restart
+            s.order_submitted
+                + s.order_denied
+                + s.order_rejected
+                + s.gate_safety_halt
+                + s.report_received
+                + s.unresolved_attempt
+                + s.restart
         };
         assert!(total(&s1) >= total(&s0));
         assert!(total(&s2) >= total(&s1));
     }
-
 }

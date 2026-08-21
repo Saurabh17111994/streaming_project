@@ -162,14 +162,14 @@ mod tests {
         client
             .advance_gate(crate::gate::ExecState::ApprovalPending)
             .expect("sanctioned transition");
-        // ENABLED is reachable only through the two-approval gate (INVARIANT-003).
+        // ENABLED is reachable only through the single-operator (saurabh, DEC-044)
+        // approval gate (INVARIANT-003).
         let mut g = client.gate().borrow_mut();
-        g.add_authorized("OPS-A");
-        g.add_authorized("OPS-B");
+        g.add_authorized("saurabh");
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").expect("ops-a approval");
-        g.record_approval("OPS-B", "h1").expect("ops-b approval");
-        g.enable(1).expect("two-approval enable");
+        g.record_approval("saurabh", "h1")
+            .expect("saurabh approval");
+        g.enable(1).expect("single-operator enable");
     }
 
     fn submit_place(client: &BridgeExecutionClient, order: &nautilus_model::orders::OrderAny) {

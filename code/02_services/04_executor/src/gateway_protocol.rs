@@ -314,7 +314,11 @@ mod tests {
 
         // now_ms == deadline -> NOT expired (strict <).
         let v = verify(&encoded, "s3cr3t", "execution-gateway.v1", 1_000_000);
-        assert!(v.accepted, "deadline == now must be accepted, got: {}", v.reason);
+        assert!(
+            v.accepted,
+            "deadline == now must be accepted, got: {}",
+            v.reason
+        );
 
         // now_ms one past the deadline -> expired.
         let v2 = verify(&encoded, "s3cr3t", "execution-gateway.v1", 1_000_001);
@@ -345,5 +349,4 @@ mod tests {
             "payload must round-trip byte-identically (TIME-008)"
         );
     }
-
 }

@@ -745,7 +745,11 @@ mod tests {
             g0.execute(&cmd("a-unk"), CrashHooks::default()).unwrap(),
             Outcome::UnknownHalted
         );
-        assert_eq!(total_handle.get(), 1, "broker UNKNOWN is one call, not a retry");
+        assert_eq!(
+            total_handle.get(),
+            1,
+            "broker UNKNOWN is one call, not a retry"
+        );
 
         // Restart: attempt is durable UNKNOWN -> reconcile, never a second broker call.
         let mut g1 = ExecutionGate::new(attempts.clone(), gates.clone(), bridge.clone());
@@ -774,15 +778,27 @@ mod tests {
         let bridge: Rc<dyn BridgeCaller> = counter.clone();
         let mut e = ExecutionGate::new(attempts.clone(), gates, bridge);
         let res = e.execute(&cmd("a-eq"), CrashHooks::default()).unwrap();
-        (res, total_handle.get(), attempts.get("a-eq").map(|a| a.phase))
+        (
+            res,
+            total_handle.get(),
+            attempts.get("a-eq").map(|a| a.phase),
+        )
     }
 
     #[test]
     fn corr015_restart_after_durable_accepted_matches_uninterrupted() {
         let (outcome_u, total_u, phase_u) = run_uninterrupted();
-        let (outcome_r, total_r, phase_r, _state_r) =
-            crash_rerun(CrashHooks { after_bridge: true, ..Default::default() }, false);
-        assert_eq!(outcome_r, outcome_u, "restarted outcome must equal uninterrupted");
+        let (outcome_r, total_r, phase_r, _state_r) = crash_rerun(
+            CrashHooks {
+                after_bridge: true,
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(
+            outcome_r, outcome_u,
+            "restarted outcome must equal uninterrupted"
+        );
         assert_eq!(phase_r, phase_u, "restarted phase must equal uninterrupted");
         assert_eq!(total_r, total_u, "same broker-call count as uninterrupted");
     }
@@ -863,7 +879,8 @@ mod tests {
         // First engine exercises ownership.
         let mut g0 = ExecutionGate::new(attempts.clone(), gates.clone(), bridge.clone());
         assert_eq!(
-            g0.execute(&cmd_uid("a-f12", "f1"), CrashHooks::default()).unwrap(),
+            g0.execute(&cmd_uid("a-f12", "f1"), CrashHooks::default())
+                .unwrap(),
             Outcome::Accepted
         );
         assert_eq!(total_handle.get(), 1);
@@ -871,7 +888,8 @@ mod tests {
         // Restart over the same durable gate store: ownership reconstructed, token intact.
         let mut g1 = ExecutionGate::new(attempts.clone(), gates.clone(), bridge.clone());
         assert_eq!(
-            g1.execute(&cmd_uid("a-f12-2", "f2"), CrashHooks::default()).unwrap(),
+            g1.execute(&cmd_uid("a-f12-2", "f2"), CrashHooks::default())
+                .unwrap(),
             Outcome::Accepted
         );
         assert_eq!(total_handle.get(), 2);
@@ -1054,5 +1072,4 @@ mod tests {
             "exactly one money-moving call across outage + recovery (NET-PART once-only)"
         );
     }
-
 }
