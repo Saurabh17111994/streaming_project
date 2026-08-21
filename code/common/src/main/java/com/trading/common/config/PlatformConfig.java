@@ -128,6 +128,11 @@ public final class PlatformConfig {
     public static void validateStartup() {
         validateLoadBearing("DEDUP_TTL_MS", envLong("DEDUP_TTL_MS"), DEDUP_TTL_MS);
         validateLoadBearing("CANDLE_WINDOW_MS", envLong("CANDLE_WINDOW_MS"), CANDLE_WINDOW_MS);
+        // 09-production-swarm § JVM and memory configuration: inside a real
+        // container, enforce the 65/35 contract so a mis-sized container aborts
+        // startup instead of OOM-ing at runtime. Non-fatal on a bare JVM (no
+        // bounded cgroup budget) — keeps dev/test unaffected.
+        ContainerMemoryGuard.assertContainerMemoryContract();
     }
 
     private static void validateLoadBearing(String key, Long runtimeValue, long pinned) {

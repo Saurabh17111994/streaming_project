@@ -6,7 +6,7 @@ Two colocated processes in the same container consume the evidence-approved brok
 
 ## Inputs
 
-- Versioned instrument manifest (loaded from Arrow `GET /all` or `GET /nse` CSV, refreshed daily 8 AM IST)
+- Versioned instrument manifest (loaded from an operator-approved Arrow `GET /all` or `GET /nse` CSV; static for the trading session — a change applies via controlled restart, ASM-ING-003)
 - Arrow market-data WebSocket: `wss://socket.arrow.trade?appID=X&token=Y&zstd=1` (HFT feed — the Standard feed `wss://ds.arrow.trade` was removed 2026-08-14)
 - Binary protocol: HFT modes — LTPC (40 bytes), Full (196 bytes), little-endian, zstd-compressed
 - Prices in **paise** (int32, ÷100 for rupees); raw frame timestamps in **nanoseconds (unix)**, converted by the bridge to UTC **epoch milliseconds** (`ts_ms` — the platform's canonical unit; never seconds)
@@ -22,7 +22,7 @@ Two colocated processes in the same container consume the evidence-approved brok
 - `raw_table_1`: original bytes, payload hash, decoder/protocol version, typed fields, timestamps, fingerprint/version, validity state
 - `suspected_discontinuities`: connection/subscription/heartbeat/decoder evidence; never fabricated sequence ranges
 - Quarantine for unknown versions, decode failures, and missing instrument identity
-- `instruments` (operator manifest loader): one row per `(instrument_token, manifest_version)` upserted through the raw client with the composite PK — the first production composite-PK raw-client writer (kv.format-version=2 + single-field subset bucket key; ING-INT-004 live proof 2026-08-15). Re-loading a manifest version is idempotent; prior versions are retained (R-090). The Arrow `GET /nse` / `GET /all` daily fetch remains open (static CSV source); the persistence path is implemented.
+- `instruments` (operator manifest loader): one row per `(instrument_token, manifest_version)` upserted through the raw client with the composite PK — the first production composite-PK raw-client writer (kv.format-version=2 + single-field subset bucket key; ING-INT-004 live proof 2026-08-15). Re-loading a manifest version is idempotent; prior versions are retained (R-090). The source CSV is operator-approved and static (no automatic daily refresh; ASM-ING-003).
 
 ## Guarantees
 

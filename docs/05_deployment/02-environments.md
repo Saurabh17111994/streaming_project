@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- | --- |
 | Local development | Docker Compose, one host | Single host | Named volumes and local test storage | Fast development and debugging | Disabled by default; simulation only |
 | Integration/acceptance | Compose or production-like harness | Controlled test failures | Test Fluss, encrypted test S3 | Contract, compatibility, workload, and recovery evidence | Sandbox/simulated only |
-| Production | Docker Swarm, four VMs | Three workload VMs + observability VM | Replicated Fluss, encrypted S3, durable audit | Live platform | Blocked until release gates pass |
+| Production | Docker Swarm, v1 4 VMs → v2 7 VMs | v1: 3× Manager+Worker + 1 observability; v2: 3× Manager-ONLY + N≥3 Workers + 1 observability (same stack) | Replicated Fluss, encrypted S3, durable audit | Live platform | Blocked until release gates pass |
 
 Environment definitions must remain separate. Local Compose settings must never be used as evidence for production HA, security, durability, or capacity.
 
@@ -14,7 +14,7 @@ Environment definitions must remain separate. Local Compose settings must never 
 
 ### Workload VMs
 
-The three workload VMs host:
+v1: The three workload VMs are Manager+Worker and host:
 
 - A ZooKeeper ensemble node (one per VM; 3-node ensemble, quorum 2-of-3; Fluss metadata store — required by Fluss 0.9.1 — and Flink JobManager HA leadership)
 - Fluss coordinator/tablet capacity and three-node replication/quorum (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Fluss remote storage + rebuild from audit (Flink checkpoints hold only small working/recovery state — DEC-038))

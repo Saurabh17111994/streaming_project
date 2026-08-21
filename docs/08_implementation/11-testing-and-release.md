@@ -299,7 +299,7 @@ Evidence: input fixture, output capture proving zero actions, checkpoint/restore
 | `EXE-UNIT-002` | ~~Decision hash, expiry, reservation~~ | ~~Mutated, expired, or unreserved decision is refused~~ — **REMOVED 2026-08-15 (CHG-005)** |
 | `EXE-UNIT-003` | Client reference canonicalization | Reference is stable and conforms to broker constraints. |
 | `EXE-UNIT-004` | Broker result classification | Success, failure, and unknown are classified safely. |
-| `EXE-UNIT-005` | Two-person approval identity/epoch/evidence | One person or mismatched approval cannot resume trading. |
+| `EXE-UNIT-005` | Single-operator (Saurabh, DEC-044) approval identity/epoch/evidence | The authorized single operator (saurabh) with matching gate epoch and evidence hash can enable; an unauthorized identity or a mismatched epoch/evidence hash cannot resume trading. |
 | `EXE-UNIT-006` | Replay the same immutable decision and request hash | At most one active attempt exists; replay cannot create a second broker call. |
 | `EXE-INT-001` | Fluss changelog and owned state writes | State ownership and durable transitions are preserved. |
 | `ARROW-REST-001` | Sandbox Arrow REST authentication, request fields, response fields, rejection, and timeout behavior | Actual behavior is captured as protocol evidence; timeout or ambiguity becomes `UNKNOWN` and blocks a blind retry. |
@@ -310,7 +310,7 @@ Evidence: input fixture, output capture proving zero actions, checkpoint/restore
 | `EXE-FAIL-004` | Changelog, checkpoint, durable-state loss | Trading readiness is false and gate halts. |
 | `EXE-FAIL-005` | Fencing, split-brain, concurrent Executor | Only current fenced owner can call broker. |
 | `EXE-FAIL-006` | Mapping quarantine/reconciliation | Ambiguous mapping blocks further unsafe action. |
-| `EXE-OPS-001` | Unauthorized controls and two-person resume | Unsafe control attempts are rejected and audited. |
+| `EXE-OPS-001` | Unauthorized controls and single-operator (Saurabh, DEC-044) resume | Unsafe control attempts are rejected and audited. |
 | `EXE-AUDIT-001` | Audit reconstruction | Order path can be reconstructed from retained audit evidence. |
 
 Evidence: sandbox broker or deterministic stub only; preserve attempt timeline, gate epoch, audit IDs, reconciliation output, and proof that no duplicate request was sent.
@@ -328,14 +328,29 @@ Evidence: sandbox broker or deterministic stub only; preserve attempt timeline, 
 
 Evidence: compose file digest, image digests, effective config with secrets removed, startup log, test fixture seed, and E2E report.
 
-### Production Swarm
+### Production Swarm — v1 (4 VMs Manager+Worker) / v2 (7 VMs Manager ONLY + Workers)
+
+Swarm control-plane HA (Raft) is tested separately from ZooKeeper HA and Fluss HA. `ZK quorum 2/3 ≠ Swarm Raft quorum 2/3`. Stack is `docker-stack.yml` (Option B); v1 uses `M1-3 = Manager+Worker Active`, v2 drains `M1-3` to `Manager ONLY` and adds `W1-3 (+W4+)` as `Worker`. Same stack via role labels (`role=manager/worker`, `flink=true`, `fluss=true`) — no hostname pin.
 
 | Test ID | What is tested | Pass result |
 | --- | --- | --- |
-| `SWARM-INT-001` | Pinned images, placement, network, secrets, and identities | No mutable image, unsafe network exposure, or replica co-location remains. |
+| `SWARM-INT-001` | Pinned images, placement, network, secrets, and identities | No mutable image, unsafe network exposure, or replica co-location remains. Placement uses role labels, not hard-coded hostnames — `W4` joins without stack redesign. |
 | `SWARM-INT-002` | Separate service, durability, job, and trading readiness | Each readiness state reports independently. |
-| `SWARM-FAIL-001` | One workload VM loss | ZooKeeper quorum 2-of-3 maintained with leader re-election; Fluss quorum/restore passes; processing recovery is within accepted target and gate halts within 5 seconds when required. |
-| `PERF-NODELOSS-001` | 50,000 ticks/s average baseline plus one VM loss (90,000 ticks/s peak retired, DEC-036) | Records ZooKeeper quorum degradation/leader re-election, Fluss quorum degradation, Flink JobManager HA failover (standby takes over), checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, and zero acknowledged loss against the catalog limits. |
+| `SWARM-MGR-001` | Initial Swarm manager quorum (Raft, not ZooKeeper) | `docker node ls` shows 3 managers, quorum available (`2/3`). Built-in Swarm Raft documented; no separate Raft deployment. |
+| `SWARM-MGR-002` | Manager M1 failure (v1: VM1) | M2+M3 remain managers, quorum 2 remains, `docker node ls` quorum OK, workloads recover per policy. |
+| `SWARM-MGR-003` | Manager M2 failure | Same as M1. |
+| `SWARM-MGR-004` | Manager M3 failure | Same as M1. |
+| `SWARM-MGR-005` | Two-manager failure (quorum loss) | 1 manager remains, Swarm Raft quorum lost, control-plane degraded correctly detected and documented. Workload survival ≠ control-plane health. |
+| `SWARM-MGR-006` | Manager recovery | Failed manager rejoins, `docker node ls` returns to 3 managers, quorum restored, services stabilize, no duplicate ownership. |
+| `SWARM-FAIL-001` | One workload VM loss (v1: one Manager+Worker, v2: one Worker) | ZooKeeper quorum 2-of-3 maintained with leader re-election; Fluss quorum/restore passes; Flink HA failover; processing recovery within target and gate halts within 5s when required. Swarm quorum unaffected in v2 (managers separate). |
+| `PERF-NODELOSS-001` | 50,000 ticks/s average baseline plus one VM loss (90,000 ticks/s peak retired, DEC-036) | Records ZK quorum degradation/leader re-election, Fluss quorum degradation, Flink JM HA failover, Swarm manager quorum status, checkpoint restore, safe-halt latency, processing recovery, backlog drain, replica catch-up, zero acknowledged loss. |
+| `SWARM-NET-001` | Single-node network partition (manager and worker separately) | Partition detected, scheduling/reconciliation behavior documented, recovery after partition heals, not conflated with VM power-off. |
+| `SWARM-PLACEMENT-001` | Replica anti-co-location | Critical replicas not all on one VM — placement constraints spread across failure domains. |
+| `SWARM-DEPLOY-001` | Rolling deployment while one worker unavailable | Update succeeds per policy, rollback correct, placement respected. |
+| `SWARM-SCALE-001` | Add worker W4 | Worker joins Swarm, `docker node ls` shows 3 managers + 4 workers, quorum stays 2/3, worker gets correct labels, eligible workloads schedule there. |
+| `SWARM-SCALE-002` | Drain worker | `docker node update --availability drain` moves tasks safely. |
+| `SWARM-SCALE-003` | Remove worker | After drain, `docker node rm` succeeds, cluster stays healthy on remaining nodes. |
+| `SWARM-RECOVERY-001` | Node return after failure | Failed node rejoins, cluster converges, workload recovery per component semantics. |
 | `SWARM-FAIL-002` | S3/checkpoint/lake/audit dependency failure | Affected readiness is false; unsafe trading is blocked. |
 | `SWARM-REC-001` | Halted rollback and state readability | Rollback preserves readable state and never auto-enables trading. |
 | `SEC-NET-001` | Public and internal deny-path network probes | Only approved ingress and service paths are reachable; every prohibited path is blocked. |
@@ -344,6 +359,23 @@ Evidence: compose file digest, image digests, effective config with secrets remo
 | `SEC-AUTHZ-001` | Least-privilege table, state, broker, and control permissions | Authorized operations work; every excessive or unauthorized operation is denied and audited. |
 | `SEC-IMAGE-001` | Pinned image digest, SBOM, and vulnerability-policy validation | Mutable, unapproved, or policy-failing images block deployment. |
 | `SEC-AUDIT-001` | Audit access, deletion, retention, and legal-hold policy | Unauthorized access/deletion is denied and retention/legal-hold behavior is evidenced. |
+
+#### M2 deployment gate — offline stack validation + one-host Swarm mimic
+
+Before the live multi-VM rig (M3) exists, the deployable surface of
+`docker-stack.yml` is gated in two offline-prep stages. These run on **any**
+host — no VMs — and are wired into the documented gate:
+
+| Stage | Command | What it proves | Applies to |
+| --- | --- | --- | --- |
+| Static (offline, no docker/swarm/VM) | `make test-09` | `docker-stack.yml` is a legal deploy unit: every service has pinned `image:` + `deploy:`; placement is by **node label** (`node.labels.role == worker` / `observability == true`), never hostname (v1→v2 needs no rewrite); no Compose-only keys (`build`/`depends_on`/`container_name`/`ports`/`network_mode`); encrypted overlays; `external: true` secrets; durable volumes; v2 replica spread | `SWARM-INT-001`, `SWARM-PLACEMENT-001`, `SEC-NET-001` (static half), `SEC-CRED-001` (secrets-declared half) |
+| Mimic (needs docker) | `make stack-selfcheck` | `docker swarm init` (single node) → label the node `role=worker` + `role=observability` → **`docker stack config -c docker-stack.yml`** compiles (catches deploy-schema/YAML/interpolation errors); `DEPLOY=1` additionally tries `docker stack deploy` | `SWARM-INT-001`, `SWARM-DEPLOY-001` (compile/schedule half), `SEC-IMAGE-001` (digest-pin enforcement) |
+
+Rules:
+- **Live quorum/HA evidence (`SWARM-MGR-001..006`, `SWARM-FAIL-001`, `PERF-NODELOSS-001`, `SWARM-SCALE-*`, `SWARM-NET-001`, `SWARM-RECOVERY-001`) is M3 and requires the multi-VM rig.** They are **not** satisfied by the one-host mimic — a single-node Swarm has no quorum to test. Do not cite `stack-selfcheck` as HA evidence.
+- **One-host deploy result (2026-08-20, `DEPLOY=1`):** the stack deploys end-to-end on a single node. Observed: all 12 services accepted; 3 encrypted overlays created; external secrets fail-closed (first missing secret aborts the deploy — confirmed); label placement proven by `zookeeper` **running 1/1** on the `role=worker`-labelled node; workload tasks moved from `no suitable node` to image-**Rejected**, isolating the `:unset` placeholder images as the sole remaining scheduling blocker (real images must be pushed to a registry first). Two issues fixed by this run: (a) the single `role` label can't be both `role=worker` and `role=observability` — observability is now a separate boolean `node.labels.observability == true`; (b) the stack had dropped the `otel-collector` config mount (collector ran then exited 1) — **fixed 2026-08-20**: the collector config is now a Swarm `configs:` (`otel-collector-config.swarm.yaml`), and the O2 Basic credential is read from a `o2_auth_basic` Swarm secret via the collector's `${file:}` provider (the on-prem collector image is distroless, so it cannot be injected via a shell wrapper); live one-host deploy shows `prod_otel-collector` **Running** (was exit 1).
+- `make test-09` is the canonical **environment-free** static prohibition gate: a stack edit that reintroduces a hostname pin, a `build:`/`depends_on`/`ports` key, a non-encrypted overlay, or an in-file (non-external) secret fails here before any swarm is involved.
+- `make stack-selfcheck` is the canonical **deploy-path** gate: it must reach `stack config: OK` (and, on `DEPLOY=1`, initiate scheduling) before a rig is stood up. It skips cleanly when docker/daemon is absent, relying on `make test-09` for static coverage.
 
 ### Observability and operations
 
@@ -418,7 +450,7 @@ Use these environments in order:
 
 1. A clean local Fluss/Flink stack for schema and connector behavior.
 2. A sandbox broker and Arrow REST environment for protocol and response evidence.
-3. A production-like four-VM Swarm for workload, HA, security, and recovery evidence.
+3. A production-like Swarm (09 v1: 4 VMs Manager+Worker; v2: 7 VMs Manager-ONLY + Workers) for workload, control-plane HA, security, and recovery evidence — Swarm Raft quorum tested via `docker node ls`, separate from ZooKeeper.
 
 Integration coverage includes catalog/table creation, effective DDL/options, `BYTES` round trips, LOG/KV/changelog behavior, Flink checkpoint/restore/rescale, all service paths, and S3 checkpoint/lake/offload/retention behavior.
 
@@ -487,7 +519,7 @@ Deterministic tests use fixed clocks, versioned fixtures, stable IDs/seeds, and 
 
 ### Chaos and disaster-recovery rules
 
-All chaos tests use a sandbox or simulated broker unless a separately approved controlled test exists. The Executor starts `HALTED`; every fault preserves evidence; no test bypasses fencing or two-person approval controls.
+All chaos tests use a sandbox or simulated broker unless a separately approved controlled test exists. The Executor starts `HALTED`; every fault preserves evidence; no test bypasses fencing or single-operator (Saurabh, DEC-044) approval controls.
 
 The required fault coverage includes: Ingestion crash, disconnect, authentication expiry, partial subscription, append timeout, and bounded-buffer saturation; Signal JobManager/TaskManager failure, ZooKeeper node loss/restart, ZooKeeper quorum loss, ZooKeeper latency/partition, Flink JobManager HA failover, checkpoint timeout/corruption, S3/state/sink failure, and backpressure; Action Capture crashes after each independent write, projection backlog, Fluss outage, ambiguity, and postback storm; Babysitter restart, changelog gap, stale input, and accidental action enablement; Executor crash windows, mapping/state/audit failure, fencing loss, and split brain; Fluss coordinator/tablet/volume/quorum/leader failures; one-VM loss at baseline and peak; Arrow REST timeout/malformed/ambiguous response; OpenObserve alert failure; EOD/offload/retry/expiry failures; and credential/TLS/authorization failures.
 
@@ -771,7 +803,7 @@ The dossiers specify implementation behavior but do not prove that code, DDL, de
 9. Security, secret rotation, least privilege, network, image/SBOM reports.
 10. Dashboard/alert/runbook readiness evidence.
 11. Rollback/readability test and deployment change record.
-12. Executor crash-window, fencing, reconciliation, and two-person approval evidence.
+12. Executor crash-window, fencing, reconciliation, and single-operator (Saurabh, DEC-044) approval evidence.
 13. Approved-policy audit reconstruction simulation covering at least one year and policy approval.
 
 ### Binary release gates
@@ -790,7 +822,7 @@ The dossiers specify implementation behavior but do not prove that code, DDL, de
 | Executor | NOT_PASSED | `REL-EXE-*` | Executor | 2026-07-23 | Implementation | DATA-GAP-005 | Durable gate/attempt/mapping/audit/fencing/reconciliation pass; safety-halt control evidenced |
 | Crash window | NOT_PASSED | `REL-CRASH-*` | Executor | 2026-07-23 | Live-money | DATA-GAP-005 | No duplicate broker order in every tested ambiguity window |
 | Safe halt | NOT_PASSED | `REL-HALT-*` | Platform + Executor | 2026-07-23 | Live-money | — | Calls block within five seconds for every defined uncertainty trigger |
-| Two-person resume | NOT_PASSED | `REL-APPROVAL-*` | Platform + Executor | 2026-07-23 | Live-money | — | Distinct authenticated approvals match epoch/evidence hash |
+| Single-operator (Saurabh, DEC-044) resume | NOT_PASSED | `REL-APPROVAL-*` | Platform + Executor | 2026-07-23 | Live-money | — | Distinct authenticated approvals match epoch/evidence hash |
 | Capacity | NOT_PASSED | `REL-PERF-*` | Platform | 2026-07-23 | Live-money | DATA-GAP-001 | 50,000 ticks/s workload campaign passes (3,000 instruments, ≈16.7 ticks/s/instrument average) |
 | HA/recovery | NOT_PASSED | `REL-HA-*` | Platform | 2026-07-23 | Live-money | — | One workload VM loss, checkpoint, replication, and recovery posture pass; N+1 budgets documented and validated |
 | EOD/audit | NOT_PASSED | `REL-RET-*` | Storage + Compliance | 2026-07-23 | Live-money | DATA-GAP-002, DATA-GAP-004 | Offload verification and retention protection pass; audit reconstructable |
@@ -810,7 +842,7 @@ A gate with `Blocker: Live-money` prevents production order placement. A gate wi
 7. Release owner confirms no unresolved critical risk.
 8. Production deploys with gate `HALTED`.
 9. Post-deployment reconciliation completes.
-10. Two distinct authenticated operators approve the same gate epoch/evidence hash.
+10. The single-operator (Saurabh, DEC-044) approval is recorded for the same gate epoch/evidence hash.
 11. Enablement is recorded as an immutable audit event.
 
 ### Automatic blocking

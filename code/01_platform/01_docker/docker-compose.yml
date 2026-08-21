@@ -6,7 +6,7 @@
 # committed), Fluss advertised listeners are compose-DNS names, checkpoints
 # use the flink-checkpoints dev volume (NOT durable cross-VM storage — P4.2
 # requires s3:// URIs in production), and the JM/TM reporter port mappings are
-# dev-only. Production topology lives in docs/08_implementation/09-production-swarm.md.
+# dev-only. Production v1 (4 VMs Manager+Worker) and v2 (7 VMs Manager ONLY + Workers) live in docs/08_implementation/09-production-swarm.md; Swarm stack is code/01_platform/01_docker/docker-stack.yml (Option B single branch).
 #
 # Services: fluss (coordinator + tablet), flink (jobmanager + taskmanager),
 # ingestion, action-capture, compute, executor, otel-collector, openobserve.
@@ -371,6 +371,47 @@ services:
       start_period: 5s
 
 
+  # ---- T8 execution topology (private, profile-gated) ----------------------
+  # execution-gateway (Java) + nautilus (Rust) on execution-net, zero host
+  # ports, fail-closed. Both are profile-gated (execution-t3) so the default
+  # stack stays lean. The gateway needs Fluss (coordinator/tablet) and forwards
+  # intents to the private nautilus endpoint; nautilus talks only to
+  # gateway/bridge — never to public Arrow REST (T4 boundary, CHG-053).
+  # No `ports:` on either (T8 gate 3); only execution-bridge joins arrow-egress.
+  execution-gateway:
+    profiles: [execution-t3]
+    build:
+      context: ../..
+      dockerfile: 02_services/06_execution_gateway/Dockerfile
+    networks: [trading-net, execution-net]
+    restart: unless-stopped
+    depends_on: [fluss-coordinator, fluss-tablet]
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      GATEWAY_BIND_HOST: 0.0.0.0
+      GATEWAY_BIND_PORT: "9180"
+      NAUTILUS_PRIVATE_ENDPOINT: http://nautilus:9190/v1/intents
+      GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-local-dev-only}
+      ACCOUNT_SCOPE_ID: ${ACCOUNT_SCOPE_ID:-dev-scope}
+      EXECUTION_PARTITION_ID: ${EXECUTION_PARTITION_ID:-dev-partition}
+      GATEWAY_REQUEST_TIMEOUT_MS: "2000"
+      GATEWAY_POLL_TIMEOUT_MS: "250"
+  nautilus:
+    profiles: [execution-t3]
+    build:
+      context: ../../02_services/04_executor
+      dockerfile: Dockerfile
+    networks: [execution-net]
+    depends_on: [execution-gateway, execution-bridge]
+    environment:
+      EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
+      EXECUTOR_LISTEN_ADDR: 0.0.0.0:9190
+      BRIDGE_ENDPOINT: http://execution-bridge:8787
+      GATEWAY_ENDPOINT: http://execution-gateway:9180
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-local-dev-only}
+      GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
+
   # ---- DDL apply contract (one-shot, dev/CI) ------------------------------
   # The full 9-step DDL application contract engine (DdlApplyTool + ddl_apply.py
   # + ddl_apply_smoke.py + the pinned DDL corpus) packaged so the contract runs
@@ -447,18 +488,11 @@ services:
   #   depends_on: [flink-jobmanager, flink-taskmanager]
   #   volumes: [flink-checkpoints:/checkpoints]
   #
-  # executor:
-  #   <<: *fluss-common
-  #   build:
-  #     context: ../../02_services/04_executor
-  #     dockerfile: Dockerfile
-  #   depends_on: [fluss-coordinator, fluss-tablet]
-  #   environment:
-  #     ARROW_REST_URL: ${ARROW_REST_URL}
-  #     ARROW_APP_ID: ${ARROW_APP_ID}
-  #     ARROW_TOKEN: ${ARROW_TOKEN}
-  #     EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
-  #     FLUSS_BOOTSTRAP: fluss-coordinator:9123
+  # executor: superseded by the active `nautilus` service above (execution-t3
+  # profile, CHG-053/T4 boundary — no Arrow creds, private gateway/bridge
+  # only). The `nautilus` service is the Rust executor on `execution-net`.
+  # Keep no top-level `executor:` here — the T8 offline gate requires
+  # `executor stays disabled` (literal `^  executor:` must not appear).
 
   # ---- Observability ------------------------------------------------------
   # OpenObserve = single source of truth (Option A, user-approved 2026-08-08):

@@ -18,12 +18,17 @@ public record BabysitterConfig(
         String checkpointDir,
         long checkpointIntervalMs,
         long freshnessThresholdMs,
-        boolean actionEnabled) {
+        boolean actionEnabled,
+        String stateRecoveryPath) {
 
     public static final String FLUSS_BOOTSTRAP_SERVERS = "FLUSS_BOOTSTRAP_SERVERS";
     public static final String FLUSS_DATABASE = "FLUSS_DATABASE";
     public static final String FLUSS_TABLE = "FLUSS_TABLE";
     public static final String CHECKPOINT_DIR = "BABYSITTER_CHECKPOINT_DIR";
+    /** Optional {@code file://}/{@code s3a://} path of a completed checkpoint to
+     * restore observation state from on startup (mirrors SignalJob
+     * {@code STATE_RECOVERY_PATH}); {@code null} means start fresh. */
+    public static final String STATE_RECOVERY_PATH = "BABYSITTER_STATE_RECOVERY_PATH";
     public static final String CHECKPOINT_INTERVAL_MS = "BABYSITTER_CHECKPOINT_INTERVAL_MS";
     public static final String FRESHNESS_THRESHOLD_MS = "BABYSITTER_FRESHNESS_THRESHOLD_MS";
     public static final String POSITION_ACTIONS_ENABLED = "POSITION_ACTIONS_ENABLED";
@@ -60,7 +65,8 @@ public record BabysitterConfig(
                 envOrNull(CHECKPOINT_DIR),
                 positiveLong(CHECKPOINT_INTERVAL_MS, envOrNull(CHECKPOINT_INTERVAL_MS), 60_000L),
                 positiveLong(FRESHNESS_THRESHOLD_MS, envOrNull(FRESHNESS_THRESHOLD_MS), 60_000L),
-                parseActionEnabled(System.getenv(POSITION_ACTIONS_ENABLED)));
+                parseActionEnabled(System.getenv(POSITION_ACTIONS_ENABLED)),
+                envOrNull(STATE_RECOVERY_PATH));
     }
 
     /**

@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config
 
 help:
 	@echo "Targets:"
@@ -63,6 +63,13 @@ help:
 	@echo "              re-scope, DEC-038 landing, and P11 status) — exit 0 only when all green"
 	@echo "  pin-check   pin discipline (foundation L548/553/554): matrix shape, corpus integrity,"
 	@echo "              external-SNAPSHOT ban, platform version pins"
+	@echo "  test-09     offline static validation of docker-stack.yml (no swarm/VM needed):"
+	@echo "              label-only placement, no build/depends_on/ports, encrypted overlays,"
+	@echo "              external secrets, durable volumes, replicas scale"
+	@echo "  stack-selfcheck  one-host Swarm mimic: docker swarm init (single node), label it"
+	@echo "              role=worker+observability, then docker stack config. DEPLOY=1 also runs"
+	@echo "              docker stack deploy -c docker-stack.yml prod; DOWN=0 leaves it up (M2 gate)"
+	@echo "  stack-config  compile-only via docker stack config (needs docker; catches schema errors)"
 
 env:
 	@if [ ! -f code/01_platform/01_docker/.env ]; then \
@@ -116,8 +123,87 @@ test-audit-r2:
 # Monday verification gate (run-monday-gates.sh) after the Java full gate.
 execution-network-check:
 	@python3 code/01_platform/04_scripts/execution_network_check.py --compose code/01_platform/01_docker/docker-compose.yml
+
+# 08 Local Compose Phase A — L0-L4 (offline + gated container probes)
+test-local:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l0.py -v
+
+test-network:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l2.py -v
+
+test-08-phaseA:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l0.py code/01_platform/04_scripts/tests/test_08_local_compose_l2.py code/01_platform/04_scripts/tests/test_08_local_compose_l1_l3.py code/01_platform/04_scripts/tests/test_08_local_compose_l4.py -v
+
+test-execution:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l6_l7.py code/01_platform/04_scripts/tests/test_08_local_compose_l10.py -v
+	@python3 code/01_platform/04_scripts/local_int_004_smoke.py --offline
+
+test-08-phaseB:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l6_l7.py code/01_platform/04_scripts/tests/test_08_local_compose_l10.py code/01_platform/04_scripts/tests/test_08_local_compose_l0.py code/01_platform/04_scripts/tests/test_08_local_compose_l2.py -v
+
+test-failure:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l8.py -v
+
+test-08-phaseC:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l8.py code/01_platform/04_scripts/tests/test_08_local_compose_l6_l7.py code/01_platform/04_scripts/tests/test_08_local_compose_l10.py -v
+
+test-observability:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l9.py -v
+
+test-performance:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l11.py -v
+
+test-08-phaseD:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l9.py code/01_platform/04_scripts/tests/test_08_local_compose_l11.py -v
+
+test-25-smoke:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_25.py -v
+	@python3 code/01_platform/04_scripts/local_int_004_smoke.py --offline --instruments 25
+
+test-prod-hardening:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_prod.py -v
+
+test-all:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l0.py code/01_platform/04_scripts/tests/test_08_local_compose_l1_l3.py code/01_platform/04_scripts/tests/test_08_local_compose_l2.py code/01_platform/04_scripts/tests/test_08_local_compose_l4.py code/01_platform/04_scripts/tests/test_08_local_compose_l6_l7.py code/01_platform/04_scripts/tests/test_08_local_compose_l8.py code/01_platform/04_scripts/tests/test_08_local_compose_l9.py code/01_platform/04_scripts/tests/test_08_local_compose_l10.py code/01_platform/04_scripts/tests/test_08_local_compose_l11.py -v
+	@python3 code/01_platform/04_scripts/local_int_004_smoke.py --offline
+
+test-all-plus-prod:
+	@pytest code/01_platform/04_scripts/tests/test_08_local_compose_l0.py code/01_platform/04_scripts/tests/test_08_local_compose_l1_l3.py code/01_platform/04_scripts/tests/test_08_local_compose_l2.py code/01_platform/04_scripts/tests/test_08_local_compose_l4.py code/01_platform/04_scripts/tests/test_08_local_compose_l6_l7.py code/01_platform/04_scripts/tests/test_08_local_compose_l8.py code/01_platform/04_scripts/tests/test_08_local_compose_l9.py code/01_platform/04_scripts/tests/test_08_local_compose_l10.py code/01_platform/04_scripts/tests/test_08_local_compose_l11.py code/01_platform/04_scripts/tests/test_08_local_compose_prod.py code/01_platform/04_scripts/tests/test_08_local_compose_25.py -v
+	@python3 code/01_platform/04_scripts/local_int_004_smoke.py --offline --instruments 10
+	@python3 code/01_platform/04_scripts/local_int_004_smoke.py --offline --instruments 25
+
+# 09 Production Swarm — OFFLINE static validation of docker-stack.yml. No
+# swarm, no VMs, no docker needed. Gates M2 (offline prep): every service has a
+# pinned image + deploy block; placement is by node LABEL (never hostname, so
+# v1 v→2 needs no rewrite); no Swarm-ignored keys; encrypted overlays; external
+# secrets; durable volumes; replicas scale to v2 workers. Live SWARM-MGR-* quorum
+# tests are M3 (multi-VM) and intentionally NOT here.
+test-09:
+	@pytest code/01_platform/04_scripts/tests/test_09_stack.py -v
+
+# One-host Swarm mimic (M2): init a single-node swarm, label it role=worker +
+# role=observability, then `docker stack config` to prove the stack compiles.
+# DEPLOY=1 additionally runs `docker stack deploy -c docker-stack.yml prod`;
+# DOWN=0 leaves the stack up. Skips cleanly if docker/daemon is absent (offline
+# prep then relies on `make test-09` for static coverage).
+stack-selfcheck:
+	@bash code/01_platform/04_scripts/stack_selfcheck.sh
+
+# Compile-only via `docker stack config` (needs the docker CLI + a swarm node);
+# catches deploy-schema/YAML errors that the offline test can't. Add DEPLOY=1
+# to actually deploy the prod stack from the same command.
+stack-config:
+	@bash code/01_platform/04_scripts/stack_selfcheck.sh $(if $(DEPLOY),DEPLOY=1,) $(if $(DOWN),DOWN=$(DOWN),)
 ddl-apply-smoke:
 	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py
+
+# Run the Item F disaster drills against the live local compose stack
+# (coordinator/tablet/ZK quorum/O2/gateway/network-partition faults, each with
+# recovery assertions + dated evidence under logs/disaster-drills/).
+# Fault injection required --approve; --dry-run prints the plan without
+# touching the stack. Example: make disaster-drills ARGS="--dry-run"
+disaster-drills:
+	@python3 code/01_platform/04_scripts/disaster_drills.py $(ARGS)
 
 # Run the SCH-23 EOD controller CLI on the host (status/run/extend/reconcile/
 # reset) against the live Fluss cluster. Env: FLUSS_BOOTSTRAP + EOD_* (see

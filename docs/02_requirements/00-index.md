@@ -30,7 +30,7 @@ The requirements in this directory enforce these decisions:
 - Instructions are immutable. Changed parameters create a new `instruction_id`.
 - Position state is a separate aggregate keyed by `position_id` and linked by `trade_context_id`.
 - MVP Babysitter emits no actions. Future actions use a versioned structured schema.
-- Local development uses Docker Compose; production uses four-VM Docker Swarm.
+- Local development uses Docker Compose; production uses Docker Swarm (09 v1 4 VMs Manager+Worker → v2 7 VMs Manager-ONLY + Workers).
 - Production checkpoints/savepoints use S3; Fluss uses three-node replication across workload VMs.
 - Eligible live source tables retain at least three complete trading days and do not expire data while EOD offload is unverified.
 - Money-moving audit records are immutable, encrypted, integrity-verifiable, and retained for at least one year or longer under approved policy.
@@ -66,7 +66,7 @@ Live-money order placement SHALL remain disabled until all of the following are 
 3. Exact Flink, Fluss, Java, Python, broker SDK/protocol, and Arrow REST versions are pinned.
 4. Version-specific Flink/Fluss source, sink, changelog, partial-update, checkpoint, and replication tests pass.
 5. Crash-window tests prove no duplicate broker order under unknown submission outcomes.
-6. Safe-halt occurs within five seconds and requires successful reconciliation plus two-person approval to resume.
+6. Safe-halt occurs within five seconds and requires successful reconciliation plus single-operator (Saurabh, DEC-044) approval to resume.
 7. One workload VM can fail while the normal workload remains within the documented durability posture.
 8. Throughput, latency, recovery, offload, security, and observability acceptance gates pass.
 

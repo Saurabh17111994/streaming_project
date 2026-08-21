@@ -19,7 +19,7 @@ class BabysitterConfigTest {
     @DisplayName("action enable attempts are rejected by both the config and the flag guard")
     void actionEnabledRejected() {
         assertThrows(IllegalStateException.class, () -> new BabysitterConfig(
-                "localhost:9123", "default", "Positions", null, 60_000L, 60_000L, true));
+                "localhost:9123", "default", "Positions", null, 60_000L, 60_000L, true, null));
         assertThrows(IllegalStateException.class,
                 () -> BabysitterConfig.parseActionEnabled("true"));
     }
@@ -28,25 +28,25 @@ class BabysitterConfigTest {
     @DisplayName("missing/blank bootstrap must fail closed, never default to a live path")
     void missingBootstrapRejected() {
         assertThrows(IllegalStateException.class, () -> new BabysitterConfig(
-                null, "default", "Positions", null, 60_000L, 60_000L, false));
+                null, "default", "Positions", null, 60_000L, 60_000L, false, null));
         assertThrows(IllegalStateException.class, () -> new BabysitterConfig(
-                "   ", "default", "Positions", null, 60_000L, 60_000L, false));
+                "   ", "default", "Positions", null, 60_000L, 60_000L, false, null));
     }
 
     @Test
     @DisplayName("non-positive checkpoint/freshness intervals are rejected")
     void nonPositiveIntervalsRejected() {
         assertThrows(IllegalStateException.class, () -> new BabysitterConfig(
-                "localhost:9123", "default", "Positions", null, 0L, 60_000L, false));
+                "localhost:9123", "default", "Positions", null, 0L, 60_000L, false, null));
         assertThrows(IllegalStateException.class, () -> new BabysitterConfig(
-                "localhost:9123", "default", "Positions", null, 60_000L, -1L, false));
+                "localhost:9123", "default", "Positions", null, 60_000L, -1L, false, null));
     }
 
     @Test
     @DisplayName("a fully valid config is accepted with the explicit non-live-action contract")
     void validConfigAccepted() {
         BabysitterConfig c = new BabysitterConfig(
-                "localhost:9123", "default", "Positions", null, 60_000L, 60_000L, false);
+                "localhost:9123", "default", "Positions", null, 60_000L, 60_000L, false, null);
         assertEquals("localhost:9123", c.bootstrapServers());
         assertEquals("Positions", c.table());
         assertEquals(60_000L, c.checkpointIntervalMs());

@@ -1,0 +1,162 @@
+use std::net::SocketAddr;
+
+use anyhow::{bail, Context, Result};
+
+/// Strict service configuration — HALTED default, fail-closed.
+///
+/// Endpoints (gateway/bridge) are optional at boot so the service can start health-only and
+/// HALTED without a broker being reachable; they are consumed only when a connection is actually
+/// needed (later work packages). The service **never** reads `ARROW_*` variables.
+#[derive(Debug, Clone)]
+pub struct ServiceConfig {
+    pub gateway_endpoint: String,
+    pub bridge_endpoint: String,
+    pub log_level: String,
+    pub execution_enabled: bool,
+    pub listen_addr: String,
+    pub gateway_shared_secret: String,
+    pub protocol_version: String,
+}
+
+impl ServiceConfig {
+    /// Parses from the process environment; fails closed on a forbidden `EXECUTION_ENABLED=true`.
+    pub fn from_env() -> Result<Self> {
+        Self::from_iter(std::env::vars())
+    }
+
+    /// Parses from a key/value iterator (testable without mutating process env).
+    pub(crate) fn from_iter<I>(kv: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        let map: std::collections::HashMap<String, String> = kv.into_iter().collect();
+        let get = |k: &str| map.get(k).map(String::as_str);
+
+        // Fail closed: execution may never be enabled at boot.
+        let enabled = get("EXECUTION_ENABLED")
+            .map(|v| v.parse::<bool>().unwrap_or(false))
+            .unwrap_or(false);
+        if enabled {
+            bail!("EXECUTION_ENABLED must not be true at boot — service always starts HALTED");
+        }
+
+        // Optional endpoints — health-only boot is allowed without a broker.
+        let gateway = get("GATEWAY_ENDPOINT").unwrap_or("").to_string();
+        let bridge = get("BRIDGE_ENDPOINT").unwrap_or("").to_string();
+
+        Ok(Self {
+            gateway_endpoint: gateway,
+            bridge_endpoint: bridge,
+            log_level: get("LOG_LEVEL").unwrap_or("info").to_string(),
+            execution_enabled: false,
+            listen_addr: get("EXECUTOR_LISTEN_ADDR")
+                .unwrap_or("127.0.0.1:8787")
+                .to_string(),
+            gateway_shared_secret: get("GATEWAY_SHARED_SECRET").unwrap_or("").to_string(),
+            protocol_version: get("GATEWAY_PROTOCOL_VERSION")
+                .unwrap_or("execution-gateway.v1")
+                .to_string(),
+        })
+    }
+
+    /// The address the health server binds to.
+    pub fn listen_addr(&self) -> Result<SocketAddr> {
+        self.listen_addr
+            .parse()
+            .with_context(|| format!("invalid EXECUTOR_LISTEN_ADDR: {}", self.listen_addr))
+    }
+
+    pub fn is_halted_default(&self) -> bool {
+        !self.execution_enabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn halted_default() {
+        let c = ServiceConfig {
+            gateway_endpoint: "http://gw:8080".into(),
+            bridge_endpoint: "http://bridge:8787".into(),
+            log_level: "info".into(),
+            execution_enabled: false,
+            listen_addr: "127.0.0.1:8787".into(),
+            gateway_shared_secret: String::new(),
+            protocol_version: "execution-gateway.v1".into(),
+        };
+        assert!(c.is_halted_default());
+        assert_eq!(c.listen_addr().unwrap().port(), 8787);
+    }
+
+    #[test]
+    fn boots_health_only_without_endpoints() {
+        let c = ServiceConfig::from_iter(kv(&[("LOG_LEVEL", "debug")])).unwrap();
+        assert!(c.gateway_endpoint.is_empty());
+        assert!(c.bridge_endpoint.is_empty());
+        assert!(!c.execution_enabled);
+        assert!(c.is_halted_default());
+        assert_eq!(c.listen_addr, "127.0.0.1:8787");
+        assert!(c.gateway_shared_secret.is_empty());
+        assert_eq!(c.protocol_version, "execution-gateway.v1");
+    }
+
+    #[test]
+    fn reads_bridge_and_listen_from_env() {
+        let c = ServiceConfig::from_iter(kv(&[
+            ("BRIDGE_ENDPOINT", "http://bridge:8787"),
+            ("EXECUTOR_LISTEN_ADDR", "0.0.0.0:8787"),
+        ]))
+        .unwrap();
+        assert_eq!(c.bridge_endpoint, "http://bridge:8787");
+        assert_eq!(c.listen_addr, "0.0.0.0:8787");
+    }
+
+    #[test]
+    fn reads_gateway_protocol_from_env() {
+        let c = ServiceConfig::from_iter(kv(&[
+            ("GATEWAY_SHARED_SECRET", "s3cr3t"),
+            ("GATEWAY_PROTOCOL_VERSION", "execution-gateway.v1"),
+        ]))
+        .unwrap();
+        assert_eq!(c.gateway_shared_secret, "s3cr3t");
+        assert_eq!(c.protocol_version, "execution-gateway.v1");
+    }
+
+    #[test]
+    fn never_consumes_arrow_vars() {
+        // Presence of Arrow credentials must not change any parsed field.
+        let c = ServiceConfig::from_iter(kv(&[
+            ("ARROW_REST_URL", "https://api"),
+            ("ARROW_APP_ID", "app"),
+            ("ARROW_TOKEN", "secret-token"),
+        ]))
+        .unwrap();
+        assert!(!c.execution_enabled);
+        assert!(c.gateway_endpoint.is_empty());
+        assert!(c.bridge_endpoint.is_empty());
+    }
+
+    #[test]
+    fn rejects_execution_enabled_true() {
+        let err = ServiceConfig::from_iter(kv(&[("EXECUTION_ENABLED", "true")])).unwrap_err();
+        assert!(
+            err.to_string().contains("must not be true at boot"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_listen_addr() {
+        let c = ServiceConfig::from_iter(kv(&[("EXECUTOR_LISTEN_ADDR", "not-an-addr")])).unwrap();
+        assert!(c.listen_addr().is_err());
+    }
+}

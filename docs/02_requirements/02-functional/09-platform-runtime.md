@@ -5,7 +5,7 @@
 | Environment       | Orchestrator   | Purpose                                                                 |
 | ----------------- | -------------- | ----------------------------------------------------------------------- |
 | Local/integration | Docker Compose | Single-host development, component integration, and deterministic tests |
-| Production        | Docker Swarm   | Four VMs: three workload/HA nodes plus one dedicated observability node |
+| Production        | Docker Swarm   | v1: 4 VMs (3× Manager+Worker + 1 O2); v2: 7 VMs (3× Manager ONLY + N≥3 Workers + 1 O2, same stack) |
 
 Compose behavior SHALL not be presented as proof of production HA.
 
@@ -25,8 +25,8 @@ Compose behavior SHALL not be presented as proof of production HA.
 
 | ID | Assumption | Source |
 | --- | --- | --- |
-| ASM-PF-001 | Four VMs can sustain the normal production baseline of 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) while one HA VM is unavailable. | ASM-005, RISK-010 |
-| ASM-PF-002 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | ASM-009 |
+| ASM-PF-001 | The production Swarm (v1: 4 VMs Manager+Worker; v2: 7 VMs with N≥3 Workers, load on the Worker VMs) can sustain the normal variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) while one HA VM is unavailable, with manager capacity isolated from workload contention. | ASM-005, RISK-010 |
+| ASM-PF-002 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, role-label placement, and three-node Fluss placement can be operated on the production Swarm (v1 4 VMs; v2 7 VMs) without changing the 3-manager Raft quorum when workers are added. | ASM-009 |
 | ASM-PF-003 | S3 `ap-south-1` can complete verified EOD offload of a full trading day within 30 minutes. | ASM-006 |
 | ASM-PF-004 | Loss of any one workload VM at normal load is detected and the safe-halt completes within five seconds. | REQ-PF-002, RISK-003 |
 | ASM-PF-005 | Fluss data recovery under 30 seconds after a clean VM restart is achievable at the normal workload. | REQ-PF-002 |
@@ -65,7 +65,7 @@ Production manifests SHALL pin exact immutable image versions/digests for Fluss,
 
 ## REQ-PF-002: Production Swarm placement
 
-The three workload VMs SHALL host Fluss replicas/quorum and Flink workload capacity with constraints preventing replica co-location. The observability VM SHALL not be required for order-safety correctness. Placement, resources, update order, restart policy, health checks, and rollback are explicit in the stack definition.
+v1: the three workload VMs are Manager+Worker and SHALL host Fluss replicas/quorum and Flink capacity with constraints preventing replica co-location; v2: M1-3 are Manager ONLY (drained), W1-3 (+W4+) are Workers. The observability VM (O1, outside Swarm) SHALL not be required for order-safety correctness. Placement uses role labels (`role=manager/worker`, `flink`, `fluss`), not hostnames, so `W4` joins without stack redesign. Resources reserve 2CPU/2GB per manager in v1. Placement, resources, update order, restart policy, health checks, and rollback are explicit in the stack definition. See 09 v1→v2.
 
 Loss of any one workload VM SHALL be tested at 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average). The test proves replica/quorum behavior, Flink recovery from S3 checkpoints, bounded backlog, data recovery under 30 seconds, and safe order halt under five seconds.
 

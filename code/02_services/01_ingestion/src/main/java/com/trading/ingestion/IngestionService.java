@@ -14,7 +14,9 @@ import com.trading.ingestion.discontinuity.DiscontinuitySink;
 import com.trading.ingestion.discontinuity.DiscontinuityWriter;
 import com.trading.ingestion.discontinuity.TimeJumpMonitor;
 import com.trading.ingestion.fingerprint.FingerprintBuilder;
+import com.trading.common.config.ContainerMemoryGuard;
 import com.trading.ingestion.health.HealthProbe;
+import com.trading.ingestion.health.JvmHeapReadinessGate;
 import com.trading.ingestion.health.NtpClockChecker;
 import com.trading.ingestion.health.ReadinessFile;
 import com.trading.ingestion.model.Instrument;
@@ -25,6 +27,7 @@ import com.trading.ingestion.quarantine.QuarantineSink;
 import com.trading.ingestion.quarantine.QuarantineWriter;
 import com.trading.ingestion.safety.SafetySink;
 import com.trading.ingestion.shutdown.UncertaintyJournal;
+import com.trading.ingestion.telemetry.OtlpAlertLogs;
 import com.trading.ingestion.telemetry.OtlpMetricsEmitter;
 import com.trading.ingestion.write.AppendTracker;
 import com.trading.ingestion.write.FlussRowConverter;
@@ -88,6 +91,11 @@ public final class IngestionService {
      *  hammering the time servers. */
     private static final long CLOCK_MONITOR_INITIAL_DELAY_MS = 60_000L;
     private static final long CLOCK_MONITOR_INTERVAL_MS = 60_000L;
+    /** Container-memory gate cadence (SIGNAL-warn-jvm-heap-high). Left small so
+     *  the sustained 60 s breach window is sampled finely (avoid timestamp gaps);
+     *  reading cgroup is cheap and local. */
+    private static final long MEMORY_MONITOR_INITIAL_DELAY_MS = 5_000L;
+    private static final long MEMORY_MONITOR_INTERVAL_MS = 5_000L;
     private static final double SLOW_FLUSS_PAUSE_PERCENT = 0.90;
     private static final double SLOW_FLUSS_RESUME_PERCENT = 0.50;
     /** Bridge restarts after an unexpected process exit (plan: restart exactly once). */
@@ -126,6 +134,10 @@ public final class IngestionService {
     /** Re-measures the NTP offset; a violation crossing CLOCK_OFFSET_LIMIT_MS
      *  emits TIME_JUMP evidence and refreshes the readiness clock dimension. */
     private final java.util.concurrent.ScheduledExecutorService clockMonitorScheduler;
+    /** Sustained JVM/container memory readiness gate (SIGNAL-warn-jvm-heap-high). */
+    private final JvmHeapReadinessGate heapGate;
+    private final java.util.concurrent.ScheduledExecutorService memoryMonitorScheduler;
+    private final String otelHost;
 
     private final IngestionConfig config;
     private final NtpClockChecker clock;
@@ -194,6 +206,12 @@ public final class IngestionService {
             t.setDaemon(true);
             return t;
         });
+        this.heapGate = new JvmHeapReadinessGate();
+        this.memoryMonitorScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ingestion-memory-monitor");
+            t.setDaemon(true);
+            return t;
+        });
         this.writer = new RawTickWriter(flussWriter, tracker, config.rawTableName,
                 config.appendTimeout,
                 config.drainDeadline); // drain deadline (DRAIN_DEADLINE_SECONDS)
@@ -205,6 +223,7 @@ public final class IngestionService {
         // Telemetry emitter — flushes every 10s to otel-collector:4318
         String otelHost = System.getenv().getOrDefault(
                 "OTEL_COLLECTOR_HOST", "otel-collector:4318");
+        this.otelHost = otelHost;
         this.metrics = new OtlpMetricsEmitter(otelHost, instanceId);
         metrics.setHealthCallback(health::setOtlpHealthy);
         metrics.start();
@@ -413,6 +432,7 @@ public final class IngestionService {
         // crossing CLOCK_OFFSET_LIMIT_MS emits a TIME_JUMP discontinuity
         // (once per episode) and keeps the readiness clock dimension fresh.
         startClockMonitor();
+        startMemoryMonitor();
 
         // Start with broker not connected — set to true on first frame
         health.setBrokerConnected(false);
@@ -1304,6 +1324,65 @@ public final class IngestionService {
                 LOG.warn("ingestion: clock monitor check failed: {}", sanitizeLog(e.getMessage()));
             }
         }, CLOCK_MONITOR_INITIAL_DELAY_MS, CLOCK_MONITOR_INTERVAL_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    // ---- SIGNAL-warn-jvm-heap-high: sustained container-memory readiness gate ----
+
+    /**
+     * Start the sustained JVM/container memory monitor. Every interval it reads
+     * the cgroup memory limit + current usage, feeds the {@link JvmHeapReadinessGate}
+     * state machine, and:
+     *
+     * <ul>
+     *   <li>reflects the gate into the readiness probe
+     *       ({@code health.setMemoryBlocked(...)}) so a sustained breach blocks
+     *       readiness (never on a transient spike);</li>
+     *   <li>emits exactly one {@code SIGNAL-warn-jvm-heap-high} WARN per breach
+     *       episode and one {@code SIGNAL-info-jvm-heap-recovered} INFO on the
+     *       sustained recovery (hysteresis at 75%).</li>
+     * </ul>
+     *
+     * <p>No-op outside a bounded cgroup (bare JVM / dev / test): without a
+     * container limit there is no budget to gate, matching
+     * {@link ContainerMemoryGuard}'s contract. The alert is best-effort and off
+     * the critical path (a dead collector can never fail the data path).
+     */
+    private void startMemoryMonitor() {
+        memoryMonitorScheduler.scheduleAtFixedRate(() -> {
+            if (!running) return;
+            try {
+                long limit = ContainerMemoryGuard.readContainerMemoryLimitBytes();
+                if (limit <= 0) return;         // no bounded container budget — nothing to gate
+                long used = ContainerMemoryGuard.readContainerMemoryUsedBytes();
+                if (used < 0) return;
+                JvmHeapReadinessGate.Signal signal =
+                        heapGate.observe(limit, used, System.currentTimeMillis());
+                health.setMemoryBlocked(heapGate.isBlocked());
+                refreshResourceMetrics();
+                if (signal == JvmHeapReadinessGate.Signal.WARN_HEAP_HIGH) {
+                    LOG.error(
+                        "ingestion: SIGNAL-warn-jvm-heap-high — container memory sustained at/above "
+                        + "the 85% alert threshold (limit={}B used={}B pct={}%); blocking readiness so "
+                        + "the mis-sized JVM stops being a live-data source instead of OOM-ing.",
+                        limit, used, ContainerMemoryGuard.utilizedPercent(limit, used));
+                    OtlpAlertLogs.emit(otelHost, "ingestion", "WARN",
+                        "SIGNAL-warn-jvm-heap-high",
+                        "container_memory_pct=" + ContainerMemoryGuard.utilizedPercent(limit, used));
+                } else if (signal == JvmHeapReadinessGate.Signal.INFO_HEAP_RECOVERED) {
+                    LOG.info(
+                        "ingestion: SIGNAL-info-jvm-heap-recovered — container memory back below the "
+                        + "75% hysteresis setpoint; clearing the readiness block (limit={}B used={}B).",
+                        limit, used);
+                    OtlpAlertLogs.emit(otelHost, "ingestion", "INFO",
+                        "SIGNAL-info-jvm-heap-recovered",
+                        "container_memory_pct=" + ContainerMemoryGuard.utilizedPercent(limit, used));
+                }
+            } catch (Exception e) {
+                // A memory-probe failure must never take the data path down.
+                LOG.warn("ingestion: memory monitor tick failed: {}", sanitizeLog(e.getMessage()));
+            }
+        }, MEMORY_MONITOR_INITIAL_DELAY_MS, MEMORY_MONITOR_INTERVAL_MS,
                 java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 

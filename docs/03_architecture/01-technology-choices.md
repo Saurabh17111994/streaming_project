@@ -83,13 +83,13 @@ Source retention is at least three complete trading days and extends while the r
 ## Container runtime
 
 - Local development and integration use Docker Compose.
-- Production uses a four-VM Docker Swarm: three workload/HA VMs and one observability VM.
+- Production uses a four-VM Docker Swarm: v1: 3× Manager+Worker + 1 O2 (4 VMs), v2: 3× Manager ONLY + N≥3 Workers + 1 O2 (7 VMs) — same stack, see 09 v1→v2. Each v1 workload VM: 500 GB.
 - Production images use immutable digests; `latest` and version ranges are prohibited.
 - Production secrets use Docker Swarm secrets and least-privilege service identities.
 - Production network traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - MVP requires four mandatory alert groups with owner, threshold, routing, and acknowledgement: order safety, streaming health, storage safety, and security. Critical alerts have defined escalation, remediation, and closure evidence.
 - Every managed or durable state category must have a cardinality bound or evidence-gated measurement plan, serialized-size estimate, cleanup trigger, checkpoint contribution, and restore size/time for production readiness.
-- Approved audit retention requires WORM-equivalent immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval evidence, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
+- Approved audit retention requires WORM-equivalent immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval evidence, event-to-manifest hash-chain integrity, and single-operator (Saurabh, DEC-044) authorized deletion where policy permits. Exact storage mechanisms remain evidence-gated. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
 
 Compose is deliberately simpler, but it cannot prove production HA or live-money safety.
 

@@ -7,7 +7,7 @@ The Streaming Trading Data Platform ingests live market data, computes event-tim
 The system has two distinct safety postures:
 
 - **Data path:** may recover automatically and tolerate bounded, explicitly measured data loss or lateness.
-- **Order path:** must halt new money-moving calls whenever state, correlation, or broker outcome is uncertain. Resumption requires reconciliation and two-person authorization.
+- **Order path:** must halt new money-moving calls whenever state, correlation, or broker outcome is uncertain. Resumption requires reconciliation and single-operator (Saurabh, DEC-044) authorization.
 
 ## 1.2 Actors and ownership
 
@@ -85,7 +85,7 @@ A missing or ambiguous mapping is quarantined and cannot be retried as a new ord
 - Checkpointed Babysitter no-op
 - Operational logs, metrics, traces, health checks, and all MVP safety alerts
 - EOD Iceberg/S3 offload with verified manifest and retention safety buffer
-- Local Docker Compose and production four-VM Docker Swarm definitions
+- Local Docker Compose and production Docker Swarm definitions (09 v1 4 VMs Manager+Worker → v2 7 VMs Manager-ONLY + Workers, same stack)
 
 ### Explicit non-goals for MVP
 

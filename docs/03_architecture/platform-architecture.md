@@ -2,7 +2,7 @@
 
 ## Purpose and environment boundary
 
-This file describes the Phase 4.2 runtime target. Docker Compose is for local development, integration, and deterministic tests. Production uses a separate four-VM Docker Swarm definition and requires HA, security, capacity, and recovery evidence. The Compose topology must never be presented as production proof.
+This file describes the Phase 4.2 runtime target. Docker Compose is for local development, integration, and deterministic tests. Production uses a separate Docker Swarm definition (09 v1 4 VMs Manager+Worker → v2 7 VMs Manager-ONLY + Workers, same stack via role labels) and requires HA, security, capacity, and recovery evidence. The Compose topology must never be presented as production proof.
 
 ## Local topology
 
@@ -44,7 +44,7 @@ All services → OpenObserve
 | EOD controller | Manifest creation, verification, retry/backoff, retention extension |
 | Custom execution control + Nautilus ExecutionClient | Durable gate, attempts, mappings, fencing, safety-halt consumption, and bridge commands |
 | OpenObserve | Logs, metrics, traces, alerts |
-| Operators/reconciliation control | Authenticated gate reconciliation and two-person approval |
+| Operators/reconciliation control | Authenticated gate reconciliation and single-operator (Saurabh, DEC-044) approval |
 
 The Signal job contains Compute and Business Logic. **(Ranking is REMOVED 2026-08-15, CHG-005 — it was never a service.)** Babysitter is a separate Flink job and a strict no-op in MVP.
 
@@ -63,12 +63,12 @@ Every table has an explicit schema version, owner, retention policy, writer/colu
 
 ## Production Swarm topology
 
-Three workload VMs host Fluss replicas/quorum and Flink workload capacity with anti-co-location. A fourth dedicated observability VM hosts telemetry services and is not required for order-safety correctness.
+Production topology is config-driven (Option B, 09 DECISION 2026-08-20 v1→v2): **v1 (4 VMs)** — three Swarm Manager+Worker VMs host Fluss replicas/quorum and Flink workload capacity with anti-co-location, plus a fourth dedicated observability VM; **v2 (7 VMs)** — three Swarm Manager-ONLY VMs (drained) form the Raft control plane (quorum 2/3) and three+ dedicated Worker VMs host the workloads, same `docker-stack.yml` via role labels (`role=manager/worker`, `flink`, `fluss`), no hostname pin. The observability VM hosts telemetry services and is not required for order-safety correctness.
 
 Production requirements include:
 
 - Immutable image digests and pinned Java/Python/Flink/Fluss/protocol versions
-- Three-node Fluss replication/quorum across workload VMs
+- Three-node Fluss replication/quorum across workload VMs (v1: the Manager+Worker VMs; v2: the Worker VMs) — Fluss data placement is independent of Swarm manager split
 - Encrypted S3 checkpoints/savepoints
 - Durable replicated Fluss volumes
 - Encrypted Iceberg/audit storage
@@ -90,7 +90,7 @@ Services may start concurrently, but production readiness is dependency-driven:
 6. Ingestion and Action Capture pass protocol/schema and subscription checks.
 7. Executor validates durable state, mappings, changelog continuity, safety-halt health, Arrow REST reachability, and starts `HALTED`.
 8. Reconciliation completes.
-9. Two distinct authorized operators approve the same gate epoch/evidence hash before `ENABLED`.
+9. Single authorized operator `saurabh` (DEC-044) approve the same gate epoch/evidence hash before `ENABLED`.
 
 Liveness, readiness, job health, trading readiness, and durability readiness are separate health dimensions.
 

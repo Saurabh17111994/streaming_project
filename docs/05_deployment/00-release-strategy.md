@@ -38,7 +38,7 @@ MVP Phase 4.2 includes:
 - Checkpointed Babysitter job that emits zero actions
 - Operational logs, metrics, health, alerts, and durable execution audit
 - Verified EOD Iceberg/S3 offload with retention safety buffer
-- Local Compose and production four-VM Swarm definitions
+- Local Compose and production Swarm definitions (09 v1 4 VMs Manager+Worker; v2 7 VMs Manager-ONLY + Workers)
 
 Deferred capabilities include real Babysitter actions, advanced features, multi-broker support, BSE/currency derivatives, Kubernetes, automatic live gap backfill, backtesting, and business analytics. (**Market-context and ML ranking REMOVED 2026-08-15, CHG-005.**)
 
@@ -68,7 +68,7 @@ Use Compose to validate:
 
 ### Stage 2 — Production-like acceptance
 
-Use the four-VM Swarm topology to validate:
+Use the production Swarm topology (09 v1 4 VMs; v2 7 VMs) to validate:
 
 - variable 50,000 ticks/s average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) for a full session
 - One workload VM loss at the per-instrument production rate

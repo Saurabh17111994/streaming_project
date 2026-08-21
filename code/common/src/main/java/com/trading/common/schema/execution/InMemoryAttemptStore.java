@@ -150,6 +150,20 @@ public final class InMemoryAttemptStore implements AttemptStore {
         return PrepareResult.created(created);
     }
 
+    /**
+     * Restart-refresh: install an attempt recovered from the durable Execution_Attempts row so a
+     * restarted process rebuilds its duplicate/contract-violation index. First-writer wins for
+     * the secondary indexes (a replayed identity must not overwrite a newer durable mapping);
+     * the by-id map always reflects the latest durable row for that id.
+     */
+    public synchronized void hydrate(AttemptRecord rec) {
+        Objects.requireNonNull(rec, "rec");
+        byAttemptId.put(rec.executionAttemptId(), rec);
+        instructionToAttemptId.putIfAbsent(rec.instructionId(), rec.executionAttemptId());
+        instructionHashToAttemptId.putIfAbsent(
+                replayKey(rec.instructionId(), rec.requestHash()), rec.executionAttemptId());
+    }
+
     @Override
     public TransitionResult transition(String executionAttemptId, long expectedPhaseEpoch,
                                        String newPhase) {

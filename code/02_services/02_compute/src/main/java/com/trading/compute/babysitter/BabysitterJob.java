@@ -5,6 +5,8 @@ import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ExternalizedCheckpointRetention;
+import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.legacy.SinkFunction;
@@ -90,10 +92,25 @@ public final class BabysitterJob {
         if (config.checkpointDir() != null) {
             flinkConfig.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, config.checkpointDir());
         }
+        // Optional restore: BABYSITTER_STATE_RECOVERY_PATH (a completed checkpoint
+        // URI) makes a restarted Babysitter continue from the last accepted
+        // observation versions instead of a full replay. Same path key SignalJob
+        // uses for state recovery (StateRecoveryOptions.SAVEPOINT_PATH), read at
+        // StreamGraph generation time.
+        if (config.stateRecoveryPath() != null) {
+            flinkConfig.set(StateRecoveryOptions.SAVEPOINT_PATH, config.stateRecoveryPath());
+        }
         StreamExecutionEnvironment env =
                 StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         env.enableCheckpointing(config.checkpointIntervalMs());
+        // A deliberate cancel/restart must retain the completed observation-state
+        // checkpoint (DEC-017: a restored run continues from the last accepted
+        // version). Mirror the proven SignalJob idiom — without this, cancelling
+        // the Babysitter deletes its checkpoint and a restart falls back to a
+        // full-replay, silently losing the version gate.
+        env.getCheckpointConfig().setExternalizedCheckpointRetention(
+                ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION);
 
         FlussSource<RowData> source = FlussSource.<RowData>builder()
                 .setBootstrapServers(config.bootstrapServers())

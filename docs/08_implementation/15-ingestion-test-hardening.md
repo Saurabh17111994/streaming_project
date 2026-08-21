@@ -123,5 +123,5 @@ Each milestone ends with its full suite green and the catalog updated — nothin
 
 ## 5. Out of scope (explicitly deferred)
 
-- The accepted deferrals of `03-ingestion.md` (daily `GET /nse`/`GET /all` manifest refresh; 3,000-instrument / 3-connection envelope) — unchanged by this plan.
+- The accepted deferral of `03-ingestion.md` (3,000-instrument / 3-connection envelope) — unchanged by this plan.
 - Perf-gate changes beyond the existing `ING-PERF-001` certification (no new envelope runs; DEC-036/037 stand).

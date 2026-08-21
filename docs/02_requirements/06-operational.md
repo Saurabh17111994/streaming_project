@@ -2,7 +2,7 @@
 
 ## 6.1 Operating modes
 
-Local operations use Docker Compose. Production operations use Docker Swarm across three workload VMs and one observability VM. Every runbook identifies its environment; local commands are never presented as production procedures.
+Local operations use Docker Compose. Production operations use Docker Swarm across v1: 4 VMs (3× Manager+Worker + 1 O2) → v2: 7 VMs (3× Manager ONLY + N≥3 Workers + 1 O2) per 09 v1→v2. Every runbook identifies its environment; local commands are never presented as production procedures.
 
 ## Constraints
 
@@ -21,7 +21,7 @@ Local operations use Docker Compose. Production operations use Docker Swarm acro
 
 | ID | Assumption | Source |
 | --- | --- | --- |
-| ASM-OPS-001 | Four VMs can be operated as a Docker Swarm cluster with encrypted overlay, TLS, secrets, and three-node Fluss placement. | ASM-005, ASM-009 |
+| ASM-OPS-001 | The production Swarm (v1: 4 VMs Manager+Worker with 2CPU/2GB manager reserved per VM; v2: 7 VMs with 3 Manager-ONLY + N≥3 Workers) can be operated with encrypted overlay, TLS, Swarm secrets, role-label placement, and three-node Fluss placement, adding worker VMs without changing the 3-manager Raft quorum. | ASM-005, ASM-009 |
 | ASM-OPS-002 | S3 `ap-south-1` is accessible, supports versioning/lifecycle policies, and can complete verified EOD offload within 30 minutes. | ASM-006 |
 | ASM-OPS-003 | Fluss three-node replication/quorum and Flink S3 checkpoints operate as documented in the pinned version matrix. | ASM-008 |
 | ASM-OPS-004 | ~~OpenAlgo is reachable from the production Swarm network~~ (obsolete — OpenAlgo removed per DEC-006). Arrow REST (`https://edge.arrow.trade`) is reachable from the production Swarm network and exposes deterministic order-submission and reconciliation endpoints. | ASM-007 |

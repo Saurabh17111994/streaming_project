@@ -37,6 +37,7 @@ public final class HealthProbe {
     private final AtomicBoolean brokerConnected = new AtomicBoolean(false);
     private final AtomicBoolean subscriptionComplete = new AtomicBoolean(false);
     private final AtomicBoolean otlpHealthy = new AtomicBoolean(false);
+    private final AtomicBoolean memoryBlocked = new AtomicBoolean(false);
     private volatile long lastFrameReceivedNanos;
     private final ConcurrentHashMap<String, SlotHealth> slots = new ConcurrentHashMap<>();
 
@@ -101,6 +102,20 @@ public final class HealthProbe {
 
     /** OTLP collector reachability + last export success (plan: telemetry readiness). */
     public void setOtlpHealthy(boolean healthy) { this.otlpHealthy.set(healthy); }
+
+    /**
+     * JVM/container memory readiness gate (09-production-swarm § JVM and
+     * memory configuration + AlertThresholds.CONTAINER_MEMORY): when
+     * {@code true}, the probe refuses readiness so a container sustained at or
+     * above the 85% alert threshold stops being a live-data source instead of
+     * OOM-ing mid-flight. Set by the JVM heap monitor once the breach is
+     * sustained (never on a transient spike); cleared only on a sustained
+     * recovery below the hysteresis setpoint.
+     */
+    public void setMemoryBlocked(boolean blocked) { this.memoryBlocked.set(blocked); }
+
+    /** Memory gate open (not blocked) — true unless the heap monitor declared a sustained breach. */
+    public boolean isMemoryReady() { return !memoryBlocked.get(); }
 
     /**
      * Telemetry readiness: the OTLP collector is reachable and the most recent
@@ -177,6 +192,7 @@ public final class HealthProbe {
                 && tracker.isReady()
                 && brokerConnected.get()
                 && subscriptionComplete.get()
+                && !memoryBlocked.get()
                 && isDataReady()
                 && isFrameRecent()
                 && isClockOk();
@@ -210,6 +226,8 @@ public final class HealthProbe {
         m.put("broker_connected", brokerConnected.get());
         m.put("subscription_complete", subscriptionComplete.get());
         m.put("telemetry_ready", otlpHealthy.get());
+        m.put("memory_blocked", memoryBlocked.get());
+        m.put("memory_ready", !memoryBlocked.get());
         m.put("frame_recent", isFrameRecent());
         long offsetMs = clockChecker != null ? clockChecker.lastOffsetMs() : 0;
         boolean ok = isClockOk();

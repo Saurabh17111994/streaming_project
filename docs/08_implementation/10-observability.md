@@ -91,6 +91,21 @@ Fluss quorum/replicas/leaders, ZooKeeper ensemble quorum/leader/latency, disk/vo
 
 OpenObserve is the target backend. A dashboard is not release evidence unless its record identifies the measurement boundary, workload, duration, UTC clock source/offset, exact software versions, sample count, and whether failures or restarts are included.
 
+**Implemented 2026-08-21 (initial corpus)** — versioned dashboard files + seed tooling under
+`code/01_platform/01_docker/openobserve/dashboards/` (manifest + `safe-to-trade.json`,
+`order-execution.json`, `data-ingestion.json`, `storage-eod.json`; 27 panels) provisioned to the
+live OpenObserve (`api/default/dashboards`) by `code/01_platform/04_scripts/seed_dashboards.py`
+(cred-gated, idempotent: re-runs report `created=0 untouched=N`; `--force` PUTs changed tabs).
+Verified 2026-08-21: `created=4`, `tests/` suite 306 passed incl. `test_seed_dashboards.py`
+(corpus schema, manifest evidence fields, no-secrets, cred gate, dry-run). Every manifest record
+carries the evidence fields this section requires (measurement boundary, workload, duration,
+UTC clock, versions, sample count, failures/restarts inclusion) — fulfilling the
+"Dashboard/query versions included in release evidence" checklist item below. Query streams
+target the O2 canonical streams the OTel collector routes (`metrics`, `logs`); panels render
+empty until their source exports (EXECUTOR export lands via the telemetry.rs `TelemetrySink`
+seam). `Safe to Trade` (primary) covers execution gate/order flow, data-feed health, system
+state; the remaining families (Dedup, Order safety, Security) extend the same corpus pattern.
+
 #### Data and ingestion dashboard
 
 Show packet/tick and byte throughput; append acknowledgements and p50/p95/p99 write latency; active connections, subscription completeness, reconnects, and connection epochs; decoder/protocol/manifest versions; decode/quarantine counts; fingerprint candidates, dedup hits, and dedup-state size; pending bytes, blocked append duration, timeouts, acknowledged-loss count; clock offset/readiness; and suspected discontinuities.
@@ -110,7 +125,7 @@ Dedicated panels for the externalized dedup model, with bounded cardinality (per
 
 #### Order safety dashboard
 
-Show gate state/epoch; halt detection-to-block latency; attempts by phase/outcome; request hashes and unknown outcomes; ~~unresolved reservations~~ (**REMOVED 2026-08-15, CHG-005**) and duplicate suppression; identity mappings and postback quarantines; reconciliation results; changelog continuity; Executor fencing; Arrow REST latency/status and broker response classification; and two-person approvals, denials, mismatches, and unauthorized attempts. Trading readiness must never be calculated from process liveness alone.
+Show gate state/epoch; halt detection-to-block latency; attempts by phase/outcome; request hashes and unknown outcomes; ~~unresolved reservations~~ (**REMOVED 2026-08-15, CHG-005**) and duplicate suppression; identity mappings and postback quarantines; reconciliation results; changelog continuity; Executor fencing; Arrow REST latency/status and broker response classification; and single-operator (Saurabh, DEC-044) approvals, denials, mismatches, and unauthorized attempts. Trading readiness must never be calculated from process liveness alone.
 
 #### Storage, EOD, and durability dashboard
 
@@ -212,7 +227,7 @@ Without a RAM cap, OpenObserve's ClickHouse-like storage can consume all availab
 - [ ] Critical alerts deliver, acknowledge, escalate, and link runbooks.
 - [ ] OpenObserve outage does not erase execution audit or authorize orders.
 - [ ] Component-specific degradation behavior is implemented: Ingestion/Action Capture continue bounded capture; Executor halts when mandatory audit/alert unavailable.
-- [ ] Dashboard/query versions are included in release evidence.
+- [x] Dashboard/query versions are included in release evidence. (2026-08-21: `openobserve/dashboards/manifest.json` — per-dashboard query_version, dashboard_version (O2 v8), streams, and the evidence fields required above; seed tooling applies the pinned corpus.)
 
 ## Verification mapping
 

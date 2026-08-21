@@ -2,7 +2,7 @@
 
 ## Environments
 
-Local development/integration uses Docker Compose. Production uses Docker Swarm on three workload VMs plus one observability VM. Compose is not production HA evidence.
+Local development/integration uses Docker Compose. Production uses Docker Swarm — v1: 4 VMs (3× Manager+Worker + 1 O2), v2: 7 VMs (3× Manager ONLY + N≥3 Workers + 1 O2, same stack via drain). Compose is not production HA evidence. See 09 DECISION 2026-08-20 v1→v2.
 
 ## Production requirements
 
@@ -26,7 +26,7 @@ Pass variable 50,000 ticks/s average baseline full session (≈16.7 ticks/s/inst
 
 ## Security and rollout
 
-Money-moving deployments begin halted and require reconciliation/two-person enablement. Rollback defaults halted when uncertain. Secret rotation, network exposure, TLS, redaction, least privilege, audit access, vulnerability policy, and compromised-credential recovery are tested.
+Money-moving deployments begin halted and require reconciliation/single-operator (Saurabh, DEC-044) enablement. Rollback defaults halted when uncertain. Secret rotation, network exposure, TLS, redaction, least privilege, audit access, vulnerability policy, and compromised-credential recovery are tested.
 
 ## Requirement traceability
 

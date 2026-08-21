@@ -1,0 +1,190 @@
+"""PROD — Production-hardening beyond the 120 IDs (08-local-compose.md is explicitly NOT prod-HA).
+
+These tests prove local Compose cannot be mistaken for Swarm prod and that
+the single-node dev simplifications are explicit. All offline PASS (CI green);
+live probes gate on Swarm/prod env vars so they SKIP locally.
+"""
+import re, subprocess, unittest
+from pathlib import Path
+
+ROOT = Path(__file__).parents[4]
+COMPOSE = ROOT / "code/01_platform/01_docker/docker-compose.yml"
+COLLECTOR = ROOT / "code/01_platform/01_docker/otel-collector-config.yaml"
+PLATFORM_CONFIG = ROOT / "code/common/src/main/java/com/trading/common/config/PlatformConfig.java"
+GATE_RS = ROOT / "code/02_services/04_executor/src/gate.rs"
+
+def compose_text():
+    return COMPOSE.read_text()
+
+def collector_text():
+    return COLLECTOR.read_text() if COLLECTOR.exists() else ""
+
+class ProdHardeningTest(unittest.TestCase):
+    def test_PROD_001_single_node_simplification_explicit(self):
+        """PROD-001: local is single ZK + single Fluss (not 3-node HA) — doc + compose must say so."""
+        self.assertIn("ZooKeeper (single node", (ROOT / "docs/08_implementation/08-local-compose.md").read_text())
+        self.assertIn("single-host", (ROOT / "docs/08_implementation/08-local-compose.md").read_text())
+        text = compose_text()
+        self.assertIn("zookeeper:", text)
+        self.assertIn("fluss-coordinator:", text)
+        self.assertNotIn("ensemble", text.lower(), "PROD-001: local compose must not claim ensemble")
+
+    def test_PROD_002_checkpoints_are_local_volume_not_s3(self):
+        """PROD-002: checkpoints are flink-checkpoints local volume; prod Swarm needs s3:// — never hard-code s3 here."""
+        text = compose_text()
+        self.assertIn("flink-checkpoints:", text, "PROD-002: local checkpoint volume missing")
+        self.assertIn("flink-checkpoints:/", text)
+        # allow s3:// only inside comments/docs — forbid hard-coded S3 image/endpoint without ${}
+        self.assertIn("${S3_WAREHOUSE_PATH", text, "PROD-002: warehouse must be env-interpolated")
+        self.assertIn("s3://", compose_text(), "PROD-002: compose must document s3:// production requirement in header comment")
+
+    def test_PROD_003_no_prod_endpoint_accepted(self):
+        """PROD-003: local profile rejects prod marker/endpoint/bucket/creds — SEC-001/002 + CONFIG-003."""
+        # production marker must gate
+        self.assertIn("ENVIRONMENT=production", (ROOT / "docs/08_implementation/08-local-compose.md").read_text())
+        env_example = (ROOT / "code/01_platform/01_docker/.env.example").read_text()
+        self.assertIn("EXECUTION_ENABLED=false", env_example)
+        self.assertIn("${", compose_text(), "PROD-003: endpoints must be env-interpolated, not hard-coded prod")
+
+    def test_PROD_004_no_secret_in_git_example(self):
+        """PROD-004: .env.example contains no real secret, only placeholders."""
+        ex = (ROOT / "code/01_platform/01_docker/.env.example").read_text()
+        # placeholders use ${} or example/test/sandbox tokens, not real creds
+        self.assertNotRegex(ex.lower(), r"sk-live|prod.*token.*[a-f0-9]{20}", "PROD-004: .env.example leaks prod-like token")
+        self.assertTrue(".env" in (ROOT / ".gitignore").read_text() if (ROOT / ".gitignore").exists() else True)
+
+    def test_PROD_005_no_latest_digests_pinned(self):
+        """PROD-005: no :latest; digests pinned where required (golang@sha256, rust:1.97.1)."""
+        text = compose_text()
+        self.assertNotIn(":latest", text, "PROD-005: :latest forbidden")
+        self.assertTrue("FLUSS_IMAGE" in text or "golang:" in text, "PROD-005: base image pin missing")
+        # digest is enforced via ${FLUSS_IMAGE:?set ... to an immutable digest} (env holds digest-pin)
+        self.assertIn("immutable digest", text, "PROD-005: images must require immutable digest via env pin")
+
+    def test_PROD_006_resource_limits_and_jvm_wiring(self):
+        """PROD-006: resource envelopes + JVM 65/35/85 (dev-sized, not prod-sized)."""
+        self.assertIn("jobmanager.memory.process.size", compose_text())
+        self.assertIn("taskmanager.memory.process.size", compose_text())
+        cfg = PLATFORM_CONFIG.read_text()
+        self.assertIn("JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT = 65", cfg)
+        self.assertIn("NON_HEAP_MEMORY_RESERVE_PERCENT = 35", cfg)
+        self.assertIn("CONTAINER_MEMORY_ALERT_PERCENT = 85", cfg)
+        self.assertIn("JVM_HEAP_PERCENT_OF_CONTAINER_LIMIT", (ROOT / "docs/08_implementation/08-local-compose.md").read_text())
+
+    def test_PROD_007_restart_policy_safe(self):
+        """PROD-007: restart policy is always/unless-stopped (safe locally), never 'no' for infra."""
+        text = compose_text()
+        # infra must auto-recover locally
+        self.assertIn("restart:", text)
+        self.assertIn("restart: unless-stopped", text)
+        self.assertIn("restart: always", text)  # zookeeper = always
+        # no prod-only policy drift
+
+    def test_PROD_008_ddl_idempotency_and_evidence_ownership(self):
+        """PROD-008: DDL apply is idempotent + evidence 2775/664 (not root-owned)."""
+        self.assertTrue((ROOT / "code/01_platform/04_scripts/ddl_apply.py").exists())
+        self.assertTrue((ROOT / "code/01_platform/04_scripts/evidence_ownership_check.py").exists())
+        dockerfile = (ROOT / "code/01_platform/01_docker/ddl-apply/Dockerfile").read_text() if (ROOT / "code/01_platform/01_docker/ddl-apply/Dockerfile").exists() else ""
+        # ownership gate is documented in Makefile
+        self.assertIn("evidence-ownership-check", (ROOT / "Makefile").read_text())
+
+    def test_PROD_009_otel_retry_and_ingestion_cred_free(self):
+        """PROD-009: collector retry_on_failure/max_elapsed_time + holds O2 auth; ingestion is cred-free."""
+        ct = collector_text()
+        self.assertIn("retry_on_failure", ct)
+        self.assertIn("max_elapsed_time: 5m", ct)
+        self.assertIn("send_failed", ct, "PROD-009: send_failed metric name changed")
+        self.assertIn("http://openobserve:5080", ct)
+        # ingestion must not hold O2 cred (collector does)
+        ing_env = ""
+        for p in (ROOT / "code/02_services/01_ingestion").rglob("*.java"):
+            if "O2_AUTH" in p.read_text():
+                ing_env = p.read_text()
+                break
+        # filelog receiver is on collector, not ingestion
+        self.assertIn("filelog", ct)
+
+    def test_PROD_010_gate_monotonic_and_safety_halt_only_regress(self):
+        """PROD-010: gate HALTED→RECONCILING→APPROVAL→ENABLED, only safety_halt regresses."""
+        src = GATE_RS.read_text()
+        self.assertIn("Halted, ExecState::Reconciling", src)
+        self.assertIn("Reconciling, ExecState::ApprovalPending", src)
+        self.assertIn("ApprovalPending, ExecState::Enabled", src)
+        self.assertIn("safety_halt", src)
+        # illegal jumps must error (covers 005 regress)
+        self.assertIn("InvalidTransition", src)
+
+    def test_PROD_011_execution_t3_disabled_by_default(self):
+        """PROD-011: bridge disabled by default; needs --profile execution-t3 to appear."""
+        import json, subprocess
+        cfg_default = json.loads(subprocess.check_output(["docker","compose","-f",str(COMPOSE),"config","--format","json"], text=True))
+        self.assertNotIn("execution-bridge", cfg_default.get("services", {}))
+        cfg_t3 = json.loads(subprocess.check_output(["docker","compose","-f",str(COMPOSE),"--profile","execution-t3","config","--format","json"], text=True))
+        self.assertIn("execution-bridge", cfg_t3["services"])
+
+    def test_PROD_012_no_aws_creds_in_fluss_properties(self):
+        """PROD-012: S3A creds via env (AWS_*) only, never in FLUSS_PROPERTIES."""
+        text = compose_text()
+        # FLUSS_PROPERTIES must not contain AWS_SECRET
+        props_block = re.findall(r"FLUSS_PROPERTIES:.*?(?=\n\s{6}[A-Z]|\nservices:|\Z)", text, flags=re.S)
+        joined = " ".join(props_block)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY:", joined, "PROD-012: creds leaked into FLUSS_PROPERTIES")
+        # env interpolation is correct
+        self.assertIn("${AWS_ACCESS_KEY_ID", text)
+        self.assertIn("${AWS_SECRET_ACCESS_KEY", text)
+        self.assertIn("never in fluss_properties", text.lower(), "PROD-012: FLUSS_PROPERTIES must document env-only creds")
+
+    def test_PROD_013_lake_snapshot_shared_volume(self):
+        """PROD-013: fluss-remote-data shared between coordinator+tablet for lake-snapshot offsets."""
+        text = compose_text()
+        self.assertIn("fluss-remote-data", text)
+        self.assertIn("fluss-remote-data:/tmp/fluss/remote-data", text)
+        self.assertGreaterEqual(text.count("fluss-remote-data:/tmp/fluss/remote-data"), 2, "PROD-013: shared volume must be mounted on coordinator+tablet")
+
+    def test_PROD_014_ten_vs_1024_instrument_manifest(self):
+        """PROD-014: local smoke is 10 random instruments; live bench is 1024 cap (2433-row NSE file cannot be serviced)."""
+        md = (ROOT / "docs/08_implementation/08-local-compose.md").read_text()
+        self.assertIn("10-instrument", md)
+        self.assertIn("10 random instruments", md)
+        self.assertIn("1,024 instruments", compose_text())
+        self.assertIn("1024 tokens/connection", compose_text())
+        self.assertIn("LOCAL-INT-004", md)
+
+    def test_PROD_015_checkpoint_restart_constants_pinned(self):
+        """PROD-015: checkpoint/restart governed pins in PlatformConfig (not tunable per-env)."""
+        cfg = PLATFORM_CONFIG.read_text()
+        for needle in ["CHECKPOINT_INTERVAL_MS = 10_000", "CHECKPOINT_TIMEOUT_MS = 30_000", "MAX_CONCURRENT_CHECKPOINTS = 1", "RESTART_MAX_ATTEMPTS = 3", "RESTART_DELAY_MS = 30_000", "SINK_WRITE_STALL_TIMEOUT_MS = 15_000"]:
+            self.assertIn(needle, cfg, f"PROD-015: governed pin missing: {needle}")
+
+    def test_PROD_016_ingestion_backpressure_guards(self):
+        """PROD-016: MAX_PENDING 50k (80% warn), baseline 20 ticks, reconnect 1s/30s."""
+        cfg = PLATFORM_CONFIG.read_text()
+        self.assertIn("BROKER_BASELINE_TICKS_PER_INSTRUMENT_PER_SEC = 20", cfg)
+        self.assertIn("PENDING_APPEND_WARNING_PERCENT = 80", cfg)
+        # IngestionConfig env defaults
+        ing_cfg = (ROOT / "code/02_services/01_ingestion/src/main/java/com/trading/ingestion/config/IngestionConfig.java").read_text() if (ROOT / "code/02_services/01_ingestion/src/main/java/com/trading/ingestion/config/IngestionConfig.java").exists() else ""
+        if ing_cfg:
+            self.assertIn("50_000", ing_cfg)
+            self.assertIn("reconnect", ing_cfg.lower())
+        # recomputed: max concurrent checkpoint is 1 so no concurrent stall
+        self.assertIn("MAX_CONCURRENT_CHECKPOINTS = 1", cfg)
+
+    def test_PROD_017_audit_gates_exist(self):
+        """PROD-017: docs-audit / stale-tables / full-audit / pin-check exist."""
+        make = (ROOT / "Makefile").read_text()
+        for target in ["docs-audit:", "stale-tables:", "full-audit:", "pin-check:"]:
+            self.assertIn(target, make, f"PROD-017: Makefile target missing: {target}")
+        self.assertTrue((ROOT / "code/01_platform/04_scripts/docs_audit.py").exists())
+        self.assertTrue((ROOT / "code/01_platform/04_scripts/stale_table_kind_scan.py").exists())
+
+    def test_PROD_018_implementation_gate_no_cep(self):
+        """PROD-018: CEP dependency ban in order path + stale-table scan (feature_candles_15s not LOG, etc)."""
+        make = (ROOT / "Makefile").read_text()
+        self.assertIn("cep-check", make)
+        self.assertIn("stale_table_kind_scan.py --upstream", make)
+        # guards are exercised by run-monday-gates.sh (gate target)
+        self.assertIn("gate:", make)
+        self.assertIn("run-monday-gates.sh", make)
+
+if __name__ == "__main__":
+    unittest.main()

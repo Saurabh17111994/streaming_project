@@ -25,7 +25,7 @@ No table definition may use an overloaded `order_id`, assume broker sequence IDs
 | --- | --- | --- |
 | ASM-STOR-001 | Fluss `partial_update` and FULL changelog behavior match the pinned server/client version, and stale/out-of-order updates are rejected. | ASM-004 |
 | ASM-STOR-002 | The selected Fluss version supports BYTES payload, KV state tables, changelog images, three-node replication, retention extension, and lake tiering properties as specified in the DDLs. | ASM-008 |
-| ASM-STOR-003 | Four VMs can sustain the normal production baseline of 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) with three-node Fluss replication/quorum while one HA VM is unavailable. | ASM-005, RISK-010 |
+| ASM-STOR-003 | The production Swarm workload VMs (v1: 3 Manager+Worker; v2: N≥3 Worker VMs) can sustain the normal production baseline of 50,000 ticks/s variable average baseline (3,000 instruments; ≈16.7 ticks/s/instrument average) with three-node Fluss replication/quorum while one HA VM is unavailable. | ASM-005, RISK-010 |
 | ASM-STOR-004 | S3 `ap-south-1` can complete verified EOD offload of a full trading day's data within 30 minutes. | ASM-006 |
 | ASM-STOR-005 | Docker Swarm encrypted overlay, TLS, and S3 checkpoint storage operate within the four-VM target. | ASM-009 |
 | ASM-STOR-006 | Fluss connector atomic visibility semantics are per-sink, not cross-sink. Consumers can tolerate partial visibility when reading multiple LOG and KV tables from the same checkpoint boundary. | RISK-008 |

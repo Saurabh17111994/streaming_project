@@ -79,7 +79,7 @@ Failure of an evidence-gated integration keeps live-money readiness blocked.
 
 ### 5. Production-like acceptance
 
-Deploy immutable candidate artifacts to the production-like four-VM Swarm environment and run:
+Deploy immutable candidate artifacts to the production-like Swarm environment (09 v1 4 VMs Manager+Worker; v2 7 VMs) and run:
 
 - Full-session variable 50,000 ticks/s average baseline (90,000 ticks/s peak retired, DEC-036)
 - One workload VM loss

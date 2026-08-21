@@ -61,15 +61,32 @@ public final class FlussGateStateStore implements GateStateStore, AutoCloseable 
     @Override public GateRow read(String partitionId) {
         GateRow cached = delegate.read(partitionId);
         if (cached != null) return cached;
+        GateRow durable = lookupGate(partitionId);
+        if (durable != null) {
+            // Restart-refresh: rebuild the local authority from the durable row (including its
+            // monotonic fence sequence) so a restarted process sees its own prior fence.
+            delegate.hydrate(durable);
+        }
+        return durable;
+    }
+
+    private GateRow lookupGate(String partitionId) {
         try {
             Lookuper lookuper = table.newLookup().createLookuper();
-            InternalRow r = lookuper.lookup(GenericRow.of(BinaryString.fromString(partitionId))).get(timeoutMs, TimeUnit.MILLISECONDS).getSingletonRow();
-            if (r == null) return null;
-            return fromRow(r);
+            InternalRow r = lookuper.lookup(GenericRow.of(BinaryString.fromString(partitionId)))
+                    .get(timeoutMs, TimeUnit.MILLISECONDS).getSingletonRow();
+            return r == null ? null : fromRow(r);
         } catch (Exception e) { return null; }
     }
 
     @Override public GateRow init(GateRow boot) {
+        // Restart-refresh: never re-initialize an already-fenced durable gate. If a row already
+        // exists in Fluss, hydrate it (with its monotonic fence) and leave it untouched.
+        GateRow durable = lookupGate(boot.partitionId());
+        if (durable != null) {
+            delegate.hydrate(durable);
+            return durable;
+        }
         GateRow r = delegate.init(boot);
         persist(r);
         return r;

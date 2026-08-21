@@ -1,7 +1,7 @@
 # Build context MUST be the Maven/Java reactor root `code/`.
-# The patch-level tag matches versions.pin. Replace with the recorded digest
-# when the pinned Go image is captured in the execution evidence bundle.
-ARG GO_BUILDER_IMAGE=golang:1.24.5-alpine
+# Pinned digest from versions.pin (T0, foundation L548). The tag alone is
+# floating; the digest makes the build reproducible and auditable.
+ARG GO_BUILDER_IMAGE=golang:1.24.5-alpine@sha256:daae04ebad0c21149979cd8e9db38f565ecefd8547cf4a591240dc1972cf1399
 FROM ${GO_BUILDER_IMAGE} AS go-builder
 WORKDIR /src
 

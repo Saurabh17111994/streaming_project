@@ -22,11 +22,11 @@
 | --- | --- | --- |
 | ASM-NFR-001 | TCP preserves order within each Arrow WebSocket connection, and the `raw_table_1` append order is sufficient for deterministic event-time replay. | ASM-001 |
 | ASM-NFR-002 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value for correlation. | ASM-002 |
-| ASM-NFR-003 | Four VMs can sustain the normal production baseline of variable 50,000 ticks/s average baseline while one HA VM is unavailable (the 90,000 ticks/s peak campaign is retired, DEC-036). | ASM-005, RISK-010 |
+| ASM-NFR-003 | The production baseline (v1: 4 VMs Manager+Worker; v2: 7 VMs with N≥3 Workers) can sustain the normal variable 50,000 ticks/s average baseline while one HA VM is unavailable, using the three workload VMs (v2: Worker VMs) as the load-bearing capacity with managers isolated from workload contention (the 90,000 ticks/s peak campaign is retired, DEC-036). | ASM-005, RISK-010 |
 | ASM-NFR-004 | S3 `ap-south-1` can complete verified EOD offload of a full trading day within 30 minutes. | ASM-006 |
 | ASM-NFR-005 | ~~OpenAlgo exposes deterministic REST order-submission responses~~ (obsolete — OpenAlgo removed per DEC-006). Arrow REST `POST /order/regular` returns deterministic order-submission responses and enough evidence to correlate broker order identity. | ASM-007 |
 | ASM-NFR-006 | The selected Fluss version supports BYTES payload, KV state tables, changelog images, three-node replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Fluss remote storage + rebuild from audit (Flink checkpoints hold only small working/recovery state — DEC-038)), retention extension, and lake tiering properties. | ASM-008 |
-| ASM-NFR-007 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, and three-node Fluss placement can be operated within the four-VM target. | ASM-009 |
+| ASM-NFR-007 | Docker Swarm secrets, encrypted overlay/TLS, S3 checkpoints, role-label placement, and three-node Fluss placement can be operated on the production Swarm (v1 4 VMs Manager+Worker; v2 7 VMs Manager-ONLY + Workers) without changing the 3-manager Raft quorum. | ASM-009 |
 | ASM-NFR-008 | The approved audit-retention policy, currently at least one year, is acceptable for the applicable live-money jurisdiction and account model. | ASM-010 |
 | ASM-NFR-009 | Fluss connector atomic visibility semantics are per-sink, not cross-sink. Consumers tolerate partial visibility when reading multiple LOG and KV tables from the same checkpoint boundary. | RISK-008 |
 | ASM-NFR-010 | The pre-production clean break permits replacing all stale physical DDLs without preserving compatibility with old consumers. | RISK-011 |

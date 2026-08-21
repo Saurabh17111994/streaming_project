@@ -23,7 +23,7 @@ Start with [Project Layer Index](./00-index.md).
 - `instruction_id`, `client_order_ref`, and `broker_order_id` are distinct identities.
 - Tick deduplication is bounded best-effort fingerprinting because no broker sequence/event ID is assumed.
 - Suspected feed discontinuities replace unsupported exact missing-sequence ranges.
-- Docker Compose is for local development; four-VM Docker Swarm is the production target.
+- Docker Compose is for local development; Docker Swarm is the production target (09 v1 4 VMs Manager+Worker → v2 7 VMs Manager-ONLY + N≥3 Workers, same stack via role labels).
 - Exactly-once claims stop at the Flink/Fluss transaction boundary and do not include broker REST side effects.
 - Order lifecycle, position lifecycle, and order-gate state are separate models.
 - EOD offload requires a verification manifest and retention safety buffer.

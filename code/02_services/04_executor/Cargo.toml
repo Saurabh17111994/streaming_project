@@ -1,0 +1,74 @@
+# ------------------------------------------------------------------------------------------------
+# Nautilus execution service (Phase 3 · T4)
+#
+# Replaces the retired Python executor scaffold with a long-lived Rust execution/position
+# authority built on audited Nautilus Rust APIs.
+#
+# All Nautilus crates are pinned to the audited revision in versions.pin:
+#   NAUTILUS_COMMIT        = 74d57e7e055015a8d974a0cf047ac2e5139610b3
+#   NAUTILUS_WORKSPACE     = 0.62.0
+#   NAUTILUS_RUST_TOOLCHAIN= 1.97.1
+# ------------------------------------------------------------------------------------------------
+
+[package]
+name = "nautilus-execution-service"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97.1"
+description = "Long-lived Nautilus execution/position authority; gateway-backended, bridge-backed."
+license = "LGPL-3.0-or-later"
+
+[dependencies]
+rust_decimal = "1"
+nautilus-core = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-common = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-live = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-execution = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-model = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-event-store = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-portfolio = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-risk = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+nautilus-sandbox = { git = "https://github.com/nautechsystems/nautilus_trader", rev = "74d57e7e055015a8d974a0cf047ac2e5139610b3" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs"] }
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+tokio-tungstenite = "0.24"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3"
+rand = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "nautilus-execution-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "t9-paper"
+path = "src/bin/t9_paper.rs"
+
+[[bin]]
+name = "t9-paper-25"
+path = "src/bin/t9_paper_25.rs"
+
+[[bin]]
+name = "t9-paper-25-full"
+path = "src/bin/t9_paper_25_full.rs"
+
+[workspace]
+# The service is a single-crate workspace (Nautilus is consumed as external git deps).

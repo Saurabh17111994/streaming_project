@@ -5,7 +5,7 @@
 > `07-executor.md` (each SUPERSEDED and deleted 2026-08-18; full history in git at `74f3d89`). Architecture per the
 > 2026-08-18 user decision: **Nautilus** (Rust-native trading engine) is the execution/position
 > core; a **go-arrow bridge** (localhost) is the ONLY component that talks to Arrow; the Fluss
-> trade-row reader and the two-person gate are custom glue. The upstream layer is reconciled to
+> trade-row reader and the single-operator (Saurabh, DEC-044) gate are custom glue. The upstream layer is reconciled to
 > this architecture (2026-08-18, **CHG-028**): build contracts
 > `docs/04_contracts/05-babysitter.md`/`06-action-capture.md`/`07-executor.md`, functional
 > requirements `02-functional/05/06/07`, and DEC-006 are re-scoped — see their dated banners.
@@ -267,7 +267,7 @@ not remain a second production authority after Nautilus parity is proven.
 | 4. Fluss integration | Intent consumer, projections, ledger, gate, fencing | Restart-safe command and projection recovery |
 | 5. Arrow sandbox | Real request/status/update/fill/reconciliation behavior | Arrow protocol evidence complete |
 | 6. Shadow mode | Read-only broker reports and Nautilus state comparison | Broker and Nautilus positions converge |
-| 7. Controlled enablement | Two-person approval, rollback, audit, operational runbook | Live-money approval package complete |
+| 7. Controlled enablement | Single-operator (Saurabh, DEC-044) approval, rollback, audit, operational runbook | Live-money approval package complete |
 
 ## Explicit non-goals
 
@@ -323,9 +323,9 @@ under the approved retention policy.
 | Nautilus event store | Append-only audit of commands/events/reports/correlations; snapshot + tail-replay recovery; incident replay | Nautilus (`event_store`) |
 | Nautilus adapter | Thin `ExecutionClient`: bridge HTTP ↔ submit/modify/cancel/reports; bridge WS events ↔ `ExecutionReport`s; symbol/status mapping | **Custom glue** (thin) |
 | go-arrow bridge | Auth (TOTP/appID-token), `PlaceOrder`/modify/cancel, order-updates WS re-publish, orders/trades/positions/margin reads | **Custom glue** (wraps pinned go-arrow SDK) |
-| Two-person gate + fencing | `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED`, epochs, two distinct approvals, per-partition fencing token | **Custom glue** |
+| Single-operator (Saurabh, DEC-044) gate + fencing | `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED`, epochs, single-operator approval (a second approval is optional, not required), per-partition fencing token | **Custom glue** |
 | Projection sinks | Nautilus event store → Fluss `Fills`, `Order_Lifecycle`, `Positions`, `Execution_Gate/Attempts/Correlation/Audit`, ledger; quarantine path | **Custom glue** |
-| Control API | Authenticated halt / reconcile / approval commands (two-person) | **Custom glue** |
+| Control API | Authenticated halt / reconcile / approval commands (single-operator (Saurabh, DEC-044)) | **Custom glue** |
 | Telemetry | OTLP metrics/logs → OpenObserve; bridge + engine readiness | Custom + Nautilus-native |
 
 ## Capability mapping
@@ -335,7 +335,7 @@ under the approved retention policy.
 | AC — postback intake, correlation, quarantine, ledger | Decode Arrow order-updates WS; adopt orders the platform did not create here; immutable audit; quarantine unknowns; crash recovery | go-arrow bridge (`OrderStream`) + Nautilus external-order adoption + event store; **correlation mapping + quarantine path custom** |
 | AC — lifecycle + position projection | Per-order state transitions, no regression on stale evidence; fill-derived positions with weighted values | Nautilus OMS + position engine; **UNKNOWN/regression policy custom** |
 | BB — position observation | Consume `Positions` state; observe freshness; **MVP emits zero actions**; fail closed on `POSITION_ACTIONS_ENABLED=true` | Nautilus position events + a no-op observer strategy; **fail-closed guard custom** (Flink scaffold already implements it) |
-| EXE — gate/attempts/audit | Durable gate, two-person resume, attempt phases, no blind retry on UNKNOWN, immutable audit, policy-controlled reconstruction for at least one year | **Gate + fencing + attempt/correlation glue custom** on Nautilus; audit via Nautilus event store + approved encrypted retention storage |
+| EXE — gate/attempts/audit | Durable gate, single-operator (Saurabh, DEC-044) resume, attempt phases, no blind retry on UNKNOWN, immutable audit, policy-controlled reconstruction for at least one year | **Gate + fencing + attempt/correlation glue custom** on Nautilus; audit via Nautilus event store + approved encrypted retention storage |
 | EXE — broker side effects | Sole path to Arrow; verified acceptance/rejection only; timeout/disconnect → halt + reconcile | go-arrow bridge (single writer) + Nautilus reconciliation |
 
 ## State machines
@@ -347,8 +347,8 @@ HALTED → RECONCILING → APPROVAL_PENDING → ENABLED → HALTED
 ```
 
 - Initial state is always `HALTED`, epoch 0; every accepted transition increments the epoch by 1.
-- Two distinct authorized operators approve the same gate epoch + evidence hash before `ENABLED`;
-  automatic resume is prohibited (DEC-019).
+- Single authorized operator `saurabh` (DEC-044) approves the same gate epoch + evidence hash before `ENABLED`;
+  automatic resume is prohibited (DEC-044).
 - Any uncertainty (unknown outcome, fencing loss, storage uncertainty, changelog gap) moves the
   gate to `HALTED`; a safe halt received while already `HALTED` is recorded idempotently.
 - Every broker-facing command re-verifies gate state + epoch + fencing token immediately before
@@ -359,8 +359,8 @@ verify schema versions and audit append capability → verify changelog continui
 position → acquire/fence the `execution_partition_id` lease → start or restore `HALTED` if any
 state is uncertain → validate bridge/Arrow REST contract and reachability **without placing a live
 order** → reconcile unknown attempts, broker orders, fills, and positions → enter
-`APPROVAL_PENDING` only after reconciliation passes → require two distinct authenticated approvals
-of the same epoch/evidence hash. Process health never implies trading readiness.
+`APPROVAL_PENDING` only after reconciliation passes → require the single-operator (Saurabh,
+DEC-044) approval of the same epoch/evidence hash. Process health never implies trading readiness.
 
 Safety-halt rules: `halt_request_id` is a deterministic canonical hash of the request tuple
 (account/partition scope, source component/instance, reason, detection time, source epoch,
@@ -551,7 +551,7 @@ Canonical IDs from `11-testing-and-release.md` (test design sections below):
 
 Mapping note: behaviors native to Nautilus (order state machine, position projection, fill dedup,
 reconciliation, event-store audit) are proven by Nautilus's own test suites plus adapter-level
-integration tests; behaviors that remain custom (gate, fencing, two-person resume, correlation to
+integration tests; behaviors that remain custom (gate, fencing, single-operator (Saurabh, DEC-044) resume, correlation to
 `Execution_Attempts`/`Order_Correlation`, quarantine, projection sinks, bridge endpoints) require
 dedicated tests under the canonical IDs above. The order REST path in the go-arrow SDK is
 currently **untested** — the bridge `PlaceOrder` endpoint requires Arrow-sandbox smoke tests
@@ -563,7 +563,7 @@ The execution core is complete when: the go-arrow bridge is the only component t
 Arrow (proven by test); every trade row is either executed with a verified outcome or halted as
 `UNKNOWN`; every postback is either correlated or quarantined; partial writes recover after
 restart (event-store replay); stale evidence cannot regress state; positions and orders remain
-separate aggregates; `UNKNOWN` never releases capacity and never auto-retries; the two-person gate
+separate aggregates; `UNKNOWN` never releases capacity and never auto-retries; the single-operator (Saurabh, DEC-044) gate
 and fencing are enforced; no crash-window test duplicates an order; the policy-controlled audit
 reconstruction (`EXE-AUDIT-001`) covers at least one year or the approved longer period; the
 Babysitter emits zero actions and fails closed; and

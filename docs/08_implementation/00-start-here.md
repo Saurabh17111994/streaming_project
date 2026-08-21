@@ -200,7 +200,7 @@ Read these **in order** before writing any code:
 1. go-arrow bridge (localhost) — the ONLY component that talks to Arrow: auth, order REST, order-updates WS, positions
 2. Nautilus execution/position core — OMS, position engine, risk, reconciliation, event-store audit, with a thin `ExecutionClient` adapter to the bridge
 3. Fluss trade-row reader + projection sinks (Fills, Order_Lifecycle, Positions, Execution_* tables, quarantine, ledger)
-4. Custom safety glue — two-person gate (`HALTED → ENABLED`), fencing, attempt/correlation mapping, unknown-outcome halt
+4. Custom safety glue — single-operator (Saurabh, DEC-044) gate (`HALTED → ENABLED`), fencing, attempt/correlation mapping, unknown-outcome halt
 5. Babysitter — MVP no-op observer on position events; `POSITION_ACTIONS_ENABLED` stays `false` and fails closed
 
 **Starts `HALTED`.** Money calls disabled until all gate checks + acceptance tests pass; live money stays BLOCKED.
@@ -216,7 +216,7 @@ Read these **in order** before writing any code:
 | **Contract** | [`../04_contracts/openobserve.md`](../04_contracts/openobserve.md) | OpenObserve OTLP metrics/logs/traces, alert thresholds |
 | **Contract** | [`../04_contracts/09-platform-runtime.md`](../04_contracts/09-platform-runtime.md) | Compose/Swarm topology, health checks |
 | **Dossier** | [`08-local-compose.md`](./08-local-compose.md) | Local Docker Compose integration |
-| **Dossier** | [`09-production-swarm.md`](./09-production-swarm.md) | Production Swarm deployment |
+| **Dossier** | [`09-production-swarm.md`](./09-production-swarm.md) | Production Swarm: v1 4 VMs (M1-3 Manager+Worker) → v2 7 VMs (M1-3 Manager ONLY + W1-3) |
 | **Dossier** | [`10-observability.md`](./10-observability.md) | Dashboards, alerts, runbooks |
 | **Dossier** | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, release evidence |
 

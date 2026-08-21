@@ -160,6 +160,19 @@ class ReadinessGatingMatrixTest {
         assertFalse(probe.isReady(), "clock out of policy must not be READY");
     }
 
+    @Test
+    @DisplayName("sustained heap-high block (memoryBlocked) refuses READY")
+    void memoryBlockedBlocksReadiness() {
+        HealthProbe probe = fullyReady();
+        assertTrue(probe.isReady(), "baseline must be READY");
+        assertTrue(probe.isMemoryReady(), "memory gate open by default");
+        probe.setMemoryBlocked(true);
+        assertFalse(probe.isMemoryReady(), "memory gate must close when blocked");
+        assertFalse(probe.isReady(), "sustained heap-high must refuse READY");
+        assertFalse((Boolean) probe.diagnostics().get("memory_ready"),
+                "diagnostics must surface the closed memory gate");
+    }
+
     /** A probe with every readiness dimension true (clock = no checker → OK). */
     private static HealthProbe fullyReady() {
         AppendTracker tracker = new AppendTracker(MAX_RECORDS, MAX_BYTES, WARNING_PERCENT);

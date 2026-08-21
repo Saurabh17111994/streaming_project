@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -156,6 +157,17 @@ public final class InMemoryGateStateStore implements GateStateStore {
 
     /** Test/migration helper: directly install a gate row (e.g. an already-ENABLED fenced gate). */
     public synchronized void install(GateRow row) {
+        rows.put(row.partitionId(), row);
+    }
+
+    /**
+     * Restart-refresh: install a durable gate row recovered from Fluss and advance the local
+     * fence sequence to at least its token, so a subsequent {@link #acquire} in this process is
+     * still strictly greater than any token already issued durably (monotonic across a restart).
+     */
+    public synchronized void hydrate(GateRow row) {
+        Objects.requireNonNull(row, "row");
+        fenceSequence.accumulateAndGet(row.fenceToken(), Math::max);
         rows.put(row.partitionId(), row);
     }
 }

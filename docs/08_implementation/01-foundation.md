@@ -1,6 +1,6 @@
 # Foundation
 
-> **2026-08-19 current test truth:** unit suites green 341/236/319 (common/ingestion/compute).
+> **2026-08-21 current test truth:** unit suites green 436/246/336 (common/ingestion/compute).
 > The longer historical status line below remains a dated implementation record; the current
 > C6 machine gate reads this line.
 
@@ -376,7 +376,7 @@ Live-money placement remains disabled if any of these is true:
 - Executor state is missing, corrupt, unfenced, or not auditable.
 - An attempt has an unresolved outcome.
 - Changelog continuity or checkpoint health is unknown.
-- Safe-halt or two-person resume is unproven.
+- Safe-halt or single-operator (Saurabh, DEC-044) resume is unproven.
 - Required observability is unavailable.
 - EOD data or audit retention is unverified.
 
@@ -818,7 +818,7 @@ Short operational Fluss TTL and policy-controlled audit retention are separate c
 - Encryption and key-management evidence — not yet; R2 storage is at-rest encrypted, key-rotation evidence pending
 - S3 versioning/lifecycle policy — lifecycle preserved/applied by `audit_r2.py provision` (existing rules never clobbered). **R2 does NOT implement the S3 Object Lock or S3 versioning APIs (live-verified 2026-08-14: `PutBucketVersioning` and `ListObjectVersions` → NotImplemented); R2's WORM-equivalent is 'bucket locks' — prefix retention rules (duration / until-date / indefinite) via the Cloudflare dashboard/Wrangler/API.** An indefinite bucket-lock rule on the audit prefix satisfies the NFR 3.4.1 WORM control on R2 (provisioning needs a Cloudflare API token, not the S3-compat keys); `audit_r2.py validate` proves bucket existence, lifecycle, and object I/O via the S3 API and reads bucket-lock state via the Cloudflare API when a token is configured (evidence `logs/audit-r2/20260814T182520Z-audit-r2-evidence.json`, PASS 2026-08-14)
 - Access audit — not yet
-- Approved deletion/legal-hold behavior — `AuditDeletionControl` implemented 2026-08-14 (approved retention-policy change + legal-hold release + two distinct authorized operators; every attempt emits an immutable deletion-evidence event)
+- Approved deletion/legal-hold behavior — `AuditDeletionControl` implemented 2026-08-14 (approved retention-policy change + legal-hold release + single authorized operator `saurabh` (DEC-044); every attempt emits an immutable deletion-evidence event)
 - Periodic reconstruction test — removed from scope by user decision 2026-08-14; hash-chain verification is covered by `AuditHashChainTest`
 
 ### Test requirements

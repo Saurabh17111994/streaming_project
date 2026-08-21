@@ -51,6 +51,12 @@ func RunPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 // keeps the conservative one-second-to-thirty-second backoff; tests can use a
 // millisecond backoff without sleeping through a real recovery interval.
 func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, error), publish func(ReportEnvelope) error, onError func(error), initialBackoff, maxBackoff time.Duration) {
+	if initialBackoff <= 0 {
+		initialBackoff = time.Nanosecond
+	}
+	if maxBackoff < initialBackoff {
+		maxBackoff = initialBackoff
+	}
 	backoff := initialBackoff
 	for ctx.Err() == nil {
 		source, err := connect()
@@ -61,43 +67,90 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 			if !sleepContext(ctx, backoff) {
 				return
 			}
-			if backoff < maxBackoff {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
+			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
-		backoff = time.Second
+		// Reset after a healthy connect. Reset to the caller-supplied initial
+		// backoff (production passes time.Second; deterministic tests pass a
+		// millisecond) rather than a hard-coded one second, so the reconnect
+		// interval honours the configured value instead of racing callers that
+		// intentionally shrink it for reproducible lifecycle tests.
+		backoff = initialBackoff
 		updates := make(chan map[string]any, 16)
 		errors := make(chan error, 1)
+		readDone := make(chan struct{})
 		readCtx, cancel := context.WithCancel(ctx)
-		go source.Read(readCtx, func(update map[string]any) {
-			select {
-			case updates <- update:
-			case <-readCtx.Done():
-			}
-		}, func(readErr error) {
-			select {
-			case errors <- readErr:
-			default:
-			}
-		})
+		go func() {
+			defer close(readDone)
+			source.Read(readCtx, func(update map[string]any) {
+				select {
+				case updates <- update:
+				case <-readCtx.Done():
+				}
+			}, func(readErr error) {
+				select {
+				case errors <- readErr:
+				default:
+				}
+			})
+		}()
 
 		closed := false
 		for !closed && ctx.Err() == nil {
 			select {
-			case update := <-updates:
+			case update, ok := <-updates:
+				if !ok {
+					closed = true
+					continue
+				}
 				report := NormalizeOrderUpdate(update)
 				if err := publish(report); err != nil && onError != nil {
 					onError(err)
 				}
-			case err := <-errors:
+			case err, ok := <-errors:
+				if !ok {
+					closed = true
+					continue
+				}
 				if err != nil && onError != nil {
 					onError(err)
 				}
 				closed = true
+				// A broker can deliver a burst of reports and then disconnect
+				// (e.g. fills followed by an immediate socket drop). The reader
+				// sequenced those reports into `updates` before it signalled the
+				// termination, so drain them here rather than drop a valid
+				// postback merely because the close arrived in the same select.
+				for ctx.Err() == nil {
+					select {
+					case drained := <-updates:
+						dreport := NormalizeOrderUpdate(drained)
+						if err := publish(dreport); err != nil && onError != nil {
+							onError(err)
+						}
+					default:
+						closed = true
+					}
+					if closed {
+						break
+					}
+				}
+			case <-readDone:
+				closed = true
+				for {
+					select {
+					case drained := <-updates:
+						dreport := NormalizeOrderUpdate(drained)
+						if err := publish(dreport); err != nil && onError != nil {
+							onError(err)
+						}
+					default:
+						break
+					}
+					if len(updates) == 0 {
+						break
+					}
+				}
 			case <-ctx.Done():
 				closed = true
 			}
@@ -108,14 +161,22 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 			if !sleepContext(ctx, backoff) {
 				return
 			}
-			if backoff < maxBackoff {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
+			backoff = nextBackoff(backoff, maxBackoff)
 		}
 	}
+}
+
+func nextBackoff(current, maximum time.Duration) time.Duration {
+	if current <= 0 {
+		current = time.Nanosecond
+	}
+	if maximum < current {
+		return current
+	}
+	if current >= maximum || current > maximum/2 {
+		return maximum
+	}
+	return current * 2
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {

@@ -54,6 +54,21 @@ func (s *scriptedOrderSource) Close() error {
 	return nil
 }
 
+type returningOrderSource struct {
+	updates []map[string]any
+	closed  bool
+}
+
+func (s *returningOrderSource) Read(_ context.Context, onUpdate func(map[string]any), _ func(error)) {
+	for _, update := range s.updates {
+		onUpdate(update)
+	}
+}
+func (s *returningOrderSource) Close() error {
+	s.closed = true
+	return nil
+}
+
 func TestRunPostbackLoopPublishesAndClosesOnCancellation(t *testing.T) {
 	source := &scriptedOrderSource{updates: []map[string]any{{"id": "BRK-1", "orderStatus": "OPEN"}}, err: errors.New("disconnect")}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -83,5 +98,55 @@ func TestRunPostbackLoopPublishesAndClosesOnCancellation(t *testing.T) {
 	}
 	if !source.closed {
 		t.Fatal("postback source must close on cancellation")
+	}
+}
+func TestRunPostbackLoopReconnectsAfterReaderReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var connects int
+	reports := make(chan ReportEnvelope, 1)
+	source := &returningOrderSource{updates: []map[string]any{{"id": "BRK-1", "orderStatus": "OPEN"}}}
+	done := make(chan struct{})
+	go func() {
+		runPostbackLoop(ctx, func() (OrderUpdateSource, error) {
+			connects++
+			if connects == 1 {
+				return source, nil
+			}
+			cancel()
+			return nil, errors.New("stop")
+		}, func(report ReportEnvelope) error {
+			reports <- report
+			return nil
+		}, nil, time.Nanosecond, time.Nanosecond)
+		close(done)
+	}()
+	select {
+	case report := <-reports:
+		if report.BrokerOrderID != "BRK-1" {
+			t.Fatalf("report=%+v", report)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reader completion did not publish its final update")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("postback loop did not reconnect after reader completion")
+	}
+	if connects != 2 {
+		t.Fatalf("connect attempts=%d, want 2", connects)
+	}
+}
+
+func TestNextBackoffClampsInvalidAndOverflowingValues(t *testing.T) {
+	if got := nextBackoff(0, time.Second); got != 2*time.Nanosecond {
+		t.Fatalf("nextBackoff(0, 1s)=%v, want 2ns", got)
+	}
+	if got := nextBackoff(700*time.Millisecond, time.Second); got != time.Second {
+		t.Fatalf("nextBackoff(700ms, 1s)=%v, want 1s", got)
+	}
+	if got := nextBackoff(time.Second, time.Second); got != time.Second {
+		t.Fatalf("nextBackoff(1s, 1s)=%v, want 1s", got)
 	}
 }

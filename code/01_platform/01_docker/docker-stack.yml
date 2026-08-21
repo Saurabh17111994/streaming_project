@@ -1,0 +1,615 @@
+# =============================================================================
+# Docker Stack — Trading_project platform runtime, PRODUCTION (Option B)
+#
+# Authoritative deployment for docs/08_implementation/09-production-swarm.md
+# DECISION 2026-08-20 v1 → v2 (single branch, single stack, role labels only).
+#
+#   v1 baseline (4 VMs): M1, M2, M3 = Swarm Manager + Worker (role=worker AND
+#     role=manager); O1 = observability (outside Swarm). Workload constraint is
+#     `node.labels.role == worker`, which M1-3 satisfy in v1; observability
+#     services pin to the separate boolean `node.labels.observability == true`.
+#   v2 evolution (7 VMs): `docker node update --availability drain M1 M2 M3`,
+#     then label W1-3 (+ W4...) `role=worker` and deploy the SAME stack —
+#     workloads migrate to workers, managers become Manager-ONLY. No stack
+#     rewrite; 3-manager Raft quorum (2/3) is unchanged when workers are added.
+#
+# Swarm Raft = built-in manager consensus. No external Raft.
+# ZK quorum != Swarm Raft quorum (tested via `docker node ls`, not ZooKeeper).
+#
+# This file is a Swarm STACK (docker stack deploy -c ...). Swarm ignores
+# `build`, `depends_on`, and Compose `restart:`; use `deploy.*` for replicas,
+# placement, resources, restart/update/rollback. Every image below MUST be a
+# pinned immutable digest in production (see .env / runtime.lock) — no :latest.
+# =============================================================================
+
+version: "3.8"
+
+# ---- Secrets: production uses Docker Swarm secrets (never committed) ------
+# Declared `external: true`: create them out-of-band, e.g.
+#   printf 'secret' | docker secret create aws_secret_access_key -
+# Apps read at /run/secrets/<name>. This is the production secret model;
+# development uses docker-compose.yml + .env (Option B separation).
+secrets:
+  aws_access_key_id:
+    external: true
+  aws_secret_access_key:
+    external: true
+  o2_password:
+    external: true
+  # base64("user:password") for the collector's O2 Basic header — the sh-less
+  # collector reads it via the config's file: provider (see config variant).
+  o2_auth_basic:
+    external: true
+  arrow_app_secret:
+    external: true
+  arrow_password:
+    external: true
+  arrow_totp_key:
+    external: true
+  arrow_token:
+    external: true
+  execution_bridge_auth_token:
+    external: true
+  gateway_shared_secret:
+    external: true
+
+# ---- Shared service fragments (YAML anchors) --------------------------------
+x-common-workload: &common_workload
+  # Workload services run on role=worker nodes. v1: M1-3 carry role=worker
+  # (they are Manager+Worker). v2: only W1-3 (+W4...) carry role=worker, so
+  # workloads automatically leave the (drained) managers.
+  deploy:
+    placement:
+      constraints: [node.labels.role == worker]
+    restart_policy:
+      condition: any
+      delay: 5s
+      max_attempts: 4
+      window: 120s
+    update_config:
+      order: start-first
+      parallelism: 1
+      delay: 10s
+      failure_action: rollback
+      monitor: 30s
+      max_failure_ratio: 0.2
+    rollback_config:
+      order: stop-first
+      parallelism: 1
+      delay: 10s
+    resources:
+      # Explicit reservations/limits — protects manager headroom in v1 (the
+      # 2 CPU / 2 GB per-VM manager reservation is enforced by node sizing +
+      # these per-container limits, never exceeded past the 85% capacity alert).
+      reservations:
+        cpus: "0.25"
+        memory: 512M
+      limits:
+        cpus: "4"
+        memory: 8G
+
+# ---- Networks: encrypted overlay, internal control plane -------------------
+# 09 § Security: `trading-net` and `execution-net` SHALL be encrypted overlays.
+# `arrow-egress` carries only the broker order-path and is restricted to the
+# execution bridge. No host ports on gateway/nautilus/bridge (T8 gate 3).
+networks:
+  trading-net:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+  execution-net:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+    internal: true
+  arrow-egress:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+
+# ---- Volumes: per-node durable, backed by named volume driver --------------
+volumes:
+  zk-data-1:
+  zk-data-2:
+  zk-data-3:
+  fluss-data:
+  fluss-remote-data:
+  fluss-tablet-data:
+  flink-checkpoints:
+  flink-logs:
+  fluss-logs:
+  openobserve-data:
+  ingestion-logs:
+
+# ---- Configs: files mounted into service containers ------------------------
+# docker-stack.yml ships the collector config as a Swarm config (the collector
+# image is distroless; config must come from an overlay-mounted file, not a
+# host bind). The .swarm variant reads O2 creds via ${file:} instead of env.
+configs:
+  otel-collector-config:
+    file: ./otel-collector-config.swarm.yaml
+
+services:
+  # ---- ZooKeeper: 3-member ensemble (quorum 2-of-3), one member per VM ------
+  # Production HA target (09 § Storage): three named members, each pinned to a
+  # distinct worker via `max_replicas_per_node: 1` + spread. Exactly one member
+  # per workload VM — they must never co-locate (anti-co-location). A single
+  # member is NOT HA evidence; quorum is only tested on a 3-node rig (M3).
+  zookeeper-1:
+    image: ${ZOOKEEPER_IMAGE:-zookeeper@sha256:43d39109cbd4de394742efbfc162a8a0a93731e806374b71f3865f4ef4460a56}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","zkServer.sh status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    environment:
+      ZOO_MY_ID: "1"
+      ZOO_SERVERS: "server.1=zookeeper-1:2888:3888;server.2=zookeeper-2:2888:3888;server.3=zookeeper-3:2888:3888"
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        preferences: [{spread: node.labels.role}]
+      restart_policy: {condition: any}
+      update_config: {order: start-first, failure_action: rollback}
+      resources:
+        limits: {cpus: "1", memory: 2G}
+    volumes:
+      - zk-data-1:/data
+
+  zookeeper-2:
+    image: ${ZOOKEEPER_IMAGE:-zookeeper@sha256:43d39109cbd4de394742efbfc162a8a0a93731e806374b71f3865f4ef4460a56}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","zkServer.sh status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    environment:
+      ZOO_MY_ID: "2"
+      ZOO_SERVERS: "server.1=zookeeper-1:2888:3888;server.2=zookeeper-2:2888:3888;server.3=zookeeper-3:2888:3888"
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        preferences: [{spread: node.labels.role}]
+      restart_policy: {condition: any}
+      update_config: {order: start-first, failure_action: rollback}
+      resources:
+        limits: {cpus: "1", memory: 2G}
+    volumes:
+      - zk-data-2:/data
+
+  zookeeper-3:
+    image: ${ZOOKEEPER_IMAGE:-zookeeper@sha256:43d39109cbd4de394742efbfc162a8a0a93731e806374b71f3865f4ef4460a56}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","zkServer.sh status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    environment:
+      ZOO_MY_ID: "3"
+      ZOO_SERVERS: "server.1=zookeeper-1:2888:3888;server.2=zookeeper-2:2888:3888;server.3=zookeeper-3:2888:3888"
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        preferences: [{spread: node.labels.role}]
+      restart_policy: {condition: any}
+      update_config: {order: start-first, failure_action: rollback}
+      resources:
+        limits: {cpus: "1", memory: 2G}
+    volumes:
+      - zk-data-3:/data
+
+  # ---- Fluss: streaming bus + storage + lake tier --------------------------
+  fluss-coordinator:
+    <<: *common_workload
+    image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","(echo > /dev/tcp/127.0.0.1/9123) >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 4
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        reservations:
+          cpus: "1"
+          memory: 2G
+        limits:
+          cpus: "4"
+          memory: 6G
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      FLUSS_COORDINATOR_HOST: fluss-coordinator
+      FLUSS_TABLET_HOST: fluss-tablet
+      # Credentials arrive via Swarm secrets (read by app from /run/secrets).
+      # See app config for the secret-file env wiring.
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper-1:2181,zookeeper-2:2181,zookeeper-3:2181
+        bind.listeners: INTERNAL://fluss-coordinator:0,CLIENT://fluss-coordinator:9123
+        advertised.listeners: CLIENT://fluss-coordinator:9123
+        internal.listener.name: INTERNAL
+        remote.data.dir: /tmp/fluss/remote-data
+        datalake.format: ${DATALAKE_FORMAT:-iceberg}
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.warehouse: ${S3_WAREHOUSE_PATH:?set S3_WAREHOUSE_PATH for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: ${R2_ENDPOINT:?set R2_ENDPOINT for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint.region: ${AWS_REGION:-auto}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: "true"
+        datalake.iceberg.iceberg.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: 30000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout: 30000
+    volumes:
+      - fluss-data:/data
+      - fluss-remote-data:/tmp/fluss/remote-data
+      - fluss-logs:/opt/fluss/log
+
+  fluss-tablet:
+    <<: *common_workload
+    image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","(echo > /dev/tcp/127.0.0.1/9124) >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      replicas: 3                      # Fluss LOG replication >= 2 across VMs
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        # anti-co-location: spread replicas across distinct workers
+        preferences:
+          - spread: node.labels.role
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        reservations: {cpus: "1", memory: 2G}
+        limits: {cpus: "4", memory: 6G}
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      FLUSS_COORDINATOR_HOST: fluss-coordinator
+      FLUSS_TABLET_HOST: fluss-tablet
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper-1:2181,zookeeper-2:2181,zookeeper-3:2181
+        bind.listeners: INTERNAL://fluss-tablet:0, CLIENT://fluss-tablet:9124
+        advertised.listeners: CLIENT://fluss-tablet:9124
+        internal.listener.name: INTERNAL
+        tablet-server.id: 0
+        kv.snapshot.interval: 0s
+        data.dir: /tmp/fluss/data
+        remote.data.dir: /tmp/fluss/remote-data
+        datalake.format: ${DATALAKE_FORMAT:-iceberg}
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.warehouse: ${S3_WAREHOUSE_PATH:?set S3_WAREHOUSE_PATH for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: ${R2_ENDPOINT:?set R2_ENDPOINT for lake tiering}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint.region: ${AWS_REGION:-auto}
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: "true"
+        datalake.iceberg.iceberg.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.timeout: 30000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.connection.establish.timeout: 30000
+    volumes:
+      - fluss-data:/data
+      - fluss-remote-data:/tmp/fluss/remote-data
+      - fluss-tablet-data:/tmp/fluss/data
+      - fluss-logs:/opt/fluss/log
+
+  # ---- Flink: compute (signal + babysitter jobs) ----------------------------
+  # Production HA: Flink JobManager HA via ZooKeeper (`high-availability.type:
+  # zookeeper`), checkpoints in encrypted S3, standby JMs. This is Flink-level
+  # HA — separate from Swarm Raft (09 § Storage and recovery). Placement allows
+  # future workers; Flink TaskManager slots are Flink's own parallelism, not
+  # Swarm replicas.
+  flink-jobmanager:
+    <<: *common_workload
+    image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","(echo > /dev/tcp/127.0.0.1/8081) >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      replicas: 2                      # standby JM; one promoted on failure
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        preferences:
+          - spread: node.labels.role
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        reservations: {cpus: "1", memory: 2G}
+        limits: {cpus: "4", memory: 4G}
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        rest.bind-address: 0.0.0.0
+        high-availability.type: zookeeper
+        high-availability.zookeeper.quorum: zookeeper-1:2181,zookeeper-2:2181,zookeeper-3:2181
+        high-availability.storageDir: ${S3_WAREHOUSE_PATH:?set S3_WAREHOUSE_PATH}
+        high-availability.zookeeper.path.root: /flink
+        high-availability.cluster-id: ${FLINK_CLUSTER_ID:-prod}
+        # REQ-FC-008: max 3 restart attempts at 30s pause, reject unbounded retry.
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 3
+        restart-strategy.fixed-delay.delay: 30 s
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+        metrics.reporter.prom.interval: 15 SECONDS
+        metrics.latency.interval: 5000
+        taskmanager.numberOfTaskSlots: 8
+        jobmanager.memory.process.size: 1600m
+        taskmanager.memory.process.size: 3g
+        taskmanager.memory.task.off-heap.size: 512m
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - flink-logs:/opt/flink/log
+
+  flink-taskmanager:
+    # x-healthcheck: none (no fixed external listener; worker liveness/slot health is
+    # inferred from the JobManager REST 8081 probe + app-level slot allocation).
+    <<: *common_workload
+    image: ${FLINK_IMAGE:?set FLINK_IMAGE to an immutable digest}
+    networks: [trading-net]
+    deploy:
+      replicas: 3                      # one TM per worker in v2; scales with W4+
+      placement:
+        constraints: [node.labels.role == worker]
+        max_replicas_per_node: 1
+        preferences:
+          - spread: node.labels.role
+      # Future workers: add W4+ labels, increase replicas — no stack rewrite.
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        reservations: {cpus: "1", memory: 3G}
+        limits: {cpus: "6", memory: 12G}
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 8
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+        metrics.reporter.prom.interval: 15 SECONDS
+        taskmanager.memory.process.size: 3g
+        taskmanager.memory.task.off-heap.size: 512m
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - flink-logs:/opt/flink/log
+
+  # ---- Ingestion ------------------------------------------------------------
+  ingestion:
+    <<: *common_workload
+    image: ${INGESTION_IMAGE:?set INGESTION_IMAGE to an immutable digest}
+    networks: [trading-net]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits: {cpus: "4", memory: 4G}
+    secrets:
+      - arrow_app_secret
+      - arrow_password
+      - arrow_totp_key
+      - arrow_token
+    environment:
+      ARROW_APP_ID: ${ARROW_APP_ID:?set ARROW_APP_ID}
+      ARROW_USER_ID: ${ARROW_USER_ID:?set ARROW_USER_ID}
+      ARROW_INSTRUMENT_TOKENS: ${ARROW_INSTRUMENT_TOKENS:-}
+      ARROW_DEBUG_WS: ${ARROW_DEBUG_WS:-}
+      ARROW_TICK_COUNTS: ${ARROW_TICK_COUNTS:-}
+      ARROW_TICK_COUNTS_FILE: ${ARROW_TICK_COUNTS_FILE:-/tmp/arrow-tick-counts.txt}
+      ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
+      ARROW_INSTRUMENT_MANIFEST: /instruments/NSE_CM_EQUITY.csv
+      RAW_TABLE_NAME: ${RAW_TABLE_NAME:-raw_table_1}
+      ARROW_MAX_EVENT_AGE_MS: ${ARROW_MAX_EVENT_AGE_MS:-5000}
+      ARROW_MAX_FUTURE_EVENT_SKEW_MS: ${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}
+      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-200}
+      READINESS_FILE_PATH: /tmp/ingestion.ready
+      LOG_DIR: /data/ingestion/logs
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ingestion.ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - ingestion-logs:/data/ingestion/logs
+
+  # ---- T3 execution bridge (fake/disabled locally; never live Arrow) --------
+  execution-bridge:
+    <<: *common_workload
+    image: ${EXECUTION_BRIDGE_IMAGE:?set EXECUTION_BRIDGE_IMAGE to an immutable digest}
+    networks: [execution-net, arrow-egress]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+      restart_policy: {condition: any}
+      resources:
+        limits: {cpus: "1", memory: 1G}
+    secrets:
+      - execution_bridge_auth_token
+    environment:
+      EXECUTION_BRIDGE_MODE: ${EXECUTION_BRIDGE_MODE:-disabled}
+      EXECUTION_BRIDGE_LISTEN_ADDR: 0.0.0.0:8787
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ---- T8 execution topology (private, zero host ports) ---------------------
+  execution-gateway:
+    # x-healthcheck: none (GATEWAY_BIND_PORT env-driven, no fixed port) — readiness is the
+    # app-level GatewayReadiness gate (gateway must be ready before nautilus trades).
+    image: ${EXECUTION_GATEWAY_IMAGE:?set EXECUTION_GATEWAY_IMAGE to an immutable digest}
+    networks: [trading-net, execution-net]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.role == worker]
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits: {cpus: "2", memory: 2G}
+    secrets:
+      - gateway_shared_secret
+    environment:
+      FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      GATEWAY_BIND_HOST: 0.0.0.0
+      GATEWAY_BIND_PORT: "9180"
+      NAUTILUS_PRIVATE_ENDPOINT: http://nautilus:9190/v1/intents
+      GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
+      ACCOUNT_SCOPE_ID: ${ACCOUNT_SCOPE_ID:-prod-scope}
+      EXECUTION_PARTITION_ID: ${EXECUTION_PARTITION_ID:-prod-partition}
+      GATEWAY_REQUEST_TIMEOUT_MS: "2000"
+      GATEWAY_POLL_TIMEOUT_MS: "250"
+
+  nautilus:
+    # x-healthcheck: none (EXECUTOR_LISTEN_ADDR is env-driven, no fixed port) — executor
+    # liveness/ownership is app-level fencing (one active owner per execution_partition_id).
+    image: ${NAUTILUS_IMAGE:?set NAUTILUS_IMAGE to an immutable digest}
+    networks: [execution-net]
+    deploy:
+      replicas: 1
+      update_config:
+        order: start-first
+        failure_action: rollback
+      placement:
+        constraints: [node.labels.role == worker]
+        # Executor fencing: exactly one active owner per execution_partition_id
+      restart_policy: {condition: any}
+      resources:
+        limits: {cpus: "2", memory: 2G}
+    secrets:
+      - gateway_shared_secret
+    environment:
+      EXECUTION_ENABLED: "false"         # live-money disabled until all gates pass
+      EXECUTOR_LISTEN_ADDR: 0.0.0.0:9190
+      BRIDGE_ENDPOINT: http://execution-bridge:8787
+      GATEWAY_ENDPOINT: http://execution-gateway:9180
+      GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
+
+  # ---- Observability (VM4 / O1: outside Swarm, not a scheduling dependency) -
+  # In production O1 is a dedicated host (not part of the manager quorum). If O1
+  # joins Swarm as a Worker, these services pin to `observability == true` so they
+  # never take core workload capacity; openobserve loss must never authorize
+  # orders or erase durable audit (OPS-FAIL-001).
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2
+    networks: [trading-net]
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.observability == true]
+      restart_policy: {condition: any}
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits: {cpus: "2", memory: 2G}
+    secrets:
+      - o2_auth_basic
+    configs:
+      - source: otel-collector-config
+        target: /etc/otel-collector-config.yaml
+    volumes:
+      - ingestion-logs:/data/ingestion/logs:ro
+      - flink-logs:/data/flink/logs:ro
+      - fluss-logs:/data/fluss/logs:ro
+
+  openobserve:
+    image: ${OPENOBSERVE_IMAGE:?set OPENOBSERVE_IMAGE to an immutable digest}
+    networks: [trading-net]
+    healthcheck:
+      test: ["CMD-SHELL","(echo > /dev/tcp/127.0.0.1/5080) >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      update_config:
+        order: start-first
+        failure_action: rollback
+      replicas: 1
+      placement:
+        constraints: [node.labels.observability == true]
+      restart_policy: {condition: any}
+      resources:
+        limits: {cpus: "4", memory: 8G}
+    secrets:
+      - o2_password
+    environment:
+      ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@example.com}
+      ZO_MAX_FILE_RETENTION_TIME: ${ZO_MAX_FILE_RETENTION_TIME:-3600}
+      ZO_MAX_FILE_SIZE_ON_DISK: ${ZO_MAX_FILE_SIZE_ON_DISK:-128}
+      ZO_MAX_FILE_SIZE_IN_MEMORY: ${ZO_MAX_FILE_SIZE_IN_MEMORY:-128}
+    volumes:
+      - openobserve-data:/data
+
+  webhook-receiver:
+    # x-healthcheck: none (stateless ingress; port is set in-app, restart policy covers
+    # liveness; its correctness is tested by webhook dispatch unit tests).
+    image: python@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
+    networks: [trading-net]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.observability == true]
+      restart_policy: {condition: any}
+      resources:
+        limits: {cpus: "1", memory: 512M}
+    command: ["python3", "/app/webhook-receiver.py"]

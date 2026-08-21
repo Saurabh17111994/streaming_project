@@ -41,7 +41,7 @@ class BabysitterJobTest {
 
     private static BabysitterConfig testConfig() {
         return new BabysitterConfig("localhost:9123", "default", "Positions", null,
-                60_000L, 60_000L, false);
+                60_000L, 60_000L, false, null);
     }
 
     /** Cluster-free stand-in: the exact pipeline operators feed on a Positions stream. */

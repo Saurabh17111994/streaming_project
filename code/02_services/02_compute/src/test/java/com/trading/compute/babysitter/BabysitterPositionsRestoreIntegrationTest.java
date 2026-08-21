@@ -2,6 +2,7 @@ package com.trading.compute.babysitter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -11,8 +12,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.JobID;
@@ -84,6 +87,10 @@ class BabysitterPositionsRestoreIntegrationTest {
     private static String bootstrap;
     private static Connection connection;
     private static Admin admin;
+    /** Table set in {@code default} before this run — pre-existing action/execution
+     * tables from other live runs on the shared dev cluster must not count as
+     * evidence that the Babysitter wrote on the zero-action boundary. */
+    private static Set<String> initialTables = new HashSet<>();
 
     @BeforeAll
     static void connect() throws Exception {
@@ -93,6 +100,8 @@ class BabysitterPositionsRestoreIntegrationTest {
             conf.setString("bootstrap.servers", bootstrap);
             connection = ConnectionFactory.createConnection(conf);
             admin = connection.getAdmin();
+            initialTables = new HashSet<>(
+                    admin.listTables(DB).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
             LOG.info("bab-int-001: connected to Fluss at {}", bootstrap);
         } catch (Exception e) {
             LOG.warn("bab-int-001: cannot connect to {} — {}", bootstrap, e.getMessage());
@@ -135,10 +144,15 @@ class BabysitterPositionsRestoreIntegrationTest {
             upsert(s.table, s.pidA + "-v1", s.pidA, "ev-a1", 1L, "OPEN", 100, 0);
             upsert(s.table, s.pidB + "-v1", s.pidB, "ev-b1", 1L, "OPEN", 50, 0);
             JobClient job1 = startJob(s, cpDir.toString(), null, "bab-int-001-phase1");
-            restore = awaitCompletedCheckpoint(job1.getJobID(), cpDir, 120);
+            awaitCompletedCheckpoint(job1.getJobID(), cpDir, 120);
             assertFalse(anyActionOrExecutionTable(s), "phase 1 Job must not create an action table");
             cancelAndFinish(job1, "phase1");
-            LOG.info("bab-int-001: phase 1 checkpointed at {}", restore);
+            // RETAIN_ON_CANCELLATION keeps the newest completed checkpoint on disk;
+            // read the retained path AFTER cancel so checkpoint subsumption cannot
+            // delete it out from under the phase 2 restore.
+            restore = latestCompletedCheckpoint(job1.getJobID(), cpDir);
+            assertNotNull(restore, "phase 1 must retain a completed checkpoint after cancel");
+            LOG.info("bab-int-001: phase 1 retained observation-state checkpoint at {}", restore);
         } finally {
             clusterA.after(); // phase 2 runs on a FRESH worker
         }
@@ -195,7 +209,7 @@ class BabysitterPositionsRestoreIntegrationTest {
             String name) throws Exception {
         BabysitterConfig config = new BabysitterConfig(
                 bootstrap, DB, s.tableName(), "file://" + Path.of(checkpointDir).toAbsolutePath(),
-                2_000L, 60_000L, false);
+                2_000L, 60_000L, false, recovery);
         StreamExecutionEnvironment senv = BabysitterJob.buildTopology(config);
         JobClient client = senv.executeAsync(name);
         JobStatus status = awaitJobStatus(client, 90);
@@ -234,14 +248,14 @@ class BabysitterPositionsRestoreIntegrationTest {
     private static String awaitCompletedCheckpoint(JobID jobId, Path cpDir, long timeoutSeconds)
             throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
-        String seen = null;
         while (System.nanoTime() < deadline) {
             String latest = latestCompletedCheckpoint(jobId, cpDir);
             if (latest != null) {
-                if (latest.equals(seen)) {
-                    return latest; // present across two consecutive polls — durable
-                }
-                seen = latest;
+                // A `chk-N/_metadata` file only appears once the checkpoint has
+                // durably completed, so the first observation is authoritative. The
+                // job checkpoints every 2s, so requiring the SAME latest across two
+                // 5s polls could never be satisfied (the counter always advances).
+                return latest;
             }
             Thread.sleep(5_000L);
         }
@@ -277,6 +291,9 @@ class BabysitterPositionsRestoreIntegrationTest {
     private static boolean anyActionOrExecutionTable(ScratchSet s) throws Exception {
         List<String> tables = admin.listTables(DB).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         for (String t : tables) {
+            if (initialTables.contains(t)) {
+                continue; // existed before this run — not evidence against the Babysitter
+            }
             String lower = t.toLowerCase();
             if (lower.contains("action") || lower.contains("execution")) {
                 return true;

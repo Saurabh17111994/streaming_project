@@ -410,6 +410,65 @@ up).
 4. Validate least privilege, transport, redaction, and unauthorized-control attempts.
 5. Reconcile and require two-person resume.
 
+## Execution service runbooks (gateway / nautilus / bridge) — WP-7
+
+> **Topology:** `execution-gateway` (Java, `trading-net` + `execution-net` bridged) forwards
+> private `GatewayProtocol` envelopes to `nautilus` (Rust, `execution-net` only, `POST /v1/intents`
+> on `0.0.0.0:9190`). `execution-bridge` (Go, `execution-net` + `arrow-egress`, `0.0.0.0:8787`)
+> is the only `arrow-egress` member (T3). All three have zero host `ports:` (T8 gate) and
+> boot `HALTED`/`disabled` (`EXECUTION_ENABLED=false`). No `ARROW_*` reaches the Rust path
+> (T4 boundary, `t8_sandbox_contract_check.py` + `execution_network_check.py`).
+
+### Execution gateway (Java) — Fluss bootstrap / IntentReader halt
+
+**Signals:** container `Up` then `Exited` with `IllegalConfigurationException: No resolvable bootstrap urls`
+or `MemoryUtil` `InaccessibleObjectException` (`--add-opens` missing); later `invalid Execution_Intent at offset N: unsupported schema_version` in `execution-intent-reader` thread; `GET /healthz` 200 `{"healthy":true}` but `GET /readyz` 503 `{"flussReady":false}`.
+
+**Evidence:** `docker logs 01_docker-execution-gateway-1`, `docker inspect` networks (`trading-net` + `execution-net`), `docker ps` (no ports), `FLUSS_BOOTSTRAP` env (`fluss-coordinator:9123` via `trading-net` DNS), `versions.pin` Go/Rust pins, `t8`/`execution_network_check` output.
+
+**Gate action:** gateway never moves money while `flussReady`/`protocolReady`/`durableWriteReady` are false — `IntentReader.poll` marks `readiness.fail` and the reader thread halts; the HTTP server stays up for probe but `/v1/events` returns 503 `gateway not ready`. No execution intent is forwarded to nautilus while halted.
+
+**Mitigation:**
+1. `No resolvable bootstrap urls` → gateway is not on `trading-net` or Fluss is down. Verify `networks: [trading-net, execution-net]` in `docker-compose.yml` and that `fluss-coordinator:9123` resolves from the gateway net (`docker run --rm --network 01_docker_trading-net curlimages/curl -s http://execution-gateway:9180/healthz`). Restart Fluss first, then gateway (`restart: unless-stopped` will retry).
+2. `MemoryUtil` / `java.base/java.nio=ALL-UNNAMED` → gateway was started without `--add-opens`. The image `ENTRYPOINT` must be `java --add-opens=java.base/java.nio=ALL-UNNAMED -jar /app/execution-gateway.jar` (matches `01_ingestion/docker-entrypoint.sh`). Rebuild with the pinned `Dockerfile`.
+3. `unsupported schema_version` at offset 0 → `Execution_Intent` Fluss table contains a row with a schema version the gateway does not understand. Do not bypass the gate — reconcile the writer (common projection) and the table DDL/manifest, then re-run `ddl-apply` if the table was created with an old schema. The gateway stays halted until a valid envelope is seen.
+
+**Recovery:** after Fluss and the `Execution_Intent` table are healthy, the gateway's `readiness` flips to `flussReady true` (poll `GET /readyz` until 200). No manual fund movement.
+
+**Closure evidence:** `GET /healthz` 200, `GET /readyz` 200 `{"executionReady":true}`, `docker logs` shows no `execution intent halted`, `t8` 12/12 PASS.
+
+### Nautilus execution service (Rust) — gate HALTED / private intents
+
+**Signals:** `nautilus:9190/healthz` 200 `{"gate_state":"HALTED","trading_ready":false,"enabled":false}` (expected default); `readyz` 200 `{"ready":true,"gate_state":"HALTED"}` while running, 503 when `draining`; `POST /v1/intents` with a valid `GatewayProtocol` envelope returns 503 `{"accepted":false,"reason":"gate HALTED","gate_state":"HALTED"}` (fail-closed, correct); bad auth returns 401 `authentication failed`; `GET /v1/intents` returns 405.
+
+**Evidence:** `docker logs 01_docker-nautilus-1` (`boot: gate HALTED, health on 0.0.0.0:9190`), `docker inspect` env (`EXECUTION_ENABLED=false`, `GATEWAY_SHARED_SECRET` is set but never logged, `EXECUTOR_LISTEN_ADDR=0.0.0.0:9190`, `BRIDGE_ENDPOINT=http://execution-bridge:8787`), `cargo test --offline` 78 pass + `gateway_protocol` round-trip, `t8` 12/12, private probe via `docker run --rm --network 01_docker_execution-net curlimages/curl -s http://nautilus:9190/healthz` and the `POST /v1/intents` envelope probe (Rust `gateway_protocol::encode_envelope` helper).
+
+**Gate action:** the Rust service **always** boots `HALTED`; `/healthz` `trading_ready` is always false while halted. No broker command is emitted while halted, and a 503 on valid intents is the correct evidence that the private route is wired but not trading. Do not set `EXECUTION_ENABLED=true` — the config rejects it at boot (`must not be true at boot`).
+
+**Mitigation:** if `healthz` reports `ENABLED` without a two-person approval, treat as incident and halt/safety-halt. If `POST` returns 404, the T4 `http.rs` `POST /v1/intents` route is not deployed — rebuild `nautilus` from the pinned `rust:1.97.1` image with the `gateway_protocol` + `http` changes.
+
+**Recovery:** no recovery to `ENABLED` without the T5 `LiveNode` fence/approval path (deferred). For T8, the 503 on valid envelopes **is** the success condition.
+
+**Closure evidence:** `healthz` HALTED, `readyz` 200, `POST` valid envelope 503 HALTED + `POST` bad auth 401, `GET` 405, no `ARROW_*` in `nautilus` env (`docker inspect`), image `01_docker-nautilus` built from `rust:1.97.1` digest-pinned toolchain and `EXECUTION_BRIDGE_GO_IMAGE` digest-pinned Go builder.
+
+### Execution bridge (Go) — disabled / fake mode
+
+**Signals:** `bridge:8787/healthz` 200 `{"status":"UP","mode":"disabled","credentials_in_process":false}`; `docker ps` shows `01_docker-execution-bridge-1` `healthy` with no host port; `execution-bridge` is the only `arrow-egress` member (`docker compose --profile execution-t3 config` shows `arrow-egress: null` only for the bridge).
+
+**Evidence:** `docker logs 01_docker-execution-bridge-1` (`listening addr=0.0.0.0:8787 mode=disabled`), `docker inspect` networks (`execution-net`, `arrow-egress`), `go test -race ./...` in `06_execution_bridge/go-bridge`, `versions.pin` `EXECUTION_BRIDGE_GO_IMAGE=golang:1.24.5-alpine@sha256:daae04e…` digest.
+
+**Gate action:** bridge in `disabled`/`fake` never reaches Arrow. `EXECUTION_BRIDGE_MODE` defaults `disabled` (never `live`). No host `ports:` and no `ARROW_*` env on the bridge except the market-data `ingestion` exception (verified by `execution_network_check.py`).
+
+**Recovery:** no live order path while `mode=disabled`. For T8, the `UP disabled` health is success.
+
+### Retention and audit — policy approval (WP-7 T0)
+
+**Baseline:** audit and money-moving evidence (execution, order, fill, gate, correlation, approval, reconciliation, future position-action) is retained **at least one year** (CHG-038/DEC-043, `SAURABH-1Y-APPROVAL-2026-08-20`). Longer retention applies when the approved jurisdictional, contractual, legal-hold, or operational policy requires it. Storage is Cloudflare R2 with WORM-equivalent bucket lock (`audit_r2.py provision --set-lock`), not S3 Object Lock.
+
+**Current posture — APPROVED 2026-08-20 by Saurabh (owner, this turn):** the one-year baseline `SAURABH-1Y-APPROVAL-2026-08-20` placeholder is now **approved** by Saurabh for the current scope. Evidence bundles `t0-…`/`t4-…` `retention_policy` remains `SAURABH-1Y-APPROVAL-2026-08-20` (commits `4db6616`/`b093d97`); `two_person_review` for the T0 bundle is satisfied by this approval + the existing `saurabh_reviewer_1` review. Longer retention remains policy-driven per CHG-038/DEC-043.
+
+**Runbook now:** keep the approved baseline (≥1y), preserve all evidence bundles sanitized (no secrets) with `t*-SHA256SUMS`, and keep the R2 bucket lock provisioning validated (`audit_r2.py validate` with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Do not expire source data while any EOD manifest is unverified/retryable/under reconciliation (EOD controller owns retention extension). If a future jurisdictional change requires longer retention, record a new approval ID in `versions.pin`/`evidence.json` and a superseding `CHG` with two-person review.
+
 ## References
 
 - Operational requirements: `../02_requirements/06-operational.md`

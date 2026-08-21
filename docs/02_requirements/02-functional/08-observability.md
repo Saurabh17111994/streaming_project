@@ -76,7 +76,7 @@ Required common fields: `timestamp` UTC RFC3339, `service`, `instance_id`, `leve
 - duplicate suppression
 - identity mappings and postback quarantines
 - reconciliation duration/result
-- two-person approvals/denials/unauthorized attempts
+- single-operator (Saurabh, DEC-044) approvals/denials/unauthorized attempts
 - changelog lag/continuity
 - Arrow REST request latency/status and broker response classification
 

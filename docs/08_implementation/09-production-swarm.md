@@ -12,7 +12,7 @@ Build this phase, then implement the tests in the second section before moving o
 | --- | --- |
 | Status | Implementation-ready, infrastructure/version evidence blocked |
 | Owner | Platform Team |
-| Topology | Four VMs: three workload/HA, one observability |
+| Topology | v1: 4 VMs (3× Manager+Worker + 1 O2) → v2: 7 VMs (3× Manager-ONLY + N≥3 Workers + 1 O2), same stack, Option B |
 | EOD controller | Named service or scheduled job owning manifest lifecycle |
 | Live-money | Disabled until Phase 12 evidence passes |
 | Acceptance criteria | `REQ-PF-001`–`REQ-PF-012` → `AC-PF-001`–`AC-PF-019` (proving families: `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001`; local subset in `08-local-compose.md`) |
@@ -58,7 +58,7 @@ The production stack must define:
 5. Verify Ingestion manifest/subscriptions and Action Capture protocol readiness.
 6. Start Executor `HALTED`; verify state, mappings, continuity, Arrow REST contract, fencing, and telemetry.
 7. Complete broker/order/fill/position/attempt reconciliation. (**Reservations REMOVED 2026-08-15, CHG-005.**)
-8. Require two distinct approvals for the same gate epoch/evidence hash.
+8. Require the single-operator (Saurabh, DEC-044) approval for the same gate epoch/evidence hash.
 9. Enable only the approved gate epoch.
 
 A container or service becoming healthy never enables order placement.
@@ -73,6 +73,141 @@ The production stack is config-driven: the same stack files, environment variabl
 | Target | 3 workload VMs + observability VM | 3-node ensemble, quorum 2-of-3 | LOG replication ≥2, anti-co-located | `high-availability.type: zookeeper`, standby JobManagers | Production HA topology |
 
 Scale-out steps (1 → 3 VMs): add the two workload nodes and labels, convert ZooKeeper single-node to the 3-member ensemble (update `server.X` entries and quorum config), raise Fluss LOG-table replication factor, enable Flink ZK HA with the ensemble quorum, and re-verify the readiness sequence. The single-VM bootstrap stage SHALL NOT be cited as quorum, replication, or HA evidence.
+
+### Swarm control-plane architecture — DECISION 2026-08-20 (v1 Manager+Worker → v2 Manager ONLY)
+
+**Principle:** Docker Swarm provides Raft consensus built-in. The project does not implement Raft. It only configures and validates the 3-manager topology.
+
+**v1 — Baseline (4 VMs, ship now):** `VM1, VM2, VM3 = Swarm Manager + Worker (Active)`, `VM4 = Observability (outside Swarm)`. This is the authoritative production topology for the initial `N=3` worker baseline. It is cost-efficient (4 VMs) and HA-correct (Raft quorum `2/3`, tolerates 1 manager loss).
+
+```text
+                    PRODUCTION v1 — 4 VMs (NOW)
+        VM1                     VM2                     VM3
+ Docker Engine           Docker Engine           Docker Engine
+ Swarm Manager+Worker    Swarm Manager+Worker    Swarm Manager+Worker
+ Active                  Active                  Active
+ ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+ │ ZK 1/3          │     │ ZK 2/3          │     │ ZK 3/3          │
+ │ Fluss replica   │     │ Fluss replica   │     │ Fluss replica   │
+ │ Flink JM / TM   │     │ Flink JM / TM   │     │ Flink JM / TM   │
+ │ Ingestion etc   │     │ Workloads       │     │ Workloads       │
+ └─────────────────┘     └─────────────────┘     └─────────────────┘
+         \                       |                       /
+          └──────────┬───────────┴──────────┬──────────┘
+                     │   Swarm Raft        │
+                     │   3 managers        │
+                     │   quorum = 2 / 3    │
+                     │   1 failure = OK    │
+                     │   2 failures = lost │
+                     └─────────────────────┘
+                              +
+                        VM4 = O1 Observability (outside Swarm)
+```
+
+**v2 — Evolution (7 VMs, when scaling or contention observed):** `M1, M2, M3 = Swarm Manager ONLY (Drained)`, `W1, W2, W3 (+ W4...) = Worker`, `O1 = Observability (outside Swarm)`. Trigger: `N>6` workers, sustained CPU >80%, or observed Raft election flaps. The same `docker-stack.yml` works unchanged — only `docker node update --availability drain M1 M2 M3` and adding `W1-3` changes.
+
+```text
+                    PRODUCTION v2 — 7 VMs (EVOLUTION)
+     CONTROL PLANE — 3 managers (drained, no workloads)
+        M1              M2              M3
+     Manager ONLY    Manager ONLY    Manager ONLY
+     Drained         Drained         Drained
+         \               |               /
+          └───────┬──────┴──────┬───────┘
+                  │ Raft quorum │
+                  │   2 / 3     │
+                  └──────┬──────┘
+                         |
+     WORKLOAD PLANE — N workers (N >= 3)
+        W1              W2              W3              W4  W5  W6 ...
+     Worker          Worker          Worker          Worker (new)
+  ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐
+  │Fluss tablet│  │Fluss tablet│  │Fluss tablet│  │Flink TM   │
+  │Flink TM    │  │Flink TM    │  │Flink TM    │  │+ capacity │
+  └───────────┘   └───────────┘   └───────────┘   └───────────┘
+                              +
+                         O1 = Observability (outside Swarm)
+```
+
+**Why v1 then v2:** v1 is correct for the initial baseline — Swarm docs state managers may be workers; dedicating 3 VMs to only Raft (2GB RAM) at `N=3` wastes 75% VM cost and exceeds the local PC (`15GB`) for `7-VM` validation. v2 provides strict control-plane isolation when worker pressure (Flink 30GB DirectMemory, Fluss compaction) risks Raft heartbeat latency (~10ms). The stack is forward-compatible: placement uses `role` labels (`role=manager`, `role=worker`, `flink=true`, `fluss=true`, `storage=nvme`), not hard-coded hostnames, so `W4` joins without stack redesign.
+
+**Stack file mapping (Option B):**
+
+| File | Topology | Swarm mode |
+| :--- | :--- | :--- |
+| `code/01_platform/01_docker/docker-compose.yml` | 08 local — 1 host | Compose (single Engine) |
+| `code/01_platform/01_docker/docker-stack.yml` | 09 v1 — 4 VMs (`M1-3` as Manager+Worker) | `swarm init` on VM1, VM2/VM3 `join --manager`, O1 outside |
+| same `docker-stack.yml` | 09 v2 — 7 VMs (`M1-3` drained) | `M1-3` `drain`, `W1-3` `join --worker`, `W4+` scale |
+
+**Resource isolation for v1 (Manager+Worker co-location):**
+
+Swarm Raft is light (~1 CPU, 2GB RAM, 5GB disk) but worker (Flink TM + Fluss) is heavy. v1 is safe only with explicit reservations/limits:
+
+| Reservation | Value | Enforcement |
+| :--- | :--- | :--- |
+| Manager reserved | 2 CPU, 2GB RAM, 10GB disk per VM1-3 | Swarm `resources.reservations` + alert if unavailable |
+| Worker limit | 46GB RAM max per VM (85% alert) | `CONTAINER_MEMORY_ALERT_PERCENT=85` |
+| Flink TM direct memory | 30GB max | `-XX:MaxDirectMemorySize` |
+
+Without limits, Flink GC 20ms or Fluss compaction can delay Raft heartbeats → false election. v2 removes this risk by draining managers.
+
+### Local development / HA validation environment
+
+The local PC must reproduce production separation on lightweight VMs. `4-VM` local fits the dev PC (`15GB`); `7-VM` local is the v2 validation and requires stopping v1 VMs first or a larger host.
+
+```text
+              LOCAL PC — v1 validation (NOW)
+                 |
+     ┌───────────┼───────────┐
+     |           |           |
+    VM1         VM2         VM3         VM4
+ Manager+Worker Manager+Worker Manager+Worker  Observability
+  2CPU/3GB      2CPU/3GB      2CPU/3GB     1CPU/2GB
+     |           |           |              |
+     └───────────┴───────────┴──────────────┘
+              (swarm init on VM1, VM2/VM3 join --manager, VM4 outside)
+
+              LOCAL PC — v2 validation (FUTURE, optional W4)
+                 |
+     M1(1CPU/2GB) M2(1CPU/2GB) M3(1CPU/2GB)
+     Manager ONLY Manager ONLY Manager ONLY
+                 |
+     W1(2CPU/3GB) W2(2CPU/3GB) W3(2CPU/3GB) [W4 2CPU/2GB]  O1(1CPU/2GB)
+```
+
+Purpose (both): validate topology, Swarm `docker node ls` quorum, placement, anti-co-location, manager/worker/VM failure, network partition, recovery, worker add/drain/remove, rolling deploy under degraded node. Not for `50k ticks/s`, latency, or storage perf — those require prod-sized infra.
+
+### Phased implementation plan (v1 → v2)
+
+| Milestone | Scope | Phases | Entry gate | Exit evidence |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1 — Architecture** | Docs only, no infra | Inspect repo + cross-check (already saved as `docs/plans/2026-08-20-swarm-reference-cross-check.md`), update `09` with v1/v2 diagrams, label model, isolation, security | Cross-check complete | `09` updated, no contradictions, `M1-3 = Manager+Worker` pinned as v1 |
+| **M2 — Deployment** | `docker-stack.yml` + Swarm config | Author `docker-stack.yml` with `replicas`, `placement: constraints [node.labels.role==worker || role==manager]` (not hostname), `preferences spread`, `healthcheck`, `restart_policy`, `update_config`, `rollback`, `resources reservations/limits`, `encrypted overlay` (`--opt encrypted` for `trading-net`, `execution-net`), `secrets` (Swarm secrets for S3/ARROW/O2), `volumes` (per-node durable) | `09` v1 diagram approved | `docker stack deploy` succeeds on `1-host swarm` mimic; `docker node ls` shows 3 managers quorum 2 |
+| **M3 — Validation** | Local multi-VM HA | Deploy local 4-VM rig (multipass/Vagrant), run `SWARM-MGR-001..006`, `SWARM-NET-001`, `SWARM-PLACEMENT-001`, `SWARM-DEPLOY-001`, `SWARM-SCALE-001..003`, `RECOVERY-001`, `Flink SCALE` (TM slots), `Fluss SCALE` (native), `O1 FAIL` | M2 stack deploys | Evidence per `11-testing-and-release.md § Production Swarm` (SWARM-*, SEC-*, PERF-NODELOSS) |
+
+Detailed test mapping is in `docs/plans/production_swarm_plan_revision.md` (Phases 13–17) and `docs/plans/2026-08-20-swarm-reference-cross-check.md` (gap table). v2 evolution (W4+ scale) is a label/drain operation with the same stack — no redesign.
+
+### Repository and branching model
+
+### Repository and branching model — DECISION 2026-08-20 (Option B)
+
+**Decision:** Single branch, different files. The repository keeps one branch (`main`) for all code. Local and production runtimes are not separate branches. They share the same service code and images. Only the run files are different.
+
+| File | Purpose | When used |
+| :--- | :--- | :--- |
+| `code/01_platform/01_docker/docker-compose.yml` | Local run — 1 computer (08) | Daily development, `make test-all` |
+| `code/01_platform/01_docker/docker-stack.yml` | Production run — 4 computers (09) | Real 4-VM Swarm, or local mimic with `docker swarm init` on 1 computer |
+| `code/01_platform/01_docker/.env` + `runtime.lock` | Secrets and fixed image versions | Both — local uses test values, production uses real secrets and `@sha256` digests |
+
+**Why Option B:** Service code (`code/02_services/*`) does not change between local and production. Only settings change (`ZOOKEEPER count`, `FLUSS replication`, `S3 path`, `placement constraints`). Keeping one branch avoids copying the same code to 3 branches and keeps all fixes in one place.
+
+Rejected: Option A (separate branches for local / mimic / prod) — rejected because it would duplicate the same service code across branches and make fixes harder to keep in sync.
+
+**How to run:**
+
+* Local (08): `docker compose -f code/01_platform/01_docker/docker-compose.yml up` or `make up`
+* Local mimic of production (09 on 1 computer): `docker swarm init` then `docker stack deploy -c code/01_platform/01_docker/docker-stack.yml prod`
+* Real production (09 on 4 computers): same `docker-stack.yml` on the 4 VMs after `swarm init` / `swarm join` and node labels
 
 ### Storage and recovery
 
@@ -115,7 +250,44 @@ Every change record includes:
 
 Any uncertain rollback returns the Executor gate to `HALTED`. Schema-breaking clean break is permitted only before live-money release with reset/replay evidence.
 
+### M2 completion — Tier-2 stack hardening (2026-08-21)
+
+Closes the remaining offline-gateable acceptance gaps in `docker-stack.yml`
+(machine-checked by `test_09_stack.py::TestTier2Hardening`):
+
+| Contract | Rule | Test |
+| :--- | :--- | :--- |
+| **No mutable image tags** | every service image is a literal `@sha256` digest **or** a `${...:?set RAM_IMAGE to an immutable digest}` form (operator must supply a digest at deploy). Bare tags (`foo`, `foo:1.2`, `foo:latest`) are rejected. | `test_no_mutable_image_tag` |
+| **Health & readiness** | every service has a `healthcheck`, OR a documented `# x-healthcheck:` exception marker naming one of the allowed exceptions and why. | `test_every_service_healthcheck_or_documented_exception` |
+| **Rollback defaults to halted** | every service with durable per-node volumes, plus the executor (`nautilus`), sets `update_config.failure_action: rollback` so a bad update returns to the last good state (gate back to `HALTED`). | `test_rollback_on_every_stateful_and_executor` |
+| **Encrypted overlays** | `trading-net`, `execution-net`, `arrow-egress` are overlay + `encrypted: true` (SN/w08). | `test_overlay_networks_encrypted_all` |
+
+Real digests pinned this pass: `zookeeper@sha256:43d3…`, `otel/…contrib@sha256:e393…`,
+`python@sha256:9c90…`. Local/docker images (`ingestion`, `execution-*`, `nautilus`,
+`fluss`, `flink`, `openobserve`) are pinned as `${…:?set … to an immutable digest}`
+— no mutable tag may exist anywhere in the stack.
+
+Healthcheck coverage: full `CMD`/`CMD-SHELL` probes on zookeeper-1/2/3 (`zkServer.sh
+status`), fluss-coordinator (9123), fluss-tablet (9124), flink-jobmanager (8081),
+openobserve (5080), ingestion + execution-bridge (kept). Five services intentionally
+carry **no** swarm healthcheck, each with an in-place `# x-healthcheck:` reason:
+
+| Service | Why no swarm healthcheck |
+| :--- | :--- |
+| `otel-collector` | distroless image — no shell, cannot run a CMD probe |
+| `flink-taskmanager` | no fixed external listener; liveness = JM 8081 probe + slot allocation |
+| `execution-gateway` | `GATEWAY_BIND_PORT` env-driven; readiness = app `GatewayReadiness` gate |
+| `webhook-receiver` | stateless ingress; port in-app |
+| `nautilus` | `EXECUTOR_LISTEN_ADDR` env-driven; liveness/ownership = app fencing |
+
+Their *liveness* is the application-level readiness/fencing gates (not a TCP probe),
+and each still honors Swarm `restart_policy` / `update_config.rollback`.
+Runtime firing of the shell probes is validated on the M3/Swarm-mimic stack (M2 is
+offline-gateable only — `docker stack config` rc=0 and the 25 `test_09` cases are
+green; live quorum/HA is M3 evidence, per `## Verification mapping`).
+
 ### Capacity acceptance
+
 
 The production-like topology must prove:
 
@@ -169,7 +341,7 @@ For non-Flink containers (Ingestion, Action Capture, Executor), use the generic 
 
 ## Verification mapping
 
-The required behavior above is verified by the canonical [Production Swarm test design](./11-testing-and-release.md#production-swarm): `SWARM-INT-001`, `SWARM-INT-002`, `SWARM-FAIL-001`, `SWARM-FAIL-002`, `SWARM-REC-001`, `PERF-NODELOSS-001`, and `SEC-NET-001` to `SEC-AUDIT-001`.
+The required behavior above is verified by the canonical [Production Swarm test design](./11-testing-and-release.md#production-swarm-v1-4-vms-managerworker-v2-7-vms-manager-only-workers): `SWARM-INT-001`, `SWARM-INT-002`, `SWARM-FAIL-001`, `SWARM-FAIL-002`, `SWARM-REC-001`, `PERF-NODELOSS-001`, and `SEC-NET-001` to `SEC-AUDIT-001`.
 
 ---
 
@@ -346,3 +518,498 @@ Precondition: the dual-sink artifact is the ONLY Design-B artifact (DB2) — the
 ### 13.3 Rehearsal qualification
 
 Every machinery step above was rehearsed on the Design-B topology against the isolated p10 environment (2026-08-17): strict archived-checkpoint restore (boxes 4–7), bounded-replay idempotency twice (boxes 8–9: LOG re-appends retained, KV key count frozen at the active-instrument count), and rollback + re-cutover with the current artifact (box 10, DB2 disposition). Evidence: `logs/tracker-14/p10-rehearsal-design-b-20260817.md`. The two VACUOUS steps (consumer repoint, single-LOG artifact) are recorded as such in the locked spec §2.1 + DB2 and become live steps only when their preconditions exist.
+
+## Extended reliability test suite — production Swarm (beyond the 7 canonical `SWARM-*`)
+
+> **Purpose 2026-08-21:** the canonical 7 Swarm tests (`SWARM-INT-001/002`, `SWARM-FAIL-001/002`,
+> `SWARM-REC-001`, `PERF-NODELOSS-001`, `SEC-NET-001..AUDIT-001`) prove the explicit
+> `REQ-PF-001..012 → AC-PF-001..019` requirements, but not the hidden invariants (fencing,
+> crash-window, partition, durability, overload). This layered suite defines the **system-
+> design-oriented contract before Swarm implementation** so the same behavioral tests can run
+> against the 4-VM production topology. Implement per the `P0→P4` release gate in §20 below.
+
+### Test taxonomy (same harness can run on Compose and Swarm)
+
+```text
+tests/
+├── config/ · deployment/ · topology/ · health/ · readiness/ · network/ · security/ · identity/
+├── correctness/ · schema/ · streaming/ · flink/ · fluss/ · execution/ · fencing/
+├── failure/ · network_partition/ · crash_window/ · durability/ · recovery/ · disaster_recovery/
+├── scalability/ · overload/ · resource_exhaustion/ · retry_storm/ · capacity/
+├── observability/ · time/ · eod/
+├── upgrade/ · rollback/ · gate/ · chaos/
+└── invariants/
+```
+
+---
+
+### Offline unit-test coverage (04_executor crate — implemented 2026-08-21)
+
+The extended suite below is deliberately system/VM-level, but several invariants are
+already **provable offline in the nautilus executor's Rust unit tests** (no rig). These
+are the FENCE/TIME/CORR cases closed at the unit level; the row-level/stack cases
+(FENCE across processes, TIME with real NTP/clock drift) remain M3/rig evidence.
+
+| Doc ID | Requirement | Where implemented | Mechanism |
+| :-- | :-- | :-- | :-- |
+| `INVARIANT-002` / §2 FENCE | at most one active owner per partition; a fenced/stale owner must not emit | `executiongate.rs` unit tests | a command whose `gate_epoch` or `fence_token` ≠ the durable `GateRow` returns `Blocked` with **zero bridge calls** |
+| `CORR-008` | no phantom state — a disabled gate cannot produce a successful order | `disabled_gate_blocks_with_zero_calls` | durable row `Halted` + matching identity still ⇒ `Blocked`, zero calls |
+| `CORR-009` / `CORR-010` | no impossible transition; lifecycle never moves backward | `gate.rs` unit tests (pre-existing) | only `HALTED→RECONCILING→APPROVAL_PENDING→ENABLED` is sanctioned; `safety_halt` is the single backward path |
+| `CORR-001` / `CORR-003` | event uniqueness; idempotent replay / crash-window exactly-once | `executiongate.rs` crash tests (pre-existing) | same `(instruction_id, request_hash)` ⇒ `Duplicate`, zero calls; each crash window ⇒ exactly one call |
+| `TIME-004` / `TIME-005` | clock skew boundary — latency never treated as negative | `gateway_protocol.rs` `deadline_boundary_at_now_is_valid_not_expired` | `deadline == now` is accepted (strict `<`); `now+1` expires. UTC epoch is the monotonic reference |
+| `INVARIANT-003` / §12 `CONTROL-001/002/006` | no ENABLED gate without an authenticated single-operator (saurabh, DEC-044) approval; mismatched epoch/hash, unauthorized identity, stale approval, wrong identity, rollback all rejected | `gate.rs` (production change 2026-08-21b; reworked to DEC-044 single-operator 2026-08-21) | `transition(Enabled)` is removed from the sanctioned path — `Enabled` is reachable **only** via `Gate::enable`, which requires a declared epoch matching the caller's, plus one approval from the **authorised** operator (saurabh, DEC-044) bound to the **evidence** hash. A second approval is not required and not checked. `safety_halt` clears the approval + evidence (fail-closed re-approve) |
+
+New tests added 2026-08-21b (offline batch 2): `stale_fence_token_never_issues_a_bridge_call`,
+`stale_gate_epoch_never_issues_a_bridge_call`, `disabled_gate_blocks_with_zero_calls`,
+`matching_fence_and_epoch_emits_exactly_one_call`, `deadline_boundary_at_now_is_valid_not_expired`,
+`broker_unknown_halts_reconcile_and_never_retries`, `corr015_restart_after_durable_accepted_matches_uninterrupted`,
+`fence009_epoch_monotonicity_new_supersedes_old_never`, `fence012_ownership_and_fence_token_survive_restart`,
+and the projection validation matrix (`version_gate_conflict_…`, `fill_event_validate_rejects_negative_and_empty`,
+`position_snapshot_validate_rejects_cross_and_negative_quantity`, `version_gate_evaluate_full_matrix`,
+`lifecycle_derive_and_transition_matrix`, `projection_apply_reapply_is_idempotent_snapshot_unchanged`).
+Covers additional doc IDs: `CORR-002/003/004/011/015`, `CRASH-ORDER-005/009`, `FENCE-009/012`,
+`STATE-*` (full version-gate + lifecycle + quantity-rejection matrix), `INVARIANT-*`.
+
+**Item 5 — single-operator + evidence-hash gate (`gate.rs`, production-code change 2026-08-21b; reworked to DEC-044 single-operator 2026-08-21):**
+the final `APPROVAL_PENDING -> ENABLED` hop was removed from `Gate::transition`, making
+`INVARIANT-003` **structural** (no bypass). `Enabled` is reachable only through the new
+guarded `Gate::enable(epoch)`, enforced by `set_epoch` + `record_approval` + `add_authorized`;
+`enable` returns `EnableError` (`EpochUnset`/`EpochMismatch`/`RequiresApproval`/`EvidenceMissing`)
+and `record_approval` returns `ApprovalError` (`Unauthorized`/`NotApprovalPending`). DEC-044
+(2026-08-21): a single approval by the authorized operator (saurabh) is sufficient and binds the
+evidence hash; a second approval is not required and not checked. Tests: `invariant003_no_enabled_without_approval`,
+`control001_unauthorized_operator_cannot_approve_or_enable`,
+`dec044_second_approval_is_not_required_and_not_checked`,
+`control002_enable_requires_declared_epoch`, `control002_mismatched_epoch_cannot_enable`,
+`control006_safety_halt_invalidates_approvals_require_reapproval`,
+`control002_operator_session_restart_requires_reapproval`, plus the rewritten sanctioned-path,
+halt, and no-skip/regress tests. The two production-caller test helpers
+(`execution/client.rs` roundtrip health test and `shutdown.rs` `enable()`) were migrated to the
+single-operator (saurabh, DEC-044) flow.
+
+Gate: `cargo test --lib` = **125 passed, 0 failed, 0 warnings (all binaries + `tests/differential_parity` + `tests/live_go_bridge` green on full `cargo test`)**.
+
+**2026-08-21b — buckets A1 + A2 + B (implemented offline, no VMs):**
+
+| Doc ID | Requirement | Where | Mechanism |
+| :-- | :-- | :-- | :-- |
+| `CRASH-ORDER-010` | reconciliation discovers already-accepted order, no duplicate | `executiongate.rs` `crash_order010_reconcile_discovers_accepted_no_new_call` | durable `Accepted` attempt resolves to `Accepted` with **zero** bridge calls |
+| `FENCE-010` | broker call during ownership loss is fenced | `fence010_broker_call_during_ownership_loss_is_fenced` | ownership promoted to new epoch ⇒ stale-epoch call `Blocked`, zero calls |
+| `FENCE-011` | late broker response cannot corrupt new owner | `projection/mod.rs` `fence011_late_duplicate_response_cannot_corrupt_state` | duplicate / stale re-delivery folds, never double-counts |
+| `CORR-012` / `INVARIANT-010` | every money-moving action has a correlation id | `corr012_identical_request_hash_distinct_instructions_stay_correlated` | identical hash on two instructions = two correlated actions, not collapsed |
+| `CORR-013` | Nautilus stays authoritative; projection can't silently become authority | `corr013_projection_is_pure_function_of_authority_events` | regression/duplicate never overwrite; size always derived (`open − closed`) |
+| `CORR-014` | schema compatibility policy | `corr014_undefined_schema_version_is_rejected` (+ guard added to `PositionSnapshot.validate`) | undefined `schema_version` rejected, declared version accepted |
+| `TIME-008` | ser/deser roundtrip fidelity | `gateway_protocol.rs` `time008_envelope_serialize_deserialize_roundtrips_exactly` | encode→verify restores every field + payload byte-identical |
+| `OBS-*` | monotonic counters / timestamp correctness | `telemetry.rs` `obs_monotonic_counters_never_decrease` | exported snapshot never decreases per counter / in total |
+| `DR-007` / `EOD-002` | replay twice / repeat offload ⇒ identical state | `projection/mod.rs` `dr007_replay_twice_produces_identical_state` | idempotent, no drift |
+| `DR-008` / `EOD-003` | interrupted rebuild resumes to uninterrupted state | `dr008_interrupted_rebuild_resumes_to_same_state` | two-chunk rebuild == one-shot |
+| `NET-PART` (offline semantics) | dependency outage ⇒ halt, once-only, no duplicate on recovery | `executiongate.rs` `netpart_dependency_outage_halts_and_never_duplicates` | outage→`UnknownHalted`; recovery never auto-retries — exactly one money-moving call |
+| `RESILIENCE-002/003/004/005/007` | retry/backoff/circuit/idempotency | **`resilience.rs`** (`Backoff`, `RetryBudget`, `CircuitBreaker`, `IdempotencyGuard`, `RetryOrchestrator`) — **wired onto the live bridge transport** (`BridgeExecutionClient::execute_job` via `execute_async`) | exponential backoff capped; hard retry budget; breaker open→half-open probe→close; only `send_command` transport `Err` is retried (a broker envelope is terminal — UNKNOWN still fails closed, never auto-retried); retries observed via `bridge_transport_retries` |
+
+---
+
+### Bucket B — dependency-failure matrix coverage (2026-08-21b)
+
+> **Wiring boundary (2026-08-21c):** the live binary's only outbound dependency call is the
+> bridge (`send_command`), which is resilience-wired in the executor. Fluss, S3, the durable
+> Broker-KV (`AttemptStore`) and the observability sink have **no in-process call site** in
+> `04_executor` — they are separate cluster components exercised at the M3 rig. Resilience for
+> them therefore applies at the cluster/rig boundary, not as executor code. Any future Rust
+> client for these MUST be wrapped with `RetryOrchestrator::execute_async`/`execute` (the proven
+> pattern), classifying only clearly-transient transport `Err`s as retryable and never
+> auto-retrying an ambiguous/terminal outcome.
+
+The §11 matrix rows split into **now-verifiable offline** (logic in the Rust authority /
+resilience component) vs **rig evidence** (needs real cluster fault injection). The
+`docker-stack.yml` digest-pinning / `failure_action: rollback` covers the deployment-dependency rows offline (`test_09`).
+
+| Dependency failure | §11 behavior | Offline now? | Where it is proven |
+| :-- | :-- | :-- | :-- |
+| Executor failure | fenced takeover | ✅ | `FENCE-010/012`, `fence009_epoch_monotonicity…`, `fence012_ownership…` |
+| Broker timeout | reconcile / UNKNOWN | ✅ | `broker_unknown_halts_reconcile_and_never_retries`, `CRASH-ORDER-005/009` |
+| Broker UNKNOWN after accept | reconcile, never dup | ✅ | `crash_order010…`, `broker_unknown…` |
+| Dependency outage (general) | halt, once-only, bounded retry | ✅ | `netpart…`, `resilience001_retry_storm_is_bounded…` |
+| Dependency recovery | breaker closes, no thundering duplicate | ✅ (logic) | `resilience005_breaker_recovers…`, `resilience007_duplicate…` |
+| Disk near full / resource exhaustion | stop unsafe growth | 🟡 harness now (acceptance = rig) | load/resource harness (below) |
+| Fluss 1 replica / quorum | continue / degraded | ❌ rig | needs real Fluss |
+| ZooKeeper 1/2 node loss | continue / control-plane halt | ❌ rig | needs real ZK quorum |
+| S3 temporary / prolonged | retry / degrade | 🟡 partial (`resilience` logic) | rig for real S3 |
+| Flink JM/TM failover | standby / reschedule | ❌ rig | needs Flink HA |
+
+### Bucket B — load / scale harness (harness now, acceptance deferred to rig)
+
+`tests/scale/run_scale_ladder.sh` (below) is the load ladder driver for §7 (`10k→…→100k/s`)
+and §8/§9 (recovery-after-overload, resource-exhaustion). It drives the workload, samples
+`throughput, p50/p95/p99, CPU, mem, disk, net, backpressure, checkpoint duration`.
+**Credentialed acceptance** (the documented 50k/s, p99<100ms, one-VM-loss numbers) is **M3/rig
+evidence** — the local single-node dev swarm can run a *sanity* ladder only, not production-
+credentialed numbers. The harness is ready so the rig run is one command.
+
+
+> `CLOCK_OFFSET_LIMIT_MS` is declared in the stack env but is **not yet enforced in the
+> executor code** (verified: zero references in `04_executor/src`). No production logic
+> exists for it yet, so no test was fabricated for it — enforcing skew beyond the
+> envelope deadline is an open implementation item (not a test gap).
+
+---
+
+## Option A vs Option B — resilience & durability coverage status (2026-08-21d)
+
+### Option A — implemented & verified (the executor's real outbound surface)
+
+The live binary's only outbound dependency call is the **bridge** (`send_command`). It is now
+resilience-wired: `BridgeExecutionClient::execute_job` runs every bridge round-trip through
+`RetryOrchestrator::execute_async` (exponential backoff + hard retry budget + circuit breaker).
+Only a clearly-transient transport `Err` is retried; a broker envelope (Success/Rejected/
+**Unknown**) is terminal and fails closed — an `Unknown` outcome is **never** auto-retried
+ (commits `beff8c1`, `94eb058`). Gate: **126 tests** (2026-08-21d measurement, before the
+DEC-044 single-operator gate rework later the same day; current `cargo test --lib` = 125),
+0 failed, 0 warnings, stable across parallel runs. Behavior proven: transient timeouts → retried then the order fills; persistent
+outage → bounded exhaustion surfaces an error, never a phantom success.
+
+### Remaining — and *why* (evidence-based, 2026-08-21d)
+
+Fluss, S3, the durable Broker-KV and the observability sink have **no in-process call site** in
+`04_executor` — they are separate cluster components (`03_fluss`, Postgres DDL, S3) exercised
+at the M3 rig. Nothing below is blocked by a missing test; each is blocked by a real production
+artifact that does not exist in this component yet.
+
+| # | Remaining production gap | Why it is not done now | Blocker / gate |
+| :-- | :-- | :-- | :-- |
+| 1 | Fluss client + resilient append/reconcile | no Rust Fluss client; Fluss is a separate cluster the executor does not call in-process | real Fluss API + endpoint (**Option B** / rig) |
+| 2 | S3 client + retry for DR/EOD offload | no `aws-sdk-s3`; offload is a projection in-memory artifact | real S3/MinIO + durable offload wiring (**Option B** / rig) |
+| 3 | Durable Broker-KV `AttemptStore` impl + resilient writes | only `InMemoryAttemptStore` (test fixture); durable store is Postgres DDL (`25_trade_instruction_state`) not wired into the Rust gate | persistent `AttemptStore` impl + gate wiring (**Option B** / rig) |
+| 4 | Observability export via a real sink | `TelemetrySink` default is the no-op `NullSink`; no OTLP/OpenObserve client | network sink + credentials (rig) |
+| 5 | `CLOCK_OFFSET_LIMIT_MS` enforcement | declared in stack env, **zero references** in `04_executor/src` | open implementation item (see note above) |
+| 6 | Credentialed 50k/s, p99<100ms, one-VM-loss numbers | need a real multi-node cluster; local dev swarm is sanity-only | M3 rig |
+| 7 | Real network partition, quorum loss, ZK/Fluss/Flink failover | need live multi-node cluster + genuine fault injection | M3 rig |
+
+### Option B — build the durable outbound clients & wire them (planned, not started)
+
+Option B is a **real architecture build** (new durable clients wired into the money-moving /
+once-only path), not a small wiring item. It will be implemented only on explicit approval —
+this section is the agreed plan.
+
+**Scope:** add in-process Rust clients for the three durable outbound deps and the
+observability sink, each wrapped with the proven `RetryOrchestrator` pattern, and wire them
+into the gate + projection lifecycle. Guarded behind a Cargo feature so the offline slice stays
+dependency-light.
+
+**Dependencies to add (behind `prod-clients` feature):**
+| Client | Dep | Reason |
+| :-- | :-- | :-- |
+| Durable Broker-KV (`AttemptStore`) | `tokio-postgres` (or `sqlx`) | once-only/duplicate records → `25_trade_instruction_state` |
+| Fluss (journal / reconcile) | Fluss Rust/REST client | delta-log append + read for reconciliation |
+| S3 (DR / EOD offload) | `aws-sdk-s3` or `rust-s3` (MinIO-compatible) | snapshot upload / replay, kept dev-swarm-testable via MinIO |
+| Observability | `opentelemetry` + OTLP exporter | replace `NullSink` with a real sink |
+
+**Wiring points:**
+- **Gate / once-only:** swap `InMemoryAttemptStore` → persistent `PostgresAttemptStore` wrapped
+  in a resilient decorator (`RetryOrchestrator::execute`); `put/get/has_duplicate` become
+  bounded-retry + breaker-protected. Read/write classification: only transient transport/SQL
+  errors are retried; a definitive duplicate/terminal is never re-issued.
+- **Fluss reconcile:** new append client wired to the gate's reconcile path (resilient append;
+  UNKNOWN append outcome fails closed, never auto-retried).
+- **DR / EOD offload:** S3 store for snapshot upload + replay, resilient upload (temporary S3
+  outage → retry; prolonged → degrade + alert, never corrupt).
+- **Observability:** `ResilientSink` decorator over any `TelemetrySink`.
+
+**Verified on the dev swarm vs deferred to rig:**
+| Verify on dev swarm (local MinIO + Postgres + Fluss containers) | Deferred to M3 rig |
+| :-- | :-- |
+| Clients compile, connect & round-trip against local containers | Credentialed 50k/s, p99<100ms, one-VM-loss |
+| Unit tests for the resilient decorators (retry/budget/breaker) offline | Real network partition / quorum loss |
+| End-to-end gate→Broker-KV persistence & projection→S3 offload locally | S3 regional durability, Flink HA, ZK loss |
+| Observability metrics exported end-to-end | Cluster-wide recovery-under-load |
+
+**Staged tasks:** (1) add deps behind `prod-clients` feature + config; (2) `PostgresAttemptStore`
++ resilient decorator + tests; (3) Fluss append client + resilient reconcile + local integration;
+(4) S3 offload/replay store + resilient upload + MinIO test; (5) OTLP sink + resilient export;
+(6) wire behind feature flag in bootstrap; dev-swarm end-to-end; update this doc + matrix.
+
+**Trade-off / when not to choose:** each dependency is added only because a real durable client
+is genuinely required for the corresponding matrix row; if the executor is destined to stay an
+offline/sandbox slice, pure Option A (bridge-only) is sufficient and Option B should not be
+started.
+
+### 1. Correctness and invariants (non-negotiable)
+
+
+| ID | Test | What it proves |
+| -- | ---- | -------------- |
+| `CORR-001` | Event uniqueness | Same immutable event cannot be applied twice to authoritative state |
+| `CORR-002` | Event ordering | Per-entity ordering rules are preserved |
+| `CORR-003` | Idempotent replay | Replaying the same input produces the same authoritative state |
+| `CORR-004` | Projection determinism | Rebuilding Fluss projections from audit/events produces identical state |
+| `CORR-005` | LOG/KV convergence | LOG history and KV current state converge according to contract |
+| `CORR-006` | Checkpoint determinism | Restore from a checkpoint produces equivalent state to uninterrupted execution |
+| `CORR-007` | Recovery determinism | Repeated recovery from the same checkpoint produces equivalent state |
+| `CORR-008` | No phantom state | A failed operation cannot create a successful order/position |
+| `CORR-009` | No impossible transition | State machine rejects invalid lifecycle transitions |
+| `CORR-010` | Monotonic lifecycle | Lifecycle never moves backward |
+| `CORR-011` | Position conservation | Position changes reconcile exactly with accepted fills |
+| `CORR-012` | Correlation completeness | Every money-moving action has a traceable correlation chain |
+| `CORR-013` | Source-of-truth consistency | Nautilus remains authoritative; projections cannot silently become authority |
+| `CORR-014` | Schema compatibility | Old state + new artifact behaves according to declared compatibility policy |
+
+#### CORR-015 — Repeated restart equivalence
+
+Run `load → process → checkpoint → restart` and compare against `load → process continuously` — authoritative result must be equivalent. Catches bugs ordinary restart tests miss.
+
+---
+
+### 2. Split-brain and fencing (`FENCE-*` — prove one active owner per `execution_partition_id`)
+
+| ID | Test | Expected |
+| -- | ---- | -------- |
+| `FENCE-001` | Normal leader acquisition | One owner |
+| `FENCE-002` | Graceful owner transfer | Old stops, new starts |
+| `FENCE-003` | Abrupt owner death | New owner takes over |
+| `FENCE-004` | Network partition | Exactly one fenced active owner |
+| `FENCE-005` | Stale owner resumes | Old owner cannot place action |
+| `FENCE-006` | Delayed old message | Stale epoch rejected |
+| `FENCE-007` | Duplicate ownership request | One owner wins deterministically |
+| `FENCE-008` | Concurrent takeover | No double ownership |
+| `FENCE-009` | Epoch monotonicity | Old epoch can never supersede new epoch |
+| `FENCE-010` | Broker call during ownership loss | Call is blocked/fenced |
+| `FENCE-011` | Broker response arrives after fencing | Response cannot corrupt new owner's state |
+| `FENCE-012` | Executor restart during active ownership | Ownership safely reconstructed |
+| `FENCE-013` | ZK session expiration | Old owner becomes invalid |
+| `FENCE-014` | Split network + reconnect | No duplicate execution after healing |
+
+*Critical assertion (measured externally, not from logs):* `successful money-moving calls by active owners <= 1` during every fencing test.
+
+---
+
+### 3. Crash-window duplicate-order tests (`CRASH-ORDER-*`)
+
+Failure mode:
+
+```text
+Executor → broker → broker accepted → Executor crashes → Executor doesn't know → retries
+```
+
+| ID | Failure point |
+| -- | ------------- |
+| `CRASH-ORDER-001` | Crash before request |
+| `CRASH-ORDER-002` | Crash while request is in flight |
+| `CRASH-ORDER-003` | Broker accepts, response lost |
+| `CRASH-ORDER-004` | Response duplicated |
+| `CRASH-ORDER-005` | Timeout followed by delayed ACK |
+| `CRASH-ORDER-006` | Restart before lifecycle persistence |
+| `CRASH-ORDER-007` | Restart after lifecycle persistence but before projection |
+| `CRASH-ORDER-008` | Restart after projection but before acknowledgment |
+| `CRASH-ORDER-009` | Broker returns UNKNOWN after acceptance |
+| `CRASH-ORDER-010` | Reconciliation discovers already-accepted order |
+
+*Hard assertion:* `one logical instruction → at most one broker order` unless the broker/API guarantees idempotency via an idempotency key.
+
+---
+
+### 4. Network partition tests (`NET-PART-*` — partial connectivity, not just kill)
+
+| Test | Partition |
+| ---- | --------- |
+| `NET-PART-001` | Executor ↔ ZooKeeper |
+| `NET-PART-002` | Executor ↔ Fluss |
+| `NET-PART-003` | Executor ↔ Arrow |
+| `NET-PART-004` | Executor ↔ observability |
+| `NET-PART-005` | Flink ↔ Fluss |
+| `NET-PART-006` | Flink ↔ ZooKeeper |
+| `NET-PART-007` | Fluss ↔ S3 |
+| `NET-PART-008` | JobManager ↔ TaskManager |
+| `NET-PART-009` | Workload VM ↔ observability VM |
+| `NET-PART-010` | One workload VM isolated from remaining cluster |
+
+For each, define: `Can it continue? Should it degrade / halt? How quickly? What state is safe?` — makes failure semantics explicit.
+
+---
+
+### 5. Data-loss and durability tests (`DUR-*`)
+
+| ID | Failure | Required proof |
+| -- | ------- | -------------- |
+| `DUR-001` | Fluss process crash | No committed data lost |
+| `DUR-002` | Fluss tablet crash | Recovery from durable state |
+| `DUR-003` | VM loss | Replica survives |
+| `DUR-004` | Disk restart | Data readable |
+| `DUR-005` | Corrupted tail segment | Repair/recovery behavior |
+| `DUR-006` | Interrupted write | No phantom committed record |
+| `DUR-007` | S3 transient failure | Retry bounded, no corruption |
+| `DUR-008` | S3 prolonged failure | Safe degradation |
+| `DUR-009` | S3 object missing | Explicit recovery failure, not silent success |
+| `DUR-010` | Partial checkpoint upload | Incomplete checkpoint rejected |
+| `DUR-011` | Checkpoint version mismatch | Restore rejected |
+| `DUR-012` | Audit object corruption | Integrity detection |
+| `DUR-013` | Restore from versioned object | Correct version recovered |
+| `DUR-014` | Recovery after abrupt VM power loss | State remains consistent |
+
+---
+
+### 6. Byzantine-ish and stale-data tests (`STATE-*`)
+
+Test stale timestamp/epoch/order-status, duplicate/out-of-order/future fills, impossible/negative quantities, unknown order/instrument, mismatched correlation/partition owner, malformed schema/missing field/invalid transition.
+
+*Expected:* `reject` or `quarantine` or `mark UNKNOWN` — never silently interpret bad data as valid.
+
+---
+
+### 7. Backpressure and overload tests (`SCALE-*`)
+
+Load ladder `10k → 20k → 30k → 40k → 50k → 60k → 75k → 100k ticks/s` — record `throughput, p50/p95/p99, CPU, memory, disk, network, Flink backpressure, checkpoint duration, Fluss write latency, queue depth, recovery time` at each step.
+
+| ID | Test |
+| -- | ---- |
+| `SCALE-001` | 10k sustained |
+| `SCALE-002` | 25k sustained |
+| `SCALE-003` | 50k sustained |
+| `SCALE-004` | 75k overload |
+| `SCALE-005` | 100k overload |
+| `SCALE-006` | Burst 2× baseline |
+| `SCALE-007` | Burst 5× baseline |
+| `SCALE-008` | Burst followed by normal rate |
+| `SCALE-009` | Hot instrument distribution |
+| `SCALE-010` | Highly skewed partition distribution |
+| `SCALE-011` | Maximum instrument count |
+| `SCALE-012` | Maximum concurrent signals |
+| `SCALE-013` | Maximum execution-event rate |
+
+*Also ask: when it cannot keep up, does it degrade predictably and recover without losing correctness?*
+
+---
+
+### 8. Recovery-after-overload (`REC-LOAD-001`)
+
+```text
+50k/s → temporary 100k/s → backpressure → return to 50k/s
+```
+
+Measure `recovery time`, `backlog drain rate`, `checkpoint behavior`, `p99`, `memory release`, `lag convergence`. Define `time_to_return_to_SLO`.
+
+---
+
+### 9. Resource-exhaustion tests
+
+Gradually approach `70% → 80% → 85% → 90% → 95%` for memory (verify alerting/backpressure/refusal/safe shutdown), plus CPU saturation (decision latency), disk pressure (readiness degradation), network limit, file-descriptor / thread / connection-pool (Fluss/S3/broker) exhaustion. Fail with bounded explicit degradation, not cascading retries.
+
+---
+
+### 10. Retry-storm / cascading-failure (`RESILIENCE-*`)
+
+`S3 failing → 100 clients retry → network saturates → more timeouts → more retries`
+
+| ID | Test |
+| -- | ---- |
+| `RESILIENCE-001` | Retry storm containment |
+| `RESILIENCE-002` | Exponential backoff correctness |
+| `RESILIENCE-003` | Retry budget exhaustion |
+| `RESILIENCE-004` | Circuit breaker opening |
+| `RESILIENCE-005` | Recovery after dependency returns |
+| `RESILIENCE-006` | Thundering herd after recovery |
+| `RESILIENCE-007` | Duplicate retry prevention |
+
+---
+
+### 11. Dependency failure matrix (failure contract)
+
+| Dependency | Failure | Expected system behavior |
+| ---------- | ------- | ------------------------ |
+| ZooKeeper | 1 node lost | continue |
+| ZooKeeper | 2 nodes lost | control plane unavailable / safe halt |
+| Fluss | 1 replica lost | continue |
+| Fluss | quorum failure | defined degraded mode |
+| S3 | temporary | retry |
+| S3 | prolonged | checkpoint/lake degradation + alert |
+| OpenObserve | down | trading remains safe; audit remains durable |
+| Arrow | unavailable | execution unavailable |
+| Broker | timeout | reconcile / UNKNOWN |
+| Flink JM | failed | standby takeover |
+| Flink TM | failed | reschedule |
+| Executor | failed | fenced takeover |
+| Network | partition | defined behavior |
+| Disk | near full | stop unsafe growth |
+
+---
+
+### 12. Control-plane safety (`CONTROL-*`)
+
+Unauthorized gate enable, approval by an unauthorized operator, mismatched epoch/hash, stale approval, wrong identity, evidence changed after approval without re-approval, deployment during active gate, rollback during active gate, operator session loss, control-plane restart.
+
+*Hard rule:* `HALTED → ENABLED` only if `same gate epoch + same evidence hash + single-operator (saurabh, DEC-044) approval + authorized operator`.
+
+---
+
+### 13. Deployment / upgrade (`UPGRADE-*`)
+
+Rolling update (one node at a time, two sequentially), image digest mismatch/incompatible, health-check failure, automatic/manual rollback, rollback after partial deployment with checkpoint from previous version, schema-compatible/incompatible, connector/Flink/Fluss upgrade. `UPGRADE-001`: deploy new version while processing `50k/s` — prove `no unsafe execution, no duplicate order, no p99 violation, state remains readable`.
+
+---
+
+### 14. Capacity scaling (`SCALE-TOPO-*`)
+
+`SCALE-TOPO-001` 1 VM bootstrap, `SCALE-TOPO-002` Add VM2, `SCALE-TOPO-003` Add VM3, `SCALE-TOPO-004` ZK 1→3, `SCALE-TOPO-005` Fluss replication, `SCALE-TOPO-006` Flink ZK HA, `SCALE-TOPO-007` Rebalance, `SCALE-TOPO-008` Anti-co-location, `SCALE-TOPO-009` Capacity increase, `SCALE-TOPO-010` App behavior unchanged.
+
+*Invariant:* scaling infra must **not require changing application semantics**.
+
+---
+
+### 15. Observability correctness (`OBS-CORR-*` / `OBS-VALIDATE-001`)
+
+Beyond "telemetry exists" — prove `timestamp correctness, monotonic counters, duplicate/missing/delay/overload handling, trace correlation, clock skew, cardinality explosion`, plus `OBS-VALIDATE-001`: inject `tick → Fluss → Flink → signal → execution → fill` and verify one correlation ID reconstructs the whole path.
+
+---
+
+### 16. Clock and time (`TIME-*`)
+
+`TIME-001` NTP offset, `TIME-002` 100ms skew, `TIME-003` 1s skew, `TIME-004` backward jump, `TIME-005` forward jump, `TIME-006` UTC/DST, `TIME-007` event-time vs processing-time, `TIME-008` ser/deser, `TIME-009` broker mismatch — verify latency never goes negative and UTC normalization holds.
+
+---
+
+### 17. Data replay and disaster recovery (`DR-001..010`)
+
+`DR-001` Full recovery from checkpoints, `DR-002` previous checkpoint, `DR-003` S3 version, `DR-004` Rebuild projection from audit, `DR-005` Replay after Flink state loss, `DR-006` after Fluss projection loss, `DR-007` Replay twice, `DR-008` interrupted halfway, `DR-009` after schema upgrade, `DR-010` missing optional telemetry. Property: `rebuild(state) == expected_authoritative_state`.
+
+---
+
+### 18. EOD correctness (`EOD-001..003`)
+
+`EOD-001` Full session → lake offload — assert partitions, row/count reconciliation, no missing/duplicate immutable events, manifest/object integrity/versioning/audit. `EOD-002` Repeat → idempotent. `EOD-003` Interrupt halfway → resume with no corruption/duplicate final objects.
+
+---
+
+### 19. Chaos test (`CHAOS-001`)
+
+During `50k/s`, randomly inject one `container crash`, one `network delay`, one `S3 timeout`, one `TM failure`, one `Executor ownership transfer` (never simultaneously destroy quorum unless testing that). Measure `availability, p99, dropped/duplicate events/orders, recovery time, state divergence`.
+
+---
+
+### 20. Invariant checker — continuous during every major test (`INVARIANT-001..010`)
+
+```text
+INVARIANT-001 No duplicate broker order for same logical instruction
+INVARIANT-002 At most one executor owner per partition
+INVARIANT-003 No ENABLED gate without an authenticated single-operator (Saurabh, DEC-044) approval
+INVARIANT-004 Nautilus authoritative state == expected state
+INVARIANT-005 Projection state eventually converges
+INVARIANT-006 No committed event disappears after recovery
+INVARIANT-007 Checkpoint IDs never regress
+INVARIANT-008 Lifecycle transitions are monotonic
+INVARIANT-009 No stale executor can execute
+INVARIANT-010 All money-moving actions have correlation IDs
+```
+
+Run **during** failure tests, not only after — major improvement over traditional suites.
+
+---
+
+### Release gate (proof, not test count)
+
+| Class | Tests | Gate |
+| ----- | ----- | ---- |
+| P0 — Safety | `FENCE-*`, `CRASH-ORDER-*`, `CONTROL-*`, `SEC-*`, `INVARIANT-*` | No failures allowed |
+| P1 — Correctness | `CORR-*`, `DUR-*`, `DR-*` | No unexplained divergence |
+| P2 — HA | `SWARM-FAIL-*`, `FAIL-VM-LOSS-60000-001`, `NET-PART-*` | Must meet explicit RPO/RTO |
+| P3 — Performance | `PERF-PROD-60000-001`, `PERF-NODELOSS-001`, `SCALE-*` | Must meet `50k/s, 3k instruments, p99 <100ms, one-VM loss` |
+| P4 — Operational | `OBS-*`, `UPGRADE-*`, `EOD-*` | Must produce auditable evidence |
+
+Acceptance is `Functional correctness + Safety invariants + Failure-budget/SLO evidence` — not just `SWARM-INT-001/002 pass`. The three failure classes (split-brain, crash-after-accept, stale-owner) matter more than 20 more happy-path tests.
