@@ -7,6 +7,60 @@
 
 ---
 
+---
+
+## 📌 LIVE TRACKER (this file is the execution ledger — mark it as you go)
+
+**How to use**
+1. One step = one checkbox. Flip `- [ ] \`X.n\`` to `- [x] \`X.n\`` the moment that step is verified — never batch.
+2. When ALL steps of a task are `[x]`, set its row below to `DONE`. Starting a task → `IN-PROGRESS`. Blocked → `BLOCKED: <reason>`. Cut by user decision → `SKIPPED: <CHG ref>`.
+3. 🔒 rows need a human action — the agent does everything except the 🔒 step, then stops.
+4. Never delete a row. Add discovered work as a new numbered task (`Task B9 — …`) + row here.
+5. After each session: run `make full-audit` — if red, fix doc/count drift before closing.
+
+**Status legend:** `TODO` · `IN-PROGRESS` · `DONE` · `BLOCKED: reason` · `SKIPPED: CHG-ref`
+
+| ID | Task | Depends on | Status |
+| --- | --- | --- | --- |
+| `A1` | Sandbox auth + auto re-auth harness | — | TODO |
+| `A2` | Paper-order placement smoke (full chain, sandbox) | A1 | TODO |
+| `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 | TODO |
+| `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
+| `A5` | Reconciliation read-back (DEC-023) | A3+A4 | TODO |
+| `A6` | Phase A gate | A1–A5 | TODO |
+| `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | TODO |
+| `B2` | Crash-exactly-once (T5 fence proof) | B1 | TODO |
+| `B3` | Gate lifecycle E2E on compose | B2 | TODO |
+| `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
+| `B5` | Babysitter live observation drill | B4 | TODO |
+| `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 | TODO |
+| `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | TODO |
+| `B8` | Clock-drift safety enforcement | — | TODO |
+| `C1` | Bridge fan-out implementation | — | TODO |
+| `C2` | Config parity + pin update | C1 | TODO |
+| `C3` | Losslessness re-validation at scale | C1+C2 | TODO |
+| `C4` | SIG-PERF-001 50k baseline unblocked | C3 | TODO |
+| `C5` | 🔒 Scale-path decision record | 🔒 C4 | TODO |
+| `D1` | 🔒 VM provisioning + agent-verifiable checklist | 🔒 human VMs | TODO |
+| `D2` | Swarm bootstrap + stack deploy | D1 | TODO |
+| `D3` | SWARM-* HA tests live (M3 quorum) | D2 | TODO |
+| `D4` | FAIL-VM-LOSS-60000-001 drill | D3 | TODO |
+| `D5` | PERF-PROD-60000-001 (p99 < 100 ms @ 50k) | C4+D3 | TODO |
+| `D6` | Disaster drills DR-001..006 on prod stack | D2 | TODO |
+| `D7` | Observability finalization | D5+D6 | TODO |
+| `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 | TODO |
+| `E2` | Full Monday gate green | all gates green | TODO |
+| `E3` | Release evidence package assembly | E1+E2 | TODO |
+| `E4` | Docs consistency reconciliation | E3 | TODO |
+| `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 | TODO |
+| `E5b` | Audit legal-hold / immutability evidence (Cloudflare R2) | 🔒 CF token | TODO |
+| `E5c` | Missing named E2E fixture artifacts | E2 | TODO |
+| `E6` | Final verification | E5 | TODO |
+
+**Progress:** 0 / 34 tasks done · AC criteria 0 / 7 met
+
+---
+
 ## Overview
 
 The platform today proves the **data path** end-to-end (ticks → `raw_table_1` → 15 s candles → `Signal_Candidates`) with strong crash-recovery and losslessness evidence. The **order path** (the part that moves money) is built but **switched off by design**: the Nautilus execution service boots `HALTED`, real broker authentication is proven live for login only, and no real order has ever been placed.
@@ -22,13 +76,13 @@ This plan closes the remaining gaps in five phases:
 **Completion of all five phases = the system is Approved-for-Testing (sandbox) and gated for Live.** Live money stays blocked until the human release review in Phase E5 passes.
 
 ### Acceptance criteria (whole plan is done when ALL hold)
-- [ ] A paper order (broker sandbox, `BI-EQ x1`) placed through `SignalJob → Execution_Intent → Gateway → Nautilus → go-arrow bridge → Arrow REST` returns a broker order id, and the matching postback projects into `Fills`/`Order_Lifecycle`/`Positions` with zero duplicates and reconciles against `GET /user/orders|trades|positions`.
-- [ ] `Nautilus` runs its live event loop; a `kill -9` mid-order does not create a duplicate broker order (fence proof).
-- [ ] The gate reaches `ENABLED` only through `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED` via the DEC-044 Saurabh approval path; a `Safety_Halt_Requests` row returns it to `HALTED` within 5 s.
-- [ ] The 2,433-instrument manifest runs at ≥50k ticks/s synthetic envelope with `0` wire loss and p99 append `< 5 ms` (SIG-PERF-001 50k baseline unblocked).
-- [ ] Production Swarm survives one workload-VM loss (FAIL-VM-LOSS-60000-001) and meets p99 `< 100 ms` trigger-to-commit at 50k (PERF-PROD-60000-001).
-- [ ] `make full-audit && make gate && make pin-check && make cep-check-module` all exit 0; version-matrix rows 7/8/9/10 read `VERIFIED`; a release evidence package exists per `docs/08_implementation/11-testing-and-release.md`.
-- [ ] DEC-044 single-operator (Saurabh) release review executed and recorded; system flips from `Blocked` to `Approved-for-Testing` with live money still gated.
+- [ ] `AC.1` A paper order (broker sandbox, `BI-EQ x1`) placed through `SignalJob → Execution_Intent → Gateway → Nautilus → go-arrow bridge → Arrow REST` returns a broker order id, and the matching postback projects into `Fills`/`Order_Lifecycle`/`Positions` with zero duplicates and reconciles against `GET /user/orders|trades|positions`.
+- [ ] `AC.2` `Nautilus` runs its live event loop; a `kill -9` mid-order does not create a duplicate broker order (fence proof).
+- [ ] `AC.3` The gate reaches `ENABLED` only through `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED` via the DEC-044 Saurabh approval path; a `Safety_Halt_Requests` row returns it to `HALTED` within 5 s.
+- [ ] `AC.4` The 2,433-instrument manifest runs at ≥50k ticks/s synthetic envelope with `0` wire loss and p99 append `< 5 ms` (SIG-PERF-001 50k baseline unblocked).
+- [ ] `AC.5` Production Swarm survives one workload-VM loss (FAIL-VM-LOSS-60000-001) and meets p99 `< 100 ms` trigger-to-commit at 50k (PERF-PROD-60000-001).
+- [ ] `AC.6` `make full-audit && make gate && make pin-check && make cep-check-module` all exit 0; version-matrix rows 7/8/9/10 read `VERIFIED`; a release evidence package exists per `docs/08_implementation/11-testing-and-release.md`.
+- [ ] `AC.7` DEC-044 single-operator (Saurabh) release review executed and recorded; system flips from `Blocked` to `Approved-for-Testing` with live money still gated.
 
 ---
 
@@ -118,50 +172,50 @@ This plan closes the remaining gaps in five phases:
 
 ### Task A1 — Sandbox auth + auto re-auth harness
 **Why:** Login (TOTP) is proven live, but automatic re-auth on token expiry (T3) was deferred; the round-trip needs a stable session.
-- [ ] Read `code/02_services/06_execution_bridge/go-bridge/broker.go` + `fake_arrow_broker_test.go` to confirm the auth interface and the existing re-auth stub.
-- [ ] Implement automatic re-auth on 401/`token_expired`: refresh TOTP, retry once, then surface `UP disabled` via `/healthz` if refresh fails (do NOT loop forever).
-- [ ] Add Go test `TestSandboxAutoReauth` in `go-bridge/broker_test.go`: fake clock expiry → exactly one re-auth → success; repeated failure → `/healthz` reports disabled, no order attempted.
-- [ ] Run `cd code/02_services/06_execution_bridge/go-bridge && go test -race -run TestSandboxAutoReauth ./...`.
-- [ ] Write evidence `logs/tracker-14/t9-sandbox-reauth-<yyyymmdd>.md` + `CHG-057` record.
+- [ ] `A1.1` Read `code/02_services/06_execution_bridge/go-bridge/broker.go` + `fake_arrow_broker_test.go` to confirm the auth interface and the existing re-auth stub.
+- [ ] `A1.2` Implement automatic re-auth on 401/`token_expired`: refresh TOTP, retry once, then surface `UP disabled` via `/healthz` if refresh fails (do NOT loop forever).
+- [ ] `A1.3` Add Go test `TestSandboxAutoReauth` in `go-bridge/broker_test.go`: fake clock expiry → exactly one re-auth → success; repeated failure → `/healthz` reports disabled, no order attempted.
+- [ ] `A1.4` Run `cd code/02_services/06_execution_bridge/go-bridge && go test -race -run TestSandboxAutoReauth ./...`.
+- [ ] `A1.5` Write evidence `logs/tracker-14/t9-sandbox-reauth-<yyyymmdd>.md` + `CHG-057` record.
 **DoD:** re-auth unit-tested; `/healthz` reflects disabled on auth failure; no test regression.
 
 ### Task A2 — Paper-order placement smoke (full chain, sandbox)
 **Why:** Proves gateway → Nautilus → bridge → Arrow `POST /order/regular` works with a real broker sandbox order.
-- [ ] Verify `EXECUTION_INTENT_ENABLED=true` is settable on `SignalJob` (`SignalJobConfig.java` line 120) and that the gateway dispatch path is wired (`DurableIntentDispatcher` + `NautilusIntentClient`).
-- [ ] Stand up compose with `--profile execution-t3`; confirm `gateway:9180/healthz` 200, `nautilus:9190/healthz` reports `HALTED`, `bridge:8787/healthz` reports `UP disabled` until approval.
-- [ ] Place ONE sandbox order `BI-EQ x1` via `POST /v1/intents` with `T9_APPROVED_BY=saurabh` + sandbox broker config (`execution-auth-001` token pattern, len 238 proven live 2026-08-21).
-- [ ] Assert: Arrow returns `broker_order_id`; `Execution_Intent` LOG + `Order_Lifecycle` KV + `Execution_Attempts` KV populated; `client_order_ref` echoed.
-- [ ] Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel.
-- [ ] Run `python3 code/01_platform/04_scripts/t8_sandbox_contract_check.py` (expect 12/12) + the new test.
-- [ ] Evidence `logs/tracker-14/t9-order-sandbox-<yyyymmdd>.md` + `CHG-058`.
+- [ ] `A2.1` Verify `EXECUTION_INTENT_ENABLED=true` is settable on `SignalJob` (`SignalJobConfig.java` line 120) and that the gateway dispatch path is wired (`DurableIntentDispatcher` + `NautilusIntentClient`).
+- [ ] `A2.2` Stand up compose with `--profile execution-t3`; confirm `gateway:9180/healthz` 200, `nautilus:9190/healthz` reports `HALTED`, `bridge:8787/healthz` reports `UP disabled` until approval.
+- [ ] `A2.3` Place ONE sandbox order `BI-EQ x1` via `POST /v1/intents` with `T9_APPROVED_BY=saurabh` + sandbox broker config (`execution-auth-001` token pattern, len 238 proven live 2026-08-21).
+- [ ] `A2.4` Assert: Arrow returns `broker_order_id`; `Execution_Intent` LOG + `Order_Lifecycle` KV + `Execution_Attempts` KV populated; `client_order_ref` echoed.
+- [ ] `A2.5` Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel.
+- [ ] `A2.6` Run `python3 code/01_platform/04_scripts/t8_sandbox_contract_check.py` (expect 12/12) + the new test.
+- [ ] `A2.7` Evidence `logs/tracker-14/t9-order-sandbox-<yyyymmdd>.md` + `CHG-058`.
 **DoD:** one sandbox order placed end-to-end; attempt/lifecycle tables populated; cancel succeeds; no real order possible without `T9_APPROVED_BY`.
 
 ### Task A3 — Live postback capture evidence (VM-BROKER-PBK-009)
 **Why:** Postback WebSocket behavior is currently `TO_BE_VERIFIED`; the capture path must be proven against real broker confirmations.
-- [ ] Subscribe to the sandbox order-updates WebSocket (`/v1/events`) via the bridge; capture a fill postback for the A2 order.
-- [ ] Assert `Postback_Quarantine` stays empty for the well-formed postback, `Fills` LOG gets one immutable row, `Order_Lifecycle` transitions to filled, `Positions` KV updates.
-- [ ] Add `TestPostbackCapture` (Go) + a `T9_POSTBACK` Python integration; run `cargo test -race` + `pytest`.
-- [ ] Evidence `logs/tracker-14/t9-postback-<yyyymmdd>.md` (status `VERIFIED`) + `CHG-059`.
+- [ ] `A3.1` Subscribe to the sandbox order-updates WebSocket (`/v1/events`) via the bridge; capture a fill postback for the A2 order.
+- [ ] `A3.2` Assert `Postback_Quarantine` stays empty for the well-formed postback, `Fills` LOG gets one immutable row, `Order_Lifecycle` transitions to filled, `Positions` KV updates.
+- [ ] `A3.3` Add `TestPostbackCapture` (Go) + a `T9_POSTBACK` Python integration; run `cargo test -race` + `pytest`.
+- [ ] `A3.4` Evidence `logs/tracker-14/t9-postback-<yyyymmdd>.md` (status `VERIFIED`) + `CHG-059`.
 **DoD:** postback identity/correlation (`client_order_ref`/`broker_order_id`) proven; matrix row 7 → VERIFIED.
 
 ### Task A4 — Arrow REST capability matrix (VM-ARROW-010)
 **Why:** `POST /order/regular` request/response/auth/timeout must be captured and correlated to one broker order.
-- [ ] Capture: request shape, success/failure response codes, auth failure (401 → re-auth), 15 s UNKNOWN timeout behavior, one-attempt-to-one-order correlation.
-- [ ] Encode as an `ArrowRestCapabilityReport` and pin it; add `TestArrowRestCapability` (Go, fake broker).
-- [ ] Evidence `logs/tracker-14/t9-arrow-rest-<yyyymmdd>.md` (status `VERIFIED`) + `CHG-060`.
+- [ ] `A4.1` Capture: request shape, success/failure response codes, auth failure (401 → re-auth), 15 s UNKNOWN timeout behavior, one-attempt-to-one-order correlation.
+- [ ] `A4.2` Encode as an `ArrowRestCapabilityReport` and pin it; add `TestArrowRestCapability` (Go, fake broker).
+- [ ] `A4.3` Evidence `logs/tracker-14/t9-arrow-rest-<yyyymmdd>.md` (status `VERIFIED`) + `CHG-060`.
 **DoD:** matrix row 8 → VERIFIED; tests green.
 
 ### Task A5 — Reconciliation read-back (DEC-023)
 **Why:** Confirms `GET /user/orders|trades|positions` matches Fluss projections so the gate can trust local state.
-- [ ] After A2+A3, read back via the reconciliation REST endpoints and diff against `Fills`/`Order_Lifecycle`/`Positions`.
-- [ ] Add `T9_RECON` Python integration asserting counts + key fields match (allowing only documented latency).
-- [ ] Evidence `logs/tracker-14/t9-reconciliation-<yyyymmdd>.md` + `CHG-061`.
+- [ ] `A5.1` After A2+A3, read back via the reconciliation REST endpoints and diff against `Fills`/`Order_Lifecycle`/`Positions`.
+- [ ] `A5.2` Add `T9_RECON` Python integration asserting counts + key fields match (allowing only documented latency).
+- [ ] `A5.3` Evidence `logs/tracker-14/t9-reconciliation-<yyyymmdd>.md` + `CHG-061`.
 **DoD:** reconciliation delta = 0 (within documented window); no unmatched fills.
 
 ### Task A6 — Phase A gate
-- [ ] `make full-audit && make gate && make pin-check && make cep-check-module` all exit 0.
-- [ ] `make static-check`.
-- [ ] Update `docs/08_implementation/12-version-compatibility-evidence.md` rows 7 & 8 status `TO_BE_VERIFIED` → `VERIFIED` (row 9 OpenObserve may stay pending to Phase D).
+- [ ] `A6.1` `make full-audit && make gate && make pin-check && make cep-check-module` all exit 0.
+- [ ] `A6.2` `make static-check`.
+- [ ] `A6.3` Update `docs/08_implementation/12-version-compatibility-evidence.md` rows 7 & 8 status `TO_BE_VERIFIED` → `VERIFIED` (row 9 OpenObserve may stay pending to Phase D).
 **DoD:** Phase A complete; order path proven in sandbox; live money still blocked.
 
 > **Caution for executors:** the existing `t9_paper`, `t9_paper_25`, `t9_paper_25_full` bins
@@ -177,63 +231,63 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B1 — `LiveNodeRuntime` long-run soak (FakeBridge)
 **Why:** The run loop exists (`engine.rs` `LiveNodeRuntime`) but needs a stability soak to catch leaks/hangs before real wiring.
-- [ ] Add `LiveNodeRuntimeSoakTest` in `code/02_services/04_executor/tests/`: run ≥30 min against `FakeBridge`, assert no goroutine/fd leak, clean `stop` via `LiveNodeHandle`, fail-closed duplicate-run guard holds.
-- [ ] `cargo test --offline --test LiveNodeRuntimeSoakTest`.
-- [ ] Evidence `logs/tracker-14/b1-livenode-soak-<yyyymmdd>.md` + `CHG-062`.
+- [ ] `B1.1` Add `LiveNodeRuntimeSoakTest` in `code/02_services/04_executor/tests/`: run ≥30 min against `FakeBridge`, assert no goroutine/fd leak, clean `stop` via `LiveNodeHandle`, fail-closed duplicate-run guard holds.
+- [ ] `B1.2` `cargo test --offline --test LiveNodeRuntimeSoakTest`.
+- [ ] `B1.3` Evidence `logs/tracker-14/b1-livenode-soak-<yyyymmdd>.md` + `CHG-062`.
 **DoD:** soak green; leaks = 0; duplicate-run guard proven.
 
 ### Task B2 — Crash-exactly-once (T5 fence proof)
 **Why:** A `kill -9` mid-order must not create a duplicate broker order.
-- [ ] Add `CrashExactlyOnceTest`: inject kill after intent accepted but before bridge ack; restart node; assert exactly one `broker_order_id` and one `Execution_Attempts` record; fence (`Execution_Gate`) epoch increments; second run is rejected.
-- [ ] Wire to the existing `FlussGateStateStore` + `FlussAttemptStore` (`attemptRefreshOnRecovery`).
-- [ ] `cargo test --offline` + env-gated compose drill (`make disaster-drills` style harness optional).
-- [ ] Evidence `logs/tracker-14/b2-crash-exactly-once-<yyyymmdd>.md` + `CHG-063`.
+- [ ] `B2.1` Add `CrashExactlyOnceTest`: inject kill after intent accepted but before bridge ack; restart node; assert exactly one `broker_order_id` and one `Execution_Attempts` record; fence (`Execution_Gate`) epoch increments; second run is rejected.
+- [ ] `B2.2` Wire to the existing `FlussGateStateStore` + `FlussAttemptStore` (`attemptRefreshOnRecovery`).
+- [ ] `B2.3` `cargo test --offline` + env-gated compose drill (`make disaster-drills` style harness optional).
+- [ ] `B2.4` Evidence `logs/tracker-14/b2-crash-exactly-once-<yyyymmdd>.md` + `CHG-063`.
 **DoD:** duplicate-order impossible by construction; fence test green.
 
 ### Task B3 — Gate lifecycle E2E on compose
 **Why:** The order path must only reach `ENABLED` via `HALTED → RECONCILING → APPROVAL_PENDING → ENABLED`, gated by DEC-044 Saurabh approval, and return to `HALTED` on a safety halt within 5 s.
-- [ ] Add `T9_GATE_LIFECYCLE` integration: publish `Safety_Halt_Requests` → assert `nautilus:9190/healthz` flips to `HALTED` within 5 s; submit Saurabh approval → `APPROVAL_PENDING` → `ENABLED`; publish halt → `HALTED`.
-- [ ] Confirm the single-operator gate logic in `src/gate.rs` / `executiongate.rs` checks `saurabh` identity + evidence hash + fencing (DEC-044).
-- [ ] Run via `--profile execution-t3`; assert via `t8_sandbox_contract_check.py` extended.
-- [ ] Evidence `logs/tracker-14/b3-gate-lifecycle-<yyyymmdd>.md` + `CHG-064`.
+- [ ] `B3.1` Add `T9_GATE_LIFECYCLE` integration: publish `Safety_Halt_Requests` → assert `nautilus:9190/healthz` flips to `HALTED` within 5 s; submit Saurabh approval → `APPROVAL_PENDING` → `ENABLED`; publish halt → `HALTED`.
+- [ ] `B3.2` Confirm the single-operator gate logic in `src/gate.rs` / `executiongate.rs` checks `saurabh` identity + evidence hash + fencing (DEC-044).
+- [ ] `B3.3` Run via `--profile execution-t3`; assert via `t8_sandbox_contract_check.py` extended.
+- [ ] `B3.4` Evidence `logs/tracker-14/b3-gate-lifecycle-<yyyymmdd>.md` + `CHG-064`.
 **DoD:** full lifecycle proven; fails closed on missing/forged approval; 5 s halt met.
 
 ### Task B4 — Signal→Intent→Fill flow E2E
 **Why:** Closes the loop: a fired signal becomes an immutable `Execution_Intent` the gateway consumes and Nautilus executes (sandbox).
-- [ ] Run `SignalJob` with `EXECUTION_INTENT_ENABLED=true` (fake bridge/sandbox), confirm `Execution_Intent` LOG rows appear.
-- [ ] Confirm gateway dispatches → `NautilusIntentClient` → bridge → fill → `Fills`/`Order_Lifecycle`/`Positions`.
-- [ ] Add `B4_SIGNAL_INTENT_E2E` env-gated Python integration (`SIGNAL_CHAIN_E2E` pattern + `run-signal-chain-e2e.sh`).
-- [ ] Evidence `logs/tracker-14/b4-signal-intent-e2e-<yyyymmdd>.md` + `CHG-065`.
+- [ ] `B4.1` Run `SignalJob` with `EXECUTION_INTENT_ENABLED=true` (fake bridge/sandbox), confirm `Execution_Intent` LOG rows appear.
+- [ ] `B4.2` Confirm gateway dispatches → `NautilusIntentClient` → bridge → fill → `Fills`/`Order_Lifecycle`/`Positions`.
+- [ ] `B4.3` Add `B4_SIGNAL_INTENT_E2E` env-gated Python integration (`SIGNAL_CHAIN_E2E` pattern + `run-signal-chain-e2e.sh`).
+- [ ] `B4.4` Evidence `logs/tracker-14/b4-signal-intent-e2e-<yyyymmdd>.md` + `CHG-065`.
 **DoD:** signal → intent → fill round-trip green in sandbox.
 
 ### Task B5 — Babysitter live observation drill
 **Why:** `BabysitterJob` now observes `Positions` changelog; prove it survives a position write storm + restart without emitting any `Position_Actions`.
-- [ ] Drive position writes (from B4), run `BabysitterJob`, assert `POSITION_ACTIONS_ENABLED=false` enforced at startup (fails closed if set), zero action rows, observation `ValueState` survives cancel+restore (`BABYSITTER_STATE_RECOVERY_PATH`).
-- [ ] Reuse `submit-jobs.sh` launcher + `COMPUTE_INT_TEST_T7` MiniCluster restore green.
-- [ ] Evidence `logs/tracker-14/b5-babysitter-observe-<yyyymmdd>.md` + `CHG-066`.
+- [ ] `B5.1` Drive position writes (from B4), run `BabysitterJob`, assert `POSITION_ACTIONS_ENABLED=false` enforced at startup (fails closed if set), zero action rows, observation `ValueState` survives cancel+restore (`BABYSITTER_STATE_RECOVERY_PATH`).
+- [ ] `B5.2` Reuse `submit-jobs.sh` launcher + `COMPUTE_INT_TEST_T7` MiniCluster restore green.
+- [ ] `B5.3` Evidence `logs/tracker-14/b5-babysitter-observe-<yyyymmdd>.md` + `CHG-066`.
 **DoD:** babysitter observes silently; restart-safe; fails closed if enabled.
 
 ### Task B6 — 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles)
 **Why:** The single-operator review must be a documented, signable checklist before any live enablement.
-- [ ] Agent assembles `docs/05_deployment/change-records/CHG-067.md` listing every A/B evidence artifact, the gate-flow proof, and the Saurabh sign-off slot.
-- [ ] 🔒 Human (Saurabh) signs after reviewing; agent marks Phase B complete only after signature recorded.
+- [ ] `B6.1` Agent assembles `docs/05_deployment/change-records/CHG-067.md` listing every A/B evidence artifact, the gate-flow proof, and the Saurabh sign-off slot.
+- [ ] `B6.2` 🔒 Human (Saurabh) signs after reviewing; agent marks Phase B complete only after signature recorded.
 **DoD:** review doc complete and signed; Phase B complete.
 
 ### Task B7 — In-service durable write path (four permanent clients)
 **Why:** The Nautilus service currently keeps its duplicate-send memory in-process. Four durable clients (Fluss state stores, local event journal, R2 backup, OTeL feed) are designed but flag-gated unbuilt — without them an in-process crash can lose the "did I send this?" guard even though Fluss-backed gateway stores exist.
-- [ ] Read `docs/08_implementation/19-nautilus-execution-service-implementation-plan.md` §durable-clients design + `CHG-052.md` for the intended client set and flags.
-- [ ] Implement each client behind a dedicated feature flag (default OFF), reusing `FlussGateStateStore`/`FlussAttemptStore`/`FlussProjectionWriter` where they already cover a client.
-- [ ] Add Rust integration tests per client: write → restart → state recovered; flag off → behavior identical to today (no regression).
-- [ ] `cargo test --offline`; evidence `logs/tracker-14/b7-durable-clients-<yyyymmdd>.md` + next free `CHG-*`.
-- [ ] 🔒 Enabling the flags in compose requires explicit user approval (recorded in the CHG); default deployment keeps them OFF until B6 sign-off.
+- [ ] `B7.1` Read `docs/08_implementation/19-nautilus-execution-service-implementation-plan.md` §durable-clients design + `CHG-052.md` for the intended client set and flags.
+- [ ] `B7.2` Implement each client behind a dedicated feature flag (default OFF), reusing `FlussGateStateStore`/`FlussAttemptStore`/`FlussProjectionWriter` where they already cover a client.
+- [ ] `B7.3` Add Rust integration tests per client: write → restart → state recovered; flag off → behavior identical to today (no regression).
+- [ ] `B7.4` `cargo test --offline`; evidence `logs/tracker-14/b7-durable-clients-<yyyymmdd>.md` + next free `CHG-*`.
+- [ ] `B7.5` 🔒 Enabling the flags in compose requires explicit user approval (recorded in the CHG); default deployment keeps them OFF until B6 sign-off.
 **DoD:** four clients implemented + tested behind flags; enabling is a recorded human decision.
 
 ### Task B8 — Clock-drift safety enforcement
 **Why:** A clock-drift limit is declared in configuration but no code enforces it — an unenforced safety switch. (Ingestion already has `NtpClockChecker` + `TimeJumpMonitor`; the gap is on the execution side.)
-- [ ] **Discover:** locate where the clock-drift setting is declared — search `code/02_services/04_executor/src/config.rs`, `code/02_services/06_execution_gateway/src/main/java/com/trading/execution/gateway/GatewayConfig.java`, `code/common/src/main/java/com/trading/common/config/`, and `code/01_platform/01_docker/docker-compose.yml` env blocks for drift/skew/NTP keys. Record the exact key(s) found.
-- [ ] Implement enforcement at startup AND runtime: measured drift beyond the configured limit → service transitions to `HALTED` (fail closed), emits an alert log via the existing telemetry path, and refuses new orders until drift returns within limits and the gate re-enables.
-- [ ] Tests: unit test for threshold boundary (just inside = pass, just outside = halt); integration test that a simulated clock jump halts the engine and recovery re-enables only through the normal gate flow.
-- [ ] Run `cargo test --offline` (+ gateway `mvn -q test` if Java-side); evidence `logs/tracker-14/b8-clock-drift-<yyyymmdd>.md` + next free `CHG-*`.
+- [ ] `B8.1` **Discover:** locate where the clock-drift setting is declared — search `code/02_services/04_executor/src/config.rs`, `code/02_services/06_execution_gateway/src/main/java/com/trading/execution/gateway/GatewayConfig.java`, `code/common/src/main/java/com/trading/common/config/`, and `code/01_platform/01_docker/docker-compose.yml` env blocks for drift/skew/NTP keys. Record the exact key(s) found.
+- [ ] `B8.2` Implement enforcement at startup AND runtime: measured drift beyond the configured limit → service transitions to `HALTED` (fail closed), emits an alert log via the existing telemetry path, and refuses new orders until drift returns within limits and the gate re-enables.
+- [ ] `B8.3` Tests: unit test for threshold boundary (just inside = pass, just outside = halt); integration test that a simulated clock jump halts the engine and recovery re-enables only through the normal gate flow.
+- [ ] `B8.4` Run `cargo test --offline` (+ gateway `mvn -q test` if Java-side); evidence `logs/tracker-14/b8-clock-drift-<yyyymmdd>.md` + next free `CHG-*`.
 **DoD:** declared limit actually enforced end-to-end; halt-on-drift proven by test; no silent tolerance of skew.
 
 ---
@@ -244,36 +298,36 @@ This plan closes the remaining gaps in five phases:
 
 ### Task C1 — Bridge fan-out implementation
 **Why:** `ARROW_HFT_CONNECTIONS=1` + `ARROW_HFT_MAX_TOKENS_PER_CONNECTION=1024` cap throughput at 1,024 instruments; multi-connection sharding removes the blocker without a new subscription.
-- [ ] In `code/02_services/01_ingestion/go-bridge/` (and mirror for `06_execution_bridge` if it consumes market data), implement `N = ARROW_HFT_CONNECTIONS` sockets, round-robin token sharding across sockets, per-socket reconnect backoff, and aggregate `ARROW_TICK_COUNTS` (file-persisted `/tmp/arrow-tick-counts.txt`).
-- [ ] Keep single-connection behavior bit-identical when `N=1` (no regression to current 1,024 path).
-- [ ] Add Go tests: `TestTokenShardingDeterministic` (same manifest → same socket assignment), `TestPerSocketReconnectIsolation` (one socket down → others keep streaming), `TestAggregateCounts`.
-- [ ] `go test -race ./...` in both bridge modules.
-- [ ] Evidence `logs/tracker-14/c1-multiconn-<yyyymmdd>.md` + `CHG-068`.
+- [ ] `C1.1` In `code/02_services/01_ingestion/go-bridge/` (and mirror for `06_execution_bridge` if it consumes market data), implement `N = ARROW_HFT_CONNECTIONS` sockets, round-robin token sharding across sockets, per-socket reconnect backoff, and aggregate `ARROW_TICK_COUNTS` (file-persisted `/tmp/arrow-tick-counts.txt`).
+- [ ] `C1.2` Keep single-connection behavior bit-identical when `N=1` (no regression to current 1,024 path).
+- [ ] `C1.3` Add Go tests: `TestTokenShardingDeterministic` (same manifest → same socket assignment), `TestPerSocketReconnectIsolation` (one socket down → others keep streaming), `TestAggregateCounts`.
+- [ ] `C1.4` `go test -race ./...` in both bridge modules.
+- [ ] `C1.5` Evidence `logs/tracker-14/c1-multiconn-<yyyymmdd>.md` + `CHG-068`.
 **DoD:** `N>1` streams N×1,024 instruments; single-socket path unchanged; tests green.
 
 ### Task C2 — Config parity + pin update
 **Why:** Project requires Java↔Go config parity (`ING-UNIT-018` pattern); new keys must be mirrored and rejected consistently.
-- [ ] Add `ARROW_HFT_CONNECTIONS`, `ARROW_HFT_MAX_TOKENS_PER_CONNECTION` to the parity table in `ConfigParityTest` (Java) and `hft_policy_test.go` (Go); reject non-integer/out-of-range with Go FATAL 2 / Java throw.
-- [ ] Confirm `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` still flow through `hftRange`/`hftPin`.
-- [ ] Evidence + `CHG-069`.
+- [ ] `C2.1` Add `ARROW_HFT_CONNECTIONS`, `ARROW_HFT_MAX_TOKENS_PER_CONNECTION` to the parity table in `ConfigParityTest` (Java) and `hft_policy_test.go` (Go); reject non-integer/out-of-range with Go FATAL 2 / Java throw.
+- [ ] `C2.2` Confirm `ARROW_HFT_LATENCY_MS`/`ARROW_HFT_CONNECTIONS` still flow through `hftRange`/`hftPin`.
+- [ ] `C2.3` Evidence + `CHG-069`.
 **DoD:** parity tests green; divergent config fails in both languages.
 
 ### Task C3 — Losslessness re-validation at scale
 **Why:** Multi-connection must not break the count-based losslessness guarantee (`ING-TCP-001`).
-- [ ] Run `reconcile-compare.py` multi-epoch across N sockets; assert 0 lost / 0 extra / 0 vanished per token.
-- [ ] Evidence `logs/tracker-14/c3-losslessness-multiconn-<yyyymmdd>.md` + `CHG-070`.
+- [ ] `C3.1` Run `reconcile-compare.py` multi-epoch across N sockets; assert 0 lost / 0 extra / 0 vanished per token.
+- [ ] `C3.2` Evidence `logs/tracker-14/c3-losslessness-multiconn-<yyyymmdd>.md` + `CHG-070`.
 **DoD:** losslessness holds across sockets.
 
 ### Task C4 — SIG-PERF-001 50k baseline unblocked
 **Why:** The 50k baseline was BLOCKED by the 1,024 cap; now runnable.
-- [ ] Run the 2,433-instrument / 20 Hz manifest (`NSE_CM_EQUITY.csv`) with `N` connections; assert ≥50k ticks/s synthetic envelope, `0` wire loss, p99 append `< 5 ms` (mirror `sig-perf-001-50k-baseline` envelope proof).
-- [ ] Update `docs/08_implementation/04-signal-job.md` pending-item `SIG-PERF-001` 50k half → DONE.
-- [ ] Evidence `logs/tracker-14/c4-sig-perf-50k-<yyyymmdd>.md` + `CHG-071`.
+- [ ] `C4.1` Run the 2,433-instrument / 20 Hz manifest (`NSE_CM_EQUITY.csv`) with `N` connections; assert ≥50k ticks/s synthetic envelope, `0` wire loss, p99 append `< 5 ms` (mirror `sig-perf-001-50k-baseline` envelope proof).
+- [ ] `C4.2` Update `docs/08_implementation/04-signal-job.md` pending-item `SIG-PERF-001` 50k half → DONE.
+- [ ] `C4.3` Evidence `logs/tracker-14/c4-sig-perf-50k-<yyyymmdd>.md` + `CHG-071`.
 **DoD:** 50k baseline certified; Signal job perf gate closed.
 
 ### Task C5 — 🔒 Scale-path decision record
-- [ ] Agent writes `CHG-072` recording: multi-connection built (C1–C4) AND the premium-tier alternative documented as fallback; **activation of the full 2,433 envelope is left to the human** (set activation env at human discretion). Do not auto-enable.
-- [ ] 🔒 Human chooses: (a) run multi-connection at N×1,024 within subscription, or (b) purchase premium tier. Decision recorded; no subscription purchase assumed.
+- [ ] `C5.1` Agent writes `CHG-072` recording: multi-connection built (C1–C4) AND the premium-tier alternative documented as fallback; **activation of the full 2,433 envelope is left to the human** (set activation env at human discretion). Do not auto-enable.
+- [ ] `C5.2` 🔒 Human chooses: (a) run multi-connection at N×1,024 within subscription, or (b) purchase premium tier. Decision recorded; no subscription purchase assumed.
 **DoD:** decision recorded; envelope activation gated on human choice.
 
 ---
@@ -281,40 +335,40 @@ This plan closes the remaining gaps in five phases:
 # Phase D — Production Deployment
 
 ### Task D1 — 🔒 VM provisioning + agent-verifiable checklist
-- [ ] Agent writes `docs/05_deployment/PROD_VM_PROVISIONING.md`: 7 VMs (v1 4 → v2 7: 3 Managers + N≥3 Workers + 1 O2), 500 GB SSD, role labels (`role=worker`,`role=observability`), no hostname pinning.
-- [ ] Agent provides `code/01_platform/04_scripts/prod_node_check.py` that, given SSH/API access constants, verifies per-VM disk/label/role and exits non-zero on drift.
-- [ ] 🔒 Human creates the VMs; agent's `prod_node_check.py` must pass before D2.
+- [ ] `D1.1` Agent writes `docs/05_deployment/PROD_VM_PROVISIONING.md`: 7 VMs (v1 4 → v2 7: 3 Managers + N≥3 Workers + 1 O2), 500 GB SSD, role labels (`role=worker`,`role=observability`), no hostname pinning.
+- [ ] `D1.2` Agent provides `code/01_platform/04_scripts/prod_node_check.py` that, given SSH/API access constants, verifies per-VM disk/label/role and exits non-zero on drift.
+- [ ] `D1.3` 🔒 Human creates the VMs; agent's `prod_node_check.py` must pass before D2.
 **DoD:** checklist + checker exist; human provisions.
 
 ### Task D2 — Swarm bootstrap + stack deploy
-- [ ] `make stack-selfcheck` (single-node mimic) passes; then `make stack-config DEPLOY=1` on the real swarm once D1 done.
-- [ ] Verify `docker-stack.yml` (already present) uses role-label placement, encrypted overlays, external secrets, durable volumes, pinned digests.
-- [ ] Evidence `logs/tracker-14/d2-swarm-deploy-<yyyymmdd>.md` + `CHG-073`.
+- [ ] `D2.1` `make stack-selfcheck` (single-node mimic) passes; then `make stack-config DEPLOY=1` on the real swarm once D1 done.
+- [ ] `D2.2` Verify `docker-stack.yml` (already present) uses role-label placement, encrypted overlays, external secrets, durable volumes, pinned digests.
+- [ ] `D2.3` Evidence `logs/tracker-14/d2-swarm-deploy-<yyyymmdd>.md` + `CHG-073`.
 **DoD:** prod stack deploys; no hostname-pinned placement.
 
 ### Task D3 — SWARM-* HA tests live (M3 quorum)
-- [ ] Run `make test-09` + the swarm quorum battery: 3-node ZK ensemble, Fluss replication ≥2 across 3 VMs (anti-co-location), Flink HA via ZK.
-- [ ] Evidence `logs/tracker-14/d3-swarm-ha-<yyyymmdd>.md` + `CHG-074`.
+- [ ] `D3.1` Run `make test-09` + the swarm quorum battery: 3-node ZK ensemble, Fluss replication ≥2 across 3 VMs (anti-co-location), Flink HA via ZK.
+- [ ] `D3.2` Evidence `logs/tracker-14/d3-swarm-ha-<yyyymmdd>.md` + `CHG-074`.
 **DoD:** quorum + anti-co-location proven on real VMs.
 
 ### Task D4 — FAIL-VM-LOSS-60000-001 drill
-- [ ] Drain one workload VM; measure data-path recovery `< 30 s` and order-path safe-halt `< 5 s`; assert no duplicate orders during failover.
-- [ ] Evidence `logs/tracker-14/d4-vmloss-<yyyymmdd>.md` + `CHG-075`.
+- [ ] `D4.1` Drain one workload VM; measure data-path recovery `< 30 s` and order-path safe-halt `< 5 s`; assert no duplicate orders during failover.
+- [ ] `D4.2` Evidence `logs/tracker-14/d4-vmloss-<yyyymmdd>.md` + `CHG-075`.
 **DoD:** one-VM loss tolerated; recovery within targets.
 
 ### Task D5 — PERF-PROD-60000-001 (p99 < 100 ms @ 50k)
-- [ ] Run the production perf campaign at 50k ticks/s, 3,000 instruments; assert p99 trigger-to-commit `< 100 ms` (DEC-029).
-- [ ] Evidence `logs/tracker-14/d5-perf-prod-<yyyymmdd>.md` + `CHG-076`.
+- [ ] `D5.1` Run the production perf campaign at 50k ticks/s, 3,000 instruments; assert p99 trigger-to-commit `< 100 ms` (DEC-029).
+- [ ] `D5.2` Evidence `logs/tracker-14/d5-perf-prod-<yyyymmdd>.md` + `CHG-076`.
 **DoD:** release latency target met on prod-like stack.
 
 ### Task D6 — Disaster drills DR-001..006 on prod stack
-- [ ] `make disaster-drills ARGS="--dry-run"` then `--approve` against the prod stack; assert recovery assertions for coordinator/tablet/ZK quorum/O2/gateway/network-partition faults.
-- [ ] Evidence under `logs/disaster-drills/` + `CHG-077`.
+- [ ] `D6.1` `make disaster-drills ARGS="--dry-run"` then `--approve` against the prod stack; assert recovery assertions for coordinator/tablet/ZK quorum/O2/gateway/network-partition faults.
+- [ ] `D6.2` Evidence under `logs/disaster-drills/` + `CHG-077`.
 **DoD:** all Item F drills green on prod stack.
 
 ### Task D7 — Observability finalization
-- [ ] Set alert thresholds from measured data (D5/D4); seed prod OpenObserve dashboards (`seed_dashboards.py`); verify O2 outage leaves durable local audit (`OPS-FAIL-001`).
-- [ ] Evidence `logs/tracker-14/d7-observability-<yyyymmdd>.md` + `CHG-078`.
+- [ ] `D7.1` Set alert thresholds from measured data (D5/D4); seed prod OpenObserve dashboards (`seed_dashboards.py`); verify O2 outage leaves durable local audit (`OPS-FAIL-001`).
+- [ ] `D7.2` Evidence `logs/tracker-14/d7-observability-<yyyymmdd>.md` + `CHG-078`.
 **DoD:** thresholds data-derived; dashboards live; O2-independent audit proven.
 
 ---
@@ -322,49 +376,49 @@ This plan closes the remaining gaps in five phases:
 # Phase E — Release Evidence Package
 
 ### Task E1 — Version matrix completion (rows 7–10)
-- [ ] `docs/08_implementation/12-version-compatibility-evidence.md`: rows 7 (postback) + 8 (Arrow REST) → VERIFIED (from A3/A4); row 9 (OpenObserve) → VERIFIED (from D7); row 10 (base images) → VERIFIED (pin-check).
-- [ ] No `TO_BE_VERIFIED` row remains.
+- [ ] `E1.1` `docs/08_implementation/12-version-compatibility-evidence.md`: rows 7 (postback) + 8 (Arrow REST) → VERIFIED (from A3/A4); row 9 (OpenObserve) → VERIFIED (from D7); row 10 (base images) → VERIFIED (pin-check).
+- [ ] `E1.2` No `TO_BE_VERIFIED` row remains.
 **DoD:** matrix fully VERIFIED.
 
 ### Task E2 — Full Monday gate green
-- [ ] `make gate` (static + compose + go + java + schema/perf) exits 0; capture output to `logs/tracker-14/e2-monday-gate-<yyyymmdd>.log`.
-- [ ] `make full-audit` + `make stale-tables` + `make pin-check` + `make cep-check-module` all exit 0 (update hardcoded test-count truth numbers if tests were added — see Gotchas).
+- [ ] `E2.1` `make gate` (static + compose + go + java + schema/perf) exits 0; capture output to `logs/tracker-14/e2-monday-gate-<yyyymmdd>.log`.
+- [ ] `E2.2` `make full-audit` + `make stale-tables` + `make pin-check` + `make cep-check-module` all exit 0 (update hardcoded test-count truth numbers if tests were added — see Gotchas).
 **DoD:** every gate green.
 
 ### Task E3 — Release evidence package assembly
-- [ ] Assemble per `docs/08_implementation/11-testing-and-release.md` final-release-evidence format: every acceptance ID (AC-*) mapped to an evidence artifact; `EvidenceRecord` entries for each.
-- [ ] Produce `docs/08_implementation/RELEASE_EVIDENCE_2026-08-21.md`.
+- [ ] `E3.1` Assemble per `docs/08_implementation/11-testing-and-release.md` final-release-evidence format: every acceptance ID (AC-*) mapped to an evidence artifact; `EvidenceRecord` entries for each.
+- [ ] `E3.2` Produce `docs/08_implementation/RELEASE_EVIDENCE_2026-08-21.md`.
 **DoD:** every required AC has an evidence pointer.
 
 ### Task E4 — Docs consistency reconciliation
-- [ ] Run `make docs-audit`; fix any drift (status banners, table counts, ownership matrix). Update `docs/08_implementation/00-start-here.md` "Current readiness" table to reflect A–E completion.
+- [ ] `E4.1` Run `make docs-audit`; fix any drift (status banners, table counts, ownership matrix). Update `docs/08_implementation/00-start-here.md` "Current readiness" table to reflect A–E completion.
 **DoD:** docs-audit green; readiness table truthful.
 
 ### Task E5 — 🔒 DEC-044 single-operator release review + sign-off
-- [ ] Review `RELEASE_EVIDENCE_2026-08-21.md` + `CHG-067` checklist.
-- [ ] 🔒 Saurabh executes the single-operator approval (evidence hash + gate epoch) and records `CHG-079` (status flip `Blocked` → `Approved-for-Testing`, live money still gated).
-- [ ] Agent flips the dossier status banners to `Approved-for-testing` after signature.
+- [ ] `E5.1` Review `RELEASE_EVIDENCE_2026-08-21.md` + `CHG-067` checklist.
+- [ ] `E5.2` 🔒 Saurabh executes the single-operator approval (evidence hash + gate epoch) and records `CHG-079` (status flip `Blocked` → `Approved-for-Testing`, live money still gated).
+- [ ] `E5.3` Agent flips the dossier status banners to `Approved-for-testing` after signature.
 **DoD:** reviewed, signed, status flipped; live money remains blocked until a separate explicit go-live decision.
 
 ### Task E5b — Audit legal-hold / immutability evidence (Cloudflare R2)
 **Why:** Money-path audit must be provably immutable and retrievable. On R2 the WORM mechanism is prefix bucket-locks (S3 Object Lock API is unsupported — outside our control); the API token for programmatic verification was never issued.
-- [ ] 🔒 Human creates a scoped Cloudflare API token (R2 read + retention admin).
-- [ ] Agent extends `code/01_platform/04_scripts/audit_r2.py` (or adds `r2_legal_hold_check.py`) to verify: prefix retention rules active on audit buckets, retrieval of a sampled object, hash-chain spot check against `AuditHashChain`.
-- [ ] Record limitation honestly: R2 bucket-locks ≠ S3 Object Lock; document residual risk in the CHG.
-- [ ] Evidence `logs/tracker-14/e5b-legalhold-<yyyymmdd>.md` + next free `CHG-*`.
+- [ ] `E5b.1` 🔒 Human creates a scoped Cloudflare API token (R2 read + retention admin).
+- [ ] `E5b.2` Agent extends `code/01_platform/04_scripts/audit_r2.py` (or adds `r2_legal_hold_check.py`) to verify: prefix retention rules active on audit buckets, retrieval of a sampled object, hash-chain spot check against `AuditHashChain`.
+- [ ] `E5b.3` Record limitation honestly: R2 bucket-locks ≠ S3 Object Lock; document residual risk in the CHG.
+- [ ] `E5b.4` Evidence `logs/tracker-14/e5b-legalhold-<yyyymmdd>.md` + next free `CHG-*`.
 **DoD:** retention rules verified programmatically; retrieval + integrity sampled; limitation documented.
 
 ### Task E5c — Missing named E2E fixture artifacts
 **Why:** Several ingestion/network scenarios are named in `docs/02_requirements/09-acceptance-matrix.md` whose building blocks and unit tests exist, but the dated end-to-end evidence artifacts were never produced (audit finding B5).
-- [ ] Grep the acceptance matrix for rows still marked `EVIDENCE_BLOCKED` / `NOT_IMPLEMENTED` whose implementing tests exist green.
-- [ ] For each, run the env-gated integration test against the dev cluster and save the artifact under `logs/tracker-14/<test-id>-<yyyymmdd>/`.
-- [ ] Flip the matrix cell to point at the artifact; rerun `make full-audit`.
+- [ ] `E5c.1` Grep the acceptance matrix for rows still marked `EVIDENCE_BLOCKED` / `NOT_IMPLEMENTED` whose implementing tests exist green.
+- [ ] `E5c.2` For each, run the env-gated integration test against the dev cluster and save the artifact under `logs/tracker-14/<test-id>-<yyyymmdd>/`.
+- [ ] `E5c.3` Flip the matrix cell to point at the artifact; rerun `make full-audit`.
 **DoD:** zero matrix rows remain blocked solely for lack of a produced artifact (any still-blocked row cites an external cause).
 
 ### Task E6 — Final verification
-- [ ] Run: `make full-audit && make gate && make pin-check && make cep-check-module && make static-check` — all exit 0.
-- [ ] `cd code && mvn -q test -pl common,02_services/01_ingestion,02_services/02_compute` green; `cargo test --offline` green; `go test -race ./...` green.
-- [ ] Mark every checkbox above `[x]`.
+- [ ] `E6.1` Run: `make full-audit && make gate && make pin-check && make cep-check-module && make static-check` — all exit 0.
+- [ ] `E6.2` `cd code && mvn -q test -pl common,02_services/01_ingestion,02_services/02_compute` green; `cargo test --offline` green; `go test -race ./...` green.
+- [ ] `E6.3` Mark every checkbox above `[x]`.
 **DoD:** whole-plan acceptance criteria satisfied.
 
 ---
@@ -379,11 +433,11 @@ This plan closes the remaining gaps in five phases:
 - **No scope creep:** ranking/reservations/decisions/multi-broker/BSE/K8s are explicitly out of scope.
 
 ## Post-Completion (manual / external)
-- 🔒 Provision cloud VMs (D1) — human.
-- 🔒 Provide broker sandbox + (later) real credentials (A) — human.
-- 🔒 Premium-tier subscription decision (C5) — human.
-- 🔒 Final go-live switch beyond Approved-for-Testing (E5) — human, separate decision.
-- Broker-side contract drift (new API versions) — monitor via `make pin-check` + `version_matrix_verify.py`.
+- [ ] `PC.1` 🔒 Provision cloud VMs (D1) — human.
+- [ ] `PC.2` 🔒 Provide broker sandbox + (later) real credentials (A) — human.
+- [ ] `PC.3` 🔒 Premium-tier subscription decision (C5) — human.
+- [ ] `PC.4` 🔒 Final go-live switch beyond Approved-for-Testing (E5) — human, separate decision.
+- [ ] `PC.5` Broker-side contract drift (new API versions) — monitor via `make pin-check` + `version_matrix_verify.py`.
 
 ---
 
