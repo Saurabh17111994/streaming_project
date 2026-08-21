@@ -36,6 +36,7 @@
 | `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
 | `B8` | Clock-drift safety enforcement | — | DONE |
+| `B9` | HTTP bridge transport into production path (WP-2 remainder) | — | DONE |
 | `C1` | Bridge fan-out plug-and-play (1→3) | — | DONE |
 | `C2` | Config parity + pin update | C1 | DONE |
 | `C3` | Losslessness re-validation at scale | C1+C2 | DONE |
@@ -319,6 +320,14 @@ This plan closes the remaining gaps in five phases:
 - [x] `B8.3` 7 monitor tests (±200/±201 boundary symmetric, fail-closed on probe error, halt clears approvals, idempotent breaches, within-limit no-op, sanctioned-path-only recovery incl. rejected direct transition + zero auto-recovery) + config default/override test.
 - [x] `B8.4` Suite green 144 passed / 0 failed (was 136). Java-side not needed (gap was execution-side only). Evidence `logs/nautilus-execution/b8-clock-drift-20260821.md` + CHG-064.
 **DoD:** declared limit actually enforced end-to-end; halt-on-drift proven by test; no silent tolerance of skew.
+
+### Task B9 — HTTP bridge transport into production path (WP-2 remainder)
+**Why:** Audit real-code item #1: the factory always hardcoded `FakeBridge`; `HttpBridgeClient` existed but was never selectable in the live path. Get the production transport (HTTP `/v1/commands` + WS `/v1/events` intake w/ reconnect) into the service the operator actually runs, without placing orders (gate stays HALTED).
+- [x] `B9.1` `BridgeSelection { Fake | Http{base_url, auth_token} }`, `from_config(&ServiceConfig)`, `mode()` (never logs token); `BridgeExecutionClientFactory` holds a selection (default `Fake`); `create()` picks `FakeBridge` or `HttpBridgeClient` (lazy connect = constructible offline). `LiveNodeRuntime::build_with_bridge(selection)`; `build()` keeps Fake default. CHG-079.
+- [x] `B9.2` Config: `BRIDGE_AUTH_TOKEN` → `bridge_auth_token` (default empty). `main.rs` derives + logs bridge mode. Compose passes `BRIDGE_AUTH_TOKEN` from the bridge's own `${EXECUTION_BRIDGE_AUTH_TOKEN:-local-only}` so both sides agree (BRIDGE_ENDPOINT already set). CHG-079.
+- [x] `B9.3` Tests: +5 executor (token read; selection fake-without-endpoint; selection http-with-token; factory http-create offline; runtime http-build halts). Suite green `cargo test --offline --lib` 153 PASS (was 148). **Live interop:** `HttpBridgeClient` round-trips the real Go fake bridge `cargo test --offline --test live_go_bridge` 1 PASS; bridge healthz `{"mode":"fake","status":"UP"}`.
+- [x] `B9.4` Evidence `logs/nautilus-execution/wp2-httpbridge-production-path-20260821.md` + CHG-079; stale "take_reports returns None" doc note closed (§2, 20-...-plan).
+**DoD:** production bridge transport is what runs when `BRIDGE_ENDPOINT` is configured; offline default unchanged; gate boots HALTED; selection unit-tested + live-interop-proven.
 
 ---
 

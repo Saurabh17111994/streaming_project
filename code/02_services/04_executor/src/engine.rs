@@ -4,11 +4,13 @@
 //! [`LiveNodeBuilder`] API — without a market-data client or strategy actor. The service always
 //! boots `HALTED` and the bridge execution client is the only registered exec client.
 //!
-//! The `LiveNode` is now fully constructible in the offline slice: the execution client is
-//! wired via `FakeBridge` (deterministic, no network) and shares the kernel cache through the
-//! `CacheView` supplied by `LiveNodeBuilder` (T4.5 resolved). The production `HttpBridgeClient`
-//! remains deferred, but construction and the `BridgeExecutionClient` gate (`HALTED` default)
-//! are proven.
+//! The `LiveNode` is fully constructible: the execution client shares the kernel cache through
+//! the `CacheView` supplied by `LiveNodeBuilder` (T4.5 resolved). The bridge transport is
+//! selected by [`BridgeSelection`]: the deterministic `FakeBridge` by default (offline slice),
+//! or the production `HttpBridgeClient` (HTTP `/v1/commands` + WS `/v1/events` intake with
+//! reconnect) when a `BRIDGE_ENDPOINT` is configured (WP-2 remainder, 2026-08-21). Either way
+//! the `BridgeExecutionClient` gate boots `HALTED`, so no broker command flows until an
+//! authorized approval advances the gate.
 //!
 //! [`LiveNodeRuntime`] (Workstream B slice, 2026-08-21) now drives the node: the hosted run
 //! loop (`NodeRunMode::Hosted` — the service keeps its own Ctrl-C / SIGTERM handling),
@@ -32,7 +34,8 @@ use nautilus_model::{
     identifiers::{AccountId, ClientId, TraderId, Venue},
 };
 
-use crate::bridge::FakeBridge;
+use crate::bridge::{FakeBridge, HttpBridgeClient};
+use crate::config::ServiceConfig;
 use crate::execution::BridgeExecutionClient;
 
 /// Marker configuration accepted by the bridge exec client.
@@ -48,12 +51,63 @@ impl ClientConfig for BridgeClientConfig {
 /// Execution-client factory registered into the [`LiveNodeBuilder`].
 ///
 /// The construction path is verified offline (see [`EngineFactory::verify_construction_path`])
-/// and now actually constructs the client against the LiveNode's kernel cache via the
-/// `CacheView` supplied by the builder. The bridge is the deterministic `FakeBridge` for the
-/// offline slice; the production `HttpBridgeClient` is wired in a later phase. The factory
-/// always boots the client `HALTED` (via `BridgeExecutionClient::new`).
-#[derive(Debug)]
-pub struct BridgeExecutionClientFactory;
+/// and constructs the client against the LiveNode's kernel cache via the `CacheView` supplied
+/// by the builder. Which bridge transport backs the client is decided by the [`BridgeSelection`]
+/// held by the factory — `Fake` (default) or `Http`. The factory always boots the client
+/// `HALTED` (via `BridgeExecutionClient::new`).
+#[derive(Debug, Clone)]
+pub struct BridgeExecutionClientFactory {
+    selection: BridgeSelection,
+}
+
+impl Default for BridgeExecutionClientFactory {
+    fn default() -> Self {
+        Self {
+            selection: BridgeSelection::Fake,
+        }
+    }
+}
+
+/// Which bridge transport backs the execution client.
+///
+/// - [`BridgeSelection::Fake`] — deterministic in-process fake (offline slice / tests).
+/// - [`BridgeSelection::Http`] — production `HttpBridgeClient` against the Go bridge
+///   (`BRIDGE_ENDPOINT` + optional `BRIDGE_AUTH_TOKEN`). Constructing it performs no I/O;
+///   the connection is established lazily by the run loop's connect path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeSelection {
+    Fake,
+    Http {
+        base_url: String,
+        auth_token: String,
+    },
+}
+
+impl BridgeSelection {
+    /// Derives the selection from service config: a non-empty `BRIDGE_ENDPOINT` selects the
+    /// production HTTP transport; otherwise the offline fake stays the default (fail-closed:
+    /// no endpoint means no network transport).
+    #[must_use]
+    pub fn from_config(cfg: &ServiceConfig) -> Self {
+        if cfg.bridge_endpoint.is_empty() {
+            Self::Fake
+        } else {
+            Self::Http {
+                base_url: cfg.bridge_endpoint.clone(),
+                auth_token: cfg.bridge_auth_token.clone(),
+            }
+        }
+    }
+
+    /// Human-readable mode name for boot logs (never includes the token).
+    #[must_use]
+    pub fn mode(&self) -> &'static str {
+        match self {
+            Self::Fake => "fake",
+            Self::Http { .. } => "http",
+        }
+    }
+}
 
 impl ExecutionClientFactory for BridgeExecutionClientFactory {
     fn create(
@@ -62,8 +116,8 @@ impl ExecutionClientFactory for BridgeExecutionClientFactory {
         _config: &dyn ClientConfig,
         cache: CacheView,
     ) -> Result<Box<dyn ExecutionClient>> {
-        // Offline slice uses the deterministic FakeBridge; it shares the LiveNode's
-        // kernel cache via the supplied CacheView (the view is a read handle over
+        // The bridge transport comes from the factory's selection; either way it shares the
+        // LiveNode's kernel cache via the supplied CacheView (the view is a read handle over
         // the LiveNode's Rc<RefCell<Cache>>).
         let trader_id = TraderId::from("TRADER-001");
         let account_id = AccountId::from("ACCOUNT-001");
@@ -78,8 +132,14 @@ impl ExecutionClientFactory for BridgeExecutionClientFactory {
             None,
             cache,
         );
-        let bridge = FakeBridge::new();
-        let client = BridgeExecutionClient::new(core, Box::new(bridge));
+        let bridge: Box<dyn crate::bridge::BridgeClient> = match self.selection {
+            BridgeSelection::Fake => Box::new(FakeBridge::new()),
+            BridgeSelection::Http {
+                ref base_url,
+                ref auth_token,
+            } => Box::new(HttpBridgeClient::new(base_url.clone(), auth_token.clone())),
+        };
+        let client = BridgeExecutionClient::new(core, bridge);
         Ok(Box::new(client))
     }
 
@@ -112,7 +172,7 @@ impl EngineFactory {
         let builder = LiveNodeBuilder::from_config(cfg)?;
         let _ = builder.add_exec_client(
             Some("exec".to_string()),
-            Box::new(BridgeExecutionClientFactory),
+            Box::new(BridgeExecutionClientFactory::default()),
             Box::new(BridgeClientConfig),
         )?;
         Ok(())
@@ -142,14 +202,19 @@ pub struct LiveNodeRuntime {
 }
 
 impl LiveNodeRuntime {
-    /// Constructs the node with the bridge execution client registered (FakeBridge slice;
-    /// production `HttpBridgeClient` remains a later phase).
+    /// Constructs the node with the default (offline `FakeBridge`) selection.
     pub fn build() -> Result<Self> {
+        Self::build_with_bridge(BridgeSelection::Fake)
+    }
+
+    /// Constructs the node with an explicit bridge transport selection (WP-2 remainder:
+    /// the production path passes `BridgeSelection::from_config(&config)`).
+    pub fn build_with_bridge(selection: BridgeSelection) -> Result<Self> {
         let cfg = EngineFactory::build_node_config();
         let builder = LiveNodeBuilder::from_config(cfg)?;
         let builder = builder.add_exec_client(
             Some("exec".to_string()),
-            Box::new(BridgeExecutionClientFactory),
+            Box::new(BridgeExecutionClientFactory { selection }),
             Box::new(BridgeClientConfig),
         )?;
         let node = builder.build()?;
@@ -217,7 +282,8 @@ mod tests {
     #[test]
     fn factory_create_succeeds_with_fake_bridge() {
         let cache = CacheView::new(Rc::new(RefCell::new(Cache::default())));
-        let res = BridgeExecutionClientFactory.create("exec", &BridgeClientConfig, cache);
+        let factory = BridgeExecutionClientFactory::default();
+        let res = factory.create("exec", &BridgeClientConfig, cache);
         assert!(
             res.is_ok(),
             "factory should now create client via FakeBridge"
@@ -225,6 +291,86 @@ mod tests {
         let client = res.unwrap();
         assert_eq!(client.client_id().as_str(), "exec");
         assert_eq!(client.venue().as_str(), "SIM");
+    }
+
+    #[test]
+    fn bridge_selection_defaults_to_fake_without_endpoint() {
+        // No BRIDGE_ENDPOINT -> offline fake (fail-closed: no network transport).
+        let cfg = ServiceConfig::from_iter(std::iter::empty()).unwrap();
+        assert_eq!(BridgeSelection::from_config(&cfg), BridgeSelection::Fake);
+        assert_eq!(BridgeSelection::Fake.mode(), "fake");
+    }
+
+    #[test]
+    fn bridge_selection_http_when_endpoint_configured() {
+        // A configured BRIDGE_ENDPOINT selects the production HttpBridgeClient transport,
+        // carrying the optional auth token.
+        let cfg = ServiceConfig::from_iter(
+            [
+                ("BRIDGE_ENDPOINT", "http://execution-bridge:8787"),
+                ("BRIDGE_AUTH_TOKEN", "devtest"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+        )
+        .unwrap();
+        let sel = BridgeSelection::from_config(&cfg);
+        assert_eq!(sel.mode(), "http");
+        match sel {
+            BridgeSelection::Http {
+                base_url,
+                auth_token,
+            } => {
+                assert_eq!(base_url, "http://execution-bridge:8787");
+                assert_eq!(auth_token, "devtest");
+            }
+            _ => panic!("expected Http selection when BRIDGE_ENDPOINT is set"),
+        }
+    }
+
+    #[test]
+    fn factory_create_succeeds_with_http_selection_offline() {
+        // Constructing HttpBridgeClient performs no I/O (connection is lazy), so the factory
+        // can be exercised fully offline — the production transport is wired but never dials
+        // a broker here.
+        let cache = CacheView::new(Rc::new(RefCell::new(Cache::default())));
+        let factory = BridgeExecutionClientFactory {
+            selection: BridgeSelection::Http {
+                base_url: "http://127.0.0.1:9".to_string(),
+                auth_token: "devtest".to_string(),
+            },
+        };
+        let res = factory.create("exec", &BridgeClientConfig, cache);
+        assert!(
+            res.is_ok(),
+            "factory must create the client with HttpBridgeClient selected (lazy connect)"
+        );
+        let client = res.unwrap();
+        assert_eq!(client.client_id().as_str(), "exec");
+        assert_eq!(client.venue().as_str(), "SIM");
+    }
+
+    #[test]
+    fn runtime_builds_with_http_selection_and_halts() {
+        // The full LiveNodeRuntime construction path with the Http selection must succeed
+        // (offline — no connection is opened at construction) and still boot fail-closed.
+        let selection = BridgeSelection::Http {
+            base_url: "http://127.0.0.1:9".to_string(),
+            auth_token: "devtest".to_string(),
+        };
+        match LiveNodeRuntime::build_with_bridge(selection) {
+            Ok(rt) => assert!(rt.gate_was_halted_at_boot()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("logger is already registered") {
+                    // Global-logger singleton artifact when tests run in parallel — the
+                    // factory + construction path is what we're proving; see
+                    // live_node_builds_with_bridge_client for the same guard.
+                    return;
+                }
+                panic!("LiveNodeRuntime should build with Http selection: {e}");
+            }
+        }
     }
 
     #[test]
@@ -242,7 +388,7 @@ mod tests {
         let builder = builder
             .add_exec_client(
                 Some("exec".to_string()),
-                Box::new(BridgeExecutionClientFactory),
+                Box::new(BridgeExecutionClientFactory::default()),
                 Box::new(BridgeClientConfig),
             )
             .expect("add_exec_client should succeed");

@@ -11,6 +11,9 @@ use anyhow::{bail, Context, Result};
 pub struct ServiceConfig {
     pub gateway_endpoint: String,
     pub bridge_endpoint: String,
+    /// Bearer token for the Go execution bridge (`BRIDGE_AUTH_TOKEN`). Empty by default;
+    /// only sent to the private execution-net bridge (never logged — see main.rs).
+    pub bridge_auth_token: String,
     pub log_level: String,
     pub execution_enabled: bool,
     pub listen_addr: String,
@@ -52,10 +55,12 @@ impl ServiceConfig {
         // Optional endpoints — health-only boot is allowed without a broker.
         let gateway = get("GATEWAY_ENDPOINT").unwrap_or("").to_string();
         let bridge = get("BRIDGE_ENDPOINT").unwrap_or("").to_string();
+        let bridge_auth_token = get("BRIDGE_AUTH_TOKEN").unwrap_or("").to_string();
 
         Ok(Self {
             gateway_endpoint: gateway,
             bridge_endpoint: bridge,
+            bridge_auth_token,
             log_level: get("LOG_LEVEL").unwrap_or("info").to_string(),
             execution_enabled: false,
             listen_addr: get("EXECUTOR_LISTEN_ADDR")
@@ -69,10 +74,18 @@ impl ServiceConfig {
                 .map(|v| v.parse::<i64>())
                 .transpose()?
                 .unwrap_or(200),
-            durable_gate_enabled: get("DURABLE_GATE_ENABLED").map(|v| v == "true").unwrap_or(false),
-            durable_attempts_enabled: get("DURABLE_ATTEMPTS_ENABLED").map(|v| v == "true").unwrap_or(false),
-            durable_journal_enabled: get("DURABLE_JOURNAL_ENABLED").map(|v| v == "true").unwrap_or(false),
-            durable_audit_enabled: get("DURABLE_AUDIT_ENABLED").map(|v| v == "true").unwrap_or(false),
+            durable_gate_enabled: get("DURABLE_GATE_ENABLED")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            durable_attempts_enabled: get("DURABLE_ATTEMPTS_ENABLED")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            durable_journal_enabled: get("DURABLE_JOURNAL_ENABLED")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            durable_audit_enabled: get("DURABLE_AUDIT_ENABLED")
+                .map(|v| v == "true")
+                .unwrap_or(false),
         })
     }
 
@@ -109,6 +122,7 @@ mod tests {
             durable_audit_enabled: false,
             gateway_endpoint: "http://gw:8080".into(),
             bridge_endpoint: "http://bridge:8787".into(),
+            bridge_auth_token: String::new(),
             log_level: "info".into(),
             execution_enabled: false,
             listen_addr: "127.0.0.1:8787".into(),
@@ -140,6 +154,20 @@ mod tests {
         .unwrap();
         assert_eq!(c.bridge_endpoint, "http://bridge:8787");
         assert_eq!(c.listen_addr, "0.0.0.0:8787");
+    }
+
+    #[test]
+    fn reads_bridge_auth_token_from_env() {
+        let c = ServiceConfig::from_iter(kv(&[
+            ("BRIDGE_ENDPOINT", "http://bridge:8787"),
+            ("BRIDGE_AUTH_TOKEN", "devtest"),
+        ]))
+        .unwrap();
+        assert_eq!(c.bridge_endpoint, "http://bridge:8787");
+        assert_eq!(c.bridge_auth_token, "devtest");
+        // Default stays empty (fail-closed; no accidental credential).
+        let c = ServiceConfig::from_iter(kv(&[])).unwrap();
+        assert!(c.bridge_auth_token.is_empty());
     }
 
     #[test]
@@ -197,11 +225,14 @@ mod tests {
         assert!(!c.durable_attempts_enabled);
         assert!(!c.durable_journal_enabled);
         assert!(!c.durable_audit_enabled);
-        let c = ServiceConfig::from_iter(kv(&[("DURABLE_GATE_ENABLED", "true"), ("DURABLE_JOURNAL_ENABLED", "true")])).unwrap();
+        let c = ServiceConfig::from_iter(kv(&[
+            ("DURABLE_GATE_ENABLED", "true"),
+            ("DURABLE_JOURNAL_ENABLED", "true"),
+        ]))
+        .unwrap();
         assert!(c.durable_gate_enabled);
         assert!(!c.durable_attempts_enabled);
         assert!(c.durable_journal_enabled);
         assert!(!c.durable_audit_enabled);
     }
-
 }

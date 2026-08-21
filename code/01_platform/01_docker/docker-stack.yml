@@ -539,6 +539,12 @@ services:
       EXECUTION_ENABLED: "false"         # live-money disabled until all gates pass
       EXECUTOR_LISTEN_ADDR: 0.0.0.0:9190
       BRIDGE_ENDPOINT: http://execution-bridge:8787
+      # CHG-079 (2026-08-21): BRIDGE_ENDPOINT now selects the production HttpBridgeClient
+      # transport. When this stack is rectified to the secret-injected token (see bridge
+      # service: the Go binary requires EXECUTION_BRIDGE_AUTH_TOKEN env, currently only the
+      # secret file is mounted -> both services need the same injected value), set
+      # BRIDGE_AUTH_TOKEN here from the same source. Gate stays HALTED (EXECUTION_ENABLED
+      # false) so no command ever flows; without a token the healthz probe would 401.
       GATEWAY_ENDPOINT: http://execution-gateway:9180
       GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
 

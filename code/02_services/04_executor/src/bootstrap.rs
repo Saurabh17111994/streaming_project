@@ -91,6 +91,7 @@ mod tests {
         ServiceConfig {
             gateway_endpoint: String::new(),
             bridge_endpoint: String::new(),
+            bridge_auth_token: String::new(),
             log_level: "info".into(),
             execution_enabled: false,
             listen_addr: "127.0.0.1:8787".into(),

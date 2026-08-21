@@ -9,7 +9,10 @@
 use std::net::SocketAddr;
 
 use nautilus_execution_service::{
-    bootstrap::Runtime, config::ServiceConfig, engine::LiveNodeRuntime, http, telemetry,
+    bootstrap::Runtime,
+    config::ServiceConfig,
+    engine::{BridgeSelection, LiveNodeRuntime},
+    http, telemetry,
 };
 
 #[tokio::main]
@@ -19,11 +22,17 @@ async fn main() -> anyhow::Result<()> {
 
     let config = ServiceConfig::from_env()?;
     let addr: SocketAddr = config.listen_addr()?;
+    // WP-2 remainder (2026-08-21): a configured BRIDGE_ENDPOINT selects the production
+    // HttpBridgeClient transport; no endpoint keeps the offline FakeBridge default. Either
+    // way the execution client boots HALTED — no broker command flows until an authorized
+    // approval advances the gate.
+    let selection = BridgeSelection::from_config(&config);
+    let bridge_mode = selection.mode();
     let runtime = Runtime::init(config)?;
-    let mut node = LiveNodeRuntime::build()?;
+    let mut node = LiveNodeRuntime::build_with_bridge(selection)?;
 
     tracing::info!(
-        "nautilus-execution-service boot: gate HALTED, LiveNode hosted run loop armed, health on {addr} (execution enabled: false)"
+        "nautilus-execution-service boot: gate HALTED, bridge mode {bridge_mode}, LiveNode hosted run loop armed, health on {addr} (execution enabled: false)"
     );
 
     let state = runtime.server_state();

@@ -53,7 +53,7 @@ wire types) so the Rust protocol matches the real Go bridge byte-for-byte.
 - Evidence: `cargo test --offline` 53 pass; live interop `SUCCESS`/`fake-broker-order-1`.
 - **On completion of this plan segment:** fold into CHG-049 (or a dedicated CHG), and
   update the `19-...plan.md` T4 row to note a production `BridgeClient` transport now exists.
-- **Still open here:** `take_reports()` returns `None` (WS `/v1/events` intake via the already-pinned `tokio-tungstenite`).
+- **Still open here (2026-08-21 UPDATE — now closed, CHG-079):** the WS `/v1/events` intake is **implemented** in `src/bridge/transport.rs` — `take_reports()` spawns `report_intake_loop` (a WebSocket transport with reconnect backoff, currently a loopback implementation rather than `tokio-tungstenite`), and the production `HttpBridgeClient` transport is now **selectable in `engine.rs` via `BridgeSelection` (WP-2 remainder, CHG-079)**: a configured `BRIDGE_ENDPOINT` selects `HttpBridgeClient`, no endpoint keeps the offline `FakeBridge` default; the service still boots the gate `HALTED`. Live interop vs the Go fake bridge proven (`cargo test --offline --test live_go_bridge` PASS, 2026-08-21).
 
 ## 3. Work Packages — implementable now (ordered)
 

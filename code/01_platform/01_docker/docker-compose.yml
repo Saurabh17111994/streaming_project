@@ -411,6 +411,10 @@ services:
       GATEWAY_ENDPOINT: http://execution-gateway:9180
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-local-dev-only}
       GATEWAY_PROTOCOL_VERSION: execution-gateway.v1
+      # WP-2 remainder (2026-08-21): BRIDGE_ENDPOINT (above) selects the production
+      # HttpBridgeClient transport; this token authenticates to the private execution-bridge.
+      # Same source as the bridge's own EXECUTION_BRIDGE_AUTH_TOKEN so both sides agree.
+      BRIDGE_AUTH_TOKEN: ${EXECUTION_BRIDGE_AUTH_TOKEN:-local-only}
 
   # ---- DDL apply contract (one-shot, dev/CI) ------------------------------
   # The full 9-step DDL application contract engine (DdlApplyTool + ddl_apply.py
