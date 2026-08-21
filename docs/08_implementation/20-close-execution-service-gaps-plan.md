@@ -151,7 +151,7 @@ restart-refresh** (a restarted process would re-mint). Both closed now:
 
 ### WP-5 — T7: Babysitter live restore + launcher (Flink)
 
-- **What's built:** `BabysitterJob` reads `Positions` changelog, checkpointed ValueState version gate, offline restore tests (336 compute green).
+- **What's built:** `BabysitterJob` reads `Positions` changelog, checkpointed ValueState version gate, offline restore tests (319 compute green — docs-audit C6 2026-08-21, was 336 pre-CHG-005).
 - **Status: DONE — live-verified (CHG-053).** Both items closed:
   1. ✅ Env-gated MiniCluster + live Fluss restore run (`COMPUTE_INT_TEST_T7`): start -> checkpoint -> restore -> duplicate is a no-op, **green against the real dev Fluss cluster** (phase 1 checkpoints & retains `chk-N`, phase 2 on a fresh MiniCluster restores from it and stays a no-op observer through replay/stale/conflict; no action/execution table created, `Positions` unchanged).
   2. ✅ `submit-jobs.sh` launcher wiring for Babysitter (submit + wait for readiness/checkpoint) — already present and now exercised: waits on `counts.completed > 0`, fails closed.

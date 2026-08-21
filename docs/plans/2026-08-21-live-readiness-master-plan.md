@@ -49,7 +49,7 @@
 | `D6` | Disaster drills DR-001..006 on prod stack | D2 | TODO |
 | `D7` | Observability finalization | D5+D6 BLOCKED: needs D4/D5 measured data |
 | `E1` | Version matrix completion (rows 7–10) | A3–A5+D7 BLOCKED: needs A3–A5+D7 |
-| `E2` | Full Monday gate green | all gates green | TODO |
+| `E2` | Full Monday gate green | all gates green | DONE |
 | `E3` | Release evidence package assembly | E1+E2 | TODO |
 | `E4` | Docs consistency reconciliation | E3 | TODO |
 | `E5` | 🔒 DEC-044 single-operator release review + sign-off | 🔒 E3+E4+E5b+E5c+B6 BLOCKED: awaiting human review |
@@ -411,8 +411,8 @@ This plan closes the remaining gaps in five phases:
 **DoD:** matrix fully VERIFIED.
 
 ### Task E2 — Full Monday gate green
-- [ ] `E2.1` `make gate` (static + compose + go + java + schema/perf) exits 0; capture output to `logs/tracker-14/e2-monday-gate-<yyyymmdd>.log`.
-- [ ] `E2.2` `make full-audit` + `make stale-tables` + `make pin-check` + `make cep-check-module` all exit 0 (update hardcoded test-count truth numbers if tests were added — see Gotchas).
+- [x] `E2.1` `make gate` 12/12 PASS 2026-08-21 19:44 IST — Rust 148, Python PASS, Go 18.7s+1.12s, Java 246, full-audit PASS, pin/cep PASS — captured to `logs/soak/monday-gates-20260821-194608/` + `logs/nautilus-execution/e2-monday-gate-20260821.md`.
+- [x] `E2.2` `make full-audit` PASS (0 UNANNOTATED after 3 doc fixes: 09 Swarm resource disambiguation + 19/20 test-count stales) + `make stale-tables` PASS + `make pin-check` PASS + `make cep-check-module` PASS — CHG-076.
 **DoD:** every gate green.
 
 ### Task E3 — Release evidence package assembly
