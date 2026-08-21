@@ -1,0 +1,67 @@
+{
+  "$comment": "D1.3: replace with the real provisioning addresses. prod_node_check.py --inventory prod_vms.json must exit 0 before D2.",
+  "access": {
+    "ssh_user": "ubuntu",
+    "ssh_port": 22,
+    "ssh_key": "/home/saurabh/.ssh/id_ed25519",
+    "connect_timeout_s": 8
+  },
+  "disk_min_gb": 500,
+  "nodes": [
+    {
+      "name": "M1",
+      "host": "10.0.0.11",
+      "role": "manager",
+      "swarm": true,
+      "labels": { "role": "manager" },
+      "expect_availability": "drained",
+      "disk_min_gb": 10
+    },
+    {
+      "name": "M2",
+      "host": "10.0.0.12",
+      "role": "manager",
+      "swarm": true,
+      "labels": { "role": "manager" },
+      "expect_availability": "drained",
+      "disk_min_gb": 10
+    },
+    {
+      "name": "M3",
+      "host": "10.0.0.13",
+      "role": "manager",
+      "swarm": true,
+      "labels": { "role": "manager" },
+      "expect_availability": "drained",
+      "disk_min_gb": 10
+    },
+    {
+      "name": "W1",
+      "host": "10.0.0.21",
+      "role": "worker",
+      "swarm": true,
+      "labels": { "role": "worker" }
+    },
+    {
+      "name": "W2",
+      "host": "10.0.0.22",
+      "role": "worker",
+      "swarm": true,
+      "labels": { "role": "worker" }
+    },
+    {
+      "name": "W3",
+      "host": "10.0.0.23",
+      "role": "worker",
+      "swarm": true,
+      "labels": { "role": "worker" }
+    },
+    {
+      "name": "O1",
+      "host": "10.0.0.40",
+      "role": "observability",
+      "swarm": false,
+      "labels": { "observability": "true" }
+    }
+  ]
+}

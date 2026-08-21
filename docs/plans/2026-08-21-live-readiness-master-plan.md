@@ -33,7 +33,7 @@
 | `B3` | Gate lifecycle E2E on compose | B2 | DONE |
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | DONE* |
 | `B5` | Babysitter live observation drill | B4 | DONE* |
-| `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | 🔒 B1–B5 BLOCKED: awaiting human signature |
+| `B6` | 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles) | B6.1 DONE (CHG-080); 🔒 B6.2 OPEN: awaiting human signature |
 | `B7` | In-service durable write path (four permanent clients) | — (enable: 🔒) | DONE |
 | `B8` | Clock-drift safety enforcement | — | DONE |
 | `B9` | HTTP bridge transport into production path (WP-2 remainder) | — | DONE |
@@ -41,8 +41,8 @@
 | `C2` | Config parity + pin update | C1 | DONE |
 | `C3` | Losslessness re-validation at scale | C1+C2 | DONE |
 | `C4` | SIG-PERF-001 50k baseline unblocked | C3 | DONE |
-| `C5` | 🔒 Scale-path decision record | 🔒 C4 BLOCKED: awaiting human decision |
-| `D1` | 🔒 VM provisioning + agent-verifiable checklist | 🔒 human VMs BLOCKED: awaiting human VM provisioning |
+| `C5` | 🔒 Scale-path decision record | C5.1 DONE (CHG-081); 🔒 C5.2 OPEN: awaiting human choice |
+| `D1` | 🔒 VM provisioning + agent-verifiable checklist | D1.1+D1.2 DONE (CHG-082); 🔒 D1.3 OPEN: awaiting human VM provisioning |
 | `D2` | Swarm bootstrap + stack deploy | D1 BLOCKED: needs prod VMs (single-node mimic OK) |
 | `D3` | SWARM-* HA tests live (M3 quorum) | D2 BLOCKED: needs prod VMs |
 | `D4` | FAIL-VM-LOSS-60000-001 drill | D3 BLOCKED: needs prod VMs |
@@ -69,9 +69,9 @@
 | `A1` | auto-re-auth code + unit tests (fake clock) | one live re-auth check (auth endpoint works off-hours) |
 | `A2` | sandbox-order integration harness + contract checks | 🔒 credentials + market hours (no fills while closed) |
 | `A4` | error-path evidence: 401 auth-fail, 15 s UNKNOWN timeout | success-response half of matrix |
-| `B6` | assemble DEC-044 checklist doc | 🔒 Saurabh signature |
-| `C5` | draft scale-decision CHG record | 🔒 premium-vs-multi-connection choice |
-| `D1` | `PROD_VM_PROVISIONING.md` + `prod_node_check.py` | 🔒 you creating the VMs |
+| `B6` | assemble DEC-044 checklist doc | ✅ B6.1 assembled (CHG-080); 🔒 B6.2 Saurabh signature |
+| `C5` | draft scale-decision CHG record | ✅ C5.1 drafted (CHG-081); 🔒 C5.2 premium-vs-multi-connection choice |
+| `D1` | `PROD_VM_PROVISIONING.md` + `prod_node_check.py` | ✅ D1.1+D1.2 shipped (CHG-082, self-check + 9 tests PASS); 🔒 D1.3 you creating the VMs |
 | `D6` | re-run drills on local compose (already green there) | prod-stack rerun |
 | `E4` | docs-audit hygiene pass | final truthfulness flip post-phases |
 
@@ -300,7 +300,7 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B6 — 🔒 DEC-044 release-review checklist (human-prepared doc, agent assembles)
 **Why:** The single-operator review must be a documented, signable checklist before any live enablement.
-- [ ] `B6.1` Agent assembles `docs/05_deployment/change-records/CHG-067.md` listing every A/B evidence artifact, the gate-flow proof, and the Saurabh sign-off slot.
+- [x] `B6.1` Agent assembles `docs/05_deployment/change-records/CHG-080.md` listing every A/B evidence artifact, the gate-flow proof, and the Saurabh sign-off slot. (CHG-080; evidence `logs/nautilus-execution/b6-dec044-checklist-20260821.md`; C14 PASS — note: plan text originally named CHG-067, which was consumed by Task C2, so the checklist landed as the next free CHG-080.)
 - [ ] `B6.2` 🔒 Human (Saurabh) signs after reviewing; agent marks Phase B complete only after signature recorded.
 **DoD:** review doc complete and signed; Phase B complete.
 
@@ -365,7 +365,7 @@ This plan closes the remaining gaps in five phases:
 **DoD:** 50k baseline certified; Signal job perf gate closed.
 
 ### Task C5 — 🔒 Scale-path decision record
-- [ ] `C5.1` Agent writes `CHG-072` recording: multi-connection built (C1–C4) AND the premium-tier alternative documented as fallback; **activation of the full 2,433 envelope is left to the human** (set activation env at human discretion). Do not auto-enable.
+- [x] `C5.1` Agent writes `CHG-081` recording: multi-connection built (C1–C4) AND the premium-tier alternative documented as fallback; **activation of the full 2,433 envelope is left to the human** (set activation env at human discretion). Do not auto-enable. (CHG-081; evidence `logs/nautilus-execution/c5-scale-path-decision-20260821.md`; C14 PASS — plan text originally named CHG-072, consumed by Task B5.)
 - [ ] `C5.2` 🔒 Human chooses: (a) run multi-connection at N×1,024 within subscription, or (b) purchase premium tier. Decision recorded; no subscription purchase assumed.
 **DoD:** decision recorded; envelope activation gated on human choice.
 
@@ -374,8 +374,8 @@ This plan closes the remaining gaps in five phases:
 # Phase D — Production Deployment
 
 ### Task D1 — 🔒 VM provisioning + agent-verifiable checklist
-- [ ] `D1.1` Agent writes `docs/05_deployment/PROD_VM_PROVISIONING.md`: 7 VMs (v1 4 → v2 7: 3 Managers + N≥3 Workers + 1 O2), 500 GB SSD, role labels (`role=worker`,`role=observability`), no hostname pinning.
-- [ ] `D1.2` Agent provides `code/01_platform/04_scripts/prod_node_check.py` that, given SSH/API access constants, verifies per-VM disk/label/role and exits non-zero on drift.
+- [x] `D1.1` Agent writes `docs/05_deployment/PROD_VM_PROVISIONING.md`: 7 VMs (v1 4 → v2 7: 3 Managers + N≥3 Workers + 1 O1), 500 GB SSD, role labels (`role=worker`,`role=observability`), no hostname pinning. (CHG-082; cross-checked vs `09-production-swarm.md`, `02-environments.md`, `docker-stack.yml`.)
+- [x] `D1.2` Agent provides `code/01_platform/04_scripts/prod_node_check.py` that, given SSH/API access constants, verifies per-VM disk/label/role and exits non-zero on drift. (CHG-082; stdlib-only, `--self-check` PASS, pytest 9/9, evidence `logs/nautilus-execution/d1-vm-prep-20260821.md`.)
 - [ ] `D1.3` 🔒 Human creates the VMs; agent's `prod_node_check.py` must pass before D2.
 **DoD:** checklist + checker exist; human provisions.
 
