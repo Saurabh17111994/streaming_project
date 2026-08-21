@@ -101,7 +101,7 @@ build
   → production-like Swarm acceptance
   → approved production candidate
   → controlled production deployment while HALTED
-  → reconciliation and two-person enablement
+  → reconciliation and single-operator (Saurabh, DEC-044) enablement
 ```
 
 Rebuilding between environments creates a new artifact and restarts required promotion evidence.
@@ -115,7 +115,7 @@ Rebuilding between environments creates a new artifact and restarts required pro
 5. Deploy only where compatibility is proven; otherwise use a clean-break pre-production reset/replay plan.
 6. Verify service liveness/readiness, Fluss quorum, Flink jobs/checkpoints, projections, changelog continuity, telemetry, and storage.
 7. Keep the gate halted until post-deployment reconciliation completes.
-8. Require two distinct authenticated approvals for the current evidence hash/epoch before enablement.
+8. Require the single-operator (Saurabh, DEC-044) authenticated approval for the current evidence hash/epoch before enablement.
 
 ## CI evidence retention
 

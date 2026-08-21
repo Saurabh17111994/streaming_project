@@ -74,7 +74,7 @@ Local configuration:
 5. Verify ingestion manifest/subscriptions and Action Capture protocol readiness.
 6. Start Executor with gate `HALTED`; verify durable state, mappings, continuity, Arrow REST, and telemetry.
 7. Complete reconciliation and verify all unknown attempts are resolved. (**Reservations REMOVED 2026-08-15, CHG-005.**)
-8. Obtain two distinct authenticated approvals for the same evidence hash/epoch.
+8. Obtain the single-operator (Saurabh, DEC-044) authenticated approval for the same evidence hash/epoch.
 9. Enable only the approved gate epoch.
 
 Startup dependencies and health checks never automatically enable order placement.

@@ -2,7 +2,7 @@
 
 > **RE-SCOPED 2026-08-18 (CHG-028, DEC-041):** the Executor is the order path of the integrated
 > Execution Core. Nautilus provides the OMS/position/risk/reconciliation machinery; the
-> **go-arrow bridge** is the ONLY component permitted to call Arrow REST; the two-person gate,
+> **go-arrow bridge** is the ONLY component permitted to call Arrow REST; the single-operator (Saurabh, DEC-044) gate,
 > fencing, attempts, correlation, and immutable audit remain custom glue. Former
 > standalone-service wording ("Executor calls Arrow REST directly") is superseded. The no-OpenAlgo
 > policy (DEC-006) stands.
@@ -34,8 +34,10 @@ identity mappings; reconciles uncertain broker outcomes; and writes only executi
   a release-blocking defect.
 - A fresh installation and any restart with unverifiable durable state SHALL begin `HALTED`.
   Automatic resume from unknown state is prohibited.
-- Resume SHALL require two distinct authenticated authorized operators approving the same gate
-  epoch and evidence hash. A single approval or mismatched epoch/hash SHALL NOT enable the gate.
+- Resume SHALL require a single authenticated approval by the authorized operator (Saurabh,
+  DEC-044) of the same gate epoch and evidence hash. An unauthorized approval or a mismatched
+  epoch/hash SHALL NOT enable the gate. A second approval is not required and not checked
+  (DEC-044).
 - The core SHALL NOT infer a broker-order mapping from proximity, timing, or overloaded IDs.
   Postbacks without a unique verified mapping are quarantined.
 - Free-form command strings for position actions are prohibited. Future actions use the versioned
@@ -50,7 +52,7 @@ identity mappings; reconciles uncertain broker outcomes; and writes only executi
 | ASM-EXE-003 | Arrow REST reconciliation endpoints (`GET /user/orders`, `/user/trades`, `/user/positions`, `/order/{id}`), reachable through the go-arrow bridge, can query recent orders, client references, broker order IDs, fills, and positions with defined consistency delay. | REQ-EXE-013 |
 | ASM-EXE-004 | Arrow postbacks expose `broker_order_id`, lifecycle status, and the submitted `remarks` value for correlation. | ASM-002 |
 | ASM-EXE-005 | The deployment provides a fencing/leadership mechanism sufficient for single-active-owner enforcement per `execution_partition_id`. | ASM-009, REQ-EXE-008 |
-| ASM-EXE-006 | Two distinct authorized operators are available for the two-person resume protocol. Single-operator deployments are not production-ready. | REQ-EXE-003, RISK-012 |
+| ASM-EXE-006 | Single authorized operator `saurabh` (DEC-044) are available for the single-operator (Saurabh, DEC-044) resume protocol. Single-operator deployments are not production-ready. | REQ-EXE-003, RISK-012 |
 | ASM-EXE-007 | The broker idempotency key or equivalent mechanism (if available) prevents duplicate order submission under crash-window scenarios. If unavailable, the durable attempt protocol plus reconciliation is the sole safeguard. | RISK-002 |
 
 Assumptions are validated by the owner and method recorded in the project risks and assumptions
@@ -68,12 +70,12 @@ These behaviors are conscious trade-offs accepted by the platform:
   evidence proves all seven conditions: known gate state/epoch, valid fencing owner, no UNKNOWN
   attempts, no unresolved correlations, healthy changelog continuity, healthy Signal-job/
   checkpoint evidence, and fresh mandatory health signals. If ANY proof is missing, the core
-  remains HALTED and the two-person reconciliation/resume path applies. Every auto-resume SHALL
+  remains HALTED and the single-operator (Saurabh, DEC-044) reconciliation/resume path applies. Every auto-resume SHALL
   produce an immutable audit event and OpenObserve notification.
 - **Unknown outcomes halt the order path:** Timeout, disconnect, crash window, or ambiguous
   broker response does not retry automatically. The attempt is marked `UNKNOWN`, the gate halts,
   and reconciliation is mandatory before any retry or new order.
-- **Two-person resume with matching evidence:** Gate resume requires two distinct operators
+- **Single-operator (Saurabh, DEC-044) resume with matching evidence:** Gate resume requires single operator `saurabh` (DEC-044)
   approving the same gate epoch and evidence hash. This prevents a single compromised operator
   from enabling money-moving flow.
 - **Reconciliation is mandatory, not optional:** Unknown attempts and unresolved correlations
@@ -134,7 +136,7 @@ reservation state clause REMOVED 2026-08-15, CHG-005.)**
 
 Safe-halt SHALL block new calls within five seconds of detection.
 
-## REQ-EXE-003: Two-person resume
+## REQ-EXE-003: Single-operator (Saurabh, DEC-044) resume
 
 Resume requires:
 
@@ -143,10 +145,10 @@ Resume requires:
 3. Consumer offset/changelog continuity verification.
 4. Signal job/checkpoint health verification.
 5. Resolution of every unknown attempt.
-6. Two distinct authenticated authorized operators approving the same gate epoch and evidence
-   hash.
+6. Single-operator (Saurabh, DEC-044) approval of the same gate epoch and evidence hash.
 
-The second approval transitions `APPROVAL_PENDING` to `ENABLED`. Automatic resume is prohibited.
+The approval transitions `APPROVAL_PENDING` to `ENABLED`; a second approval is not required and
+not checked (DEC-044). Automatic resume is prohibited.
 Approvals and denied/unauthorized attempts are immutable audit events.
 
 ## REQ-EXE-004: Immutable execution-intent intake (reinstated by DEC-042)
@@ -257,7 +259,7 @@ live-money release.
    acknowledgement produces no duplicate broker order.
 2. Unknown outcomes halt within five seconds and cannot retry automatically.
 3. Restart with missing/corrupt state defaults to HALTED.
-4. Two-person approval enforces distinct identities and matching evidence epoch/hash.
+4. Single-operator (Saurabh, DEC-044) approval enforces distinct identities and matching evidence epoch/hash.
 5. Concurrent-instance/fencing tests prevent dual submission.
 6. Safety-halt requests are idempotent, scoped, audited, and applied within the defined
    fault-to-gate threshold.

@@ -18,11 +18,12 @@ package com.trading.common.schema.ownership;
  *       {@code fence_lost_ts}. The fence group is written only by the fenced
  *       leader under the deployment leadership mechanism (ASM-EXE-005 /
  *       REQ-EXE-012); a stale owner/sequence is rejected before every command.</li>
- *   <li>{@code gate-approvals} owns the two-person approval group —
- *       {@code approval_1} / {@code approval_2} (authenticated, distinct,
- *       authorized principals) and {@code approved_evidence_hash} (the exact
- *       evidence hash both approvals covered, so an epoch change invalidates
- *       the approvals).</li>
+ *   <li>{@code gate-approvals} owns the approval group — {@code approval_1}
+ *       (authenticated, authorized principal — {@code saurabh}, DEC-044), the
+ *       optional {@code approval_2} (a second approval is not required and not
+ *       checked, DEC-044) and {@code approved_evidence_hash} (the exact evidence
+ *       hash the approval covered, so an epoch change invalidates the
+ *       approval).</li>
  * </ul>
  *
  * <p>Identity columns — the PK {@code execution_partition_id},

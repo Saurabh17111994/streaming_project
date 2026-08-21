@@ -129,7 +129,7 @@ A modified instruction under the same `instruction_id` is a contract violation a
 
 ## 5.9 Gate/resume interface
 
-Gate transitions are authenticated control operations recorded in `Execution_Audit`. Resume requires broker/order reconciliation, position/fill reconciliation, changelog continuity, job/checkpoint health, resolution of unknown attempts, and two distinct authorized approvals for the same gate epoch/evidence hash.
+Gate transitions are authenticated control operations recorded in `Execution_Audit`. Resume requires broker/order reconciliation, position/fill reconciliation, changelog continuity, job/checkpoint health, resolution of unknown attempts, and a single-operator (Saurabh, DEC-044) authorized approval for the same gate epoch/evidence hash.
 
 ## 5.10 Observability interface
 

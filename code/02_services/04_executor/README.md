@@ -40,7 +40,7 @@ never treats broker REST as exactly-once.
 - [ ] Implement account/order-partition fencing.
 - [ ] Implement Arrow REST adapter and explicit result classification.
 - [ ] Implement mapping, UNKNOWN state, reconciliation, and quarantine interaction.
-- [ ] Implement two-person authenticated resume.
+- [ ] Implement single-operator authenticated resume (Saurabh, DEC-044).
 - [ ] Implement immutable audit and readiness/telemetry.
 - [ ] Pass crash-window, duplicate, fencing, reconciliation, approval, and reconstruction tests.
 

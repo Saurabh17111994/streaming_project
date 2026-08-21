@@ -14,7 +14,8 @@ import java.util.Set;
  * (docs/02_requirements/03-non-functional.md &sect;3.4.1 "Deletion";
  * docs/02_requirements/04-data.md: deletion of audit records before the approved retention period
  * is prohibited unless an approved retention-policy change, a legal-hold release,
- * and two-person authorization are recorded as immutable deletion-evidence events).
+ * and single-operator (Saurabh) authorization are recorded as immutable deletion-evidence events).
+ * <p>DEC-044 (2026-08-21): single-operator Saurabh (was two-person).
  */
 public final class AuditDeletionControl {
 
@@ -24,7 +25,7 @@ public final class AuditDeletionControl {
         APPROVED,
         REJECTED_NO_POLICY_CHANGE,
         REJECTED_LEGAL_HOLD,
-        REJECTED_REQUIRES_TWO_AUTHORIZERS,
+        REJECTED_REQUIRES_SINGLE_AUTHORIZER,
         REJECTED_UNAUTHORIZED_OPERATOR,
         REJECTED_MISSING_EVIDENCE
     }
@@ -100,7 +101,7 @@ public final class AuditDeletionControl {
 
     /**
      * Evaluates a deletion request against the known governance state. Approval
-     * always requires two distinct, authorized operators. Deletion of records
+     * requires a single authorized operator (Saurabh, DEC-044). Deletion of records
      * still inside the approved retention window additionally requires an
      * approved retention-policy change and a legal-hold release. Every attempt —
      * approved or rejected — produces an immutable deletion-evidence event.
@@ -116,8 +117,8 @@ public final class AuditDeletionControl {
                     buildEvent(request, false, null, null, timestampMs));
         }
         Set<String> distinctAuthorizers = new LinkedHashSet<>(request.authorizers());
-        if (distinctAuthorizers.size() != 2) {
-            return new DeletionDecision(Decision.REJECTED_REQUIRES_TWO_AUTHORIZERS,
+        if (distinctAuthorizers.size() != 1) {
+            return new DeletionDecision(Decision.REJECTED_REQUIRES_SINGLE_AUTHORIZER,
                     buildEvent(request, false, null, null, timestampMs));
         }
         for (String operator : distinctAuthorizers) {
@@ -138,10 +139,9 @@ public final class AuditDeletionControl {
                         buildEvent(request, false, null, null, timestampMs));
             }
         }
-        List<String> operators = new ArrayList<>(distinctAuthorizers);
-        Collections.sort(operators);
+        String single = distinctAuthorizers.iterator().next();
         DeletionEvidenceEvent evidence =
-                buildEvent(request, true, operators.get(0), operators.get(1), timestampMs);
+                buildEvent(request, true, single, null, timestampMs);
         return new DeletionDecision(Decision.APPROVED, evidence);
     }
 

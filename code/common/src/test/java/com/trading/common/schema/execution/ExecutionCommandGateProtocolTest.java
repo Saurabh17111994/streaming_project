@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
  * attempt, verified acceptance/rejection classification, and UNKNOWN &rarr;
  * evidence + halt + reconciliation. Also pins stale epoch / stale fence /
  * expired lease / wrong owner / missing approval / cross-scope rejection with
- * zero broker calls, and the two-person approval rule.
+ * zero broker calls, and the single-operator (saurabh, DEC-044) approval rule.
  */
 class ExecutionCommandGateProtocolTest {
 
@@ -57,7 +57,7 @@ class ExecutionCommandGateProtocolTest {
                        FakeBridge bridge, ExecutionCommandGate gate, String partition) {
         static Rig enabled() {
             InMemoryAttemptStore attempts = new InMemoryAttemptStore(new AtomicInteger()::incrementAndGet);
-            InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+            InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
             FakeBridge bridge = new FakeBridge();
             gates.install(enabledRow());
             ExecutionCommandGate gate = new ExecutionCommandGate(attempts, gates, bridge,
@@ -68,9 +68,9 @@ class ExecutionCommandGateProtocolTest {
 
     private static GateRow enabledRow() {
         // ENABLED, epoch 5, fence token 7 held by worker-1 (unexpired), approved by
-        // two distinct operators over evidence hash "ev-1".
+        // the single authorized operator (saurabh, DEC-044) over evidence hash "ev-1".
         return new GateRow(PARTITION, "acc", GateState.ENABLED, 5, "enabled", "ev-1",
-                "op-a", "op-b", "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null);
+                "saurabh", null, "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null);
     }
 
     private static Command cmd(String attemptId, String instruction, String hash,
@@ -124,7 +124,7 @@ class ExecutionCommandGateProtocolTest {
         InMemoryAttemptStore attempts = new InMemoryAttemptStore(new AtomicInteger()::incrementAndGet);
         InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of());
         gates.install(new GateRow(PARTITION, "acc", GateState.HALTED, 5, "halted", "ev-1",
-                "op-a", "op-b", "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null));
+                "saurabh", null, "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null));
         ExecutionCommandGate g = new ExecutionCommandGate(attempts, gates, new FakeBridge(),
                 "worker-1", () -> NOW, null);
         ExecutionCommandGate.Result r = g.execute(cmd("a-1", "ins-1", "h-1"));
@@ -158,7 +158,7 @@ class ExecutionCommandGateProtocolTest {
         FakeBridge bridge = new FakeBridge();
         // lease expired at NOW-1
         gates.install(new GateRow(PARTITION, "acc", GateState.ENABLED, 5, "enabled", "ev-1",
-                "op-a", "op-b", "ev-1", "worker-1", 7, NOW - 1000, NOW - 1, null));
+                "saurabh", null, "ev-1", "worker-1", 7, NOW - 1000, NOW - 1, null));
         ExecutionCommandGate g = new ExecutionCommandGate(attempts, gates, bridge,
                 "worker-1", () -> NOW, null);
         ExecutionCommandGate.Result r = g.execute(cmd("a-1", "ins-1", "h-1"));
@@ -188,7 +188,7 @@ class ExecutionCommandGateProtocolTest {
     /** Raises a gate whose approvals are (only) as given, then runs one command. */
     private void atomicApproval(String[] approved, Outcome expected) {
         InMemoryAttemptStore attempts = new InMemoryAttemptStore(new AtomicInteger()::incrementAndGet);
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         FakeBridge bridge = new FakeBridge();
         gates.install(new GateRow(PARTITION, "acc", GateState.ENABLED, 5, "enabled", "ev-1",
                 approved.length >= 1 ? approved[0] : null, approved.length >= 2 ? approved[1] : null,
@@ -245,33 +245,37 @@ class ExecutionCommandGateProtocolTest {
         assertThat(rig.bridge.total).isEqualTo(1);
     }
 
-    // ---- two-person approval ----
+    // ---- single-operator (Saurabh) approval (DEC-044) ----
 
     @Test
-    void twoDistinctAuthorizedApproversCompleteApproval() {
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+    void singleAuthorizedApproverCompletesApproval() {
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         gates.install(bootHalted());
-        assertThat(gates.approve(PARTITION, "op-a", 0, "ev-1", NOW).outcome())
-                .isEqualTo(ApprovalOutcome.APPLIED);
-        GateStateStore.ApprovalResult second = gates.approve(PARTITION, "op-b", 0, "ev-1", NOW);
-        assertThat(second.outcome()).isEqualTo(ApprovalOutcome.APPLIED);
-        assertThat(second.row().approvalsComplete()).isTrue();
-        assertThat(second.row().approvalsCover("ev-1")).isTrue();
+        GateStateStore.ApprovalResult first = gates.approve(PARTITION, "saurabh", 0, "ev-1", NOW);
+        assertThat(first.outcome()).isEqualTo(ApprovalOutcome.APPLIED);
+        assertThat(first.row().approvalsComplete()).isTrue();
+        assertThat(first.row().approvalsCover("ev-1")).isTrue();
+        // second approval after completion is already applied (single-operator gate)
+        assertThat(gates.approve(PARTITION, "saurabh", 0, "ev-1", NOW).outcome())
+                .isEqualTo(ApprovalOutcome.ALREADY_APPLIED);
     }
 
     @Test
-    void samePrincipalCannotApproveTwice() {
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+    void samePrincipalCannotApproveTwiceWhenNotYetComplete() {
+        // With single-operator, one approval completes, so a second same-principal
+        // is ALREADY_APPLIED. The SAME_PRINCIPAL path is only reachable if the
+        // store is in a partially-approved edge state — still guarded.
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         gates.install(bootHalted());
-        assertThat(gates.approve(PARTITION, "op-a", 0, "ev-1", NOW).outcome())
+        assertThat(gates.approve(PARTITION, "saurabh", 0, "ev-1", NOW).outcome())
                 .isEqualTo(ApprovalOutcome.APPLIED);
-        assertThat(gates.approve(PARTITION, "op-a", 0, "ev-1", NOW).outcome())
-                .isEqualTo(ApprovalOutcome.SAME_PRINCIPAL);
+        assertThat(gates.approve(PARTITION, "saurabh", 0, "ev-1", NOW).outcome())
+                .isEqualTo(ApprovalOutcome.ALREADY_APPLIED);
     }
 
     @Test
     void unauthorizedPrincipalCannotApprove() {
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         gates.install(bootHalted());
         assertThat(gates.approve(PARTITION, "mallory", 0, "ev-1", NOW).outcome())
                 .isEqualTo(ApprovalOutcome.UNAUTHORIZED);
@@ -281,14 +285,14 @@ class ExecutionCommandGateProtocolTest {
     void approvalRejectedWhenGateEpochChanges() {
         // An approval is for an exact gate epoch; after the epoch advances the
         // old approval must not authorize a different generation.
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         // Start already-ENABLED at epoch 5 so a subsequent halt advances to 6.
         gates.install(new GateRow(PARTITION, "acc", GateState.ENABLED, 5, "enabled", "ev-1",
                 null, null, null, "worker-1", 7, NOW - 1000, NOW + 100_000, null));
-        gates.approve(PARTITION, "op-a", 5, "ev-1", NOW);
+        gates.approve(PARTITION, "saurabh", 5, "ev-1", NOW);
         // advance the epoch (safety halt: ENABLED -> HALTED increments epoch to 6)
         gates.halt(PARTITION, gates.read(PARTITION), "reconcile", "ev-1", NOW);
-        assertThat(gates.approve(PARTITION, "op-b", 5, "ev-1", NOW).outcome())
+        assertThat(gates.approve(PARTITION, "saurabh", 5, "ev-1", NOW).outcome())
                 .isEqualTo(ApprovalOutcome.EPOCH_MISMATCH);
     }
 

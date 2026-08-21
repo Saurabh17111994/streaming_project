@@ -9,14 +9,14 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
-/** Unit tests for the two-person audit deletion governance path. */
+/** Unit tests for the single-operator (Saurabh) audit deletion governance path (DEC-044). */
 class AuditDeletionControlTest {
 
     private static final long TS = 1_700_000_000_000L;
 
     private static AuditDeletionControl.DeletionContext context() {
         return new AuditDeletionControl.DeletionContext(
-                Set.of("RPC-42"), Set.of("LHR-7"), Set.of("ops-1", "ops-2"));
+                Set.of("RPC-42"), Set.of("LHR-7"), Set.of("saurabh"));
     }
 
     private static AuditDeletionControl.DeletionRequest request(boolean withinWindow,
@@ -28,7 +28,7 @@ class AuditDeletionControlTest {
     }
 
     private static AuditDeletionControl.DeletionRequest fullRequest() {
-        return request(true, "RPC-42", "LHR-7", List.of("ops-1", "ops-2"));
+        return request(true, "RPC-42", "LHR-7", List.of("saurabh"));
     }
 
     @Test
@@ -39,43 +39,43 @@ class AuditDeletionControlTest {
         assertThat(d.evidenceEvent()).isNotNull();
         assertThat(d.evidenceEvent().approved()).isTrue();
         assertThat(d.evidenceEvent().authorizerOne()).isNotBlank();
-        assertThat(d.evidenceEvent().authorizerTwo()).isNotBlank();
+        assertThat(d.evidenceEvent().authorizerOne()).isEqualTo("saurabh");
     }
 
     @Test
     void rejectedWithoutApprovedPolicyChange() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-999", "LHR-7", List.of("ops-1", "ops-2")), context(), TS);
+                request(true, "RPC-999", "LHR-7", List.of("saurabh")), context(), TS);
         assertThat(d.decision()).isEqualTo(AuditDeletionControl.Decision.REJECTED_NO_POLICY_CHANGE);
     }
 
     @Test
     void rejectedWhileLegalHoldActive() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-42", "LHR-0", List.of("ops-1", "ops-2")), context(), TS);
+                request(true, "RPC-42", "LHR-0", List.of("saurabh")), context(), TS);
         assertThat(d.decision()).isEqualTo(AuditDeletionControl.Decision.REJECTED_LEGAL_HOLD);
     }
 
     @Test
-    void rejectedWithSingleAuthorizer() {
+    void rejectedWithNoAuthorizer() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-42", "LHR-7", List.of("ops-1")), context(), TS);
+                request(true, "RPC-42", "LHR-7", List.of()), context(), TS);
         assertThat(d.decision())
-                .isEqualTo(AuditDeletionControl.Decision.REJECTED_REQUIRES_TWO_AUTHORIZERS);
+                .isEqualTo(AuditDeletionControl.Decision.REJECTED_REQUIRES_SINGLE_AUTHORIZER);
     }
 
     @Test
-    void rejectedWhenSameOperatorTwice() {
+    void rejectedWithTwoAuthorizersWhenOneRequired() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-42", "LHR-7", List.of("ops-1", "ops-1")), context(), TS);
+                request(true, "RPC-42", "LHR-7", List.of("saurabh", "ops-2")), context(), TS);
         assertThat(d.decision())
-                .isEqualTo(AuditDeletionControl.Decision.REJECTED_REQUIRES_TWO_AUTHORIZERS);
+                .isEqualTo(AuditDeletionControl.Decision.REJECTED_REQUIRES_SINGLE_AUTHORIZER);
     }
 
     @Test
     void rejectedWhenOperatorNotAuthorized() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-42", "LHR-7", List.of("ops-1", "intruder")), context(), TS);
+                request(true, "RPC-42", "LHR-7", List.of("intruder")), context(), TS);
         assertThat(d.decision())
                 .isEqualTo(AuditDeletionControl.Decision.REJECTED_UNAUTHORIZED_OPERATOR);
     }
@@ -84,7 +84,7 @@ class AuditDeletionControlTest {
     void rejectedWhenRequestMissingEvidence() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
                 new AuditDeletionControl.DeletionRequest("", "Execution_Audit:2024-06-01",
-                        true, "RPC-42", "LHR-7", List.of("ops-1", "ops-2")),
+                        true, "RPC-42", "LHR-7", List.of("saurabh")),
                 context(), TS);
         assertThat(d.decision())
                 .isEqualTo(AuditDeletionControl.Decision.REJECTED_MISSING_EVIDENCE);
@@ -93,9 +93,9 @@ class AuditDeletionControlTest {
     @Test
     void approvedOutsideRetentionWindowWithoutPolicyChange() {
         // Records past the approved retention window: normal expiry, no policy-change or
-        // legal-hold evidence required — two-person authorization still applies.
+        // legal-hold evidence required — single-operator authorization still applies.
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(false, null, null, List.of("ops-1", "ops-2")), context(), TS);
+                request(false, null, null, List.of("saurabh")), context(), TS);
         assertThat(d.decision()).isEqualTo(AuditDeletionControl.Decision.APPROVED);
         assertThat(d.evidenceEvent().withinRetentionWindow()).isFalse();
     }
@@ -142,7 +142,7 @@ class AuditDeletionControlTest {
         AuditDeletionControl.DeletionEvidenceEvent b =
                 AuditDeletionControl.evaluate(
                         new AuditDeletionControl.DeletionRequest("del-2", "Execution_Audit:2024-06-01",
-                                true, "RPC-42", "LHR-7", List.of("ops-1", "ops-2")),
+                                true, "RPC-42", "LHR-7", List.of("saurabh")),
                         context(), TS).evidenceEvent();
         assertThat(AuditDeletionControl.classify(a, b))
                 .isEqualTo(ImmutabilityProtocol.Outcome.ACCEPTED);
@@ -163,7 +163,7 @@ class AuditDeletionControlTest {
     @Test
     void rejectedAttemptStillEmitsEvidenceEvent() {
         AuditDeletionControl.DeletionDecision d = AuditDeletionControl.evaluate(
-                request(true, "RPC-999", "LHR-7", List.of("ops-1", "ops-2")), context(), TS);
+                request(true, "RPC-999", "LHR-7", List.of("saurabh")), context(), TS);
         assertThat(d.decision()).isEqualTo(AuditDeletionControl.Decision.REJECTED_NO_POLICY_CHANGE);
         assertThat(d.evidenceEvent()).isNotNull();
         assertThat(d.evidenceEvent().approved()).isFalse();

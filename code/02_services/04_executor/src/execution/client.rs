@@ -45,6 +45,7 @@ use nautilus_model::{
     types::{AccountBalance, Currency, MarginBalance, Price, Quantity},
 };
 
+use crate::resilience::{AttemptError, RetryConfig, RetryError, RetryOrchestrator};
 use crate::{
     bridge::{
         protocol::{
@@ -55,7 +56,6 @@ use crate::{
     },
     gate::{ExecState, Gate},
 };
-use crate::resilience::{AttemptError, RetryConfig, RetryError, RetryOrchestrator};
 
 /// A bridge command awaiting its round-trip in the pump.
 struct PendingJob {
@@ -814,17 +814,19 @@ mod tests {
         assert!(health.health_does_not_imply_enabled());
 
         // Sanctioned path reaches APPROVAL_PENDING; ENABLED requires the
-        // two-approval gate (INVARIANT-003), which cannot be bypassed via advance_gate.
+        // single-operator (saurabh, DEC-044) approval gate (INVARIANT-003),
+        // which cannot be bypassed via advance_gate.
         client.advance_gate(ExecState::Reconciling).unwrap();
         client.advance_gate(ExecState::ApprovalPending).unwrap();
-        assert_eq!(client.advance_gate(ExecState::Enabled).is_err(), true);
+        assert!(
+            client.advance_gate(ExecState::Enabled).is_err(),
+            "gate must reject unsanctioned enable"
+        );
         {
             let mut g = client.gate.borrow_mut();
-            g.add_authorized("OPS-A");
-            g.add_authorized("OPS-B");
+            g.add_authorized("saurabh");
             g.set_epoch(1);
-            g.record_approval("OPS-A", "h1").unwrap();
-            g.record_approval("OPS-B", "h1").unwrap();
+            g.record_approval("saurabh", "h1").unwrap();
             g.enable(1).unwrap();
         }
         assert!(client.gate.borrow().can_execute());
@@ -889,16 +891,15 @@ mod tests {
     }
 
     /// Enables the safety gate along the only sanctioned path (HALTED -> RECONCILING ->
-    /// APPROVAL_PENDING -> ENABLED via two-approval, INVARIANT-003), mirroring the existing tests.
+    /// APPROVAL_PENDING -> ENABLED via single-operator (saurabh) approval, DEC-044,
+    /// INVARIANT-003), mirroring the existing tests.
     fn enable_gate(client: &BridgeExecutionClient) {
         client.advance_gate(ExecState::Reconciling).unwrap();
         client.advance_gate(ExecState::ApprovalPending).unwrap();
         let mut g = client.gate.borrow_mut();
-        g.add_authorized("OPS-A");
-        g.add_authorized("OPS-B");
+        g.add_authorized("saurabh");
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
     }
 
@@ -1003,7 +1004,10 @@ mod tests {
 
         // Bounded attempts exhaust and surface an error — never a phantom success, and never
         // an unbounded retry storm (RESILIENCE-001/003 on the live path).
-        assert!(result.is_err(), "bounded retries must surface, not fabricate success");
+        assert!(
+            result.is_err(),
+            "bounded retries must surface, not fabricate success"
+        );
         // Bounded behavior is the proof (`result` is Err, never a phantom success). The retry
         // counter is populated too, but its exact value is not cross-test deterministic because
         // `METRICS` is process-global and parallel tests share it.

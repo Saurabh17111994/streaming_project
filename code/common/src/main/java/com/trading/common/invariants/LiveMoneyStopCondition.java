@@ -21,7 +21,7 @@ public enum LiveMoneyStopCondition {
     ATTEMPT_OUTCOME_UNRESOLVED("An attempt has an unresolved outcome"),
     CHANGELOG_CHECKPOINT_UNKNOWN(
             "Changelog continuity or checkpoint health is unknown"),
-    SAFE_HALT_RESUME_UNPROVEN("Safe-halt or two-person resume is unproven"),
+    SAFE_HALT_RESUME_UNPROVEN("Safe-halt or single-operator (Saurabh, DEC-044) resume is unproven"),
     OBSERVABILITY_UNAVAILABLE("Required observability is unavailable"),
     EOD_AUDIT_RETENTION_UNVERIFIED(
             "EOD data or audit retention is unverified");

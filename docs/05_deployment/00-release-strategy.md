@@ -64,7 +64,7 @@ Use Compose to validate:
 - Ingestion, Flink, Action Capture, Executor, and Babysitter interfaces
 - Identity and ownership rules
 - Duplicate, out-of-order, malformed, partial-write, restart, and quarantine behavior
-- Safe-halt and two-person resume in simulation
+- Safe-halt and single-operator (Saurabh, DEC-044) resume in simulation
 
 ### Stage 2 — Production-like acceptance
 
@@ -87,7 +87,7 @@ Production begins with:
 2. Reconciled broker orders, fills, positions, and attempts. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 3. Verified changelog continuity and checkpoint health.
 4. Verified observability and alert ownership.
-5. Two distinct authenticated operators approving the same gate epoch/evidence hash.
+5. Single-operator (Saurabh, DEC-044) authenticated approval of the same gate epoch/evidence hash.
 6. A documented rollback and halt procedure available to operators.
 
 Automatic enablement and automatic resume are prohibited.

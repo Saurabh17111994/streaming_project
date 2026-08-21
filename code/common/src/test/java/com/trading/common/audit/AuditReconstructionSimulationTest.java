@@ -69,10 +69,10 @@ class AuditReconstructionSimulationTest {
             }
             // Deletion-governance evidence for that day joins the same chain.
             AuditDeletionControl.DeletionRequest request = new AuditDeletionControl.DeletionRequest(
-                    "del-" + days[d], INSTRUMENT, true, "PC-1", "LH-1", List.of("op-a", "op-b"));
+                    "del-" + days[d], INSTRUMENT, true, "PC-1", "LH-1", List.of("saurabh"));
             AuditDeletionControl.DeletionContext context = new AuditDeletionControl.DeletionContext(
                     java.util.Set.of("PC-1"), java.util.Set.of("LH-1"),
-                    java.util.Set.of("op-a", "op-b"));
+                    java.util.Set.of("saurabh"));
             AuditDeletionControl.DeletionDecision decision =
                     AuditDeletionControl.evaluate(request, context, 1_700_000_000_000L + d);
             AuditHashChain.AuditEvent evidence = decision.evidenceEvent().asAuditEvent();
@@ -201,12 +201,12 @@ class AuditReconstructionSimulationTest {
     }
 
     @Test
-    @DisplayName("an approved deletion is a governed, two-person decision")
+    @DisplayName("an approved deletion is a governed, single-operator (Saurabh) decision")
     void approvedDeletionRequiresGovernance() {
         AuditDeletionControl.DeletionRequest request = new AuditDeletionControl.DeletionRequest(
-                "del-governed", INSTRUMENT, true, "PC-2", "LH-2", List.of("op-a", "op-b"));
+                "del-governed", INSTRUMENT, true, "PC-2", "LH-2", List.of("saurabh"));
         AuditDeletionControl.DeletionContext context = new AuditDeletionControl.DeletionContext(
-                java.util.Set.of("PC-2"), java.util.Set.of("LH-2"), java.util.Set.of("op-a", "op-b"));
+                java.util.Set.of("PC-2"), java.util.Set.of("LH-2"), java.util.Set.of("saurabh"));
         AuditDeletionControl.DeletionDecision decision =
                 AuditDeletionControl.evaluate(request, context, 1_700_000_000_000L);
         assertThat(decision.decision()).isEqualTo(AuditDeletionControl.Decision.APPROVED);

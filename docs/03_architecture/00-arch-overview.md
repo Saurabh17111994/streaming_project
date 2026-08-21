@@ -21,7 +21,7 @@ It independently captures broker postbacks, builds order-lifecycle and fill-deri
 The platform has two safety postures:
 
 - **Data path:** may recover automatically when correctness state is verifiable and may tolerate only bounded, measured data gaps or lateness.
-- **Order path:** halts new money-moving calls whenever state, identity, changelog continuity, or broker outcome is uncertain. Resume requires reconciliation and two distinct authenticated approvals.
+- **Order path:** halts new money-moving calls whenever state, identity, changelog continuity, or broker outcome is uncertain. Resume requires reconciliation and a single-operator (Saurabh, DEC-044) authenticated approval.
 
 ## Scope and non-goals
 

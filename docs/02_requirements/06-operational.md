@@ -6,8 +6,8 @@ Local operations use Docker Compose. Production operations use Docker Swarm acro
 
 ## Constraints
 
-- A process start or container health check SHALL NOT automatically enable order placement. The Executor gate SHALL begin `HALTED` and require explicit reconciliation plus two-person approval to reach `ENABLED`.
-- Automatic gate resume SHALL be prohibited. Any mechanism that enables order placement without two distinct authenticated approvals for the same gate epoch and evidence hash is a release-blocking defect.
+- A process start or container health check SHALL NOT automatically enable order placement. The Executor gate SHALL begin `HALTED` and require explicit reconciliation plus single-operator (Saurabh, DEC-044) approval to reach `ENABLED`.
+- Automatic gate resume SHALL be prohibited. Any mechanism that enables order placement without the single-operator (Saurabh, DEC-044) authenticated approval for the same gate epoch and evidence hash is a release-blocking defect.
 - Planned maintenance that affects money-moving state SHALL first halt new money-moving calls and record the gate epoch and reason before proceeding.
 - No source trading day SHALL expire before its EOD manifest is verified. Retention SHALL extend automatically while the manifest is unverified, retryable, or under reconciliation. At least three complete trading days SHALL remain live even after successful verification.
 - RPO and RTO claims SHALL be reported per failure scenario with measured evidence. Broader claims than the tested scenarios are prohibited.
@@ -25,7 +25,7 @@ Local operations use Docker Compose. Production operations use Docker Swarm acro
 | ASM-OPS-002 | S3 `ap-south-1` is accessible, supports versioning/lifecycle policies, and can complete verified EOD offload within 30 minutes. | ASM-006 |
 | ASM-OPS-003 | Fluss three-node replication/quorum and Flink S3 checkpoints operate as documented in the pinned version matrix. | ASM-008 |
 | ASM-OPS-004 | ~~OpenAlgo is reachable from the production Swarm network~~ (obsolete — OpenAlgo removed per DEC-006). Arrow REST (`https://edge.arrow.trade`) is reachable from the production Swarm network and exposes deterministic order-submission and reconciliation endpoints. | ASM-007 |
-| ASM-OPS-005 | Two distinct authorized operators are available for the two-person gate resume protocol on demand. | RISK-012 |
+| ASM-OPS-005 | Single authorized operator `saurabh` (DEC-044) are available for the single-operator (Saurabh, DEC-044) gate resume protocol on demand. | RISK-012 |
 | ASM-OPS-006 | Brokers provide sufficient reconciliation capability (query/list recent orders, client references, broker order IDs, fills, positions) with defined consistency delay. | REQ-EXE-013 |
 | ASM-OPS-007 | Security incidents can be detected and will halt affected order flow within the five-second safe-halt target. | RISK-003 |
 
@@ -50,7 +50,7 @@ The following capabilities are explicitly NOT in MVP operational scope:
 - **Kubernetes deployment and operations:** Production is Docker Swarm.
 - **Multi-broker operational procedures:** MVP supports exactly one evidence-approved broker integration.
 - **Multi-region disaster recovery:** MVP covers single-region operations with S3 durability.
-- **Automatic order-path resume after uncertainty:** Explicitly prohibited. Resume is always manual, two-person, and reconciliation-gated.
+- **Automatic order-path resume after uncertainty:** Explicitly prohibited. Resume is always manual, single-operator (Saurabh, DEC-044), and reconciliation-gated.
 - **Automatic live-gap backfill operations:** Deferred; not in MVP scope.
 - **Business analytics operations (P&L, win rate, trader dashboards):** Deferred; not in MVP scope.
 - **End-user trading alerts and notification operations:** Deferred. Operational alerts remain in scope.
@@ -66,7 +66,7 @@ Production startup order is readiness-driven:
 4. Signal and Babysitter jobs deployed from pinned artifacts and checkpoint-compatible state.
 5. Ingestion and Action Capture connect using verified protocol/schema versions.
 6. Executor starts `HALTED`, validates durable state, mappings, continuity, Arrow REST, and observability.
-7. Reconciliation completes; two authorized operators approve the same gate epoch/evidence hash before `ENABLED`.
+7. Reconciliation completes; the authorized single operator (Saurabh, DEC-044) approves the same gate epoch/evidence hash before `ENABLED`.
 
 A process start or container health check never automatically enables order placement.
 
@@ -105,13 +105,13 @@ No source day expires until its manifest is verified, and at least three complet
 
 Halt records reason, detection timestamp, scope, epoch, affected attempts (and, pre-2026-08-15, reservations — REMOVED with CHG-005), and evidence. Reconciliation checks broker orders, Arrow REST responses, mappings, fills/positions, changelog continuity, Signal job/checkpoints, and every unknown attempt.
 
-Resume requires two distinct authenticated authorized operators approving the same evidence hash and epoch. Unauthorized or mismatched approvals are rejected, audited, and alerted. Automatic resume is prohibited.
+Resume requires a single-operator (Saurabh, DEC-044) authenticated approval of the same evidence hash and epoch. Unauthorized approvals or a mismatched epoch/evidence hash are rejected, audited, and alerted. Automatic resume is prohibited.
 
 ## 6.8 Secrets and security operations
 
 Production credentials are Swarm secrets. Rotation/revocation is documented and tested for broker, Arrow REST, S3, OpenObserve, TLS, and operator credentials. Logs and support bundles run redaction checks. Audit access is role-controlled and reviewed.
 
-Security incidents halt affected order flow, rotate credentials, preserve evidence, and require reconciliation/two-person resume.
+Security incidents halt affected order flow, rotate credentials, preserve evidence, and require reconciliation/single-operator (Saurabh, DEC-044) resume.
 
 ## 6.9 Observability and alert response
 

@@ -130,7 +130,7 @@
     {
       "table_name": "Execution_Gate",
       "ddl_path": "11_execution_gate.sql",
-      "ddl_sha256": "bc201fd81e3f548cb3d70b884375addfe6829b2ff94ab36665049d587cb6f06d",
+      "ddl_sha256": "3dab809423bb8f52810cd98e7cda6a28d2691a1125dd25f12e1f4cdcd30998ed",
       "table_kind": "KV",
       "primary_key": "execution_partition_id",
       "bucket_key": null,

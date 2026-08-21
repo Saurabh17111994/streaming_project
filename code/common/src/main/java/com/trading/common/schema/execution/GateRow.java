@@ -6,8 +6,9 @@ import java.util.Objects;
 /**
  * Durable snapshot of one Execution_Gate row (v3, CHG-044) — the authorization
  * surface a money-moving command is checked against. It carries the gate
- * lifecycle ({@code state}/{@code epoch}), the two-person approval evidence
- * ({@code approval_1}/{@code approval_2}/{@code approvedEvidenceHash}), and the
+ * lifecycle ({@code state}/{@code epoch}), the single-operator (DEC-044) approval
+ * evidence ({@code approval_1}/{@code approval_2}/{@code approvedEvidenceHash} —
+ * a second approval is not required and not checked), and the
  * fenced lease ({@code ownerInstanceId}/{@code fenceToken}/{@code leaseExpiresTs}
  * plus acquisition/loss evidence). {@code epoch} is the gate-generation value;
  * {@code fenceToken} is the per-partition owner sequence that must still be
@@ -39,11 +40,9 @@ public record GateRow(
         Objects.requireNonNull(state, "state");
     }
 
-    /** The two required approvals are present, distinct, and covered an evidence hash. */
+    /** Single-operator approval (Saurabh) is present and covers an evidence hash (DEC-044). */
     public boolean approvalsComplete() {
-        return approval1 != null && approval2 != null
-                && !approval1.equals(approval2)
-                && approvedEvidenceHash != null;
+        return approval1 != null && approvedEvidenceHash != null;
     }
 
     /** Whether the approvals covered the given evidence hash exactly. */

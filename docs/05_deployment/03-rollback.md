@@ -66,7 +66,7 @@ If a call times out, disconnects, returns malformed/ambiguous data, or the Execu
 4. Reconcile fills and positions.
 5. Resolve the attempt (**and, pre-2026-08-15, reservation — REMOVED CHG-005**); never submit a blind new retry.
 6. Record immutable reconciliation evidence.
-7. Require two distinct authenticated approvals for the same gate epoch/evidence hash.
+7. Require the single-operator (Saurabh, DEC-044) authenticated approval for the same gate epoch/evidence hash.
 
 ### Normal Flink restart vs exceptional Fluss-state rebuild (DEC-038)
 
@@ -90,7 +90,7 @@ No full `raw_table_1` replay is performed on a normal restart.
 3. Reconstruct the Fluss authoritative state from `raw_table_1`.
 4. Verify state/schema compatibility before any resume.
 
-This path is exceptional recovery, not automatic rollback, and never resumes money-moving calls without reconciliation and two-person approval (safety rule above).
+This path is exceptional recovery, not automatic rollback, and never resumes money-moving calls without reconciliation and single-operator (Saurabh, DEC-044) approval (safety rule above).
 
 ### Flink checkpoint or job failure
 
@@ -127,7 +127,7 @@ The deployment is not recovered until all applicable checks pass:
 - No unknown attempts or ambiguous mappings remain without approved disposition. (**Unresolved reservations REMOVED 2026-08-15, CHG-005.**)
 - Metrics, alerts, audit, and operator access work.
 - EOD retention safety is intact.
-- Gate remains `HALTED` until two-person approval enables the verified epoch.
+- Gate remains `HALTED` until single-operator (Saurabh, DEC-044) approval enables the verified epoch.
 
 ## Recovery evidence
 

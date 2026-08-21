@@ -13,8 +13,11 @@
 -- instance that holds the partition lease), `fence_token` (monotonically
 -- increasing per partition, never reused), `fence_acquired_ts` /
 -- `fence_lost_ts` (acquisition and loss evidence), `lease_expires_ts`, and
--- `approved_evidence_hash` (the exact evidence hash both approvals covered, so
--- an epoch change or a new evidence package invalidates old approvals).
+-- `approved_evidence_hash` (the exact evidence hash the single-operator approval
+-- covered, so an epoch change or a new evidence package invalidates the
+-- approval; DEC-044 keeps `approval_1` (authenticated authorized principal
+-- `saurabh`) and retains `approval_2` as optional — a second approval is not
+-- required and not checked).
 -- `epoch` remains the gate-generation value and is NOT a substitute for the
 -- fence token: the fence token is the per-partition owner sequence that must
 -- still be valid immediately before every authorized bridge command.

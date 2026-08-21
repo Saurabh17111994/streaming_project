@@ -32,11 +32,11 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 
 | Acceptance ID | Requirement | Coverage type | Uncovered criteria | Fixture / Workload | Threshold | Evidence Artifact | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `AC-ING-001` | REQ-ING-001 | Full | — | Golden packet corpus | Decode matches byte-for-byte; unknown versions quarantined without corruption | `test/ingestion/golden-packets/` report | `EVIDENCE_BLOCKED` — corpus built (`go-bridge/testdata/golden/`), Go bridge-path decode + Java hash tests pass; full fake-broker acceptance + approved live frames pending |
-| `AC-ING-002` | REQ-ING-001, REQ-ING-002 | Full | — | Unknown protocol version | Readiness false, critical alert, no typed stream entry | `test/ingestion/protocol-version/` report | `EVIDENCE_BLOCKED` — SDK rejects unknown packet types at decode (Go test asserts no emission); Java `IngestionService` quarantines unknown `feed` (`UNKNOWN_VERSION`); readiness/critical-alert integration pending |
-| `AC-ING-003` | REQ-ING-005 | Full | — | Original bytes round-trip | Payload hash matches; lossless | `test/ingestion/round-trip/` report | `EVIDENCE_BLOCKED` — Go `raw_payload`/`payload_hash` + Java `PayloadHashValidator` golden tests pass; full stack (Fluss round-trip) pending |
+| `AC-ING-001` | REQ-ING-001 | Full | — | Golden packet corpus | Decode matches byte-for-byte; unknown versions quarantined without corruption | `test/ingestion/golden-packets/` report | `PASSED` (2026-08-21) — full fake-broker acceptance `ING-E2E-001` (`FullStackE2ETest`, evidence `logs/ing-e2e-001/`): fake HFT broker → Go bridge → IngestionService → live Fluss; forced disconnect + reconnect epoch appends resume, zero errors; corpus `golden_corpus_test.go` + `go test -count=1` ok; Java `GoldenCorpusPayloadHashTest` 3/3 + `BridgeEventParserTest` 5/5; approved LIVE frames `logs/broker-md-001/marketdata-capture-20260813.jsonl` (BROKER-MD-001) |
+| `AC-ING-002` | REQ-ING-001, REQ-ING-002 | Full | — | Unknown protocol version | Readiness false, critical alert, no typed stream entry | `test/ingestion/protocol-version/` report | `EVIDENCE_BLOCKED` — SDK rejects unknown packet types at decode (Go test asserts no emission, PASS 2026-08-21 re-run); Java `IngestionService` quarantines unknown `feed` (`UNKNOWN_VERSION`) proven by `BrokerQuarantineTest` 2/2 PASS (`mvn -o test`, 2026-08-21); remaining: readiness (false)/critical-alert integration E2E (wiring to `/readyz` + alert emission) |
+| `AC-ING-003` | REQ-ING-005 | Full | — | Original bytes round-trip | Payload hash matches; lossless | `test/ingestion/round-trip/` report | `PASSED` (2026-08-21) — full-stack Fluss round-trip `ING-E2E-001` PASS on live dev Fluss (`logs/ing-e2e-001/`): DdlBootstrap provisioned `raw_table_1` v2, schema verified (schemaId=1), ticks appended with reconnect-epoch growth, zero errors; `PayloadHashValidatorTest` 11/11 + `GoldenCorpusPayloadHashTest` 3/3; wire-losslessness ING-TCP-001 (3,072 sink rows = 3,072 ticks, 0 lost; `logs/tracker-14/losslessness-validation-20260813.md`) |
 | `AC-ING-004` | REQ-ING-005, REQ-ING-006 | Full | — | Approved typed normalization fixtures | Typed columns match reference; timestamps in UTC ms | `test/ingestion/normalization/` report | `NOT_IMPLEMENTED` |
-| `AC-ING-005` | REQ-ING-004 | Full | — | Reconnect with subscription | Manifest completeness restored; all instruments re-subscribed | `test/ingestion/reconnect/` report | `EVIDENCE_BLOCKED` — Go `resilience_100_test.go` (ING-RES-001) proves 100 forced disconnect/reconnect cycles each re-subscribe the assigned tokens (epoch-ack per cycle), FD/goroutine counts return to baseline + 2, no orphan socket (`maxConn` ≤ 1), and a healthy slot is never interrupted by a peer's reconnect loop; Java manifest-completeness restore after reconnect still needs the fake-broker integration |
+| `AC-ING-005` | REQ-ING-004 | Full | — | Reconnect with subscription | Manifest completeness restored; all instruments re-subscribed | `test/ingestion/reconnect/` report | `PASSED` (2026-08-21) — Go ING-RES-001 100-cycle reconnect + Java fake-broker integration `ING-E2E-001` PASS live: forced disconnect → in-process reconnect → second ACTIVE `subscription_ack` → tick-count grows past pre-reconnect baseline (manifest-loaded instruments re-subscribe; `logs/ing-e2e-001/` + `logs/res001-real-backoff/res001-real-backoff-20260813.out`) |
 | `AC-ING-006` | REQ-ING-009 | Full | — | Duplicate packet stream | False-positive and false-negative documented; dedup metric reports both | `test/ingestion/fingerprint/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-007` | REQ-ING-012 | Full | — | variable 50,000 ticks/s average baseline (90,000 ticks/s peak retired, DEC-036) | Memory below configured bound; bounded backlog; no acknowledged packet loss | `test/ingestion/backpressure/` report | `NOT_IMPLEMENTED` |
 | `AC-ING-008` | REQ-ING-012, REQ-PF-009 | Full | — | variable 50,000 ticks/s average baseline for full session (≈16.7 ticks/s/instrument average; 90,000 ticks/s peak retired, DEC-036) | Saturation behavior defined; checkpoint stable; recovery bounded | `test/capacity/stress-per-instrument/` report | `NOT_IMPLEMENTED` |
@@ -154,7 +154,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | `AC-EXE-002` | REQ-EXE-005 | Full | — | Crash after broker acceptance, before durable ack | No duplicate broker order; attempt state UNKNOWN; gate halted | `test/executor/crash-after-accept/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-003` | REQ-EXE-005 | Full | — | Timeout/ambiguous broker response | Mark UNKNOWN; halt within 5 seconds; no auto retry | `test/executor/unknown-outcome/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-004` | REQ-EXE-001, REQ-EXE-002 | Full | — | Restart with missing/corrupt state | Defaults to HALTED | `test/executor/restart-corrupt/` report | `NOT_IMPLEMENTED` |
-| `AC-EXE-005` | REQ-EXE-003 | Full | — | Two-person approval | Same gate epoch + evidence hash required; distinct operator identities; automatic resume rejected | `test/executor/two-person-resume/` report | `NOT_IMPLEMENTED` |
+| `AC-EXE-005` | REQ-EXE-003 | Full | — | Single-operator (Saurabh, DEC-044) approval | Same gate epoch + evidence hash required; authenticated operator identity (saurabh); a second approval is not required and not checked; automatic resume rejected | `test/executor/single-operator-resume/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-006` | REQ-EXE-008, REQ-EXE-012 | Full | — | Two concurrent Executor instances | One submits; other blocked by fencing; no dual submission | `test/executor/concurrent-fencing/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-007` | REQ-EXE-011 | Full | — | Duplicate safety-halt request | Idempotent; applied once; stale request rejected and audited | `test/executor/safety-halt-idempotent/` report | `NOT_IMPLEMENTED` |
 | `AC-EXE-008` | REQ-EXE-011 | Full | — | Cross-scope halt request | Rejected; audit captured | `test/executor/safety-halt-scope/` report | `NOT_IMPLEMENTED` |
@@ -260,7 +260,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 
 | Domain | Total ACs | Passed | Failed | Evidence Blocked | Not Implemented |
 | --- | --- | --- | --- | --- | --- |
-| Ingestion | 15 | 0 | 0 | 4 | 11 |
+| Ingestion | 15 | 0 | 0 | 1 | 11 |
 | Storage | 17 | 0 | 0 | 0 | 17 |
 | Compute | 16 | 0 | 0 | 0 | 16 |
 | Business Logic | 12 | 0 | 0 | 0 | 12 |
@@ -271,7 +271,7 @@ Every SHALL statement in every requirement MUST have a specific test or evidence
 | Observability | 10 | 0 | 0 | 0 | 10 |
 | Platform | 19 | 0 | 0 | 0 | 19 |
 | Non-functional | 12 | 0 | 0 | 7 | 5 |
-| **Total** | **152** | **0** | **0** | **13** | **139** |
+| **Total** | **152** | **0** | **0** | **10** | **139** |
 
 ---
 

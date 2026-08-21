@@ -92,7 +92,7 @@ Executor auto-resume after a restart is permitted **only** when durable evidence
 6. Healthy Signal-job/checkpoint evidence (recent successful checkpoint, no state corruption)
 7. Fresh mandatory health signals (Signal job, Action Capture, Ingestion all report healthy)
 
-If ANY proof is missing, the Executor remains `HALTED`. Reconciliation and the existing approved-resume path apply. Executor auto-resume SHALL produce an immutable audit event and OpenObserve notification including the evidence hash and every check performed. Do not leave conflicting active text that "every restart requires two-person approval" alongside this conditional rule — auto-resume is permitted only with complete proof; without it, the two-person approval path applies.
+If ANY proof is missing, the Executor remains `HALTED`. Reconciliation and the existing approved-resume path apply. Executor auto-resume SHALL produce an immutable audit event and OpenObserve notification including the evidence hash and every check performed. Do not leave conflicting active text that "every restart requires single-operator (Saurabh, DEC-044) approval" alongside this conditional rule — auto-resume is permitted only with complete proof; without it, the single-operator (Saurabh, DEC-044) approval path applies.
 
 Resumption requires:
 
@@ -101,7 +101,7 @@ Resumption requires:
 3. Changelog offset / consumer-health verification
 4. Confirmation that the signal job and checkpoints are healthy
 5. Resolution of every unknown attempt (**and, pre-2026-08-15, reservation — REMOVED CHG-005**)
-6. Two distinct authenticated operators approving the same gate epoch and evidence hash
+6. Single-operator (Saurabh, DEC-044) approval of the same gate epoch and evidence hash
 
 Existing positions may be monitored during a halt, but no new order is submitted until the gate returns to `ENABLED`.
 

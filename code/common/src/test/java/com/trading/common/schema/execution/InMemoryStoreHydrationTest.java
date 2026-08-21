@@ -22,9 +22,9 @@ class InMemoryStoreHydrationTest {
     void gateHydrateRebuildsFenceAndKeepsSequenceMonotonic() {
         InMemoryGateStateStore store = new InMemoryGateStateStore();
         // A durable row this (restarted) process has not witnessed: already fenced at token 5,
-        // two-person approved, owner exec-1.
+        // single-operator approved (saurabh, DEC-044), owner exec-1.
         GateRow durable = new GateRow("p1", "acc-1", GateState.ENABLED, 0L,
-                null, null, "op-a", "op-b", "ev-1", "exec-1", 5L, NOW, NOW + 30_000L, null);
+                null, null, "saurabh", null, "ev-1", "exec-1", 5L, NOW, NOW + 30_000L, null);
         store.hydrate(durable);
 
         GateRow recovered = store.read("p1");

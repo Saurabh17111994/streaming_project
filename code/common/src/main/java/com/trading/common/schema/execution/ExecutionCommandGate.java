@@ -147,7 +147,7 @@ public final class ExecutionCommandGate {
             return blocked(cmd, row, "fence invalid: owner/token/lease before the call");
         }
         if (!row.approvalsComplete() || !row.approvalsCover(cmd.evidenceHash())) {
-            return blocked(cmd, row, "two-person approval missing or for a different evidence package");
+            return blocked(cmd, row, "approval missing or for a different evidence package (single-operator Saurabh)");
         }
 
         // 2. Persist PREPARED with request hash + client ref + gate epoch + fence token

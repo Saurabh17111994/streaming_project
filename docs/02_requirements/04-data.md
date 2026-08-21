@@ -15,7 +15,7 @@ Every table records a schema version. Event tables are immutable; corrections ap
 - All monetary price values SHALL be stored as integer paise (BIGINT). ₹1 = 100 paise. Floating-point (DOUBLE/FLOAT) SHALL NOT be used for financial values. Conversion to decimal rupees occurs only at display/API boundaries.
 - No source data SHALL expire before verified EOD offload plus the minimum three-day live buffer. Retention SHALL extend automatically while the manifest is unverified, retryable, or under reconciliation.
 - Money-moving audit records (`Execution_Audit`, `Fills`, postback/fill audit events) SHALL be immutable, encrypted at rest in the lake tier, integrity-verifiable, access-controlled, and retained for at least one year or longer under the approved retention policy.
-- Deletion before the approved retention period SHALL require an approved policy change, legal-hold release where applicable, and two-person authorization recorded as immutable deletion-evidence events.
+- Deletion before the approved retention period SHALL require an approved policy change, legal-hold release where applicable, and single-operator (Saurabh, DEC-044) authorization recorded as immutable deletion-evidence events.
 - All state tables SHALL be rebuildable from immutable events/audit or have a documented, tested backup/restore contract.
 - Physical schemas SHALL be generated/reconciled from these logical contracts. A DDL that contradicts this document is blocked until the contract is reconciled.
 - LOG tables SHOULD use a tested `bucket.key` aligned with their dominant identity. KV tables SHALL distribute by primary key. Bucket counts SHALL be workload-tested configuration, not copied assumptions.
@@ -153,7 +153,7 @@ Key: `position_id`. Fields: `trade_context_id`, instrument, side, open/closed/cu
 
 ### Execution state
 
-- `Execution_Gate`: scope key, state, epoch, reason, detection time, evidence hash, two distinct approvals, transition timestamp, schema version.
+- `Execution_Gate`: scope key, state, epoch, reason, detection time, evidence hash, single-operator (Saurabh, DEC-044) approval (a second approval is optional, not required), transition timestamp, schema version.
 - `Execution_Attempts`: attempt/instruction/action IDs, immutable request hash, client reference, gate epoch, phase/outcome, timestamps, retry eligibility, broker response summary, schema version.
 - `Order_Correlation`: instruction/attempt/client/broker/trade/position IDs, verification state/evidence, timestamps, schema version.
 - `Execution_Audit`: immutable event ID/type, all relevant IDs, gate epoch, actor/service identity, evidence hash/summary, timestamp, schema version.

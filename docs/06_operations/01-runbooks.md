@@ -58,8 +58,8 @@ Existing positions may remain monitored, but no new money-moving call is permitt
 7. Verify Signal job and checkpoint health.
 8. Verify projection completion and quarantine disposition.
 9. Produce an evidence hash bound to the current gate epoch.
-10. Require two distinct authenticated authorized operators to approve that same hash/epoch.
-11. Transition to `ENABLED` only after the second approval.
+10. Require the single-operator (Saurabh, DEC-044) authenticated authorized approval of that same hash/epoch.
+11. Transition to `ENABLED` only after that approval.
 
 Automatic resume and approval reuse across epochs are prohibited.
 
@@ -408,7 +408,7 @@ up).
 2. Preserve access, gate, network, and execution evidence.
 3. Revoke/rotate compromised credentials using `../05_deployment/04-secrets-rotation.md`.
 4. Validate least privilege, transport, redaction, and unauthorized-control attempts.
-5. Reconcile and require two-person resume.
+5. Reconcile and require single-operator (Saurabh, DEC-044) resume.
 
 ## Execution service runbooks (gateway / nautilus / bridge) — WP-7
 
@@ -445,7 +445,7 @@ or `MemoryUtil` `InaccessibleObjectException` (`--add-opens` missing); later `in
 
 **Gate action:** the Rust service **always** boots `HALTED`; `/healthz` `trading_ready` is always false while halted. No broker command is emitted while halted, and a 503 on valid intents is the correct evidence that the private route is wired but not trading. Do not set `EXECUTION_ENABLED=true` — the config rejects it at boot (`must not be true at boot`).
 
-**Mitigation:** if `healthz` reports `ENABLED` without a two-person approval, treat as incident and halt/safety-halt. If `POST` returns 404, the T4 `http.rs` `POST /v1/intents` route is not deployed — rebuild `nautilus` from the pinned `rust:1.97.1` image with the `gateway_protocol` + `http` changes.
+**Mitigation:** if `healthz` reports `ENABLED` without a single-operator (Saurabh, DEC-044) approval, treat as incident and halt/safety-halt. If `POST` returns 404, the T4 `http.rs` `POST /v1/intents` route is not deployed — rebuild `nautilus` from the pinned `rust:1.97.1` image with the `gateway_protocol` + `http` changes.
 
 **Recovery:** no recovery to `ENABLED` without the T5 `LiveNode` fence/approval path (deferred). For T8, the 503 on valid envelopes **is** the success condition.
 
@@ -465,9 +465,9 @@ or `MemoryUtil` `InaccessibleObjectException` (`--add-opens` missing); later `in
 
 **Baseline:** audit and money-moving evidence (execution, order, fill, gate, correlation, approval, reconciliation, future position-action) is retained **at least one year** (CHG-038/DEC-043, `SAURABH-1Y-APPROVAL-2026-08-20`). Longer retention applies when the approved jurisdictional, contractual, legal-hold, or operational policy requires it. Storage is Cloudflare R2 with WORM-equivalent bucket lock (`audit_r2.py provision --set-lock`), not S3 Object Lock.
 
-**Current posture — APPROVED 2026-08-20 by Saurabh (owner, this turn):** the one-year baseline `SAURABH-1Y-APPROVAL-2026-08-20` placeholder is now **approved** by Saurabh for the current scope. Evidence bundles `t0-…`/`t4-…` `retention_policy` remains `SAURABH-1Y-APPROVAL-2026-08-20` (commits `4db6616`/`b093d97`); `two_person_review` for the T0 bundle is satisfied by this approval + the existing `saurabh_reviewer_1` review. Longer retention remains policy-driven per CHG-038/DEC-043.
+**Current posture — APPROVED 2026-08-20 by Saurabh (owner, this turn):** the one-year baseline `SAURABH-1Y-APPROVAL-2026-08-20` placeholder is now **approved** by Saurabh for the current scope. Evidence bundles `t0-…`/`t4-…` `retention_policy` remains `SAURABH-1Y-APPROVAL-2026-08-20` (commits `4db6616`/`b093d97`); under DEC-044 the evidence review requirement is satisfied by the single `saurabh` review (the legacy `two_person_review` field for the T0 bundle is satisfied by that review alone — a second reviewer is not required and not checked). Longer retention remains policy-driven per CHG-038/DEC-043.
 
-**Runbook now:** keep the approved baseline (≥1y), preserve all evidence bundles sanitized (no secrets) with `t*-SHA256SUMS`, and keep the R2 bucket lock provisioning validated (`audit_r2.py validate` with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Do not expire source data while any EOD manifest is unverified/retryable/under reconciliation (EOD controller owns retention extension). If a future jurisdictional change requires longer retention, record a new approval ID in `versions.pin`/`evidence.json` and a superseding `CHG` with two-person review.
+**Runbook now:** keep the approved baseline (≥1y), preserve all evidence bundles sanitized (no secrets) with `t*-SHA256SUMS`, and keep the R2 bucket lock provisioning validated (`audit_r2.py validate` with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Do not expire source data while any EOD manifest is unverified/retryable/under reconciliation (EOD controller owns retention extension). If a future jurisdictional change requires longer retention, record a new approval ID in `versions.pin`/`evidence.json` and a superseding `CHG` with single-operator (Saurabh, DEC-044) review.
 
 ## References
 

@@ -15,9 +15,9 @@ calls (`https://edge.arrow.trade`) and streams order-updates back. There is no i
 OpenAlgo layer (DEC-006 — no third-party layer remains policy; the bridge is first-party, pinned,
 tested protocol code wrapping the vendored `go-arrow` SDK).
 
-The two-person gate, fencing, attempt/correlation mapping, and immutable audit remain custom glue
+The single-operator (Saurabh, DEC-044) gate, fencing, attempt/correlation mapping, and immutable audit remain custom glue
 on Nautilus: Nautilus provides the OMS, position engine, risk engine, reconciliation, fill dedup,
-and event store; the custom gate layer enforces the HALTED start, two-person resume, and
+and event store; the custom gate layer enforces the HALTED start, single-operator (Saurabh, DEC-044) resume, and
 single-writer boundary.
 
 ## Inputs and owned state
@@ -36,8 +36,8 @@ ENABLED`, with `ENABLED → HALTED` on uncertainty. Every broker-facing command 
 gate epoch. Halt blocks calls within five seconds.
 
 Resume requires broker/order, position/fill, offsets/continuity, Signal checkpoint, and
-unknown-attempt reconciliation, followed by two distinct authorized approvals of the same evidence
-hash/epoch.
+unknown-attempt reconciliation, followed by a single-operator (Saurabh, DEC-044) authorized
+approval of the same evidence hash/epoch.
 
 ## Attempt protocol
 
@@ -126,14 +126,14 @@ halt-request stream is unavailable.
 
 Reconciliation uses Arrow REST endpoints (DEC-023) through the go-arrow bridge: `GET /user/orders`,
 `GET /user/trades`, `GET /user/positions`, and `GET /order/{id}`. These provide near-real-time data
-for the two-person resume protocol. Consistency delay and rate limits (10 req/sec) must be
+for the single-operator (Saurabh, DEC-044) resume protocol. Consistency delay and rate limits (10 req/sec) must be
 measured.
 
 ## Acceptance
 
 Crash-window, duplicate, timeout, rejection, malformed response, missing mapping, changelog gap,
 restart/corrupt state, fencing, safety-halt idempotency/scope, unauthorized/mismatched approval,
-two-person resume, reconciliation capability, and approved-policy reconstruction tests pass. Bridge
+single-operator (Saurabh, DEC-044) resume, reconciliation capability, and approved-policy reconstruction tests pass. Bridge
 `PlaceOrder`/modify/cancel endpoints require Arrow-sandbox smoke tests before trust (the go-arrow
 SDK order path is currently untested). Live money stays blocked until the evidence package
 approves enablement.

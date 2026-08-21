@@ -12,14 +12,14 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * In-memory {@link GateStateStore} — the offline durable boundary the
  * {ExecutionCommandGate} protocol engine and its crash-window/zero-duplicate
- * tests run against (T5, CHG-044). It is deliberately NOT a production cache:
+ * tests run against (T5, CHG-044; CHG-056 single-operator). It is deliberately NOT a production cache:
  * it can only be a lease/fence authority when the real writer is a gateway-backed
  * Fluss store using the deployment leadership/fencing mechanism (ASM-EXE-005 /
  * REQ-EXE-012). A Fluss-backed implementation satisfies the same interface.
  *
  * <p>It enforces the writes that a raw KV upsert must never be trusted to
- * provide: monotonic fence tokens with concurrent-owner rejection, distinct
- * authorized two-person approvals tied to an exact (epoch, evidence hash), and
+ * provide: monotonic fence tokens with concurrent-owner rejection, single-operator
+ * (Saurabh) approval tied to an exact (epoch, evidence hash), and
  * an exactly-once epoch increment on a safety halt.
  */
 public final class InMemoryGateStateStore implements GateStateStore {
@@ -90,34 +90,25 @@ public final class InMemoryGateStateStore implements GateStateStore {
             return ApprovalResult.of(ApprovalOutcome.UNAUTHORIZED, row,
                     "principal " + principal + " not authorized");
         }
-        // Distinct principals only. Second approval must reference the same evidence hash.
+        if (row.approvalsComplete()) {
+            return ApprovalResult.of(ApprovalOutcome.ALREADY_APPLIED, row, "approvals complete");
+        }
         if (row.approval1() != null && row.approval1().equals(principal)) {
             return ApprovalResult.of(ApprovalOutcome.SAME_PRINCIPAL, row,
                     "approver " + principal + " already approved once");
         }
-        if (row.approval2() != null && row.approval2().equals(principal)) {
-            return ApprovalResult.of(ApprovalOutcome.SAME_PRINCIPAL, row,
-                    "approver " + principal + " already approved once");
-        }
-        if (row.approvalsComplete()) {
+        if (row.approval1() != null) {
+            // Single-operator gate (DEC-044): one approval completes the gate.
+            // A second distinct principal after completion is ALREADY_APPLIED;
+            // we already returned above for complete, so this is a stale second
+            // distinct approval on an incomplete row — should not happen, but
+            // treat as already applied to avoid a second slot.
             return ApprovalResult.of(ApprovalOutcome.ALREADY_APPLIED, row, "approvals complete");
         }
-        GateRow next;
-        if (row.approval1() == null) {
-            next = new GateRow(row.partitionId(), row.accountScopeId(), row.state(), row.epoch(),
-                    row.reason(), row.evidenceHash(), principal, null, evidenceHash,
-                    row.ownerInstanceId(), row.fenceToken(), row.fenceAcquiredTs(),
-                    row.leaseExpiresTs(), row.fenceLostTs());
-        } else {
-            if (!evidenceHash.equals(row.approvedEvidenceHash())) {
-                return ApprovalResult.of(ApprovalOutcome.EPOCH_MISMATCH, row,
-                        "second approval evidence hash differs from first — not the same package");
-            }
-            next = new GateRow(row.partitionId(), row.accountScopeId(), row.state(), row.epoch(),
-                    row.reason(), row.evidenceHash(), row.approval1(), principal,
-                    evidenceHash, row.ownerInstanceId(), row.fenceToken(), row.fenceAcquiredTs(),
-                    row.leaseExpiresTs(), row.fenceLostTs());
-        }
+        GateRow next = new GateRow(row.partitionId(), row.accountScopeId(), row.state(), row.epoch(),
+                row.reason(), row.evidenceHash(), principal, null, evidenceHash,
+                row.ownerInstanceId(), row.fenceToken(), row.fenceAcquiredTs(),
+                row.leaseExpiresTs(), row.fenceLostTs());
         rows.put(partitionId, next);
         audit(new AuditRecord(partitionId, "APPROVE", nowTs, next.epoch(), next.fenceToken(),
                 "principal=" + principal, evidenceHash));

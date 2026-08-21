@@ -12,8 +12,9 @@ import java.util.List;
  * lacked: {@code owner_instance_id} (fenced executor instance), {@code fence_token}
  * (monotonic per-partition owner sequence, never reused), {@code fence_acquired_ts}
  * / {@code fence_lost_ts} (acquisition/loss evidence), {@code lease_expires_ts},
- * and {@code approved_evidence_hash} (the exact evidence hash both approvals
- * covered). {@code epoch} is the gate-generation value and is not a substitute
+ * and {@code approved_evidence_hash} (the exact evidence hash the single-operator
+ * approval covered, DEC-044; {@code approval_2} is optional — a second approval
+ * is not required and not checked). {@code epoch} is the gate-generation value and is not a substitute
  * for the fence token.
  */
 public final class ExecutionGateColumns {

@@ -34,7 +34,7 @@ Services may start concurrently. Readiness is dependency-driven, not determined 
 6. Verify Action Capture postback schema/protocol, correlation dependencies, projection readiness, and telemetry.
 7. Start Executor with gate `HALTED`; verify durable execution state, identity mappings, changelog continuity, Arrow REST contract/readiness, fencing, and telemetry.
 8. Reconcile broker orders, fills, positions, attempts, and incomplete projections. (**Reservations REMOVED 2026-08-15, CHG-005.**)
-9. Require two distinct authenticated operators to approve the same gate epoch/evidence hash before `ENABLED`.
+9. Require the single-operator (Saurabh, DEC-044) authenticated approval of the same gate epoch/evidence hash before `ENABLED`.
 
 A process may be live while not ready. Startup never automatically enables order placement.
 
@@ -74,7 +74,7 @@ Planned maintenance:
 4. Drain accepted ingestion/postback work within bounded deadlines.
 5. Stop or update services according to the approved change plan.
 6. Verify readiness, continuity, replication, storage, and telemetry after restart.
-7. Keep gate `HALTED` until reconciliation and two-person approval complete.
+7. Keep gate `HALTED` until reconciliation and single-operator (Saurabh, DEC-044) approval complete.
 
 Forced termination creates an audit event and requires reconciliation before resumption.
 

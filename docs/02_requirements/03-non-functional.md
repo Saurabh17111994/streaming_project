@@ -9,7 +9,7 @@
 - Order lifecycle and position lifecycle SHALL remain separate aggregates. A position projection SHALL NOT be inferred from a single order lifecycle row.
 - Older or out-of-order postbacks SHALL NOT regress authoritative lifecycle or position state. Stale updates SHALL be rejected using versioned source event checks.
 - No source data SHALL expire before verified EOD offload plus the minimum three-day live buffer. Retention extension SHALL be automatic while the manifest is unverified.
-- Two distinct authenticated operators SHALL approve every post-reconciliation gate resume. A single approval or mismatched epoch/evidence hash SHALL NOT enable the gate.
+- A single authenticated approval by the authorized operator (Saurabh, DEC-044) SHALL approve every post-reconciliation gate resume. An unauthorized approval or a mismatched epoch/evidence hash SHALL NOT enable the gate. A second approval is not required and not checked (DEC-044).
 - TLS or equivalent authenticated encrypted transport SHALL be mandatory for broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic. "Where supported" is not sufficient.
 - Unencrypted cross-host secrets or money-moving data are prohibited.
 - Secrets, tokens, original payload bytes, and unnecessary account identifiers SHALL be redacted from logs and metrics. Secrets SHALL NOT be embedded in images, stack files, logs, or environment dumps.
@@ -37,14 +37,14 @@ Assumptions are validated by the owner and method recorded in the project risks 
 
 These behaviors are conscious trade-offs accepted by the platform:
 
-- **Data path vs. order path separation:** The data path may auto-recover and tolerate bounded gaps. The order path halts on uncertainty and requires reconciliation plus two-person approval to resume. This is the foundational safety posture of the platform.
+- **Data path vs. order path separation:** The data path may auto-recover and tolerate bounded gaps. The order path halts on uncertainty and requires reconciliation plus single-operator (Saurabh, DEC-044) approval to resume. This is the foundational safety posture of the platform.
 - **At-least-once delivery with bounded dedup:** Ingestion, Fluss LOG tables, and Executor intake are at-least-once. Duplicate events may exist. Bounded fingerprint-based dedup in the Signal job is best-effort, not exact.
 - **Partial visibility across tables:** A single Flink checkpoint commits source offsets and sinks, but cross-table atomic visibility is not assumed. Consumers tolerate partial visibility and reconcile using stable IDs.
 - **Exactly-once is bounded:** Exactly-once is claimed only for Flink managed state and version-pinned, tested sink boundaries. Broker calls and independent non-Flink writes are not described as exactly-once.
 - **Pre-production clean break:** Stale schemas, outdated DDLs, and incompatible old consumer compatibility are not preserved. After go-live, schema changes follow the compatibility, replay, and rollback contract.
 - **RPO is per-boundary, not a single platform claim:** Recovery Point Objective is defined separately for raw packets, immutable instructions, postback audit, Executor attempts/audit, projections, and EOD data.
 - **Health is multidimensional:** A single green/red indicator cannot represent the platform. Liveness, readiness, job health, and trading readiness are separate dimensions.
-- **Audit retention is policy-gated:** Money-moving audit records are immutable and encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before the approved retention period requires policy change, applicable legal-hold release, and two-person authorization.
+- **Audit retention is policy-gated:** Money-moving audit records are immutable and encrypted at rest in the lake tier. Audit access is role-restricted and itself logged. Deletion before the approved retention period requires policy change, applicable legal-hold release, and single-operator (Saurabh, DEC-044) authorization.
 - **Slow-Fluss ingestion policy** (`EVIDENCE-GATE-ING-BUFFER-001`) **resolved by capacity:** Fluss ingests up to 1-2 million ticks/s and the platform’s theoretical cap ceiling is 90,000 ticks/s (3,000 × 30; sustained gate 50,000 per DEC-036), so no durable local SSD buffer or controlled subscription pause is required. Bounded pending-append limits (50,000 records / `min(64MiB, 10% container memory)` bytes) remain as the defensive backpressure bound; indefinite in-memory buffering and silent data loss remain prohibited. An affected instrument becomes not-ready when the ...
 
 ## Out of Scope
@@ -160,7 +160,7 @@ Execution, gate, order, fill, correlation, approval, and position-action audit r
 | Retrieval SLA | Any single audit record or logical transaction reconstructable within 15 minutes from cold storage | `EVIDENCE-BLOCKED` |
 | Export format | Audit exports use the reconciled Iceberg table format with content-hash verification; Parquet is an acceptable secondary format | `OPEN` |
 | Reconstruction integrity | Every audit event carries a content hash; EOD manifest hashes chain to individual event hashes; a reconstruction integrity test SHALL verify the hash chain end-to-end. **2026-08-14: `AuditHashChain` (event→manifest→root hash chain, unit-tested) is implemented; the EOD-manifest end-to-end proof still needs the EOD controller (SCH-23)** | `EVIDENCE-BLOCKED` (hash-chain core implemented 2026-08-14) |
-| Deletion | Audit deletion before the approved retention period is prohibited unless an approved retention-policy change, applicable legal-hold release, and two-person authorization are recorded as immutable deletion-evidence events. **2026-08-14: `AuditDeletionControl` implements this — two distinct authorized operators plus, inside the window, an approved policy change and a legal-hold release; every attempt emits an immutable deletion-evidence event** | `IMPLEMENTED` (2026-08-14, `AuditDeletionControl`) |
+| Deletion | Audit deletion before the approved retention period is prohibited unless an approved retention-policy change, applicable legal-hold release, and single-operator (Saurabh, DEC-044) authorization are recorded as immutable deletion-evidence events. **2026-08-14: `AuditDeletionControl` implements this — single authorized operator `saurabh` (DEC-044) plus, inside the window, an approved policy change and a legal-hold release; every attempt emits an immutable deletion-evidence event** | `IMPLEMENTED` (2026-08-14, `AuditDeletionControl`) |
 
 Compliance acceptance SHALL include: object-lock enforcement on a test prefix, legal-hold freeze/release cycle, key rotation without audit loss, access-review audit trail, retrieval SLA measurement, export-and-reconstruct integrity, and unauthorized-deletion rejection. **2026-08-14: on Cloudflare R2 the object-lock enforcement acceptance maps to 'bucket lock' rules (indefinite, audit prefix) applied via the Cloudflare dashboard/Wrangler/API; `audit_r2.py validate` verifies bucket/lifecycle/object-I/O via the S3 API and reads bucket-lock state via the Cloudflare API (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID).**
 
@@ -173,7 +173,7 @@ Compliance acceptance SHALL include: object-lock enforcement on a test prefix, l
 5. Order lifecycle and position lifecycle are separate aggregates.
 6. Older/out-of-order postbacks cannot regress authoritative lifecycle/position state.
 7. No source data expires before verified EOD offload plus the minimum live buffer.
-8. Two distinct authenticated operators approve every post-reconciliation resume.
+8. The authorized single operator (Saurabh, DEC-044) approves every post-reconciliation resume.
 
 ## 3.6 Security and privacy
 

@@ -29,7 +29,7 @@ This runbook covers broker/Arrow, Fluss, S3, OpenObserve, TLS, Swarm, and operat
 6. Validate authentication, authorization, readiness, telemetry, and no secret leakage.
 7. Revoke the old credential after the overlap window and verify rejection.
 8. Record the secret version, timestamps, service instances, test evidence, and audit event.
-9. Reconcile the order path and require two distinct approvals before returning the gate to `ENABLED`.
+9. Reconcile the order path and require the single-operator (Saurabh, DEC-044) approval before returning the gate to `ENABLED`.
 
 ## Credential classes
 
@@ -51,7 +51,7 @@ This runbook covers broker/Arrow, Fluss, S3, OpenObserve, TLS, Swarm, and operat
 - S3 credential failure: checkpoint/offload readiness fails; retain source data and do not claim recovery or EOD verification.
 - Fluss credential failure: stop unsafe writes/reads, preserve uncertainty, and reconcile before resuming.
 - Observability credential failure: buffer durable audit where supported; telemetry readiness fails and the live-money gate remains blocked if acceptance evidence is unavailable.
-- Operator credential compromise: revoke, preserve evidence, halt affected order flow, and require fresh authenticated two-person approval.
+- Operator credential compromise: revoke, preserve evidence, halt affected order flow, and require fresh authenticated single-operator (Saurabh, DEC-044) approval.
 
 ## Secret safety checks
 

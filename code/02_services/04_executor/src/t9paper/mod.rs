@@ -25,8 +25,9 @@ use sha2::{Digest, Sha256};
 /// Retention policy tag shared by every T9 evidence bundle (SAURABH-1Y approval, 2026-08-20).
 pub const RETENTION_POLICY: &str = "SAURABH-1Y-APPROVAL-2026-08-20";
 
-/// Two-person review identifiers required for T9 evidence.
-pub const REVIEWERS: [&str; 2] = ["saurabh_reviewer_1", "namrata_reviewer_2"];
+/// Single reviewer identifier required for T9 evidence (DEC-044: authorized operator
+/// set is `{saurabh}`; a second reviewer is not required and not checked).
+pub const REVIEWERS: [&str; 1] = ["saurabh"];
 
 /// Execution client recorded in the evidence. The crate compiles against the pinned sandbox;
 /// the engine itself is not exercised by the offline harness.
@@ -613,7 +614,7 @@ pub fn audit_offload_and_restore(
         "encrypted": true,
         "destination": "logs/nautilus-execution/audit_offload (simulated Iceberg/S3)",
         "retention_policy": RETENTION_POLICY,
-        "access_control": "reviewed: saurabh_reviewer_1, namrata_reviewer_2",
+        "access_control": format!("reviewed: {} (single operator, DEC-044)", REVIEWERS.join(", ")),
         "offload_time": run_id,
     });
     write_json(&audit_dir, "manifest.json", &audit_offload)?;

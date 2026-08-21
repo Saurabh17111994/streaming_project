@@ -59,7 +59,7 @@ class ExecutionCommandGateCrashWindowTest {
 
     private static GateRow enabledRow() {
         return new GateRow(PARTITION, "acc", GateState.ENABLED, 5, "enabled", "ev-1",
-                "op-a", "op-b", "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null);
+                "saurabh", null, "ev-1", "worker-1", 7, NOW - 1000, NOW + 100_000, null);
     }
 
     private static Command cmd(String attemptId) {
@@ -94,7 +94,7 @@ class ExecutionCommandGateCrashWindowTest {
         return new InMemoryAttemptStore(new AtomicInteger()::incrementAndGet);
     }
     private static InMemoryGateStateStore gates() {
-        InMemoryGateStateStore g = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore g = new InMemoryGateStateStore(Set.of("saurabh"));
         g.install(enabledRow());
         return g;
     }
@@ -204,7 +204,7 @@ class ExecutionCommandGateCrashWindowTest {
 
     @Test
     void concurrentOwnerCannotAcquireWhileLeaseHeld() {
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         gates.install(new GateRow(PARTITION, "acc", GateState.HALTED, 0, "boot", null,
                 null, null, null, null, 0, null, null, null));
         // worker-1 acquires a live lease
@@ -217,7 +217,7 @@ class ExecutionCommandGateCrashWindowTest {
 
     @Test
     void staleOwnerIsRejectedAfterFenceLossAndReAcquisition() {
-        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("op-a", "op-b"));
+        InMemoryGateStateStore gates = new InMemoryGateStateStore(Set.of("saurabh"));
         gates.install(new GateRow(PARTITION, "acc", GateState.HALTED, 0, "boot", null,
                 null, null, null, null, 0, null, null, null));
         FenceResult r1 = gates.acquire(PARTITION, "worker-1", 60_000, NOW); // token 1

@@ -35,8 +35,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * WP-3 live drill (T5 CHG-044/045): the Fluss-backed {@link FlussGateStateStore}
- * (fence/lease/ownership + two-person approval) and {@link FlussAttemptStore}
+ * WP-3 live drill (T5 CHG-044/045; CHG-056 single-operator): the Fluss-backed {@link FlussGateStateStore}
+ * (fence/lease/ownership + single-operator Saurabh approval) and {@link FlussAttemptStore}
  * (exactly-one PREPARED) round-trip the durable v3 Execution_Gate /
  * Execution_Attempts KV shapes on a real Fluss cluster. Scratch tables are
  * created and dropped; platform tables are never touched.
@@ -49,7 +49,7 @@ import org.slf4j.LoggerFactory;
  *   <li><b>exactly-one command</b> — re-preparing the same
  *       (instruction_id, request_hash) returns {@code DUPLICATE} and leaves
  *       exactly one row, so a driving engine would issue one bridge command;</li>
- *   <li>gate HALTED-boot + monotonic fence token + two-person approval all
+ *   <li>gate HALTED-boot + monotonic fence token + single-operator (Saurabh) approval all
  *       persist durably (raw lookup), mirroring the offline crash-window suite
  *       against the InMemory implementation.</li>
  * </ul>
@@ -185,7 +185,8 @@ class FlussGateAttemptStoresIntegrationTest {
                     .isEqualTo("exec-1");
             assertThat(fenced.getLong(ExecutionGateColumns.FENCE_TOKEN)).isEqualTo(1L);
 
-            // --- Two-person approval (distinct principals, same evidence hash) persists. ---
+            // --- DEC-044: a single approval persists; an optional second approval is
+            // accepted without being required or checked. ---
             assertThat(gate.approve(partition, "op-a", 0L, "ev-1", NOW).outcome())
                     .isEqualTo(GateStateStore.ApprovalOutcome.APPLIED);
             assertThat(gate.approve(partition, "op-b", 0L, "ev-1", NOW).outcome())
@@ -257,7 +258,7 @@ class FlussGateAttemptStoresIntegrationTest {
         try (FlussGateStateStore bGate = FlussGateStateStore.open(bootstrap, "default", gateT, TIMEOUT);
              FlussAttemptStore bAttempts = FlussAttemptStore.open(bootstrap, "default", attT, TIMEOUT, () -> { })) {
 
-            // Gate: read() re-derives the prior fenced, two-person-approved row from Fluss.
+            // Gate: read() re-derives the prior fenced, single-operator-approved row from Fluss.
             GateRow recovered = bGate.read(partition);
             assertThat(recovered).isNotNull();
             assertThat(recovered.fenceToken()).isEqualTo(1L);

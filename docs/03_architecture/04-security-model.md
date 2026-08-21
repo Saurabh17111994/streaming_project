@@ -44,7 +44,7 @@ HALTED
 
 Every call validates the current gate epoch. Before a call, the Executor durably records `execution_attempt_id`, request hash, `client_order_ref`, gate epoch, and prepared state. An ambiguous outcome becomes `UNKNOWN`, halts the gate, and cannot be retried automatically as a new order.
 
-Resumption requires broker order reconciliation, fill/position reconciliation, changelog continuity, signal/checkpoint health, resolution of unknown attempts (and, pre-2026-08-15, reservations — REMOVED CHG-005), and two distinct authenticated operators approving the same epoch and evidence hash. Automatic resume and unaudited bypass are prohibited.
+Resumption requires broker order reconciliation, fill/position reconciliation, changelog continuity, signal/checkpoint health, resolution of unknown attempts (and, pre-2026-08-15, reservations — REMOVED CHG-005), and a single-operator (Saurabh, DEC-044) authenticated approval of the same epoch and evidence hash. Automatic resume and unaudited bypass are prohibited.
 
 One fenced Executor owns each `execution_partition_id`. Leadership loss, durable-state loss, fencing-token mismatch, network partition, or stale ownership halts submissions.
 
@@ -55,7 +55,7 @@ One fenced Executor owns each `execution_partition_id`. Leadership loss, durable
 - Fluss volumes, S3 checkpoints, Iceberg/lake data, and money-moving audit are encrypted at rest.
 - Production cross-host traffic uses mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - Broker and Arrow REST communication uses the evidence-approved secure transport.
-- Money-moving audit retention is at least one year or longer under approved policy and is encrypted with WORM-equivalent immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval evidence, event-to-manifest hash-chain integrity, and two-person authorized deletion where policy permits. Exact mechanisms remain evidence-gated but the controls are architecturally mandatory. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
+- Money-moving audit retention is at least one year or longer under approved policy and is encrypted with WORM-equivalent immutability, legal-hold capability, key rotation with historical decryptability, role-restricted access with access audit, retrieval evidence, event-to-manifest hash-chain integrity, and single-operator (Saurabh, DEC-044) authorized deletion where policy permits. Exact mechanisms remain evidence-gated but the controls are architecturally mandatory. **2026-08-14: on the configured store (Cloudflare R2) the WORM mechanism is 'bucket locks' — prefix retention rules via the Cloudflare dashboard/Wrangler/API; the S3 Object Lock API is not implemented on R2.**
 
 The exact encryption modes, keys, rotation cadence, and legal retention/deletion policy require deployment and compliance evidence.
 
@@ -75,7 +75,7 @@ The exact encryption modes, keys, rotation cadence, and legal retention/deletion
 
 Required signals include authentication failures, credential age/expiry, secret exposure, redaction failures, TLS failures, unauthorized or mismatched approvals, gate transitions, fencing events, anomalous Arrow REST responses, audit access, and compromised-credential recovery.
 
-Security incidents halt affected order flow, preserve evidence, rotate/revoke credentials, and require reconciliation plus two-person approval before resumption.
+Security incidents halt affected order flow, preserve evidence, rotate/revoke credentials, and require reconciliation plus single-operator (Saurabh, DEC-044) approval before resumption.
 
 ## Security acceptance
 

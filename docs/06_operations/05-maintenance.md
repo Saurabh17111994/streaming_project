@@ -17,7 +17,7 @@ Local Compose maintenance is not production procedure or HA evidence.
 7. Monitor the required health, dashboard, and alert views in [`../08_implementation/10-observability.md`](../08_implementation/10-observability.md).
 8. Run targeted functional, recovery, security, and SLO checks.
 9. Keep gate halted until reconciliation and post-change verification pass.
-10. Require two distinct authenticated approvals for the same current epoch/evidence hash before enablement.
+10. Require the single-operator (Saurabh, DEC-044) authenticated approval for the same current epoch/evidence hash before enablement.
 11. Record outcome, evidence, deviations, and follow-up work.
 
 ## Change classes
@@ -59,11 +59,11 @@ For imminent safety or durability risk:
 3. Apply the smallest reversible mitigation.
 4. Do not delete volumes, checkpoints, audit, or source data without authorization.
 5. Reconcile all affected state and execute rollback/DR procedures as needed.
-6. Restore service readiness only through the two-person approval process.
+6. Restore service readiness only through the single-operator (Saurabh, DEC-044) approval process.
 
 ## Closure criteria
 
-A maintenance event is closed only when the change is verified, alerts are clear or dispositioned, state and offsets are consistent, storage/retention safety is intact, audit evidence is stored, rollback remains understood, and the gate epoch has either remained halted or been explicitly re-enabled by two authorized operators.
+A maintenance event is closed only when the change is verified, alerts are clear or dispositioned, state and offsets are consistent, storage/retention safety is intact, audit evidence is stored, rollback remains understood, and the gate epoch has either remained halted or been explicitly re-enabled by the authorized single operator (Saurabh, DEC-044).
 
 ## References
 

@@ -53,7 +53,7 @@ Preserve local structured logs and immutable execution audit. If required safety
 
 ### Security/credential compromise
 
-Halt affected order flow, preserve evidence, revoke/rotate credentials, verify least privilege and redaction, scan for unauthorized access, reconcile all affected execution state, and require two-person approval.
+Halt affected order flow, preserve evidence, revoke/rotate credentials, verify least privilege and redaction, scan for unauthorized access, reconcile all affected execution state, and require single-operator (Saurabh, DEC-044) approval.
 
 ## Recovery sequence
 
@@ -66,7 +66,7 @@ Halt affected order flow, preserve evidence, revoke/rotate credentials, verify l
 7. Reconcile broker orders, fills, positions, attempts, and mappings. (**Reservations REMOVED 2026-08-15, CHG-005.**)
 8. Verify EOD retention/offload safety.
 9. Produce evidence hash for the current gate epoch.
-10. Require two distinct authenticated approvals before enabling the gate.
+10. Require the single-operator (Saurabh, DEC-044) authenticated approval before enabling the gate.
 11. Record RPO/RTO, data loss/lateness accounting, root cause, and follow-up actions.
 
 ## DR exercises

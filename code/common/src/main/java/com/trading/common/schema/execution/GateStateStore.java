@@ -3,23 +3,23 @@ package com.trading.common.schema.execution;
 import java.util.List;
 
 /**
- * Durable boundary for the Execution_Gate table (v3, CHG-044). A gateway-backed
+ * Durable boundary for the Execution_Gate table (v3, CHG-044; CHG-056 single-operator). A gateway-backed
  * implementation persists rows to Fluss; the offline engine composes against
  * this interface and an in-memory implementation so the protocol (order of
  * persists, fence concurrency, approvals, halting) is proven before the Fluss
  * writer is wired. The store owns fence acquisition (concurrent-owner
- * rejection), two-person approval registration, and the epoch-incrementing
+ * rejection), single-operator (Saurabh) approval registration, and the epoch-incrementing
  * halt — the writes that must never be inferred from a raw KV upsert.
  */
 public interface GateStateStore {
 
     /** Outcome of an approval registration. */
     enum ApprovalOutcome {
-        /** A (first or second) distinct authorized approval was recorded. */
+        /** An authorized approval was recorded. */
         APPLIED,
         /** Approvals are already complete for this epoch/evidence. */
         ALREADY_APPLIED,
-        /** The same principal tried to approve twice — the two-person rule requires distinct operators. */
+        /** The same principal tried to approve twice — single-operator gate already approved. */
         SAME_PRINCIPAL,
         /** The principal is not authorized to approve this scope. */
         UNAUTHORIZED,
@@ -73,10 +73,9 @@ public interface GateStateStore {
     FenceResult acquire(String partitionId, String ownerInstanceId, long leaseMs, long nowTs);
 
     /**
-     * Register one of the two required approvals for the exact
-     * {@code (epoch, evidenceHash)}. Distinct, authorized principals only; a
-     * changed epoch invalidates pending approvals (the caller never approves a
-     * different generation than the two-person gate authorized).
+     * Register the single required approval for the exact
+     * {@code (epoch, evidenceHash)} by the authorized operator (Saurabh). A
+     * changed epoch invalidates pending approvals. (DEC-044 single-operator).
      */
     ApprovalResult approve(String partitionId, String principal, long epoch, String evidenceHash,
                            long nowTs);

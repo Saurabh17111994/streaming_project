@@ -5,7 +5,7 @@
 //! `HALTED` from any state. This enforces the plan's invariant that the default and uncertain
 //! state is `HALTED` ("live money: prohibited").
 //!
-//! # Two-approval enablement (CONTROL-\*, INVARIANT-003)
+//! # Single-operator enablement (CONTROL-\*, INVARIANT-003, DEC-044)
 //!
 //! The final `APPROVAL_PENDING -> ENABLED` step is **not** reachable through [`Gate::transition`]:
 //! a bare transition to `Enabled` is always rejected. The only route to `ENABLED` is
@@ -13,15 +13,18 @@
 //!
 //! - a **current gate epoch** declared via [`Gate::set_epoch`] — and the epoch passed to
 //!   `enable` must match it (a stale control-plane thread cannot enable on a mismatched/old term);
-//! - **two approvals** ([`Gate::record_approval`]) from **two distinct operators**, each **authorized**
-//!   (provisioned via [`Gate::add_authorized`] / [`Gate::new_with_authorized`]), both bound to the
-//!   **same evidence hash**; and
-//! - the evidence hash approvals were granted for is still bound (approval after the evidence
-//!   changed is rejected).
+//! - **a single authenticated approval** ([`Gate::record_approval`]) from an **authorized**
+//!   operator (DEC-044: the authorized set is `{saurabh}`; provisioned via
+//!   [`Gate::add_authorized`] / [`Gate::new_with_authorized`]), bound to the **evidence hash**
+//!   being approved; and
+//! - the evidence hash the approval was granted for is still bound (approval after the evidence
+//!   changed is rejected — a second approval, if supplied, is not required and not checked,
+//!   DEC-044).
 //!
-//! This makes INVARIANT-003 ("no ENABLED gate without two approvals") structurally enforced rather
-//! than conventional. A safety halt (fail-closed) clears both approvals and the bound evidence, so
-//! re-enabling always requires a fresh two-approval round (CONTROL-006).
+//! This makes INVARIANT-003 ("no ENABLED gate without an authenticated single-operator approval
+//! bound to the evidence hash") structurally enforced rather than conventional. A safety halt
+//! (fail-closed) clears the approval and the bound evidence, so re-enabling always requires a
+//! fresh approval round (CONTROL-006).
 
 use std::fmt;
 
@@ -79,8 +82,8 @@ pub enum EnableError {
     EpochUnset,
     /// The epoch supplied to `enable` does not match the gate's current epoch.
     EpochMismatch { expected: u64, got: u64 },
-    /// INVARIANT-003: fewer than two approvals are recorded.
-    RequiresTwoApprovals,
+    /// INVARIANT-003 (DEC-044): no approval is recorded.
+    RequiresApproval,
     /// Approvals were recorded but no evidence hash was bound.
     EvidenceMissing,
 }
@@ -93,8 +96,11 @@ impl fmt::Display for EnableError {
             Self::EpochMismatch { expected, got } => {
                 write!(f, "enable epoch mismatch: gate epoch {expected}, got {got}")
             }
-            Self::RequiresTwoApprovals => {
-                write!(f, "enable requires two distinct authorized approvals")
+            Self::RequiresApproval => {
+                write!(
+                    f,
+                    "enable requires an authenticated approval from an authorized operator"
+                )
             }
             Self::EvidenceMissing => write!(f, "enable requires a bound evidence hash"),
         }
@@ -110,10 +116,6 @@ pub enum ApprovalError {
     NotApprovalPending(ExecState),
     /// The operator is not in the authorized set.
     Unauthorized,
-    /// The same operator is trying to supply both the first and the second approval.
-    SingleApprover,
-    /// The approval binds a different evidence hash than a previously recorded approval.
-    EvidenceChanged,
 }
 
 impl fmt::Display for ApprovalError {
@@ -121,12 +123,6 @@ impl fmt::Display for ApprovalError {
         match self {
             Self::NotApprovalPending(s) => write!(f, "approval not allowed in {s}"),
             Self::Unauthorized => write!(f, "approver is not authorized"),
-            Self::SingleApprover => {
-                write!(f, "one operator cannot supply both approvals")
-            }
-            Self::EvidenceChanged => {
-                write!(f, "approval evidence hash does not match the already-bound evidence")
-            }
         }
     }
 }
@@ -142,10 +138,8 @@ pub struct Gate {
     epoch: u64,
     /// Evidence hash the approvals are bound to; `None` until first approval.
     enabled_evidence: Option<String>,
-    /// First approver identity.
+    /// Approved operator identity (the approval recorded on the enablement path).
     approval_a: Option<String>,
-    /// Second (distinct) approver identity.
-    approval_b: Option<String>,
     /// Authorized operator identities.
     authorized: Vec<String>,
 }
@@ -165,7 +159,6 @@ impl Gate {
             epoch: 0,
             enabled_evidence: None,
             approval_a: None,
-            approval_b: None,
             authorized: Vec::new(),
         }
     }
@@ -209,7 +202,7 @@ impl Gate {
     }
 
     /// Advances the enablement path one sanctioned step. The `APPROVAL_PENDING -> ENABLED` hop is
-    /// intentionally absent: `Enabled` is reachable only via [`Gate::enable`] after two approvals.
+    /// intentionally absent: `Enabled` is reachable only via [`Gate::enable`] after an approval.
     ///
     /// Returns `InvalidTransition` if `from -> to` is not sanctioned.
     pub fn transition(&mut self, to: ExecState) -> Result<(), InvalidTransition> {
@@ -226,8 +219,10 @@ impl Gate {
         Ok(())
     }
 
-    /// Records one operator approval binding an evidence hash. INVARIANT-003 requires two
-    /// **distinct authorized** operators before `enable` becomes possible.
+    /// Records one operator approval binding an evidence hash (DEC-044). INVARIANT-003 requires
+    /// an **authorized** operator approval before `enable` becomes possible; the first approval
+    /// binds the evidence hash. A second approval, if supplied, is not required and not checked
+    /// (DEC-044) — it is accepted as a no-op and never alters the recorded approval.
     pub fn record_approval(
         &mut self,
         approver: &str,
@@ -239,29 +234,20 @@ impl Gate {
         if !self.authorized.iter().any(|o| o == approver) {
             return Err(ApprovalError::Unauthorized);
         }
-        if self.approval_a.as_deref() == Some(approver) {
-            return Err(ApprovalError::SingleApprover);
+        // DEC-044: the first approved evidence hash binds the gate; a second approval is not
+        // required and not checked.
+        if self.approval_a.is_some() {
+            return Ok(());
         }
-        if let Some(bound) = &self.enabled_evidence {
-            if bound != evidence_hash {
-                return Err(ApprovalError::EvidenceChanged);
-            }
-        }
-        if self.approval_a.is_none() {
-            self.approval_a = Some(approver.to_string());
-        } else {
-            self.approval_b = Some(approver.to_string());
-        }
-        if self.enabled_evidence.is_none() {
-            self.enabled_evidence = Some(evidence_hash.to_string());
-        }
+        self.approval_a = Some(approver.to_string());
+        self.enabled_evidence = Some(evidence_hash.to_string());
         Ok(())
     }
 
     /// The authoritative, and only, route to `ENABLED`.
     ///
-    /// Requires the current epoch match the declared gate epoch, two distinct authorized
-    /// approvals bound to a present evidence hash. Otherwise returns an [`EnableError`].
+    /// Requires the current epoch match the declared gate epoch, an authorized single-operator
+    /// approval (DEC-044) bound to a present evidence hash. Otherwise returns an [`EnableError`].
     pub fn enable(&mut self, epoch: u64) -> Result<(), EnableError> {
         if self.state != ExecState::ApprovalPending {
             return Err(EnableError::NotApprovalPending(self.state));
@@ -275,9 +261,9 @@ impl Gate {
                 got: epoch,
             });
         }
-        // INVARIANT-003: no ENABLED gate without two approvals.
-        if self.approval_a.is_none() || self.approval_b.is_none() {
-            return Err(EnableError::RequiresTwoApprovals);
+        // INVARIANT-003 (DEC-044): no ENABLED gate without an authenticated approval.
+        if self.approval_a.is_none() {
+            return Err(EnableError::RequiresApproval);
         }
         if self.enabled_evidence.is_none() {
             return Err(EnableError::EvidenceMissing);
@@ -286,14 +272,13 @@ impl Gate {
         Ok(())
     }
 
-    /// Raises a safety halt, returning the gate to `HALTED` from any state and invalidating both
-    /// approvals and the bound evidence (fail-closed), so re-enabling always re-approves.
+    /// Raises a safety halt, returning the gate to `HALTED` from any state and invalidating the
+    /// approval and the bound evidence (fail-closed), so re-enabling always re-approves.
     pub fn safety_halt(&mut self) {
         if self.state != ExecState::Halted {
             self.safety_halt_count += 1;
         }
         self.approval_a = None;
-        self.approval_b = None;
         self.enabled_evidence = None;
         self.state = ExecState::Halted;
     }
@@ -304,8 +289,8 @@ mod tests {
 
     fn authorized() -> Gate {
         let mut g = Gate::new();
-        g.add_authorized("OPS-A");
-        g.add_authorized("OPS-B");
+        // DEC-044: the authorized operator set is `{saurabh}`.
+        g.add_authorized("saurabh");
         g
     }
 
@@ -335,8 +320,7 @@ mod tests {
         // (INVARIANT-003 structural enforcement).
         assert!(g.transition(ExecState::Enabled).is_err());
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
     }
@@ -346,8 +330,7 @@ mod tests {
         let mut g = authorized();
         to_approval_pending(&mut g);
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
         g.safety_halt();
@@ -371,11 +354,10 @@ mod tests {
         assert!(g.transition(ExecState::Reconciling).is_err());
         g.transition(ExecState::ApprovalPending).unwrap();
         assert!(g.transition(ExecState::Reconciling).is_err());
-        // Bare ApprovalPending -> Enabled is rejected; enable requires two approvals.
+        // Bare ApprovalPending -> Enabled is rejected; enable requires an approval.
         assert!(g.transition(ExecState::Enabled).is_err());
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
         // ENABLED can only go to HALTED (safety halt).
@@ -385,17 +367,14 @@ mod tests {
     }
 
     #[test]
-    fn invariant003_no_enabled_without_two_approvals() {
+    fn invariant003_no_enabled_without_approval() {
         let mut g = authorized();
         to_approval_pending(&mut g);
         g.set_epoch(1);
         // Zero approvals: enable rejected.
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-        // Single approval is still not enough (single approval must never enable).
-        g.record_approval("OPS-A", "h1").unwrap();
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-        // Two distinct approvals enable.
-        g.record_approval("OPS-B", "h1").unwrap();
+        assert_eq!(g.enable(1), Err(EnableError::RequiresApproval));
+        // DEC-044: a single authenticated approval by an authorized operator enables.
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
     }
@@ -410,40 +389,23 @@ mod tests {
             g.record_approval("MALLORY", "h1"),
             Err(ApprovalError::Unauthorized)
         );
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
+        assert_eq!(g.enable(1), Err(EnableError::RequiresApproval));
     }
 
     #[test]
-    fn control001_single_operator_cannot_supply_both_approvals() {
-        let mut g = Gate::new();
-        g.add_authorized("OPS-A"); // only one operator authorized
-        to_approval_pending(&mut g);
-        g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        // Same actor tries to be the second approval -> SingleApprover.
-        assert_eq!(
-            g.record_approval("OPS-A", "h1"),
-            Err(ApprovalError::SingleApprover)
-        );
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-    }
-
-    #[test]
-    fn control002_approval_after_evidence_change_is_rejected() {
+    fn dec044_second_approval_is_not_required_and_not_checked() {
         let mut g = authorized();
         to_approval_pending(&mut g);
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        // B approves a DIFFERENT evidence hash -> evidence changed, rejected.
-        assert_eq!(
-            g.record_approval("OPS-B", "h2"),
-            Err(ApprovalError::EvidenceChanged)
-        );
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-        // B re-approving the ORIGINAL hash is valid; enable succeeds.
-        g.record_approval("OPS-B", "h1").unwrap();
+        // A single approval is sufficient to enable (DEC-044).
+        g.record_approval("saurabh", "h1").unwrap();
+        // A second approval, if supplied, is accepted but not checked: it never
+        // changes the recorded approval (even a different evidence hash is not
+        // checked against it) and cannot block the enable.
+        assert_eq!(g.record_approval("saurabh", "h2").unwrap(), ());
         g.enable(1).unwrap();
         assert!(g.can_execute());
+        assert_eq!(g.state(), ExecState::Enabled);
     }
 
     #[test]
@@ -451,8 +413,7 @@ mod tests {
         let mut g = authorized();
         to_approval_pending(&mut g);
         // Epoch never declared (0).
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         assert_eq!(g.enable(1), Err(EnableError::EpochUnset));
         g.set_epoch(1);
         g.enable(1).unwrap();
@@ -464,12 +425,14 @@ mod tests {
         let mut g = authorized();
         to_approval_pending(&mut g);
         g.set_epoch(5); // current control-plane epoch 5
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         // A stale control-plane thread carrying epoch 4 cannot enable.
         assert_eq!(
             g.enable(4),
-            Err(EnableError::EpochMismatch { expected: 5, got: 4 })
+            Err(EnableError::EpochMismatch {
+                expected: 5,
+                got: 4
+            })
         );
         assert!(!g.can_execute());
         // Correct epoch enables.
@@ -482,32 +445,29 @@ mod tests {
         let mut g = authorized();
         to_approval_pending(&mut g);
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
         // Rollback/during-active-gate -> safety halt clears approvals (fail-closed).
         g.safety_halt();
         assert!(!g.can_execute());
-        // Old approvals are gone; re-enabling requires a fresh two-approval round.
+        // Old approvals are gone; re-enabling requires a fresh approval round.
         to_approval_pending(&mut g);
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        assert_eq!(g.enable(1), Err(EnableError::RequiresApproval));
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
     }
 
     #[test]
     fn control002_operator_session_restart_requires_reapproval() {
-        // A fresh gate (operator session restarted) holds no approvals: even with a
-        // declared epoch it cannot enable until both operators approve again.
-        let mut g = Gate::new_with_authorized(&["OPS-A", "OPS-B"]);
+        // A fresh gate (operator session restarted) holds no approval: even with a
+        // declared epoch it cannot enable until the operator approves again.
+        let mut g = Gate::new_with_authorized(&["saurabh"]);
         to_approval_pending(&mut g);
         g.set_epoch(1);
-        assert_eq!(g.enable(1), Err(EnableError::RequiresTwoApprovals));
-        g.record_approval("OPS-A", "h1").unwrap();
-        g.record_approval("OPS-B", "h1").unwrap();
+        assert_eq!(g.enable(1), Err(EnableError::RequiresApproval));
+        g.record_approval("saurabh", "h1").unwrap();
         g.enable(1).unwrap();
         assert!(g.can_execute());
     }
@@ -517,12 +477,12 @@ mod tests {
         let mut g = authorized();
         // Approval is only honored while APPROVAL_PENDING.
         assert_eq!(
-            g.record_approval("OPS-A", "h1"),
+            g.record_approval("saurabh", "h1"),
             Err(ApprovalError::NotApprovalPending(ExecState::Halted))
         );
         to_approval_pending(&mut g);
         g.set_epoch(1);
-        g.record_approval("OPS-A", "h1").unwrap();
+        g.record_approval("saurabh", "h1").unwrap();
         // Enable is only honored while APPROVAL_PENDING.
         g.safety_halt();
         assert_eq!(
