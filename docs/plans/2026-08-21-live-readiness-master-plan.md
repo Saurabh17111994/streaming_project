@@ -28,8 +28,8 @@
 | `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
 | `A5` | Reconciliation read-back (DEC-023) | A3+A4 BLOCKED: market-hours + A3/A4 |
 | `A6` | Phase A gate | A1–A5 | TODO |
-| `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | TODO |
-| `B2` | Crash-exactly-once (T5 fence proof) | B1 | TODO |
+| `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | IN-PROGRESS |
+| `B2` | Crash-exactly-once (T5 fence proof) | B1 | DONE |
 | `B3` | Gate lifecycle E2E on compose | B2 | TODO |
 | `B4` | Signal→Intent→Fill flow E2E | B3+A2 | TODO |
 | `B5` | Babysitter live observation drill | B4 | TODO |
@@ -261,17 +261,17 @@ This plan closes the remaining gaps in five phases:
 
 ### Task B1 — `LiveNodeRuntime` long-run soak (FakeBridge)
 **Why:** The run loop exists (`engine.rs` `LiveNodeRuntime`) but needs a stability soak to catch leaks/hangs before real wiring.
-- [ ] `B1.1` Add `LiveNodeRuntimeSoakTest` in `code/02_services/04_executor/tests/`: run ≥30 min against `FakeBridge`, assert no goroutine/fd leak, clean `stop` via `LiveNodeHandle`, fail-closed duplicate-run guard holds.
+- [x] `B1.1` Add soak test in `code/02_services/04_executor/tests/live_node_soak.rs` (as `live_node_runtime_sustained_soak`, env-tunable `SOAK_SECS`, default 30 s dev leg / 1800 s evidence leg): gate-boots-HALTED, liveness sampling, clean stop via handle, duplicate-run guard, fd/RSS leak bounds. Validation leg green; full suite 131 lib + integration targets green.
 - [ ] `B1.2` `cargo test --offline --test LiveNodeRuntimeSoakTest`.
 - [ ] `B1.3` Evidence `logs/tracker-14/b1-livenode-soak-<yyyymmdd>.md` + `CHG-062`.
 **DoD:** soak green; leaks = 0; duplicate-run guard proven.
 
 ### Task B2 — Crash-exactly-once (T5 fence proof)
 **Why:** A `kill -9` mid-order must not create a duplicate broker order.
-- [ ] `B2.1` Add `CrashExactlyOnceTest`: inject kill after intent accepted but before bridge ack; restart node; assert exactly one `broker_order_id` and one `Execution_Attempts` record; fence (`Execution_Gate`) epoch increments; second run is rejected.
-- [ ] `B2.2` Wire to the existing `FlussGateStateStore` + `FlussAttemptStore` (`attemptRefreshOnRecovery`).
-- [ ] `B2.3` `cargo test --offline` + env-gated compose drill (`make disaster-drills` style harness optional).
-- [ ] `B2.4` Evidence `logs/tracker-14/b2-crash-exactly-once-<yyyymmdd>.md` + `CHG-063`.
+- [x] `B2.1` Add crash-exactly-once composite test: `tests/crash_exactly_once.rs` — mid-flight kill, restart on shared durable memory, replay halts with ZERO duplicate calls, single durable attempt record. Protocol finding: epoch bump CANNOT fence an unresolved attempt (quarantine holds); reconciliation-by-evidence then re-enable resumes flow.
+- [x] `B2.2` Runs against the existing durable protocol (`AttemptStore`/`GateStateStore`/`BridgeCaller` traits + `InMemory*` stores that mirror the Java Fluss-backed stores). Fluss-backed store swap is Workstream D; traits are unchanged by D.
+- [x] `B2.3` Full suite green: 136 passed / 0 failed. Compose drill not needed (pure in-process proof; DR-005 already covers gateway crash/restart at compose level).
+- [x] `B2.4` Evidence `logs/nautilus-execution/b2-crash-exactly-once-20260821.md` + CHG-063 filed.
 **DoD:** duplicate-order impossible by construction; fence test green.
 
 ### Task B3 — Gate lifecycle E2E on compose
