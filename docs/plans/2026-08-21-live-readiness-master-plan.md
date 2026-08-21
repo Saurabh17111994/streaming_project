@@ -25,7 +25,7 @@
 | `A1` | Sandbox auth + auto re-auth harness | — | DONE* |
 | `A2` | Paper-order placement smoke (full chain, sandbox) | A1 BLOCKED: market-hours (harness buildable now) |
 | `A3` | Live postback capture evidence (VM-BROKER-PBK-009) | A2 BLOCKED: market-hours + A2 |
-| `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | TODO |
+| `A4` | Arrow REST capability matrix (VM-ARROW-010) | A2 | DONE* |
 | `A5` | Reconciliation read-back (DEC-023) | A3+A4 BLOCKED: market-hours + A3/A4 |
 | `A6` | Phase A gate | A1–A5 | TODO |
 | `B1` | `LiveNodeRuntime` long-run soak (FakeBridge) | — | DONE |
@@ -230,9 +230,9 @@ This plan closes the remaining gaps in five phases:
 
 ### Task A4 — Arrow REST capability matrix (VM-ARROW-010)
 **Why:** `POST /order/regular` request/response/auth/timeout must be captured and correlated to one broker order.
-- [ ] `A4.1` Capture: request shape, success/failure response codes, auth failure (401 → re-auth), 15 s UNKNOWN timeout behavior, one-attempt-to-one-order correlation.
-- [ ] `A4.2` Encode as an `ArrowRestCapabilityReport` and pin it; add `TestArrowRestCapability` (Go, fake broker).
-- [ ] `A4.3` Evidence `logs/tracker-14/t9-arrow-rest-<yyyymmdd>.md` (status `VERIFIED`) + `CHG-060`.
+- [x] `A4.1` Error half captured: auth 401 → ReauthBroker one retry → broker_disabled, 15 s UNKNOWN timeout (no retry), one-attempt-to-one-order (RequestID+fingerprint coalesce vs reuse_violation) — new `arrow_capability_test.go` 4 legs.
+- [x] `A4.2` `TestArrowRestCapability` (Go, fake broker) — `go test -race` PASS 1.12s; success half (`BI-EQ ×1` live order) deferred to market-hours A2/A3.
+- [x] `A4.3` Evidence `logs/nautilus-execution/a4-arrow-rest-error-20260821.md` + CHG-075 (error half VERIFIED on fake bridge; success half still TO_BE_VERIFIED until live BI-EQ ×1).
 **DoD:** matrix row 8 → VERIFIED; tests green.
 
 ### Task A5 — Reconciliation read-back (DEC-023)
