@@ -65,7 +65,7 @@ x-flink-common: &flink-common
     STATE_BACKEND_LOCAL_DIRS: ${STATE_BACKEND_LOCAL_DIRS:-/tmp/flink-rocksdb}
     STATE_BACKEND_MANAGED_MEMORY: ${STATE_BACKEND_MANAGED_MEMORY:-true}
     TASK_MANAGER_NETWORK_MEMORY_MAX: ${TASK_MANAGER_NETWORK_MEMORY_MAX:-256m}
-    TASK_MANAGER_MEMORY_MANAGED_SIZE: ${TASK_MANAGER_MEMORY_MANAGED_SIZE:-}
+    TASK_MANAGER_MEMORY_MANAGED_SIZE: ${TASK_MANAGER_MEMORY_MANAGED_SIZE:-2g}  # blank default would fail SignalJobConfig validation; 2g matches 6g process @ managed 0.4
     FLINK_PROPERTIES: |
       jobmanager.rpc.address: flink-jobmanager
       rest.address: flink-jobmanager
@@ -91,7 +91,7 @@ x-flink-common: &flink-common
       # fraction) + task heap + jvm-overhead — derived by the Flink memory
       # model at startup.
       jobmanager.memory.process.size: 1600m
-      taskmanager.memory.process.size: 3g
+      taskmanager.memory.process.size: 6g
       # P7 phase-1+ (tracker 14): explicit task off-heap (direct) budget —
       # the 1.7 GB RocksDB restore streams state-handle downloads through
       # direct buffers; the 2g envelope's derived ~287m direct limit

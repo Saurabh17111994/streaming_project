@@ -521,6 +521,13 @@ public record SignalJobConfig(
     private static String savepointDir(Map<String, String> env) {
         String raw = env.get("SAVEPOINT_DIR");
         String dir = raw == null ? null : raw.trim();
+        // T9-errata 2026-08-22: compose injects SAVEPOINT_DIR="" (present-but-
+        // blank) — treat blank as unset so the deployment config stays
+        // authoritative and `execution.checkpointing.savepoint-dir` is never
+        // set to an empty Path (Flink rejects it at JobMaster init).
+        if (dir != null && dir.isEmpty()) {
+            dir = null;
+        }
         if (isProduction(env) && dir != null && !dir.isEmpty()
                 && !dir.startsWith("s3://") && !dir.startsWith("s3a://")) {
             throw new IllegalStateException("Config SAVEPOINT_DIR must be an encrypted S3 object-store URI "

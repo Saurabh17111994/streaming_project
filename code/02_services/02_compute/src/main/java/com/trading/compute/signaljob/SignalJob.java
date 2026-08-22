@@ -607,17 +607,21 @@ public final class SignalJob {
         // Effective-backend log WITHOUT secrets: the checkpoint URI is printed
         // as its scheme only, never the full path (credentials may be embedded
         // in S3 URIs — tracker 14 P4.2 "never committed files").
-        String cpScheme = config.checkpointDir() == null ? "none"
-                : config.checkpointDir().substring(0, config.checkpointDir().indexOf(':'));
+        // T9-errata 2026-08-22: blank env injection (SAVEPOINT_DIR=${VAR:-} -> "")
+        // is not null — guard against both so the scheme log cannot blow up
+        // with StringIndexOutOfBoundsException(0, -1) on every submit.
+        String cpDir = config.checkpointDir();
+        String spDir = config.savepointDir();
+        String cpScheme = (cpDir == null || cpDir.isEmpty()) ? "none"
+                : cpDir.substring(0, cpDir.indexOf(':'));
+        String spScheme = (spDir == null || spDir.isEmpty()) ? "none"
+                : spDir.substring(0, spDir.indexOf(':'));
         LOG.info("signal-job: effective state backend = {} (dev={}, incremental={}), "
                 + "checkpoint URI class = {}, savepoint URI class = {}, parallelism = {}",
                 config.stateBackend(), config.deploymentEnv(),
                 "rocksdb".equals(config.stateBackend())
                         && flinkConfig.get(CheckpointingOptions.INCREMENTAL_CHECKPOINTS),
-                cpScheme,
-                config.savepointDir() == null ? "none"
-                        : config.savepointDir().substring(0, config.savepointDir().indexOf(':')),
-                config.parallelism());
+                cpScheme, spScheme, config.parallelism());
     }
 
     /**
