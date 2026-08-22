@@ -118,3 +118,23 @@ func tokenSetHash(tokens []int32) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// SlotForToken maps a token to its owning slot index, or -1 when the token is
+// not part of the plan. The mapping is deterministic and consistent with
+// BuildSubscriptionPlan's sharding (T1): tokens are sorted ascending and
+// carved into contiguous ranges of connectionLimit per slot — the 3000-token
+// manifest with 3 slots yields 1024+1024+952. Broker consumers deriving
+// token→slot identity (per-slot scoping, discontinuity attribution) must use
+// this same mapping rather than recomputing a modulo split, which would not
+// match the plan's contiguous ranges.
+func SlotForToken(plan SubscriptionPlan, token int32) int {
+	for i := range plan.Slots {
+		tokens := plan.Slots[i].Tokens
+		if len(tokens) > 0 && token >= tokens[0] && token <= tokens[len(tokens)-1] {
+			// Ranges are disjoint and contiguous (sorted, no gaps): a bounds
+			// hit implies membership.
+			return i
+		}
+	}
+	return -1
+}

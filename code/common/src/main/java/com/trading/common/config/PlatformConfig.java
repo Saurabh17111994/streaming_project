@@ -99,8 +99,9 @@ public final class PlatformConfig {
     public static final int MAX_ACTIVE_CANDIDATES_PER_INSTRUMENT = 1;
 
     /**
-     * {@code MAX_PENDING_APPEND_BYTES = min(67108864, floor(container_memory_limit_bytes * 0.10))}.
-     * Capped at 64 MiB so very large container limits do not over-buffer.
+     * {@code MAX_PENDING_APPEND_BYTES = min(201326592, floor(container_memory_limit_bytes * 0.10))}.
+     * Capped at 192 MiB (T2 streaming-3000: 64M → 192M) so very large container limits do not over-buffer
+     * beyond the 3k tunable bound. Env overrides via MAX_PENDING_APPEND_BYTES / PENDING_MAX_BYTES.
      *
      * <p>R-199: a non-positive container limit (unreadable cgroup surfaced as 0,
      * or a misconfigured value) previously produced a <= 0 result from
@@ -113,7 +114,7 @@ public final class PlatformConfig {
                     + containerMemoryLimitBytes);
         }
         long derived = (long) Math.floor(containerMemoryLimitBytes * 0.10);
-        return Math.min(67_108_864L, derived);
+        return Math.min(201_326_592L, derived);
     }
 
     /**

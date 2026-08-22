@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory;
  * Falls back to a basic sanity check if the NTP server is unreachable
  * (clock must not be before 2024-01-01 UTC).
  *
- * <p>Contract: clock offset &lt;= {@code CLOCK_OFFSET_LIMIT_MS} (default 100ms)
+ * <p>Contract: clock offset &lt;= {@code CLOCK_OFFSET_LIMIT_MS} (default 2000ms / 2s, T10)
  * for ingestion readiness per {@code docs/08_implementation/03-ingestion.md}.
  */
 public final class NtpClockChecker {

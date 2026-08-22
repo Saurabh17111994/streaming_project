@@ -21,11 +21,14 @@ public final class IngestionConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(IngestionConfig.class);
 
-    // ---- Constants (matching dossier) ----
-    public static final long MAX_PENDING_RECORDS = 50_000L;
-    public static final long MAX_PENDING_BYTES = 67_108_864L; // 64 MiB
+    // ---- Constants (matching dossier) -- T2 tunable backpressure (G2 Ingest) ----
+    // streaming-3000 hardening: raised from 50k/64M (1k) to 150k/192M (3k).
+    // Env overrides via MAX_PENDING_APPEND_RECORDS / PENDING_MAX_RECORDS etc,
+    // with 80% warn / 100% halt (halt = 100% hard). Tunable without code change.
+    public static final long MAX_PENDING_RECORDS = 150_000L;
+    public static final long MAX_PENDING_BYTES = 201_326_592L; // 192 MiB (192*1024*1024)
     public static final double WARNING_PERCENT = 0.80;
-    public static final long CLOCK_OFFSET_LIMIT_MS = 100L;
+    public static final long CLOCK_OFFSET_LIMIT_MS = 2000L; // T10: 2s NTP gate (was 100ms)
 
     // ---- Validated values (populated by validate()) ----
     public final String arrowAppId;
@@ -154,12 +157,20 @@ public final class IngestionConfig {
         b.maxBatchRecords = intRange(env, "INGESTION_MAX_BATCH_RECORDS", 1, 1, 1000, errors);
         b.maxBatchWaitMs = intRange(env, "INGESTION_MAX_BATCH_WAIT_MS", 0, 0, 100, errors);
 
-        // ---- Backpressure ----
-        b.maxPendingRecords = intRange(env, "MAX_PENDING_APPEND_RECORDS",
-                50_000, 100, 1_000_000, errors);
-        b.maxPendingBytes = longRange(env, "MAX_PENDING_APPEND_BYTES",
-                67_108_864L, 1_048_576L, Long.MAX_VALUE, errors);
-        b.pendingWarningPercent = doubleRange(env, "PENDING_APPEND_WARNING_PERCENT",
+        // ---- Backpressure -- T2 tunable (G2 Ingest) ----
+        // streaming-3000: bounded halt tunable 50k/64M (1k) → 150k/192M (3k).
+        // Env primary: MAX_PENDING_APPEND_* + PENDING_APPEND_WARNING_PERCENT.
+        // Aliases: PENDING_MAX_RECORDS / PENDING_MAX_BYTES / PENDING_WARNING_PERCENT
+        // for task-spec ergonomics (T2). Primary wins if both set. 80% warn
+        // (pendingWarningPercent) → readiness false; 100% → halt (hard fail-closed).
+        b.maxPendingRecords = intRangeWithAlias(env,
+                "MAX_PENDING_APPEND_RECORDS", "PENDING_MAX_RECORDS",
+                150_000, 100, 1_000_000, errors);
+        b.maxPendingBytes = longRangeWithAlias(env,
+                "MAX_PENDING_APPEND_BYTES", "PENDING_MAX_BYTES",
+                201_326_592L, 1_048_576L, Long.MAX_VALUE, errors);
+        b.pendingWarningPercent = doubleRangeWithAlias(env,
+                "PENDING_APPEND_WARNING_PERCENT", "PENDING_WARNING_PERCENT",
                 0.80, 0.10, 0.99, errors);
 
         // ---- Timing ----
@@ -168,7 +179,7 @@ public final class IngestionConfig {
         b.drainDeadline = Duration.ofSeconds(
                 intRange(env, "DRAIN_DEADLINE_SECONDS", 30, 1, 300, errors));
         b.clockOffsetLimitMs = longRange(env, "CLOCK_OFFSET_LIMIT_MS",
-                100L, 10L, 60_000L, errors);
+                2000L, 10L, 60_000L, errors);
         b.arrowMaxEventAgeMs = requiredLong(env, "ARROW_MAX_EVENT_AGE_MS", errors);
         b.arrowMaxFutureEventSkewMs = requiredLong(env, "ARROW_MAX_FUTURE_EVENT_SKEW_MS", errors);
 
@@ -403,6 +414,78 @@ public final class IngestionConfig {
         return parsed;
     }
 
+    // ---- T2 alias helpers — primary + PENDING_MAX_* alias ----
+    private static String resolveAlias(Map<String, String> env, String primary, String alias) {
+        String v = env.get(primary);
+        if (v != null && !v.isBlank()) return v;
+        String a = env.get(alias);
+        if (a != null && !a.isBlank()) {
+            LOG.info("ingestion-config: {} alias used (primary {} not set)", alias, primary);
+            return a;
+        }
+        return null;
+    }
+
+    private static int intRangeWithAlias(Map<String, String> env, String primary, String alias,
+                                         int defVal, int min, int max, List<String> errors) {
+        String v = resolveAlias(env, primary, alias);
+        if (v == null) {
+            LOG.warn("ingestion-config: {} (alias {}) not set; using default {}", primary, alias, defVal);
+            return defVal;
+        }
+        int parsed;
+        try {
+            parsed = Integer.parseInt(v);
+        } catch (NumberFormatException e) {
+            errors.add(primary + " (alias " + alias + ") must be an integer, got: " + v);
+            return defVal;
+        }
+        if (parsed < min || parsed > max) {
+            errors.add(primary + " (alias " + alias + ") must be in range [" + min + ", " + max + "], got: " + parsed);
+        }
+        return parsed;
+    }
+
+    private static long longRangeWithAlias(Map<String, String> env, String primary, String alias,
+                                           long defVal, long min, long max, List<String> errors) {
+        String v = resolveAlias(env, primary, alias);
+        if (v == null) {
+            LOG.warn("ingestion-config: {} (alias {}) not set; using default {}", primary, alias, defVal);
+            return defVal;
+        }
+        long parsed;
+        try {
+            parsed = Long.parseLong(v);
+        } catch (NumberFormatException e) {
+            errors.add(primary + " (alias " + alias + ") must be a long, got: " + v);
+            return defVal;
+        }
+        if (parsed < min || parsed > max) {
+            errors.add(primary + " (alias " + alias + ") must be in range [" + min + ", " + max + "], got: " + parsed);
+        }
+        return parsed;
+    }
+
+    private static double doubleRangeWithAlias(Map<String, String> env, String primary, String alias,
+                                               double defVal, double min, double max, List<String> errors) {
+        String v = resolveAlias(env, primary, alias);
+        if (v == null) {
+            LOG.warn("ingestion-config: {} (alias {}) not set; using default {}", primary, alias, defVal);
+            return defVal;
+        }
+        double parsed;
+        try {
+            parsed = Double.parseDouble(v);
+        } catch (NumberFormatException e) {
+            errors.add(primary + " (alias " + alias + ") must be a number, got: " + v);
+            return defVal;
+        }
+        if (parsed < min || parsed > max) {
+            errors.add(primary + " (alias " + alias + ") must be in range [" + min + ", " + max + "], got: " + parsed);
+        }
+        return parsed;
+    }
+
     // ---- Builder ----
 
     private static class Builder {
@@ -413,12 +496,12 @@ public final class IngestionConfig {
         String flussBootstrap = "fluss-coordinator:9123";
         String rawTableName = "raw_table_1";
         int maxBatchRecords = 1, maxBatchWaitMs;
-        int maxPendingRecords = 50_000;
-        long maxPendingBytes = 67_108_864L;
+        int maxPendingRecords = 150_000;
+        long maxPendingBytes = 201_326_592L; // 192 MiB — T2 3k default
         double pendingWarningPercent = 0.80;
         Duration appendTimeout = Duration.ofSeconds(5);
         Duration drainDeadline = Duration.ofSeconds(30);
-        long clockOffsetLimitMs = 100L;
+        long clockOffsetLimitMs = 2000L; // T10: 2s default
         long arrowMaxEventAgeMs;
         long arrowMaxFutureEventSkewMs;
         String goArrowSdkVersion = "v0.0.0-20260622-7cce1630";

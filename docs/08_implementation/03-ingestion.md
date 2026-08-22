@@ -84,7 +84,7 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `APPEND_TIMEOUT_SECONDS` | Yes | Pinned client classification (default 5 s, range 1-30) |
 | `DRAIN_DEADLINE_SECONDS` | Yes | Shutdown drain deadline for pending appends (default 30 s, range 1-300); added 2026-08-15 (ING-FAIL-010) — the deadline was previously hardcoded 30 s, and a never-acking Fluss must not hang shutdown |
 | Fingerprint version — fixed inside code (`FingerprintBuilder.FINGERPRINT_VERSION`), not an env key | — | Canonical algorithm version (currently 1) |
-| `CLOCK_OFFSET_LIMIT_MS` | Yes | 100 ms code default; dev stack runs 200 ms (2026-08-14: host clock measured -102 ms on one NTP sample — 200 leaves margin while still catching genuine drift) |
+| `CLOCK_OFFSET_LIMIT_MS` | Yes | 2000 ms (2s) code default (T10 NTP 2s gate); configurable via env; drift >2s → not-ready, future ticks >2s → quarantine per slot |
 | `DEPLOY_ENV` | No | Deployment environment (default `dev`); `prod` rejects `INGESTION_ALLOW_DEGRADED=true` and `ARROW_HFT_MULTI_CONNECTION_APPROVED=true` |
 | `ALLOW_RUNTIME_DDL` | No | `true` = DdlBootstrap may create missing tables at startup (local dev); default `false` = verify-only |
 | `CLOCK_CHECK_REQUIRED` | No | `true` = clock offset outside `CLOCK_OFFSET_LIMIT_MS` is FATAL at startup (exit 1); default `false` |

@@ -41,7 +41,7 @@ func TestSupervisorKeepsHealthySlotAliveDuringPeerRetry(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			runHFTSupervisorWithFactory(ctx, cancel, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
+			runHFTSupervisorWithFactory(ctx, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
 		}()
 		// Let slot-0 fail (backoff) and slot-1 reach ACTIVE.
 		time.Sleep(300 * time.Millisecond)
@@ -93,7 +93,7 @@ func TestSupervisorStopsTerminalSlotWithoutDisturbingPeers(t *testing.T) {
 			// The terminal slot stops itself (E_ALL_INVALID → epochTerminal)
 			// without cancelling the shared context; the healthy peer keeps
 			// running until we shut down.
-			done <- runHFTSupervisorWithFactory(ctx, cancel, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
+			done <- runHFTSupervisorWithFactory(ctx, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
 		}()
 		// Generous fixed wait: the terminal slot fails in milliseconds and the
 		// healthy peer reaches ACTIVE in milliseconds. (Not polling the captured

@@ -258,7 +258,7 @@ func runHFT(ctx context.Context, cancel context.CancelFunc, client *arrow.Client
 		cancel()
 		return
 	}
-	runHFTSupervisor(ctx, cancel, client, plan, latencyMs, responseTimeout, refreshAuth, logf)
+	runHFTSupervisor(ctx, client, plan, latencyMs, responseTimeout, refreshAuth, logf)
 }
 
 func runReconnectLoop(ctx context.Context, run func(uint64) bool, onRetry func(uint64, time.Duration), wait func(context.Context, time.Duration)) {
@@ -278,7 +278,7 @@ func runReconnectLoop(ctx context.Context, run func(uint64) bool, onRetry func(u
 	}
 }
 
-func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory hftStreamFactory, slot SlotAssignment, latencyMs int, responseTimeout time.Duration, epoch uint64, refreshAuth func(context.Context) error, logf func(string, ...any)) slotEpochResult {
+func runHFTEpoch(ctx context.Context, streamFactory hftStreamFactory, slot SlotAssignment, latencyMs int, responseTimeout time.Duration, epoch uint64, refreshAuth func(context.Context) error, authRefreshes *int, logf func(string, ...any)) slotEpochResult {
 	tokens := slot.Tokens
 	stream, err := streamFactory()
 	if err != nil {
@@ -305,7 +305,19 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 	lastFrameNanos := atomic.Int64{}
 	decodeErrors := 0
 	decodeWindow := time.Now()
-	authRefreshes := 0
+	// T1: the auth-refresh budget is owned by the slot's reconnect loop
+	// (runHFTSlotWithFactory) so it survives reconnect epochs and exhaustion
+	// terminates that slot only. nil (direct single-epoch callers) falls back
+	// to an epoch-local budget, preserving the pre-T1 per-epoch semantics.
+	authTries := 0
+	if authRefreshes != nil {
+		authTries = *authRefreshes
+	}
+	syncAuthBudget := func() {
+		if authRefreshes != nil {
+			*authRefreshes = authTries
+		}
+	}
 	terminalAuthFailure := false
 	readCtx, stopRead := context.WithCancel(ctx)
 	defer stopRead()
@@ -358,20 +370,21 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			message := err.Error()
 			if isHFTAuthError(message) {
 				refreshErr := error(nil)
-				if refreshAuth != nil && authRefreshes < 3 {
-					authRefreshes++
+				if refreshAuth != nil && authTries < maxAuthRefreshAttempts {
+					authTries++
+					syncAuthBudget()
 					refreshErr = refreshAuth(ctx)
 				}
-				// classifyAuthRefresh expects the prior count; authRefreshes was
-				// already incremented above, so pass authRefreshes-1.
-				switch classifyAuthRefresh(refreshAuth != nil, authRefreshes-1, refreshErr) {
+				// classifyAuthRefresh expects the prior count; authTries was
+				// already incremented above, so pass authTries-1.
+				switch classifyAuthRefresh(refreshAuth != nil, authTries-1, refreshErr) {
 				case authResumed:
 					noteReconnect(slot.SlotID)
 					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "reconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: "authentication_refreshed", ReceivedTsMs: time.Now().UnixMilli()})
 					signalEpochStop()
 					return
 				case authRetry:
-					logf("HFT authentication refresh failed (attempt %d): %v", authRefreshes, sanitizeDiagnostic(err.Error()))
+					logf("HFT authentication refresh failed (attempt %d): %v", authTries, sanitizeDiagnostic(err.Error()))
 					signalEpochStop()
 					return
 				default: // authTerminal or authTerminalExhausted
@@ -379,11 +392,24 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 					if refreshErr == nil {
 						reason = "authentication_refresh_exhausted"
 					}
+					// Set the flag BEFORE signalEpochStop: close() synchronizes
+					// with the epoch's `<-epochStop` receive, so the receiver is
+					// guaranteed to observe the terminal decision (previously
+					// ordered after the close, an auth-terminal arriving while a
+					// subscription response was pending was misread as retryable
+					// and the slot reconnected forever).
+					terminalAuthFailure = true
+					// R-297: signal the epoch stop BEFORE the emit — EmitEvent
+					// blocks on a full NDJSON pipe, and the stop must never wait
+					// behind a write that cannot complete.
+					signalEpochStop()
 					_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "auth_failure", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotTerminal), Reason: reason, ReceivedTsMs: time.Now().UnixMilli()})
 					logf("HFT authentication failed; refresh exhausted")
-					signalEpochStop()
-					cancel()
-					terminalAuthFailure = true
+					// T1: auth exhaustion is terminal for THIS slot only. The
+					// shared process context is deliberately NOT cancelled, so
+					// peer slots keep running with their own refresh episodes.
+					// Returning epochTerminal stops this slot; the supervisor
+					// records the terminal outcome and leaves peers alone.
 					return
 				}
 			}
@@ -447,6 +473,11 @@ func runHFTEpoch(ctx context.Context, cancel context.CancelFunc, streamFactory h
 			// wait out the full responseTimeout and degrade into a TERMINAL.
 			// The stream is already gone — report and retry with backoff so
 			// reconnect cycles survive mid-subscription drops.
+			// T1: an auth-refresh exhaustion, however, is a terminal decision
+			// even mid-subscription — it must stop THIS slot, not retry.
+			if terminalAuthFailure {
+				return epochTerminal
+			}
 			return epochRetryable
 		case <-ctx.Done():
 			return epochRecovered
@@ -581,14 +612,14 @@ const (
 // possible — a token-only deployment (refreshAuth == nil, so refreshErr stays
 // nil) previously looped "reconnect / authentication_refreshed" forever.
 func classifyAuthRefresh(hasRefresh bool, authRefreshes int, refreshErr error) authRefreshOutcome {
-	if !hasRefresh || authRefreshes >= 3 {
+	if !hasRefresh || authRefreshes >= maxAuthRefreshAttempts {
 		return authTerminalExhausted
 	}
 	if refreshErr == nil {
 		return authResumed
 	}
 	// This attempt counted: the next check sees authRefreshes+1.
-	if authRefreshes+1 >= 3 {
+	if authRefreshes+1 >= maxAuthRefreshAttempts {
 		return authTerminal
 	}
 	return authRetry

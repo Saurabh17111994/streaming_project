@@ -15,15 +15,15 @@ import org.junit.jupiter.api.Test;
 class IngestionConfigTest {
 
     @Test
-    @DisplayName("MAX_PENDING_RECORDS = 50,000 (throughput redesign Phase 3)")
+    @DisplayName("MAX_PENDING_RECORDS = 150,000 — T2 streaming-3000 3k default (50k→150k)")
     void maxPendingRecords() {
-        assertEquals(50_000L, IngestionConfig.MAX_PENDING_RECORDS);
+        assertEquals(150_000L, IngestionConfig.MAX_PENDING_RECORDS);
     }
 
     @Test
-    @DisplayName("MAX_PENDING_BYTES = 64 MiB")
+    @DisplayName("MAX_PENDING_BYTES = 192 MiB — T2 streaming-3000 3k default (64M→192M)")
     void maxPendingBytes() {
-        assertEquals(67_108_864L, IngestionConfig.MAX_PENDING_BYTES);
+        assertEquals(201_326_592L, IngestionConfig.MAX_PENDING_BYTES);
     }
 
     @Test
@@ -33,9 +33,9 @@ class IngestionConfigTest {
     }
 
     @Test
-    @DisplayName("CLOCK_OFFSET_LIMIT_MS = 100ms")
+    @DisplayName("CLOCK_OFFSET_LIMIT_MS = 2000ms (T10 2s gate)")
     void clockOffsetLimit() {
-        assertEquals(100L, IngestionConfig.CLOCK_OFFSET_LIMIT_MS);
+        assertEquals(2000L, IngestionConfig.CLOCK_OFFSET_LIMIT_MS);
     }
 
     @Test
@@ -153,5 +153,56 @@ class IngestionConfigTest {
                 () -> IngestionConfig.validateFrom(env),
                 "MAX_PENDING_APPEND_BYTES below the 1 MiB floor must be rejected (R-156)");
         assertTrue(e.getMessage().contains("MAX_PENDING_APPEND_BYTES"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("T2 tunable backpressure — env overrides 80%/100%, alias PENDING_MAX_*")
+    void tunableBackpressureEnvOverrides() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("ARROW_APP_ID", "test-app");
+        env.put("ARROW_APP_SECRET", "test-secret");
+        env.put("ARROW_TOKEN", "test-token");
+        env.put("FLUSS_BOOTSTRAP", "localhost:9123");
+        env.put("RAW_TABLE_NAME", "raw_table_1");
+        env.put("ARROW_MAX_EVENT_AGE_MS", "5000");
+        env.put("ARROW_MAX_FUTURE_EVENT_SKEW_MS", "2000");
+        // Default is 150k/192M (3k) — no env → defaults.
+        IngestionConfig def = IngestionConfig.validateFrom(env);
+        assertEquals(150_000, def.maxPendingRecords, "default 150k for 3k");
+        assertEquals(201_326_592L, def.maxPendingBytes, "default 192M for 3k");
+        assertEquals(0.80, def.pendingWarningPercent, 0.001, "default 80% warn");
+
+        // Override back to 1k values via primary keys.
+        env.put("MAX_PENDING_APPEND_RECORDS", "50000");
+        env.put("MAX_PENDING_APPEND_BYTES", "67108864");
+        env.put("PENDING_APPEND_WARNING_PERCENT", "0.80");
+        IngestionConfig v1k = IngestionConfig.validateFrom(env);
+        assertEquals(50_000, v1k.maxPendingRecords, "1k override 50k via primary");
+        assertEquals(67_108_864L, v1k.maxPendingBytes, "1k override 64M via primary");
+
+        // Alias PENDING_MAX_* works when primary absent.
+        env.remove("MAX_PENDING_APPEND_RECORDS");
+        env.remove("MAX_PENDING_APPEND_BYTES");
+        env.remove("PENDING_APPEND_WARNING_PERCENT");
+        env.put("PENDING_MAX_RECORDS", "50000");
+        env.put("PENDING_MAX_BYTES", "67108864");
+        env.put("PENDING_WARNING_PERCENT", "0.85");
+        IngestionConfig alias = IngestionConfig.validateFrom(env);
+        assertEquals(50_000, alias.maxPendingRecords, "alias PENDING_MAX_RECORDS");
+        assertEquals(67_108_864L, alias.maxPendingBytes, "alias PENDING_MAX_BYTES");
+        assertEquals(0.85, alias.pendingWarningPercent, 0.001, "alias warning 85%");
+
+        // Primary wins over alias when both set.
+        env.put("MAX_PENDING_APPEND_RECORDS", "150000");
+        env.put("PENDING_MAX_RECORDS", "50000");
+        IngestionConfig priWins = IngestionConfig.validateFrom(env);
+        assertEquals(150_000, priWins.maxPendingRecords, "primary wins over alias");
+
+        // Custom 3k tunable — env overrides still enforce range (100..1M, 1MiB..MAX).
+        env.put("MAX_PENDING_APPEND_RECORDS", "150000");
+        env.put("PENDING_MAX_BYTES", "201326592");
+        IngestionConfig c3k = IngestionConfig.validateFrom(env);
+        assertEquals(150_000, c3k.maxPendingRecords);
+        assertEquals(201_326_592L, c3k.maxPendingBytes);
     }
 }

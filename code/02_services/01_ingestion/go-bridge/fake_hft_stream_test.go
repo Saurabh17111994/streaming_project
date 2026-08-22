@@ -14,14 +14,15 @@ import (
 type fakeHFTStream struct {
 	mu sync.Mutex
 
-	subscribeErr   error                    // error returned by SubscribeHFTTokens
-	response       *arrow.HFTResponsePacket // the single response delivered for the first request
-	noResponse     bool                     // never deliver a response (→ timeout)
-	heartbeatErr   error                    // next WriteText("PONG") returns this
-	readErr        error                    // onError delivered once the read loop starts
-	decodeErrCount int                      // deliver this many decode-class onError calls
-	closeErr       error                    // Close returns this
-	onLTPTick      arrow.HFTLTPTick         // emitted after subscribe (via callbacks)
+	subscribeErr   error                        // error returned by SubscribeHFTTokens
+	response       *arrow.HFTResponsePacket     // the single response delivered for the first request
+	ackCh          chan arrow.HFTResponsePacket // when set: one SUCCESS ack per SubscribeHFTTokens batch (multi-request slots)
+	noResponse     bool                         // never deliver a response (→ timeout)
+	heartbeatErr   error                        // next WriteText("PONG") returns this
+	readErr        error                        // onError delivered once the read loop starts
+	decodeErrCount int                          // deliver this many decode-class onError calls
+	closeErr       error                        // Close returns this
+	onLTPTick      arrow.HFTLTPTick             // emitted after subscribe (via callbacks)
 	onFullTick     arrow.HFTFullTick
 	onDecodedFrame []byte // delivered via onDecoded before the tick
 
@@ -38,10 +39,24 @@ func (f *fakeHFTStream) SubscribeHFTTokens(mode string, exchSeg int, ids []int32
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.subscribeIds = append(f.subscribeIds, append([]int32(nil), ids...))
+	if f.ackCh != nil {
+		select {
+		case f.ackCh <- arrow.HFTResponsePacket{ErrorCode: "SUCCESS", SuccessCount: uint16(len(ids))}:
+		default:
+		}
+	}
 	if f.subscribeErr != nil {
 		return f.subscribeErr
 	}
 	return nil
+}
+
+// IsClosed reports whether the stream was Close()d, lock-protected for
+// cross-goroutine assertions (supervisor slot-isolation tests).
+func (f *fakeHFTStream) IsClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
 }
 
 func (f *fakeHFTStream) WriteText(payload string) error {
@@ -64,6 +79,7 @@ func (f *fakeHFTStream) ReadHFTWithFrame(ctx context.Context,
 	f.mu.Lock()
 	readErr := f.readErr
 	response := f.response
+	ackCh := f.ackCh
 	noResponse := f.noResponse
 	ltp := f.onLTPTick
 	full := f.onFullTick
@@ -74,6 +90,24 @@ func (f *fakeHFTStream) ReadHFTWithFrame(ctx context.Context,
 	// Deliver the subscription response (unless suppressed → timeout).
 	if !noResponse && response != nil {
 		onResponse(*response)
+	}
+	// Multi-batch mode: SubscribeHFTTokens enqueues one SUCCESS ack per batch;
+	// relay them to onResponse so a 1024-token slot (2×512 requests) gets an
+	// ack for every batch without a response timeout. The relay stops when the
+	// read loop ends (readErr or ctx cancel).
+	if ackCh != nil {
+		relayDone := make(chan struct{})
+		defer close(relayDone)
+		go func() {
+			for {
+				select {
+				case r := <-ackCh:
+					onResponse(r)
+				case <-relayDone:
+					return
+				}
+			}
+		}()
 	}
 	// Emit a decoded frame + tick so the watchdog sees a frame.
 	if decoded != nil {

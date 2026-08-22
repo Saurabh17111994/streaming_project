@@ -155,7 +155,7 @@ func TestINGRES001OneHundredForcedDisconnectReconnectCycles(t *testing.T) {
 		// Suppressed backoff: reconnect immediately after each drop.
 		runReconnectLoop(ctx,
 			func(epoch uint64) bool {
-				res := runHFTEpoch(ctx, cancel, streamFactoryFor(client, 0), slot, 50, 10*time.Second, epoch, nil, t.Logf)
+				res := runHFTEpoch(ctx, streamFactoryFor(client, 0), slot, 50, 10*time.Second, epoch, nil, nil, t.Logf)
 				return res == epochTerminal || res == epochRecovered
 			},
 			func(uint64, time.Duration) {},              // onRetry — event emission is internal
@@ -264,7 +264,7 @@ func TestINGRES001OneHundredForcedDisconnectReconnectCyclesRealBackoff(t *testin
 		defer close(completed)
 		runReconnectLoop(ctx,
 			func(epoch uint64) bool {
-				res := runHFTEpoch(ctx, cancel, streamFactoryFor(client, 0), slot, 50, 10*time.Second, epoch, nil, t.Logf)
+				res := runHFTEpoch(ctx, streamFactoryFor(client, 0), slot, 50, 10*time.Second, epoch, nil, nil, t.Logf)
 				return res == epochTerminal || res == epochRecovered
 			},
 			func(uint64, time.Duration) {}, // onRetry — event emission is internal
@@ -363,7 +363,7 @@ func TestINGRES001HealthySlotNotInterruptedByPeerReconnect(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHFTSupervisorWithFactory(ctx, cancel, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
+		runHFTSupervisorWithFactory(ctx, makeFactory, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
 
 	// Let slot-0 complete a few disconnect cycles (supervisor uses REAL

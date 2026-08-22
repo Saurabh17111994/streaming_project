@@ -35,6 +35,7 @@ set -euo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJ_ROOT="$(cd "$CODE_ROOT/.." && pwd)"
+export CODE_ROOT PROJ_ROOT
 : "${FLUSS_BOOTSTRAP:=localhost:9123}"
 export FLUSS_BOOTSTRAP
 

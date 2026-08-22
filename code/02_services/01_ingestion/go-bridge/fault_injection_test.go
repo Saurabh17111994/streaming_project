@@ -76,7 +76,7 @@ func TestFaultInjectionDecodeBurstRecovers(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHFTSlotWithFactory(ctx, cancel, factory, slot, 50, 10*time.Second, nil, t.Logf)
+		runHFTSlotWithFactory(ctx, factory, slot, 50, 10*time.Second, nil, t.Logf)
 	}()
 	// Poll for the recovered ACTIVE ack instead of a fixed 300ms sleep —
 	// under `go test -race` full-suite load the burst + reconnect can take
@@ -147,7 +147,7 @@ func TestFaultInjectionAuthRefreshRecovers(t *testing.T) {
 		go func() {
 			defer close(done)
 			// refreshAuth returns nil (success) — the slot resumes.
-			runHFTSlotWithFactory(ctx, cancel, factory, slot, 50, 10*time.Second,
+			runHFTSlotWithFactory(ctx, factory, slot, 50, 10*time.Second,
 				func(context.Context) error { return nil }, t.Logf)
 		}()
 		time.Sleep(300 * time.Millisecond)

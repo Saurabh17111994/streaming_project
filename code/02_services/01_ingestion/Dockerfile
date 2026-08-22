@@ -18,6 +18,7 @@ WORKDIR /src
 COPY pom.xml .
 COPY common ./common
 COPY 02_services/01_ingestion/pom.xml ./02_services/01_ingestion/pom.xml
+COPY 02_services/06_execution_gateway/pom.xml ./02_services/06_execution_gateway/pom.xml
 # Download deps first for layer caching
 RUN mvn -q dependency:go-offline 2>/dev/null || true
 COPY 02_services/01_ingestion/src ./02_services/01_ingestion/src
@@ -29,6 +30,13 @@ WORKDIR /app
 COPY --from=go-builder /arrow-bridge /app/arrow-bridge
 COPY --from=java-builder /src/02_services/01_ingestion/target/ingestion.jar /app/ingestion.jar
 COPY 02_services/01_ingestion/docker-entrypoint.sh /app/docker-entrypoint.sh
+# 2026-08-22 single-pane: OTel Javaagent for JVM metrics (jvm.*) → collector.
+# Agent is downloaded at build so image stays self-contained; same endpoint as gateway.
+ADD --chmod=0444 https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.9.0/opentelemetry-javaagent.jar /app/opentelemetry-javaagent.jar
+ENV OTEL_SERVICE_NAME=ingestion
+ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+ENV OTEL_METRICS_EXPORTER=otlp
+ENV OTEL_LOGS_EXPORTER=otlp
 # Arrow instrument CSV mounted as volume at runtime (see docker-compose)
 # COPY removed — CSV lives at Arrow_broker/instruments/cash_stocks/ on host
 RUN chmod +x /app/arrow-bridge /app/docker-entrypoint.sh

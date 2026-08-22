@@ -16,10 +16,18 @@
 # EXECUTION_ENABLED must remain false in .env.example.
 # =============================================================================
 
-# Operational live manifest (1,024 instruments, Jul 31) — the Go bridge caps
-# 1024 tokens/connection and Java pins ARROW_HFT_CONNECTIONS=1, so the 2433-row
-# NSE_CM_EQUITY.csv cannot be serviced; this file is the live + bench manifest.
-x-manifest: &manifest /home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv
+# Operational live manifest (1,024 instruments, Jul 31) — 1024 tokens/connection
+# cap stays the per-connection contract (ARROW_HFT_MAX_TOKENS_PER_CONNECTION) —
+# T0 3-slot ready. Default N=1 (1024) via ARROW_HFT_CONNECTIONS=1. Premium N=3 shards
+# 3000 as 1024+1024+952 without code rewrite — set ARROW_HFT_CONNECTIONS=3
+# and ARROW_INSTRUMENT_MANIFESTS=/instruments/host/slot1.csv,/instruments/host/slot2.csv,/instruments/host/slot3.csv
+# (or a single 3000-row CSV auto-sharded by BuildSubscriptionPlan at
+# INSTRUMENT_MANIFEST_PATH). The single-manifest anchor below remains the
+# N=1 default; the directory mount in the ingestion service exposes all host
+# manifests for N=3.
+# Host paths are env-driven with defaults to the approved 1024 CSV/dir.
+x-manifest: &manifest "${INSTRUMENT_MANIFEST_HOST_PATH:-/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks/NSE_CM_EQUITY (1024).csv}"
+x-manifest-dir: &manifest-dir "${INSTRUMENT_MANIFESTS_HOST_DIR:-/home/saurabh/Jupyter_notebook/Flink_Fluss_Infrastructure/Arrow_broker/instruments/cash_stocks}"
 
 x-fluss-common: &fluss-common
   restart: unless-stopped
@@ -34,6 +42,30 @@ x-flink-common: &flink-common
   networks: [trading-net]
   depends_on: [fluss-coordinator]
   environment:
+    ALLOW_FULL_REPLAY: "true"
+    # G4 Durability T9: checkpoint storage contract
+    # - Dev (default): keeps local durable volume via flink-checkpoints:/checkpoints
+    #   (CHECKPOINT_DIR=file:///checkpoints via CheckpointingOptions.CHECKPOINTS_DIRECTORY;
+    #   no S3 required — SignalJobConfig defaults to file:// when DEPLOYMENT_ENV=dev)
+    # - Prod: requires encrypted S3 (CHECKPOINT_DIR=s3:// or s3a://, bucket AES256)
+    #   — SignalJobConfig fails fast if CHECKPOINT_DIR missing or non-S3 when
+    #   DEPLOYMENT_ENV=production or PROFILE=prod (G4 T9). Override at runtime:
+    #   DEPLOYMENT_ENV=production CHECKPOINT_DIR=s3://bucket/flink-checkpoints ...
+    DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-dev}
+    CHECKPOINT_DIR: ${CHECKPOINT_DIR:-file:///checkpoints}
+    SAVEPOINT_DIR: ${SAVEPOINT_DIR:-}
+    # PROFILE alias for prod (task G4 T9: validate s3:// when PROFILE=prod or similar)
+    PROFILE: ${PROFILE:-}
+    # Streaming-3000 T3 G3 Compute (p=8, 16 Fluss buckets → 8 slots, hash(token) 2:1)
+    # Dev single-host keeps 8 TaskSlots (taskmanager.numberOfTaskSlots=8) so p=8
+    # runs without slot starvation; scale target 3000 instruments @50k tps avg
+    # (1024 tokens/slot at 8). Override with explicit env for tests (PARALLELISM=1).
+    PARALLELISM: ${PARALLELISM:-8}
+    STATE_BACKEND: ${STATE_BACKEND:-rocksdb}
+    STATE_BACKEND_LOCAL_DIRS: ${STATE_BACKEND_LOCAL_DIRS:-/tmp/flink-rocksdb}
+    STATE_BACKEND_MANAGED_MEMORY: ${STATE_BACKEND_MANAGED_MEMORY:-true}
+    TASK_MANAGER_NETWORK_MEMORY_MAX: ${TASK_MANAGER_NETWORK_MEMORY_MAX:-256m}
+    TASK_MANAGER_MEMORY_MANAGED_SIZE: ${TASK_MANAGER_MEMORY_MANAGED_SIZE:-}
     FLINK_PROPERTIES: |
       jobmanager.rpc.address: flink-jobmanager
       rest.address: flink-jobmanager
@@ -68,6 +100,17 @@ x-flink-common: &flink-common
       # the task heap keeps its ~800m budget (otherwise off-heap shrinks
       # heap and the steady-state 434m heap OOMs).
       taskmanager.memory.task.off-heap.size: 512m
+      # Streaming-3000 T3 G3 Compute: p=8 (16 buckets → 8 slots, hash(token) 2:1)
+      # RocksDB incremental on SSD, managed 0.4, network 256m. Single-host dev
+      # keeps 8 slots so p8 runs without slot starvation (CompatRescale p2→p4
+      # already proven, T3 extends to p8 at 1k). Hashmap dev-override is via
+      # STATE_BACKEND=hashmap env; default RocksDB matches prod pin.
+      taskmanager.memory.managed.fraction: 0.4
+      taskmanager.memory.network.max: 256m
+      taskmanager.memory.network.min: 256m
+      state.backend: rocksdb
+      state.backend.incremental: "true"
+      state.backend.rocksdb.localdir: /tmp/flink-rocksdb
       # Note: the image default env.java.opts.all already includes
       # --add-opens=java.base/java.nio=ALL-UNNAMED (arrow-compatible JVM
       # options) — do NOT set env.java.opts here: it collides with the
@@ -109,6 +152,8 @@ volumes:
   openobserve-data:
   # R-171: persistent ingestion JSON logs.
   ingestion-logs:
+  # 2026-08-22 single-pane: infra logs (host/journald) for O2.
+  infra-logs:
 
 services:
   # ---- ZooKeeper: metadata store for Fluss -----------------------------
@@ -193,6 +238,8 @@ services:
     <<: *fluss-common
     image: ${FLUSS_IMAGE:?set FLUSS_IMAGE to an immutable digest}
     command: ["tabletServer"]
+    # T13 chaos-03: tablet must auto-restart after SIGKILL (kill→recovery invariant)
+    restart: unless-stopped
     depends_on: [fluss-coordinator]
     ports: ["9124:9124"]
     volumes:
@@ -318,18 +365,41 @@ services:
       # reconcile can read it after the container stops.
       ARROW_TICK_COUNTS_FILE: ${ARROW_TICK_COUNTS_FILE:-/tmp/arrow-tick-counts.txt}
       ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
+      # T0 3-slot (streaming-3000): env-driven slot count N=1..3. Default 1
+      # keeps single-socket 1024 working; N=3 shards 3000 as 1024+1024+952
+      # via BuildSubscriptionPlan contiguous chunks. Manifest list enables
+      # per-slot CSVs without code rewrite; single CSV (3000 rows) also
+      # auto-shards when N=3. Go/ Java both enforce 1..3 (hftRange/intRange).
+      ARROW_HFT_CONNECTIONS: ${ARROW_HFT_CONNECTIONS:-1}
+      # Comma-separated container paths for 3-slot manifests, e.g.
+      # /instruments/host/slot1.csv,/instruments/host/slot2.csv,/instruments/host/slot3.csv
+      # Empty = use single manifest path below (N=1 default). T1 will wire
+      # the loader/bridge to consume this list; until then the single-CSV
+      # auto-shard path covers 3000 via N=3.
+      ARROW_INSTRUMENT_MANIFESTS: ${ARROW_INSTRUMENT_MANIFESTS:-}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
-      INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
-      ARROW_INSTRUMENT_MANIFEST: /instruments/NSE_CM_EQUITY.csv
+      # Single-manifest fallback — env-driven with default to the N=1 approved
+      # 1024 CSV. Overridable via host env for 3000 single-CSV sharding.
+      INSTRUMENT_MANIFEST_PATH: ${INSTRUMENT_MANIFEST_PATH:-/instruments/NSE_CM_EQUITY.csv}
+      ARROW_INSTRUMENT_MANIFEST: ${ARROW_INSTRUMENT_MANIFEST:-/instruments/NSE_CM_EQUITY.csv}
       # IngestionConfig treats these as required (no code default) — the
       # container must pass them or the Java service exits at startup.
       RAW_TABLE_NAME: ${RAW_TABLE_NAME:-raw_table_1}
       ARROW_MAX_EVENT_AGE_MS: ${ARROW_MAX_EVENT_AGE_MS:-5000}
       ARROW_MAX_FUTURE_EVENT_SKEW_MS: ${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}
-      # Clock offset limit in ms (default 100). The host clock here is
-      # NTP-synchronized but measured -102ms on one sample (2026-08-14); a
-      # limit of 200 leaves margin while still catching genuine drift.
-      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-200}
+      # Clock offset limit in ms (default 2000 / 2s, T10). Configurable via env; overrides code default 2000.
+      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-2000}
+      # T2 tunable backpressure (G2 Ingest) — streaming-3000: 50k/64M (1k) → 150k/192M (3k)
+      # Primary: MAX_PENDING_APPEND_* + PENDING_APPEND_WARNING_PERCENT (80% warn / 100% halt).
+      # Aliases: PENDING_MAX_RECORDS / PENDING_MAX_BYTES / PENDING_WARNING_PERCENT (primary wins).
+      # Defaults raised for 3k: 150k records / 192MiB. For 1k dev, override to 50000 / 67108864.
+      # Keep halt logic — fail-closed until restart, never silent drop.
+      MAX_PENDING_APPEND_RECORDS: ${MAX_PENDING_APPEND_RECORDS:-150000}
+      MAX_PENDING_APPEND_BYTES: ${MAX_PENDING_APPEND_BYTES:-201326592}
+      PENDING_APPEND_WARNING_PERCENT: ${PENDING_APPEND_WARNING_PERCENT:-0.80}
+      PENDING_MAX_RECORDS: ${PENDING_MAX_RECORDS:-}
+      PENDING_MAX_BYTES: ${PENDING_MAX_BYTES:-}
+      PENDING_WARNING_PERCENT: ${PENDING_WARNING_PERCENT:-}
       READINESS_FILE_PATH: /tmp/ingestion.ready
       # R-171: persistent log volume so the JSON log survives recreate.
       LOG_DIR: /data/ingestion/logs
@@ -340,9 +410,20 @@ services:
       retries: 3
       start_period: 20s
     volumes:
+      # T0: default N=1 single-file mount (backward compatible) + directory
+      # mount exposing the host manifest directory for N=3 candidate. The
+      # directory mount at /instruments/host allows
+      # ARROW_INSTRUMENT_MANIFESTS list members
+      # (/instruments/host/slot*.csv) to resolve without extra binds. Both
+      # mounts are read-only; the file mount serves the default single-CSV
+      # path, the dir mount satisfies the list path.
       - type: bind
         source: *manifest
         target: /instruments/NSE_CM_EQUITY.csv
+        read_only: true
+      - type: bind
+        source: *manifest-dir
+        target: /instruments/host
         read_only: true
       # R-171: /data/ingestion/logs holds the JSON log (LOG_DIR default).
       - ingestion-logs:/data/ingestion/logs
@@ -498,6 +579,35 @@ services:
   # Keep no top-level `executor:` here — the T8 offline gate requires
   # `executor stays disabled` (literal `^  executor:` must not appear).
 
+  # ---- Infrastructure observability (2026-08-22 single-pane) --------------
+  # Host + container metrics for OpenObserve. Always on (default stack) —
+  # single-pane requires infra/JVM/host visibility even without trading.
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.8.2
+    networks: [trading-net]
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    networks: [trading-net]
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+
   # ---- Observability ------------------------------------------------------
   # OpenObserve = single source of truth (Option A, user-approved 2026-08-08):
   # metrics + dashboards + alert rules in one org (`default`), folders/prefix
@@ -524,6 +634,8 @@ services:
       # TabletServer logs (fluss-logs volume, /opt/fluss/log/*.log inside the
       # fluss containers) read by the filelog/fluss receiver.
       - fluss-logs:/data/fluss/logs:ro
+      # 2026-08-22 single-pane: infra logs volume for infrastructure_logs.
+      - infra-logs:/data/infra/logs:ro
     environment:
       O2_AUTH_BASIC: ${O2_AUTH_BASIC}
     depends_on: [openobserve]
@@ -548,6 +660,10 @@ services:
       # (receiver shares this netns); the SSRF guard blocks loopback by
       # default (dev only — remove in prod).
       ZO_SSRF_ALLOW_LOOPBACK: ${ZO_SSRF_ALLOW_LOOPBACK:-true}
+      # 2026-08-22 single-pane: cap O2 so it cannot starve collector (10-observability.md resource budget).
+      # 48GB VM: 8-12GB for O2, 36GB for collector+OS; alert >14GB 60s.
+      ZO_MEMORY_LIMIT: ${ZO_MEMORY_LIMIT:-12g}
+      ZO_MEMORY_ALERT_THRESHOLD: ${ZO_MEMORY_ALERT_THRESHOLD:-14g}
     volumes: [openobserve-data:/data]
 
   # Dev-only alert webhook receiver. Shares OpenObserve's network namespace so

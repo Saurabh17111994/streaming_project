@@ -101,8 +101,8 @@ func TestFakeBrokerSubscriptionSuccess(t *testing.T) {
 	out := captureBridge(t, func() {
 		done := make(chan struct{})
 		go func() {
-			runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-				slot, 50, 10*time.Second, 1, nil, t.Logf)
+			runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+				slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 			close(done)
 		}()
 		time.Sleep(50 * time.Millisecond)
@@ -130,8 +130,8 @@ func TestFakeBrokerPartialSubscription(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000, 1001)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 10*time.Second, 1, nil, t.Logf)
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 	})
 
 	if got := lastEventState(eventsFrom(t, out), "subscription_ack"); got != "PARTIAL" {
@@ -148,8 +148,8 @@ func TestFakeBrokerAllInvalidSubscription(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000, 1001)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 10*time.Second, 1, nil, t.Logf)
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 	})
 
 	if got := lastEventState(eventsFrom(t, out), "subscription_ack"); got != "TERMINAL" {
@@ -166,8 +166,8 @@ func TestFakeBrokerSubscriptionTimeout(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 30*time.Millisecond, 1, nil, t.Logf) // short timeout
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 30*time.Millisecond, 1, nil, nil, t.Logf) // short timeout
 	})
 
 	events := eventsFrom(t, out)
@@ -200,8 +200,8 @@ func TestTickNotAcceptedAsSubscriptionAck(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 30*time.Millisecond, 1, nil, t.Logf) // short timeout
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 30*time.Millisecond, 1, nil, nil, t.Logf) // short timeout
 	})
 
 	events := eventsFrom(t, out)
@@ -233,8 +233,8 @@ func TestFakeBrokerHeartbeatFailure(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 10*time.Second, 1, nil, t.Logf)
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 		// Heartbeat ticker fires every 3s; force it quickly by re-entering with a
 		// tiny heartbeat via the raw loop is not possible — instead we wait for
 		// the goroutine to end via the 3s ticker.
@@ -256,8 +256,8 @@ func TestFakeBrokerReadFailure(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 10*time.Second, 1, nil, t.Logf)
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 	})
 	if got := lastEventState(eventsFrom(t, out), "disconnect"); got != "BACKOFF" {
 		t.Fatalf("expected disconnect BACKOFF, got %q\n%s", got, out)
@@ -281,8 +281,8 @@ func TestFakeBrokerStaleFeedWatchdog(t *testing.T) {
 	out := captureBridge(t, func() {
 		done := make(chan struct{})
 		go func() {
-			runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-				slot, 50, 10*time.Second, 1, nil, t.Logf)
+			runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+				slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 			close(done)
 		}()
 		time.Sleep(30 * time.Millisecond)
@@ -308,8 +308,8 @@ func TestFakeBrokerDecodeBurstRecovery(t *testing.T) {
 	defer cancel()
 	slot := slotAssignment(1000)
 	out := captureBridge(t, func() {
-		runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-			slot, 50, 10*time.Second, 1, nil, t.Logf)
+		runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+			slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 	})
 
 	events := eventsFrom(t, out)
@@ -339,8 +339,8 @@ func TestFakeBrokerDecodeBurstBelowThreshold(t *testing.T) {
 	out := captureBridge(t, func() {
 		done := make(chan struct{})
 		go func() {
-			runHFTEpoch(ctx, cancel, func() (hftStream, error) { return fake, nil },
-				slot, 50, 10*time.Second, 1, nil, t.Logf)
+			runHFTEpoch(ctx, func() (hftStream, error) { return fake, nil },
+				slot, 50, 10*time.Second, 1, nil, nil, t.Logf)
 			close(done)
 		}()
 		time.Sleep(20 * time.Millisecond)

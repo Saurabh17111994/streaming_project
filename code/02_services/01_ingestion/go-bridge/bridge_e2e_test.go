@@ -282,7 +282,7 @@ func TestFakeBrokerMultiSlotSupervisor(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
+		runHFTSupervisor(ctx, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
 	// Poll: both slots ACTIVE + each emits its own token's tick (race-safe).
 	deadline := time.Now().Add(6 * time.Second)
@@ -359,7 +359,7 @@ func TestFakeBrokerForcedOneSlotDisconnect(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
+		runHFTSupervisor(ctx, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
 	// Poll: slot-0 reconnects (1s backoff) while slot-1 stays ACTIVE.
 	deadline := time.Now().Add(8 * time.Second)
@@ -430,7 +430,7 @@ func TestFakeBrokerAllSlotTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	terminal := make(chan int, 1)
 	go func() {
-		terminal <- runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
+		terminal <- runHFTSupervisor(ctx, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
 	// The supervisor should finish on its own (both slots terminal) without
 	// needing a cancel — bounded wait, then cancel as a safety net.
@@ -494,7 +494,7 @@ func TestSlotIsolationSuppressesOnlyAssignedInstruments(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHFTSupervisor(ctx, cancel, client, plan, 50, 10*time.Second, nil, t.Logf)
+		runHFTSupervisor(ctx, client, plan, 50, 10*time.Second, nil, t.Logf)
 	}()
 	// Poll: slot-0 TERMINAL while slot-1 ACTIVE + emitting (race-safe).
 	deadline := time.Now().Add(6 * time.Second)

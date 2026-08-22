@@ -96,6 +96,11 @@ public final class IngestionService {
      *  reading cgroup is cheap and local. */
     private static final long MEMORY_MONITOR_INITIAL_DELAY_MS = 5_000L;
     private static final long MEMORY_MONITOR_INTERVAL_MS = 5_000L;
+    /** T2 tunable backpressure (G2 Ingest): pending limits are env-tunable via
+     *  IngestionConfig / AppendTracker — 80% WARN / 100% HALT (fail-closed until
+     *  restart, never silent drop). Streaming-3000 3k defaults: 150k records /
+     *  192 MiB (vs 50k/64M for 1k). Slow-Fluss subscription pause stays at 90% with
+     *  50% resume — conservative early-throttle above the 80% warning. */
     private static final double SLOW_FLUSS_PAUSE_PERCENT = 0.90;
     private static final double SLOW_FLUSS_RESUME_PERCENT = 0.50;
     /** Bridge restarts after an unexpected process exit (plan: restart exactly once). */
@@ -197,6 +202,8 @@ public final class IngestionService {
         for (Instrument inst : instruments) {
             instrumentMap.put(inst.instrumentToken(), inst);
         }
+        // T2 G2 Ingest: tunable pending limits from IngestionConfig (env-driven 80%/100%).
+        // Defaults 150k/192M (3k); 50k/64M (1k) via env override. Halt stays fail-closed.
         this.tracker = new AppendTracker(config.maxPendingRecords, config.maxPendingBytes,
                 config.pendingWarningPercent);
         this.health = new HealthProbe(tracker, clock);
@@ -813,9 +820,11 @@ public final class IngestionService {
                         "missing or non-positive broker timestamp", gt.token, null, null);
                 return;
             }
-            // Freshness gate — stale or future broker timestamps are quarantined
+            // Freshness gate (T10 NTP 2s gate): stale or future broker timestamps are quarantined
             // BEFORE any trade classification, so stale data can never become a
-            // trade decision. (Plan §Production hardening: 1376.)
+            // trade decision. Future ticks > ARROW_MAX_FUTURE_EVENT_SKEW_MS (2s, T10)
+            // are quarantined per slot (slot_id + epoch) and emit slot-scoped safety
+            // evidence; ticks <2s keep existing behavior. (Plan §Production hardening: 1376.)
             FreshnessDecision fd = classifyFreshness(gt.ts_ms, receiveTsMs,
                     config.arrowMaxFutureEventSkewMs, config.arrowMaxEventAgeMs);
             if (fd == FreshnessDecision.FUTURE) {

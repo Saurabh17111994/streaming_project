@@ -22,12 +22,14 @@ class PlatformConfigTest {
     }
 
     @Test
-    @DisplayName("positive limit derives min(64MiB, 10%)")
+    @DisplayName("positive limit derives min(192MiB, 10%) — T2 3k tunable")
     void positiveLimitDerives() {
-        // 512 MiB container → floor(536870912 * 0.10) = 53687091 < 64 MiB.
+        // 512 MiB container → floor(536870912 * 0.10) = 53687091 < 192 MiB.
         assertEquals(53_687_091L, PlatformConfig.maxPendingAppendBytes(512L << 20));
-        // 4 GiB container → floor > 64 MiB → capped.
-        assertEquals(67_108_864L, PlatformConfig.maxPendingAppendBytes(4L << 30));
+        // 4 GiB container → floor > 192 MiB → capped at 192 MiB (201326592).
+        assertEquals(201_326_592L, PlatformConfig.maxPendingAppendBytes(4L << 30));
+        // 2 GiB container → floor 214748364 > 192 MiB → capped.
+        assertEquals(201_326_592L, PlatformConfig.maxPendingAppendBytes(2L << 30));
     }
 
     @Test

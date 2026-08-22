@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@link AppendTracker} is ready (not halted, below warning)</li>
  *   <li>Broker connection is subscribed and receiving (recent frame)</li>
  *   <li>Subscription is complete (all manifest instruments subscribed)</li>
- *   <li>Clock offset is within policy (≤100 ms) — verified via {@link NtpClockChecker}</li>
+ *   <li>Clock offset is within policy (≤2000 ms / 2s, T10) — verified via {@link NtpClockChecker}</li>
  * </ol>
  */
 public final class HealthProbe {

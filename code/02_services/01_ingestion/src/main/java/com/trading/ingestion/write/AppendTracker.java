@@ -7,24 +7,32 @@ import java.util.concurrent.atomic.AtomicLong;
  * Bounded pending-append counters — records and bytes.
  *
  * <p>Thread-safe. Enforces the backpressure contract from
- * {@code docs/04_contracts/01-ingestion.md}:
+ * {@code docs/04_contracts/01-ingestion.md} and streaming-3000 plan T2:
  *
  * <ul>
- *   <li>Max pending records: 50,000 ({@code MAX_PENDING_APPEND_RECORDS})</li>
- *   <li>Max pending bytes: 64 MiB ({@code MAX_PENDING_APPEND_BYTES})</li>
- *   <li>80% warning → readiness false, warning event emitted</li>
+ *   <li>Max pending records: 150,000 default (tunable 50k/64M for 1k → 150k/192M for 3k)
+ *       via {@code MAX_PENDING_APPEND_RECORDS} / alias {@code PENDING_MAX_RECORDS}</li>
+ *   <li>Max pending bytes: 192 MiB default (tunable) via
+ *       {@code MAX_PENDING_APPEND_BYTES} / alias {@code PENDING_MAX_BYTES}</li>
+ *   <li>80% warning (tunable via {@code PENDING_APPEND_WARNING_PERCENT} /
+ *       alias {@code PENDING_WARNING_PERCENT}) → readiness false, warning event emitted</li>
  *   <li>100% → stop accepting broker data, readiness false, critical event,
  *       preserved acknowledged-loss record; never silently discard</li>
  *   <li>Pending counters decrease only after append completes</li>
+ *   <li>Halt is fail-closed until process restart (ING-FAIL-005)</li>
  * </ul>
+ *
+ * <p>Thresholds are env-driven: 80% warn / 100% halt. Defaults raised for 3k
+ * scale (streaming-3000 G2 Ingest T2). Keep halt logic — never drop silently.
  *
  * <p>Events are delivered through a pluggable {@link BackpressureListener}
  * so the tracker remains independent of logging/telemetry.
  */
 public final class AppendTracker {
 
-    public static final long MAX_PENDING_RECORDS = 50_000L;
-    static final long MAX_PENDING_BYTES = 67_108_864L; // 64 MiB
+    // T2 tunable backpressure (G2 Ingest) — streaming-3000: 50k/64M → 150k/192M
+    public static final long MAX_PENDING_RECORDS = 150_000L;
+    static final long MAX_PENDING_BYTES = 201_326_592L; // 192 MiB
     static final double WARNING_PERCENT = 0.80;
 
     private final AtomicLong pendingRecords = new AtomicLong(0);
