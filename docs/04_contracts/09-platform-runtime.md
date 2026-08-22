@@ -8,7 +8,8 @@ Local development/integration uses Docker Compose. Production uses Docker Swarm 
 
 - Exact image digests and Java/Python/Flink/Fluss/Arrow REST/protocol versions; no `latest`.
 - Three-node Fluss replication/quorum with anti-co-location.
-- Flink checkpoints/savepoints in encrypted S3.
+- Flink checkpoints/savepoints in encrypted S3 (G4 Durability T9):
+  prod requires `CHECKPOINT_DIR=s3://` or `s3a://` (bucket encryption AES256, R2 default or S3 SSE-S3 via `fs.s3a.server-side-encryption-algorithm=AES256` in `SignalJob`/`BabysitterJob`) — validated by `SignalJobConfig` which fails fast at startup with a clear, actionable message if `CHECKPOINT_DIR` is missing or not `s3://` when `DEPLOYMENT_ENV=production` or `PROFILE=prod` (case-insensitive, `PROFILE=prod` alias honored); `SAVEPOINT_DIR` likewise requires encrypted S3 in prod when set; Swarm `docker-stack.yml` enforces `CHECKPOINT_DIR=${CHECKPOINT_DIR:?encrypted s3:// mandatory}}` and `state.checkpoints.dir` + `state.savepoints.dir` + `fs.s3a.server-side-encryption-algorithm=AES256`, secrets via Swarm (`aws_access_key_id`/`aws_secret_access_key` at `/run/secrets/...` with `_FILE` fallback in the job); dev keeps a local durable volume (`flink-checkpoints:/checkpoints` via `docker-compose.yml` `CHECKPOINT_DIR=file:///checkpoints` default, `DEPLOYMENT_ENV=dev`) — no S3 required in dev, and `SignalJobConfig` deliberately allows `file://`/`/tmp` only in dev.
 - Mandatory encrypted overlay/TLS-protected transport for all sensitive paths (broker, Arrow REST, S3, operator control, secret delivery, and cross-host money-moving/state traffic). Exact mechanism remains evidence-gated but encryption is not optional.
 - Docker Swarm secrets and least-privilege service identities.
 - Durable volumes and encrypted policy-controlled audit/lake storage with a one-year minimum target.

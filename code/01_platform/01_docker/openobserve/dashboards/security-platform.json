@@ -1,18 +1,18 @@
 {
   "version": 8,
-  "title": "Safe to Trade",
-  "description": "Primary operator dashboard: execution gate, order flow, data feed health, system state. Cardinality: queries aggregate over global+slot series only (no per-token group-by; log tails bounded by LIMIT). Per-token metric series are limited to the top-20 sampler in otel-collector-config.yaml (METRICS_TOP20_TOKENS_REGEX); tick logs arrive 1% sampled with errors/gaps 100% — see docs/08_implementation/10-observability.md.",
+  "title": "Security and Platform (Infra/JVM/Host)",
+  "description": "Single-pane for all project infrastructure: hosts, containers, JVM, ZK, Swarm, security (2026-08-22 re-scope). Cardinality: queries aggregate over global+slot series only (no per-token group-by; log tails bounded by LIMIT). Per-token metric series are limited to the top-20 sampler in otel-collector-config.yaml (METRICS_TOP20_TOKENS_REGEX); tick logs arrive 1% sampled with errors/gaps 100% — see docs/08_implementation/10-observability.md.",
   "folder_id": "default",
   "tabs": [
     {
-      "tabId": "execution",
-      "name": "Execution",
+      "tabId": "infra",
+      "name": "Infra",
       "panels": [
         {
           "id": "1",
           "type": "line",
-          "title": "Executor report intake (fills/cancels/failures) rate",
-          "description": "Lights up when EXECUTOR OTLP export lands (telemetry.rs TelemetrySink seam).",
+          "title": "Host CPU % (node_exporter)",
+          "description": "Per vm_id/host. Source: node_exporter metrics via prometheus remote-write.",
           "config": {
             "show_legends": true,
             "legends_position": null
@@ -20,7 +20,7 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" GROUP BY x",
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name = 'node_cpu_seconds_total' GROUP BY x",
               "customQuery": true,
               "fields": {
                 "stream": "metrics",
@@ -42,16 +42,16 @@
           "layout": {
             "x": 0,
             "y": 0,
-            "w": 96,
+            "w": 64,
             "h": 8,
             "i": 1
           }
         },
         {
           "id": "2",
-          "type": "bar",
-          "title": "Unknown attempt / unresolved count",
-          "description": "",
+          "type": "line",
+          "title": "Host memory available (bytes)",
+          "description": "Per host.",
           "config": {
             "show_legends": true,
             "legends_position": null
@@ -59,7 +59,7 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE service = 'executor' AND metric_name LIKE '%unresolved%' GROUP BY x",
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name = 'node_memory_MemAvailable_bytes' GROUP BY x",
               "customQuery": true,
               "fields": {
                 "stream": "metrics",
@@ -79,17 +79,17 @@
             }
           ],
           "layout": {
-            "x": 96,
+            "x": 64,
             "y": 0,
-            "w": 96,
+            "w": 64,
             "h": 8,
             "i": 2
           }
         },
         {
           "id": "3",
-          "type": "table",
-          "title": "Execution log tail (gate transitions, halts, failures)",
+          "type": "line",
+          "title": "Host disk free (bytes) / filesystem avail",
           "description": "",
           "config": {
             "show_legends": true,
@@ -98,10 +98,10 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT _timestamp, service, log FROM \"logs\" WHERE service = 'executor' ORDER BY _timestamp DESC LIMIT 100",
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name = 'node_filesystem_avail_bytes' GROUP BY x",
               "customQuery": true,
               "fields": {
-                "stream": "logs",
+                "stream": "metrics",
                 "x": [],
                 "y": [],
                 "z": [],
@@ -110,7 +110,46 @@
                   "logicalOperator": "AND",
                   "conditions": []
                 },
-                "stream_type": "logs"
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 8,
+            "i": 3
+          }
+        },
+        {
+          "id": "4",
+          "type": "line",
+          "title": "Container CPU (cAdvisor)",
+          "description": "Per container_name.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name = 'container_cpu_usage_seconds_total' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
               },
               "config": {
                 "promql_legend": ""
@@ -120,21 +159,15 @@
           "layout": {
             "x": 0,
             "y": 8,
-            "w": 192,
-            "h": 10,
-            "i": 3
+            "w": 64,
+            "h": 8,
+            "i": 4
           }
-        }
-      ]
-    },
-    {
-      "tabId": "datafeed",
-      "name": "Data Feed",
-      "panels": [
+        },
         {
-          "id": "11",
+          "id": "5",
           "type": "line",
-          "title": "Market-data ticks/sec (all instruments)",
+          "title": "Container memory usage (bytes)",
           "description": "",
           "config": {
             "show_legends": true,
@@ -143,7 +176,85 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" GROUP BY x",
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name = 'container_memory_usage_bytes' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 8,
+            "w": 64,
+            "h": 8,
+            "i": 5
+          }
+        },
+        {
+          "id": "6",
+          "type": "line",
+          "title": "JVM heap used / GC duration",
+          "description": "Per service_name (ingestion, gateway, flink). Via OTel javaagent jvm.* + Flink prometheus.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name LIKE 'jvm_memory_used_bytes' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                },
+                "stream_type": "metrics"
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 8,
+            "w": 64,
+            "h": 8,
+            "i": 6
+          }
+        },
+        {
+          "id": "11",
+          "type": "line",
+          "title": "ZooKeeper quorum / leader (zk_up)",
+          "description": "Ensemble health.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE job = 'zookeeper' GROUP BY x",
               "customQuery": true,
               "fields": {
                 "stream": "metrics",
@@ -164,7 +275,7 @@
           ],
           "layout": {
             "x": 0,
-            "y": 0,
+            "y": 16,
             "w": 64,
             "h": 8,
             "i": 11
@@ -173,7 +284,7 @@
         {
           "id": "12",
           "type": "bar",
-          "title": "Quarantine reasons (unknown version, decode, fingerprint)",
+          "title": "Unauthorized gate/control attempts (security)",
           "description": "",
           "config": {
             "show_legends": true,
@@ -182,10 +293,10 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE service = 'ingestion' AND metric_name LIKE '%quarantine%' GROUP BY x",
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"logs\" WHERE stream = 'trading_alerts' AND log LIKE '%unauthorized%' GROUP BY x",
               "customQuery": true,
               "fields": {
-                "stream": "metrics",
+                "stream": "logs",
                 "x": [],
                 "y": [],
                 "z": [],
@@ -194,7 +305,7 @@
                   "logicalOperator": "AND",
                   "conditions": []
                 },
-                "stream_type": "metrics"
+                "stream_type": "logs"
               },
               "config": {
                 "promql_legend": ""
@@ -203,7 +314,7 @@
           ],
           "layout": {
             "x": 64,
-            "y": 0,
+            "y": 16,
             "w": 64,
             "h": 8,
             "i": 12
@@ -211,9 +322,9 @@
         },
         {
           "id": "13",
-          "type": "line",
-          "title": "Append latency p50/p95/p99 (ms)",
-          "description": "",
+          "type": "table",
+          "title": "Infrastructure log tail (journald/host)",
+          "description": "Host/journald + infra logs.",
           "config": {
             "show_legends": true,
             "legends_position": null
@@ -221,10 +332,10 @@
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) AS x, max(latency_p99) AS y FROM \"metrics\" WHERE service = 'ingestion' GROUP BY x",
+              "query": "SELECT _timestamp, service, log FROM \"logs\" WHERE service = 'infra' ORDER BY _timestamp DESC LIMIT 100",
               "customQuery": true,
               "fields": {
-                "stream": "metrics",
+                "stream": "logs",
                 "x": [],
                 "y": [],
                 "z": [],
@@ -233,7 +344,7 @@
                   "logicalOperator": "AND",
                   "conditions": []
                 },
-                "stream_type": "metrics"
+                "stream_type": "logs"
               },
               "config": {
                 "promql_legend": ""
@@ -242,250 +353,10 @@
           ],
           "layout": {
             "x": 128,
-            "y": 0,
+            "y": 16,
             "w": 64,
             "h": 8,
             "i": 13
-          }
-        },
-        {
-          "id": "14",
-          "type": "table",
-          "title": "Ingestion log tail (reconnects, epochs, readiness)",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT _timestamp, service, log FROM \"logs\" WHERE service = 'ingestion' ORDER BY _timestamp DESC LIMIT 100",
-              "customQuery": true,
-              "fields": {
-                "stream": "logs",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "logs"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 0,
-            "y": 8,
-            "w": 192,
-            "h": 10,
-            "i": 14
-          }
-        }
-      ]
-    },
-    {
-      "tabId": "system",
-      "name": "System",
-      "panels": [
-        {
-          "id": "21",
-          "type": "line",
-          "title": "VM CPU % (per host)",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT histogram(_timestamp) AS x, avg(cpu_percent) AS y FROM \"metrics\" WHERE service = 'host' GROUP BY x",
-              "customQuery": true,
-              "fields": {
-                "stream": "metrics",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "metrics"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 0,
-            "y": 0,
-            "w": 64,
-            "h": 8,
-            "i": 21
-          }
-        },
-        {
-          "id": "22",
-          "type": "line",
-          "title": "VM memory used (MB)",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT histogram(_timestamp) AS x, avg(memory_used) AS y FROM \"metrics\" WHERE service = 'host' GROUP BY x",
-              "customQuery": true,
-              "fields": {
-                "stream": "metrics",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "metrics"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 64,
-            "y": 0,
-            "w": 64,
-            "h": 8,
-            "i": 22
-          }
-        },
-        {
-          "id": "23",
-          "type": "line",
-          "title": "Flink checkpoint duration (ms)",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT histogram(_timestamp) AS x, avg(checkpoint_duration) AS y FROM \"metrics\" WHERE service = 'flink' GROUP BY x",
-              "customQuery": true,
-              "fields": {
-                "stream": "metrics",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "metrics"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 128,
-            "y": 0,
-            "w": 64,
-            "h": 8,
-            "i": 23
-          }
-        },
-        {
-          "id": "24",
-          "type": "bar",
-          "title": "Safety-halt requests / scoped halts",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%safety_halt%' GROUP BY x",
-              "customQuery": true,
-              "fields": {
-                "stream": "metrics",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "metrics"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 0,
-            "y": 8,
-            "w": 96,
-            "h": 8,
-            "i": 24
-          }
-        },
-        {
-          "id": "25",
-          "type": "table",
-          "title": "Fluss runtime log tail (coordinator/tablet)",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null
-          },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT _timestamp, service, log FROM \"logs\" WHERE service = 'fluss' ORDER BY _timestamp DESC LIMIT 100",
-              "customQuery": true,
-              "fields": {
-                "stream": "logs",
-                "x": [],
-                "y": [],
-                "z": [],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                },
-                "stream_type": "logs"
-              },
-              "config": {
-                "promql_legend": ""
-              }
-            }
-          ],
-          "layout": {
-            "x": 96,
-            "y": 8,
-            "w": 96,
-            "h": 8,
-            "i": 25
           }
         }
       ]

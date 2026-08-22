@@ -1,7 +1,10 @@
 -- forming_bar: KV projection — current-state forming bar per instrument
 -- Owner: Signal job
 -- Type: KV (primary key on instrument_token)
--- Retention: current state only; rebuildable from raw_table_1 replay
+-- Retention: 7 calendar days via table.log.ttl (T8 G1/G4 7d hardening
+-- 2026-08-22 — was none/current-state only; now 7d + block-delete-unverified
+-- guard: Fluss delete blocked until iceberg manifest VERIFIED, otherwise
+-- EOD controller extends; critical alert).
 -- Scope: account_scope_id
 -- Schema version: 1
 
@@ -20,5 +23,6 @@ CREATE TABLE forming_bar (
     PRIMARY KEY (instrument_token) NOT ENFORCED
 ) WITH (
     'bucket.num' = '16',
-    'bucket.key' = 'instrument_token'
+    'bucket.key' = 'instrument_token',
+    'table.log.ttl' = '7d'
 );

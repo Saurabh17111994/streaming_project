@@ -2,8 +2,11 @@
 -- Owner: Signal job (sole writer); Nautilus/Executor never mutates this table
 -- Type: LOG (append-only, no primary key)
 -- Bucket key: instruction_id
--- Retention: table.log.ttl = 2d for operational replay; durable audit evidence
---   is offloaded and retained under the approved policy-controlled minimum.
+-- Retention: table.log.ttl = 7d for operational replay (T8 G1/G4 7d hardening
+--   2026-08-22 — was 2d; now 7d + block-delete-unverified guard: Fluss delete
+--   blocked until iceberg manifest VERIFIED, else EOD controller extends;
+--   critical alert); durable audit evidence is offloaded and retained under
+--   the approved policy-controlled minimum.
 -- Lake: enabled for durable replay/offload; this table is intent evidence, not
 --   an order-lifecycle or position state machine.
 -- Scope: account_scope_id, execution_partition_id
@@ -35,7 +38,7 @@ CREATE TABLE Execution_Intent (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'instruction_id',
-    'table.log.ttl' = '2d',
+    'table.log.ttl' = '7d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

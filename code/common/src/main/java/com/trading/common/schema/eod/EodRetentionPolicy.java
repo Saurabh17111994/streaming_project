@@ -12,7 +12,12 @@ import java.util.regex.Pattern;
  * docs/08_implementation/02-schema-storage.md "EOD controller and offload
  * gate", docs/04_contracts/02-storage.md "Retention and lake").
  *
- * <p>Load-bearing rules encoded here:
+ * <p><b>T8 G1/G4 7d hardening (2026-08-22)</b>: live DDL TTL is 7d (was 2d) +
+ * block-delete-unverified guard — source data for a trading day cannot expire
+ * while its iceberg manifest is unverified; unverified days always extend
+ * (shadow rewrite) and fire a critical alert.
+ *
+ * <p>Load-bearing rules encoded here (updated 7d):
  *
  * <ul>
  *   <li>Source data for a trading day cannot expire while its manifest is
@@ -32,7 +37,7 @@ public final class EodRetentionPolicy {
 
     private EodRetentionPolicy() {}
 
-    /** Storage contract: at least three complete trading days remain live. */
+    /** Storage contract: at least three complete trading days remain live (T8: 7d TTL + block-guard ensures this across weekend). */
     public static final int MIN_COMPLETE_TRADING_DAYS = 3;
 
     /**
@@ -51,7 +56,12 @@ public final class EodRetentionPolicy {
         return Duration.between(now, protectedExpiryBound).toMillis();
     }
 
-    /** Extension is required when the margin collapses below the safety floor. */
+    /**
+     * Extension is required when the margin collapses below the safety floor.
+     * T8 block-guard: this is the verified-guard check — when true, Fluss
+     * delete is BLOCKED until the iceberg manifest is VERIFIED; caller must
+     * extend and alert CRITICAL.
+     */
     public static boolean requiresExtension(long marginMs, long safetyFloorMs) {
         return marginMs < safetyFloorMs;
     }

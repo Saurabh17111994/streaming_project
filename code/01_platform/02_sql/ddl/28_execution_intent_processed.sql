@@ -14,8 +14,11 @@
 -- Bucket key: instruction_id (single-field PK -> raw-client writable per the
 --   COMPAT-FLUSS-005 matrix; same single-field-PK shape as Execution_Attempts /
 --   trade_instruction_state)
--- Retention: table.log.ttl = 2d bounds the changelog; the index is rebuildable
---   from the Execution_Intent LOG replay (same replay model as the source)
+-- Retention: table.log.ttl = 7d bounds the changelog (T8 G1/G4 7d hardening
+--   2026-08-22 — was 2d; now 7d + block-delete-unverified guard: Fluss delete
+--   blocked until iceberg manifest VERIFIED, else EOD controller extends;
+--   critical alert); the index is rebuildable from the Execution_Intent LOG
+--   replay (same replay model as the source)
 -- Lake: none — transient reprocessing index, rebuildable from the source LOG;
 --   the LOG twin (Execution_Intent) is the audit record
 -- Scope: account_scope_id, execution_partition_id
@@ -31,5 +34,5 @@ CREATE TABLE Execution_Intent_Processed (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'instruction_id',
-    'table.log.ttl' = '2d'
+    'table.log.ttl' = '7d'
 );

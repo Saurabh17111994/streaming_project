@@ -18,6 +18,14 @@ import java.util.stream.Collectors;
  * insufficient" (docs/04_contracts/02-storage.md "EOD controller",
  * 01-foundation.md "EOD controller and offload gate").
  *
+ * <p><b>T8 G1/G4 7d hardening (2026-08-22)</b>: live DDL TTL is now 7d (was 2d)
+ * plus a <b>block-delete-unverified guard</b>: Fluss TTL delete is BLOCKED
+ * until the iceberg manifest for that trading day is VERIFIED; otherwise the
+ * controller extends retention (shadow-rewrite with extended TTL) and fires a
+ * critical alert. The EOD fail Fri → Fri-Sun must survive 7d even when the
+ * S3/Iceberg offload is delayed. See {@link EodPlanner} protected bound and
+ * {@link EodRetentionPolicy#requiresExtension}.
+ *
  * <p>The controller owns planning (per table: earliest unverified day,
  * protected source-expiry bound, margin, extension decision — via
  * {@link EodPlanner}), the offload drive (PENDING → WRITING → COMMITTED →
@@ -35,6 +43,20 @@ import java.util.stream.Collectors;
 public final class EodController {
 
     private EodController() {}
+
+    /**
+     * Block-guard predicate: true when source data for the protected bound
+     * must NOT be allowed to expire — the earliest unverified day is still
+     * pending and its iceberg manifest is not VERIFIED. Callers must block
+     * any Fluss TTL-driven delete and instead extend retention. This is the
+     * G4 storage-guard half of T8; the 7d TTL half is the DDL change.
+     * Placeholder is pure logic — the live enforcement is the
+     * {@link EodPlanner.Plan#requiresExtension()} check plus the shadow
+     * rewrite in {@link EodControllerTool#extend}.
+     */
+    public static boolean isDeleteBlocked(EodPlanner.Plan plan) {
+        return plan.requiresExtension();
+    }
 
     /** Per-table status plan: the planner output plus day-state tallies. */
     public record TablePlan(String table, EodPlanner.Plan plan, List<EodOffloadRecord> days,

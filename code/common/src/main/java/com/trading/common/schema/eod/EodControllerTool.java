@@ -62,7 +62,14 @@ public final class EodControllerTool {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
-    /** The ten 2d-TTL live tables (2026-08-13 recreation evidence) — the documented default scope. */
+    /**
+     * EOD-eligible live tables — now 7d TTL (T8 G1/G4 hardened 2026-08-22 — was
+     * ten 2d-TTL tables 2026-08-13). The documented default scope remains ten
+     * tables for backward compat, but the storage contract is 7 calendar days
+     * + block-delete-unverified guard: Fluss TTL delete is BLOCKED until the
+     * iceberg manifest is VERIFIED; otherwise the controller extends retention
+     * via the shadow-rewrite drill and fires a critical alert.
+     */
     static final List<String> DEFAULT_TABLES = List.of(
             "raw_table_1", "feature_candles_15s", "ingestion_quarantine",
             "Order_Lifecycle", "suspected_discontinuities", "Postback_Quarantine",
@@ -101,6 +108,11 @@ public final class EodControllerTool {
 
             // Live TTLs — the controller plans against each table's ACTUAL
             // create-time TTL, with a documented fallback when metadata lacks it.
+            // T8 G1/G4 block-guard (G4): before any Fluss TTL delete is allowed,
+            // the iceberg manifest for that day must be VERIFIED; if unverified,
+            // delete is BLOCKED and retention is extended (requiresExtension).
+            // See EodController / EodPlanner protectedExpiryBound + the
+            // unverified-block alert below.
             Map<String, Duration> liveTtls = new LinkedHashMap<>();
             for (String table : opts.tables) {
                 liveTtls.put(table, liveTtl(admin, opts.database, table, opts.ttlDefault));
@@ -156,6 +168,25 @@ public final class EodControllerTool {
                 case EXTENSION_REQUIRED -> 2;
                 case PENDING_WORK -> 3;
             };
+            // G4 block-guard alert: when any table needs extension, its
+            // earliestUnverified day's sourceExpiryBound is the protected bound —
+            // Fluss delete is blocked until that day's iceberg manifest is
+            // VERIFIED. Emit a critical alert so the weekend EOD-fail scenario
+            // (Fri offload unverified → Fri-Sun must survive past 2d, now 7d)
+            // is observable. The EOD controller's extend path then holds the data.
+            if (s == EodController.Status.EXTENSION_REQUIRED) {
+                for (EodController.TablePlan p : plans) {
+                    if (!p.noDays() && p.plan().requiresExtension()) {
+                        String when = p.plan().earliestUnverifiedDate() != null
+                                ? p.plan().earliestUnverifiedDate().toString() : "floor";
+                        System.err.println("eod-controller: ALERT CRITICAL — retention extension required for "
+                                + p.table() + " earliestUnverified=" + when
+                                + " protectedBound=" + p.plan().protectedExpiryBound()
+                                + " margin=" + p.plan().marginMs() + "ms"
+                                + " — Fluss TTL delete BLOCKED until iceberg manifest VERIFIED");
+                    }
+                }
+            }
             System.out.println("eod-controller: RESULT=" + result + " EXIT=" + exit
                     + " TABLES=" + opts.tables.size() + " DAYS=" + days.size());
             return exit;
@@ -216,6 +247,13 @@ public final class EodControllerTool {
                 Duration newTtl = EodRetentionPolicy.extendedTtl(live, opts.extension);
                 String shadow = p.table() + "__eod_ext_"
                         + now.atZone(zone).format(DateTimeFormatter.BASIC_ISO_DATE);
+                // Block-guard: this table's delete is currently BLOCKED — the
+                // protected bound is unverified, so the shadow rewrite (extended
+                // 7d + extra) must succeed before the old table is allowed to
+                // expire. The alert below makes the hold observable.
+                System.err.println("eod-controller: ALERT CRITICAL — block-guard extend for "
+                        + p.table() + " liveTtl=" + live + " -> newTtl=" + newTtl
+                        + " — Fluss delete BLOCKED until VERIFIED (iceberg manifest)");
                 System.out.println("eod-controller: extend " + p.table()
                         + " liveTtl=" + live + " newTtl=" + newTtl
                         + " shadow=" + shadow + " margin=" + p.plan().marginMs() + "ms");
@@ -484,7 +522,7 @@ public final class EodControllerTool {
                   --database <db>      (env FLUSS_DATABASE, default default)
                   --state-table <name> (env EOD_STATE_TABLE, default eod_offload_state)
                   --tables <t1,t2>     (env EOD_TABLES — EOD-eligible tables)
-                  --ttl <ttl>          (env EOD_TTL, default 2d — live-TTL fallback)
+                  --ttl <ttl>          (env EOD_TTL, default 7d — live-TTL fallback; T8 hardened was 2d)
                   --safety-floor <ttl> (env EOD_SAFETY_FLOOR, default 7d)
                   --extension <ttl>    (env EOD_EXTENSION, default 30d)
                   --lease-ttl <ttl>    (env EOD_LEASE_TTL, default 30m)
@@ -520,7 +558,7 @@ public final class EodControllerTool {
             String stateTable = System.getenv().getOrDefault("EOD_STATE_TABLE",
                     "eod_offload_state");
             String tablesRaw = System.getenv().getOrDefault("EOD_TABLES", null);
-            Duration ttlDefault = parseEnvTtl("EOD_TTL", Duration.ofDays(2));
+            Duration ttlDefault = parseEnvTtl("EOD_TTL", Duration.ofDays(7));
             Duration safetyFloor = parseEnvTtl("EOD_SAFETY_FLOOR", Duration.ofDays(7));
             Duration extension = parseEnvTtl("EOD_EXTENSION", Duration.ofDays(30));
             Duration leaseTtl = parseEnvTtl("EOD_LEASE_TTL", Duration.ofMinutes(30));

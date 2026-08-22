@@ -8,12 +8,12 @@
 --   composite PK with Fluss's default encoder (COMPAT evidence 2026-08-15) —
 --   without v2 the iceberg datalake encoder requires exactly one key field and
 --   raw-client upserts fail (Flink connector unaffected).
--- Retention: 2 calendar days via table.log.ttl (R-055 — Fluss TTL is
--- calendar-based; the previous '7 trading days' header was unverifiable and
--- table.retention.days is not a Fluss option). Extend once EOD offload is
--- verified. CANDLE-TABLE EXCEPTION (user decision 2026-08-16): the 3-trading-
--- day floor is the source/event invariant; this derived table stays at 2d
--- (rebuildable from raw_table_1) — the 'extend' note is superseded.
+-- Retention: 7 calendar days via table.log.ttl (R-055; T8 G1/G4 7d hardening
+-- 2026-08-22 — was 2d; supersedes 2026-08-16 candle-table exception which kept
+-- 2d as derived/rebuildable — now 7d + block-delete-unverified guard: Fluss
+-- delete blocked until iceberg manifest VERIFIED, else EOD controller extends;
+-- critical alert. Fluss TTL is calendar-based; "trading days" unverifiable,
+-- table.retention.days is not a Fluss option).
 -- Lake: EOD Iceberg offload (R-168: datalake options restored — dropped in a
 -- rewrite while the header still claimed offload)
 -- Scope: account_scope_id
@@ -40,7 +40,7 @@ CREATE TABLE feature_candles_15s (
 ) WITH (
     'bucket.num' = '16',
     'bucket.key' = 'instrument_token',
-    'table.log.ttl' = '2d',
+    'table.log.ttl' = '7d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

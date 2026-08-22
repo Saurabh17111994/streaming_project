@@ -1,6 +1,6 @@
 # Foundation
 
-> **2026-08-21 current test truth:** unit suites green 436/246/336 (common/ingestion/compute).
+> **2026-08-22 current test truth:** unit suites green 436/247/376 (common/ingestion/compute) — Streaming-3000 hardening (T2 tunable backpressure +1 IngestionConfig leg, T3 RuntimeOptions passthrough legs, T5 CandleKvFirstWriteWinsFunctionTest ×6, T6 OHLC invariant/quarantine suites ×20, T7 SignalJobStrictGateT7Test ×10); plain-suite totals re-verified 2026-08-22 (mvn -o test per module).
 > The longer historical status line below remains a dated implementation record; the current
 > C6 machine gate reads this line.
 

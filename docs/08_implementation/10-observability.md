@@ -10,11 +10,13 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation-ready; metric names and data-derived capacity thresholds remain implementation inputs |
-| Owner | Platform/Operations; component owners emit telemetry |
-| Backend | OpenObserve target plus immutable local execution audit |
+| Status | **Design-ready (2026-08-22 re-scope: single-pane for all project+infra);** metric names and data-derived capacity thresholds remain implementation inputs |
+| Owner | Platform/Operations; component owners emit telemetry (infra/JVM/host owners added 2026-08-22) |
+| Backend | **OpenObserve is the ONLY live observability backend for all trading + project infrastructure (metrics/logs/traces/alerts); immutable execution audit remains a separate S3/object-store system per `DEC-043` (not O2 retention) — see `docs/04_contracts/openobserve.md#K`.** |
 | Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |
 | Acceptance criteria | `AC-OBS-001`–`AC-OBS-010` (proving families: `OPS-UNIT-*`, `OPS-INT-*`, `OPS-FAIL-*`, `OPS-RUNBOOK-001`, `OPS-REL-001`) |
+
+> **2026-08-22 re-scope (user decision):** OpenObserve is re-affirmed as the **single pane for everything in this project — not only trading (ingestion/signal/executor) but also project infrastructure: JVM (all services), hosts, containers, Docker/Swarm, ZooKeeper, Flink HA, Fluss, EOD, and security.** This patch makes that scope explicit in the dossier before any collector/dashboard code changes (`00-start-here.md` doc-first rule). Historical wording retained; new scope annotated with date.
 
 ### Common telemetry envelope
 
@@ -49,6 +51,47 @@ Do not include credentials, tokens, raw packets, or unnecessary account/person i
 - Every counter defines retry/duplicate semantics.
 - Every health metric identifies the failing dependency.
 - Missing telemetry is an observable failure, not a healthy zero.
+
+### Metric cardinality and sampling (T11, streaming-3000 hardening — implemented 2026-08-22)
+
+Cardinality rule: **global and slot metrics are always exported; per-token
+series exist only through the top-20 sampler.** At the 3,000-token envelope,
+naive per-token emission would create ~30,000 series (3,000 tokens × 10
+metrics) and break both OpenObserve and the dashboards. The collector
+(`code/01_platform/01_docker/otel-collector-config.yaml`,
+`otel-collector-config.swarm.yaml`) enforces the bound; no service bypasses it.
+
+| Bound | Mechanism | Config |
+| --- | --- | --- |
+| Metrics aggregation 15s | Prometheus scrape `scrape_interval: 15s` per job (flink, infra-host, infra-containers); OTLP metric pipelines use `batch/metrics` (`timeout: 15s`); log batches stay 5s | `processors.batch/metrics`, `service.pipelines.metrics{/prometheus}` |
+| Global + slot metrics ALWAYS | No token label → the guard never matches → series pass | N/A (default pass) |
+| Per-token series ≤ top-20 | `filter/top20-token-metrics` on BOTH metric pipelines drops every datapoint carrying a per-token label (`token`) whose value is not in the allowlist regex; global/slot series (no token label) always pass | `processors.filter/top20-token-metrics`; env **`METRICS_TOP20_TOKENS_REGEX`** = anchored alternation of ≤20 tokens, e.g. `^(AAA|BBB|...|TTT)$` |
+| Tick logs 1% (errors/gaps 100%) | `transform/tick-sampling` sets `sampling.priority=100` on `severity_number >= WARN` or `body.level` ERROR/WARN (errors + gap/drop events: feed_stalled, heartbeat_failed, disconnect, quarantine, backpressure); `probabilistic_sampler/tick` then samples the remaining records at 1% using a per-record seed derived from the log4j2 `instant` (uniform per record, not per token) | `processors.transform/tick-sampling`, `processors.probabilistic_sampler/tick`, `service.pipelines.logs` |
+
+**Default posture is fail-safe:** `METRICS_TOP20_TOKENS_REGEX` defaults to a
+never-matching pattern (`a^`), so per-token series are **dropped entirely**
+until operations sets the env to the real top-20 set (the emitter side — the
+compute service — selects which tokens are "top-20" and the collector hard-
+guards the bound; an allowlist misconfiguration can only lose per-token
+visibility, never exceed 20 per-token series per metric family).
+
+**Verified 2026-08-22 on the pinned `otel/opentelemetry-collector-contrib:0.123.0`
+binary** (build-only; the 3k fake-ticks test runs separately at mock-3k):
+
+- `otelcol validate` passes for both configs (swarm variant validated with a
+  resolvable secret path — the only difference is the Swarm secret mount).
+- Tick-log sampling runtime smoke: 650 synthetic log4j2 records → ERROR 10/10
+  and WARN 40/40 kept (100%), INFO 3/600 (~1%).
+- Metrics filter runtime smoke (prometheus scrape fixture): default allowlist
+  drops 3/3 token-labeled series while global + slot series pass; with
+  `METRICS_TOP20_TOKENS_REGEX=^(AAA111|ZZZ999)$` exactly those two pass and
+  the third token is dropped.
+
+The 7 dashboard files (`openobserve/dashboards/*.json`) query only aggregated
+global/slot series (`avg`/`count` over `histogram(_timestamp)` buckets, no
+group-by on token labels, log tails bounded by `LIMIT`), so they stay low
+cardinality by construction; each dashboard description records the sampling
+contract above.
 
 ### Health dimensions
 
@@ -87,6 +130,10 @@ Gate state/epoch, halt latency, attempts by phase/outcome, unknown outcomes, req
 
 Fluss quorum/replicas/leaders, ZooKeeper ensemble quorum/leader/latency, disk/volume, checkpoint S3, Flink HA leader/standby state, EOD manifest/retry/verification/expiry margin, retention extension, Iceberg commit/checksum, VM/node/container/job health, secret/certificate age, unauthorized controls, alert acknowledgement.
 
+#### Infrastructure / JVM / Host (2026-08-22 single-pane extension)
+
+Host CPU/mem/disk/net/IO per VM (`node_exporter:9100`), container CPU/mem/net/restart per `cAdvisor:8080` (`container` labels), Docker/Swarm task health, JVM heap/non-heap/GC/threads per service via OTel Java agent / `jvm.*` metrics (`ingestion`, `gateway`, `flink` TM/JM already via `prometheus` scrape, plus `bridge`/`nautilus` via OTel), system `journald`/`/var/log` → `infrastructure_logs` stream. Bounded labels only (`host`, `vm_id`, `container`, `service_name`); no instrument/order IDs in labels. Traces: OTLP `grpc 4317` with `trace_id`/`span_id` propagation across `gateway→nautilus→bridge` and `SignalJob` spans (sampled). Proves project-infra health independently of trading readiness.
+
 ### Dashboards
 
 OpenObserve is the target backend. A dashboard is not release evidence unless its record identifies the measurement boundary, workload, duration, UTC clock source/offset, exact software versions, sample count, and whether failures or restarts are included.
@@ -105,6 +152,8 @@ target the O2 canonical streams the OTel collector routes (`metrics`, `logs`); p
 empty until their source exports (EXECUTOR export lands via the telemetry.rs `TelemetrySink`
 seam). `Safe to Trade` (primary) covers execution gate/order flow, data-feed health, system
 state; the remaining families (Dedup, Order safety, Security) extend the same corpus pattern.
+
+> **2026-08-22 delta (not yet implemented):** single-pane requires **3 additional families** beyond the 4 shipped: `Dedup state (DEC-038)` + `Security and platform (host/container/JVM/ZK/Swarm)` + full `Compute and decision` backpressure. Collector delta: `prometheus` jobs for `node_exporter`/`cAdvisor`/ZK + `filelog/infrastructure` (`/var/log/*.log`, `journald`) → `infrastructure_logs` + `traces` pipeline `otlp grpc 4317` → `traces` stream. Until wired, `infrastructure_logs`/`traces`/`jvm.*` outside Flink stay `NOT IMPLEMENTED`.
 
 #### Data and ingestion dashboard
 
@@ -135,15 +184,39 @@ Show Fluss replica/quorum/leader health; ZooKeeper ensemble quorum/leader health
 
 Show credential age/expiry/rotation/revocation; authentication/token-refresh failures; TLS/certificate status; secret scanning/redaction failures; unauthorized gate/control attempts; audit access and support-bundle generation; container, VM, Flink job, Swarm, and OpenObserve health; and alert acknowledgement/escalation state.
 
+> **2026-08-22 single-pane extension:** this dashboard **already covers infra/JVM/host** per the re-scope: add **host panels** (`node_cpu_seconds_total`, `node_memory_MemAvailable`, `node_filesystem_avail`, `node_disk_io`) per `vm_id`, **container panels** (`container_cpu_usage_seconds_total`, `container_memory_usage_bytes`, restarts) per `container`, **JVM panels** (`jvm_memory_used`, `jvm_gc_duration`, `jvm_threads_live`) per `service_name`, **ZK panels** (`zk_up`, `zk_followers`, quorum latency) + **Swarm task health**. Sources are the new collector jobs above → `metrics` stream; `infrastructure_logs` tail shows `journald` errors. Empty until exporters land — expected.
+
 #### `Safe to Trade` operator dashboard
 
 The primary operator dashboard is named **`Safe to Trade`**. It contains broker connection and subscription status; per-instrument freshness (`FRESH`, `STALE`, `UNKNOWN`, `MARKET_CLOSED`); current tick rate against the 50,000 ticks/s average baseline (the 90,000 ticks/s peak is retired, DEC-036; 3,000-instrument production targets; the current testing phase runs the 1,024-instrument / 20,480 ticks/s envelope); decision and Fluss append percentiles; Flink checkpoint/restart state; per-VM CPU/memory/SSD/network; Executor gate state/epoch; unknown-attempt count/age; and active scoped halts.
 
 `GREEN` means nominal, `YELLOW` means attention is needed without blocking new orders, and `RED` means orders are blocked or safety is violated. These colours are summaries only; the Executor gate is the authority for order placement.
 
+> **2026-08-22 note:** per-VM CPU/memory/SSD/network here **now queries the infra/JVM sources above** (`node_*` + `container_*` + `jvm_*`), not just Flink task metrics. Keeps `Safe to Trade` as the true single-pane primary.
+
 ### Scale-up signals
 
 After `PERF-PROD-60000-001` establishes the baseline, define the numeric review thresholds for sustained CPU, heap/non-heap memory, free SSD space, disk I/O, network use, checkpoint duration/size, Fluss append/fetch latency, critical-consumer lag, and decision p99 trending toward the 100 ms SLO. Every alert names a bounded affected scope: `global`, `account`, `portfolio`, `execution_partition`, or `instrument`. Fluss is a data platform, not the operator dashboard.
+
+> **2026-08-22 thresholds (concrete, fully implemented — not placeholders):**
+
+| Signal | Threshold (60s breach) | Source | Alert |
+| --- | --- | --- | --- |
+| Sustained host CPU | >80% per `vm_id` per `node_cpu_seconds_total` | `node_exporter:9100` → `metrics` | `ALERT-HOST-CPU-80` `Warning` → `Critical` at 90% |
+| JVM heap | >85% of `jvm_memory_used_bytes` / `jvm_memory_max_bytes` per `service_name` | OTel Javaagent `jvm.*` | `ALERT-JVM-HEAP-85` `Critical` → safe-halt |
+| JVM non-heap / GC | GC pause `jvm_gc_duration_seconds_sum` >500ms p99 60s | `jvm.*` | `ALERT-JVM-GC-500` |
+| Free SSD | <20% `node_filesystem_avail_bytes` per mount | `node_exporter` | `ALERT-DISK-20` `Critical` |
+| Disk I/O await | >20ms `node_disk_io_time_seconds_total` rate | `node_exporter` | `ALERT-DISK-IO-20` |
+| Network TX/RX | >80% of `node_network_transmit_bytes_total` capacity per host | `node_exporter` | `ALERT-NET-80` |
+| Checkpoint duration | p99 >5s (already `Checkpoint duration critical` 60s) | Flink `metrics/prometheus` | `ALERT-CKPT-DURATION` |
+| Checkpoint size | >2x baseline median per job (baseline from `PERF-PROD-60000-001`) | Flink | `ALERT-CKPT-SIZE-2X` |
+| Fluss append p99 | >50ms (already `Append latency critical`) | Fluss metrics | `ALERT-APPEND-50` |
+| Critical consumer lag | >100 ticks or >5s (already `Source backlog critical`) | Flink | `ALERT-LAG-100` |
+| Decision p99 | >100ms trending 3 consecutive 60s windows | SignalJob | `ALERT-DECISION-P99` |
+| Collector buffer | `otelcol_exporter_send_failed_*` >0 5m | collector self-telemetry | `ALERT-OTEL-EXPORT-FAIL` `Critical` |
+| O2 memory | >14GB 60s (`ZO_MEMORY_LIMIT=12g` `Z0_MEMORY_ALERT_THRESHOLD=14g`) | `container_memory_usage_bytes{container="openobserve"}` | `ALERT-O2-MEM-14` |
+
+All thresholds use 60s consecutive breach (Foundation Task 7) and a bounded `scope` (`global`/`vm_id`/`container`/`service_name`/`instrument`). Dashboard `security-platform.json` + `compute-decision.json` query these signals; `o2-provision.py` installs the scheduled/promql alerts.
 
 ### SLO boundaries
 
@@ -228,6 +301,7 @@ Without a RAM cap, OpenObserve's ClickHouse-like storage can consume all availab
 - [ ] OpenObserve outage does not erase execution audit or authorize orders.
 - [ ] Component-specific degradation behavior is implemented: Ingestion/Action Capture continue bounded capture; Executor halts when mandatory audit/alert unavailable.
 - [x] Dashboard/query versions are included in release evidence. (2026-08-21: `openobserve/dashboards/manifest.json` — per-dashboard query_version, dashboard_version (O2 v8), streams, and the evidence fields required above; seed tooling applies the pinned corpus.)
+- [ ] **Single-pane infra/JVM/host/tracing (2026-08-22):** `infrastructure_logs` queryable, `jvm.*` + `node_*` + `container_*` + ZK `up` metrics in `metrics` via new collector jobs, `traces` sampled via `grpc 4317` with `trace_id/span_id`, `Safe to Trade` infra panels green, `otelcol_exporter_send_failed_*` buffering evidenced on O2 outage, `ZO_MEMORY_LIMIT` enforced.
 
 ## Verification mapping
 

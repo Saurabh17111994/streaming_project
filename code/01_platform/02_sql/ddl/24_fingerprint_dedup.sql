@@ -5,9 +5,12 @@
 -- Type: KV state table (PK instrument_token, fingerprint_version, event_fingerprint)
 -- Bucket key: instrument_token (PK prefix — per-instrument colocation; the Fluss
 --   connector requires bucket.key ⊆ primary key)
--- Retention: table.log.ttl = 2d bounds ONLY the underlying log; the logical dedup
---   lifetime is the column-based expiry (DEDUP_TTL_MS = 300000), enforced by the
---   writer + cleanup pass — never the log TTL
+-- Retention: table.log.ttl = 7d bounds the underlying log (T8 G1/G4 7d hardening
+--   2026-08-22 — was 2d; now 7d + block-delete-unverified guard: Fluss delete
+--   blocked until iceberg manifest VERIFIED, else EOD controller extends;
+--   critical alert). The logical dedup lifetime is the column-based expiry
+--   (DEDUP_TTL_MS = 300000), enforced by the writer + cleanup pass — never
+--   the log TTL alone
 -- Lake: none — transient state (logical life ≤ 5 min); no EOD/audit value; avoids
 --   lake churn at the write rate (datalake disabled, like forming_bar)
 -- Scope: account_scope_id
@@ -29,5 +32,5 @@ CREATE TABLE fingerprint_dedup (
     -- feature_candles_15s/instruments). The Flink connector writes the table
     -- regardless, but the apply smoke must stay green.
     'table.kv.format-version' = '2',
-    'table.log.ttl' = '2d'
+    'table.log.ttl' = '7d'
 );

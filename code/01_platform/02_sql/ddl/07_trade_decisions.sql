@@ -2,7 +2,10 @@
 -- Owner: Signal job (sole writer). Executor never mutates this table.
 -- Type: LOG (no primary key)
 -- Bucket key: instruction_id
--- Retention: 2 calendar days via table.log.ttl (until consumed + replay/reconciliation buffer)
+-- Retention: 7 calendar days via table.log.ttl (T8 G1/G4 7d hardening
+-- 2026-08-22 — was 2d; now 7d + block-delete-unverified guard: Fluss delete
+-- blocked until iceberg manifest VERIFIED, else EOD controller extends;
+-- critical alert)
 -- Lake: execution audit links retained under approved policy (one-year minimum target)
 -- Scope: portfolio_id, account_scope_id
 -- Schema version: 2
@@ -36,7 +39,7 @@ CREATE TABLE Trade_Decisions (
 ) WITH (
     'bucket.num' = '8',
     'bucket.key' = 'instruction_id',
-    'table.log.ttl' = '2d',
+    'table.log.ttl' = '7d',
     'table.datalake.enabled' = 'true',
     'table.datalake.format' = 'iceberg',
     'table.datalake.freshness' = '5min',

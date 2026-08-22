@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config seed-dashboards
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config seed-dashboards rollout-savepoint chaos-suite
 
 help:
 	@echo "Targets:"
@@ -71,6 +71,12 @@ help:
 	@echo "              docker stack deploy -c docker-stack.yml prod; DOWN=0 leaves it up (M2 gate)"
 	@echo "  stack-config  compile-only via docker stack config (needs docker; catches schema errors)"
 	@echo "  seed-dashboards  idempotent OpenObserve dashboard provisioning (D7); needs O2_PASSWORD"
+	@echo "  rollout-savepoint  G5/T12: savepoint -> stop -> redeploy SignalJob with"
+	@echo "         STATE_RECOVERY_PATH=<fresh savepoint> + ALLOW_FULL_REPLAY=false, verify restore"
+	@echo "         (dedup continuity). Env: JAR, JOB_ID/JOB_NAME, RECOVERY_PATH, JM_URL,"
+	@echo "         SAVEPOINT_DIR, COMPOSE_FILE, DRY_RUN=1; required pinned job env (DEDUP_TTL_MS,"
+	@echo "         CANDLE_WINDOW_MS, CHECKPOINT_INTERVAL_MS, CHECKPOINT_TIMEOUT_MS,"
+	@echo "         MAX_CONCURRENT_CHECKPOINTS) must be exported. See docs/08_implementation/21-savepoint-rollout.md"
 
 env:
 	@if [ ! -f code/01_platform/01_docker/.env ]; then \
@@ -203,6 +209,28 @@ stack-config:
 # Example: O2_PASSWORD=$(grep ^O2_PASSWORD= code/01_platform/01_docker/.env | cut -d= -f2) make seed-dashboards
 seed-dashboards:
 	@python3 code/01_platform/04_scripts/seed_dashboards.py $(ARGS)
+
+# G5 Ops T12 (streaming-3000 hardening): rolling update of the SignalJob that
+# keeps the fingerprint-dedup state. Triggers a savepoint, stops the job,
+# copies the new compute jar into the flink-jobmanager container and submits
+# it via the flink CLI with STATE_RECOVERY_PATH=<savepoint> and
+# ALLOW_FULL_REPLAY=false (restore mode — the SignalJobConfig F005 gate
+# rejects anything else), then verifies RUNNING + a completed checkpoint +
+# dedup-state continuity (Prometheus, degradable). See docs/08_implementation/
+# 21-savepoint-rollout.md.
+rollout-savepoint:
+	@bash code/01_platform/04_scripts/rollout-savepoint.sh $(ARGS)
+
+# G5 Ops T13 (streaming-3000 hardening): failure chaos suite — the 4 L11
+# gates (slot kill / TM kill / tablet kill / VM loss) run in order by
+# code/01_platform/04_scripts/chaos/chaos-run.sh. Tests 01+02 run offline
+# (Go tests + MiniCluster IT); 03+04 require the live stack / M3 swarm and
+# SKIP cleanly otherwise (deployment runs are executed later, serially).
+# Pass-through env: FLUSS_BOOTSTRAP TABLET_CONTAINER CHAOS_ORDER_PROBE_TCP
+# CHAOS_WORKLOAD_NODE CHAOS_VM_OFF_MODE ... See docs/08_implementation/
+# 22-failure-chaos-suite.md. Example: make chaos-suite
+chaos-suite:
+	@bash code/01_platform/04_scripts/chaos/chaos-run.sh $(ARGS)
 
 ddl-apply-smoke:
 	@python3 code/01_platform/04_scripts/ddl_apply_smoke.py

@@ -6,11 +6,9 @@
 #   - INGESTION folder (via dashboards carrying folder="INGESTION")
 #   - 4 dashboards: Overview, Slots, Resources, Quality
 #   - 4 dashboards: Overview, Slots, Resources, Quality
-#   - 24 alert rules (8 ING- ingestion phase + SIGNAL-crit-schema-version-rejected
-#     + 15 P8.3 SignalJob/Flink/collector rules incl. SIGNAL-warn-source-lag
-#     (rule 15, 2026-08-11: operator event-time lag, expressible once the
-#     Fluss/operator metrics were live); exact plan thresholds, approved
-#     2026-08-11; label-scoped conditions for per-task rules)
+#   - 33 alert rules (8 ING- ingestion + 16 SIGNAL- + 9 INFRA- infra/JVM/host 2026-08-22 single-pane)
+#     (SIGNAL includes P8.3 15 + SIGNAL-crit-schema 1; INFRA 9: host CPU 80/90, JVM heap 85, GC 500ms,
+#     disk 20%, disk IO 20ms, net 80%, O2 mem 14GB, collector export failed)
 #   - one dev webhook destination ("dev-webhook" -> localhost:9999 in O2's
 #     netns, served by the compose webhook-receiver; replace with the real
 #     delivery endpoint when alert routing is approved)
@@ -710,6 +708,16 @@ ALERTS = [
         desc="[Warning/compute] Candle KV sink writing 0 records/s for 2 min while running: window-close stall / watermark freeze; recovery = sink resumes (quiesced dev feeds false-fire by design)",
     ),
     dict(
+        name="SIGNAL-warn-dedup-state-bytes",
+        stream="flink_taskmanager_job_task_operator_compute_dedup_state_bytes_estimate",
+        # Added 2026-08-22 T4: total dedup bytes alert for 3k/p8 ~1GB budget. Mirrors count alert logic: max by subtask then sum.
+        promql="sum(max by (subtask_index) (flink_taskmanager_job_task_operator_compute_dedup_state_bytes_estimate))",
+        promql_condition=(">", 800*1024*1024),
+        period=1,
+        frequency=1,
+        desc="[Warning/compute] TOTAL dedup bytes >800MB: large state near 1GB budget at 3k/p8; checkpoint may timeout, consider restore/balance. Mirrors count alert logic.",
+    ),
+    dict(
         name="SIGNAL-warn-dedup-state",
         stream="flink_taskmanager_job_task_operator_compute_dedup_state_count",
         # 2026-08-17: the old custom condition (value > 6.5M) was PER-SUBTASK —
@@ -793,6 +801,83 @@ ALERTS = [
         conditions=[("value", ">=", 600000)],
         period=2,
         desc="[Warning/ops] Event-time lag >= 600 s (10 min): source data stalled or replay far behind; recovery = live feed resumes / replay drains",
+    ),
+    # --- 2026-08-22 single-pane: infra/JVM/host infra alerts (10-observability.md scale-up thresholds) ---
+    dict(
+        name="INFRA-warn-host-cpu-80",
+        stream="node_cpu_seconds_total",
+        promql="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        promql_condition=(">=", 80),
+        period=1,
+        frequency=1,
+        desc="[Warning/infra] Host CPU >80% for 60s per vm_id (node_exporter). Recovery = load drops. Scope=vm_id",
+    ),
+    dict(
+        name="INFRA-crit-host-cpu-90",
+        stream="node_cpu_seconds_total",
+        promql="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        promql_condition=(">=", 90),
+        period=1,
+        frequency=1,
+        desc="[Critical/infra] Host CPU >90% for 60s — safe-halt candidate. Scope=vm_id",
+    ),
+    dict(
+        name="INFRA-crit-jvm-heap-85",
+        stream="flink_jobmanager_status_jvm_memory_heap_used",
+        promql="max (flink_jobmanager_status_jvm_memory_heap_used / flink_jobmanager_status_jvm_memory_heap_max * 100)",
+        promql_condition=(">=", 85),
+        period=1,
+        frequency=1,
+        desc="[Critical/infra] JVM heap >85% per service (native Flink reporter flink_jobmanager_status_jvm_memory_heap_*; OTel jvm.* via javaagent pending ingestion rebuild). Recovery = GC/restart. Scope=jobmanager",
+    ),
+    dict(
+        name="INFRA-warn-jvm-gc-500",
+        stream="flink_jobmanager_status_jvm_garbagecollector_g1_young_generation_time",
+        promql="max (rate(flink_jobmanager_status_jvm_garbagecollector_g1_young_generation_time[5m]) * 1000)",
+        promql_condition=(">=", 500),
+        period=1,
+        frequency=1,
+        desc="[Warning/infra] JVM GC young-gen time >500ms/s for 60s (native Flink GC metric; OTel jvm_gc_duration pending). Recovery = GC tuning. Scope=jobmanager",
+    ),
+    dict(
+        name="INFRA-crit-disk-20",
+        stream="node_filesystem_avail_bytes",
+        promql="100 * node_filesystem_avail_bytes / node_filesystem_size_bytes",
+        promql_condition=("<", 20),
+        period=1,
+        frequency=1,
+        desc="[Critical/infra] Free SSD <20% per mount. Recovery = free disk. Scope=vm_id/mountpoint",
+    ),
+    dict(
+        name="INFRA-warn-disk-io-20",
+        stream="node_disk_io_time_seconds_total",
+        promql="rate(node_disk_io_time_seconds_total[5m]) * 1000",
+        promql_condition=(">=", 20),
+        period=1,
+        frequency=1,
+        desc="[Warning/infra] Disk IO await >20ms per device 60s. Scope=device",
+    ),
+    dict(
+        name="INFRA-warn-net-80",
+        stream="node_network_transmit_bytes_total",
+        promql="rate(node_network_transmit_bytes_total[5m])",
+        promql_condition=(">", 80),
+        period=1,
+        frequency=1,
+        desc="[Warning/infra] Network TX >80% capacity per host 60s (rate observed). Scope=host/device",
+    ),
+    dict(
+        name="INFRA-crit-o2-mem-14",
+        stream="container_memory_usage_bytes",
+        conditions=[("container", "=", "openobserve"), ("value", ">=", 14 * 1024 * 1024 * 1024)],
+        period=1,
+        desc="[Critical/infra] OpenObserve >14GB for 60s (ZO_MEMORY_LIMIT=12g starvation risk). Recovery = restart/limit. Scope=container",
+    ),
+    dict(
+        name="INFRA-crit-collector-export-failed",
+        stream="otelcol_exporter_send_failed_metric_points",
+        conditions=[("value", ">", 0)],
+        desc="[Critical/infra] Collector otelcol_exporter_send_failed >0 for 5m retry window: O2 delivery gap started — single-pane breach. Scope=global",
     ),
 ]
 

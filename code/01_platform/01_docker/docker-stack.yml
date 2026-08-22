@@ -108,6 +108,11 @@ networks:
       encrypted: "true"
 
 # ---- Volumes: per-node durable, backed by named volume driver --------------
+# G4 Durability T9: flink-checkpoints volume is dev-local only (Compose keeps
+# file:///checkpoints). Production checkpoints are encrypted S3 (s3:// / s3a://,
+# bucket AES256) — SignalJobConfig fails fast if CHECKPOINT_DIR missing or non-S3
+# when DEPLOYMENT_ENV=production or PROFILE=prod; the volume is retained for
+# logs only in prod (not durable checkpoints).
 volumes:
   zk-data-1:
   zk-data-2:
@@ -328,7 +333,10 @@ services:
 
   # ---- Flink: compute (signal + babysitter jobs) ----------------------------
   # Production HA: Flink JobManager HA via ZooKeeper (`high-availability.type:
-  # zookeeper`), checkpoints in encrypted S3, standby JMs. This is Flink-level
+  # zookeeper`), checkpoints in encrypted S3 (G4 T9: production requires
+  # CHECKPOINT_DIR=s3:// or s3a:// with bucket AES256; SignalJobConfig fails fast
+  # if missing/non-S3 when DEPLOYMENT_ENV=production or PROFILE=prod; dev keeps
+  # local volume file:///checkpoints), standby JMs. This is Flink-level
   # HA — separate from Swarm Raft (09 § Storage and recovery). Placement allows
   # future workers; Flink TaskManager slots are Flink's own parallelism, not
   # Swarm replicas.
@@ -357,6 +365,29 @@ services:
         reservations: {cpus: "1", memory: 2G}
         limits: {cpus: "4", memory: 4G}
     environment:
+      # G4 Durability T9: production checkpoint storage — encrypted S3 mandatory.
+      # Swarm enforces s3:// via mandatory variable expansion; the job itself
+      # (SignalJobConfig) also fails fast with a clear message if CHECKPOINT_DIR
+      # missing or not s3:// when DEPLOYMENT_ENV=production or PROFILE=prod.
+      # Dev never needs S3: compose uses file:///checkpoints local volume.
+      DEPLOYMENT_ENV: production
+      PROFILE: ${PROFILE:-production}
+      CHECKPOINT_DIR: ${CHECKPOINT_DIR:?set CHECKPOINT_DIR to an encrypted s3:// URI - prod requires s3://<bucket>/flink-checkpoints (G4 T9, encrypted S3 mandatory)}
+      SAVEPOINT_DIR: ${SAVEPOINT_DIR:-${CHECKPOINT_DIR}}
+      # S3/R2 endpoint + credentials arrive via Swarm secrets/env injection.
+      # The job's SignalJobConfig.s3Endpoint validates S3_ENDPOINT (or R2_ENDPOINT)
+      # + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY when CHECKPOINT_DIR is s3://.
+      S3_ENDPOINT: ${S3_ENDPOINT:-${R2_ENDPOINT:-}}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      # Streaming-3000 T3 G3 Compute (p=8, 16 buckets → 8 slots, hash(token) 2:1)
+      PARALLELISM: ${PARALLELISM:-8}
+      STATE_BACKEND: rocksdb
+      STATE_BACKEND_LOCAL_DIRS: ${STATE_BACKEND_LOCAL_DIRS:-/tmp/flink-rocksdb}
+      STATE_BACKEND_MANAGED_MEMORY: "true"
+      TASK_MANAGER_NETWORK_MEMORY_MAX: 256m
+      TASK_MANAGER_MEMORY_MANAGED_SIZE: ${TASK_MANAGER_MEMORY_MANAGED_SIZE:-}
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         rest.address: flink-jobmanager
@@ -378,10 +409,26 @@ services:
         jobmanager.memory.process.size: 1600m
         taskmanager.memory.process.size: 3g
         taskmanager.memory.task.off-heap.size: 512m
+        # Streaming-3000 T3 G3 Compute: p=8 RocksDB incremental on SSD, managed 0.4, network 256m
+        taskmanager.memory.managed.fraction: 0.4
+        taskmanager.memory.network.max: 256m
+        taskmanager.memory.network.min: 256m
+        # G4 T9: durable encrypted checkpoint store (cluster-level fallback;
+        # the job also sets CheckpointingOptions.CHECKPOINTS_DIRECTORY from
+        # CHECKPOINT_DIR env via SignalJobConfig -> Configuration).
+        state.checkpoints.dir: ${CHECKPOINT_DIR:?set CHECKPOINT_DIR to an encrypted s3:// URI}
+        state.savepoints.dir: ${SAVEPOINT_DIR:-${CHECKPOINT_DIR}}
+        state.backend: rocksdb
+        state.backend.incremental: "true"
+        state.backend.rocksdb.localdir: /tmp/flink-rocksdb
+        fs.s3a.server-side-encryption-algorithm: AES256
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
     volumes:
       - flink-checkpoints:/checkpoints
       - flink-logs:/opt/flink/log
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
 
   flink-taskmanager:
     # x-healthcheck: none (no fixed external listener; worker liveness/slot health is
@@ -405,6 +452,22 @@ services:
         reservations: {cpus: "1", memory: 3G}
         limits: {cpus: "6", memory: 12G}
     environment:
+      # G4 Durability T9: mirror JM checkpoint contract on TMs (same S3 vars).
+      DEPLOYMENT_ENV: production
+      PROFILE: ${PROFILE:-production}
+      CHECKPOINT_DIR: ${CHECKPOINT_DIR:?set CHECKPOINT_DIR to an encrypted s3:// URI - prod requires s3://<bucket>/flink-checkpoints (G4 T9)}
+      SAVEPOINT_DIR: ${SAVEPOINT_DIR:-${CHECKPOINT_DIR}}
+      S3_ENDPOINT: ${S3_ENDPOINT:-${R2_ENDPOINT:-}}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      # Streaming-3000 T3 G3 Compute (p=8, 16 buckets → 8 slots)
+      PARALLELISM: ${PARALLELISM:-8}
+      STATE_BACKEND: rocksdb
+      STATE_BACKEND_LOCAL_DIRS: ${STATE_BACKEND_LOCAL_DIRS:-/tmp/flink-rocksdb}
+      STATE_BACKEND_MANAGED_MEMORY: "true"
+      TASK_MANAGER_NETWORK_MEMORY_MAX: 256m
+      TASK_MANAGER_MEMORY_MANAGED_SIZE: ${TASK_MANAGER_MEMORY_MANAGED_SIZE:-}
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 8
@@ -413,10 +476,22 @@ services:
         metrics.reporter.prom.interval: 15 SECONDS
         taskmanager.memory.process.size: 3g
         taskmanager.memory.task.off-heap.size: 512m
+        taskmanager.memory.managed.fraction: 0.4
+        taskmanager.memory.network.max: 256m
+        taskmanager.memory.network.min: 256m
+        state.checkpoints.dir: ${CHECKPOINT_DIR:?set CHECKPOINT_DIR to an encrypted s3:// URI}
+        state.savepoints.dir: ${SAVEPOINT_DIR:-${CHECKPOINT_DIR}}
+        state.backend: rocksdb
+        state.backend.incremental: "true"
+        state.backend.rocksdb.localdir: /tmp/flink-rocksdb
+        fs.s3a.server-side-encryption-algorithm: AES256
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
     volumes:
       - flink-checkpoints:/checkpoints
       - flink-logs:/opt/flink/log
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
 
   # ---- Ingestion ------------------------------------------------------------
   ingestion:
@@ -446,13 +521,32 @@ services:
       ARROW_TICK_COUNTS: ${ARROW_TICK_COUNTS:-}
       ARROW_TICK_COUNTS_FILE: ${ARROW_TICK_COUNTS_FILE:-/tmp/arrow-tick-counts.txt}
       ARROW_HFT_LATENCY_MS: ${ARROW_HFT_LATENCY_MS:-50}
+      # T0 3-slot (streaming-3000): env-driven slot count N=1..3. Default 1
+      # keeps single-socket 1024 working; N=3 shards 3000 as 1024+1024+952
+      # via BuildSubscriptionPlan contiguous chunks. List enables per-slot
+      # CSVs without code rewrite; single 3000-row CSV also auto-shards.
+      # Go/Java both enforce 1..3 (hftRange/intRange). Swarm image must
+      # bake manifests under /instruments; for N=3 bake slot1/2/3.csv or
+      # the single 3000-row CSV and set the corresponding env.
+      ARROW_HFT_CONNECTIONS: ${ARROW_HFT_CONNECTIONS:-1}
+      ARROW_INSTRUMENT_MANIFESTS: ${ARROW_INSTRUMENT_MANIFESTS:-}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
-      INSTRUMENT_MANIFEST_PATH: /instruments/NSE_CM_EQUITY.csv
-      ARROW_INSTRUMENT_MANIFEST: /instruments/NSE_CM_EQUITY.csv
+      INSTRUMENT_MANIFEST_PATH: ${INSTRUMENT_MANIFEST_PATH:-/instruments/NSE_CM_EQUITY.csv}
+      ARROW_INSTRUMENT_MANIFEST: ${ARROW_INSTRUMENT_MANIFEST:-/instruments/NSE_CM_EQUITY.csv}
       RAW_TABLE_NAME: ${RAW_TABLE_NAME:-raw_table_1}
       ARROW_MAX_EVENT_AGE_MS: ${ARROW_MAX_EVENT_AGE_MS:-5000}
       ARROW_MAX_FUTURE_EVENT_SKEW_MS: ${ARROW_MAX_FUTURE_EVENT_SKEW_MS:-2000}
-      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-200}
+      CLOCK_OFFSET_LIMIT_MS: ${CLOCK_OFFSET_LIMIT_MS:-2000}
+      # T2 tunable backpressure (G2 Ingest) — streaming-3000: 50k/64M (1k) → 150k/192M (3k)
+      # Primary: MAX_PENDING_APPEND_* + PENDING_APPEND_WARNING_PERCENT (80% warn / 100% halt).
+      # Aliases: PENDING_MAX_RECORDS / PENDING_MAX_BYTES / PENDING_WARNING_PERCENT (primary wins).
+      # Prod 3k defaults: 150k records / 192MiB. Override for 1k: 50000 / 67108864.
+      MAX_PENDING_APPEND_RECORDS: ${MAX_PENDING_APPEND_RECORDS:-150000}
+      MAX_PENDING_APPEND_BYTES: ${MAX_PENDING_APPEND_BYTES:-201326592}
+      PENDING_APPEND_WARNING_PERCENT: ${PENDING_APPEND_WARNING_PERCENT:-0.80}
+      PENDING_MAX_RECORDS: ${PENDING_MAX_RECORDS:-}
+      PENDING_MAX_BYTES: ${PENDING_MAX_BYTES:-}
+      PENDING_WARNING_PERCENT: ${PENDING_WARNING_PERCENT:-}
       READINESS_FILE_PATH: /tmp/ingestion.ready
       LOG_DIR: /data/ingestion/logs
     healthcheck:
