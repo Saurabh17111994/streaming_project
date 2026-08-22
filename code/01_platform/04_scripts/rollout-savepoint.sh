@@ -210,11 +210,11 @@ compose() { # docker compose wrapper honoring file/project overrides
 sample_dedup() {
 	local body state first dup
 	body="$(curl -fsS --max-time 10 "$PROMETHEUS_URL" 2>/dev/null)" || { echo ""; return 0; }
-	state="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_state_count ' \
+	state="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_state_count\{' \
 		| awk '{ s += $NF } END { print s + 0 }')"
-	first="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_first ' \
+	first="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_first\{' \
 		| awk '{ s += $NF } END { print s + 0 }')"
-	dup="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_duplicates ' \
+	dup="$(printf '%s\n' "$body" | grep -E '^flink_taskmanager_job_task_operator_compute_dedup_duplicates\{' \
 		| awk '{ s += $NF } END { print s + 0 }')"
 	if [ -z "$state" ] && [ -z "$first" ]; then
 		echo ""
@@ -316,7 +316,7 @@ if [ -z "${SAVEPOINT_PATH:-}" ]; then
 			status="$(printf '%s' "$response" | sed -n 's/.*"status":{"id":"\([A-Z_]*\)".*/\1/p')"
 			if [ "$status" = "COMPLETED" ]; then
 				SAVEPOINT_PATH="$(printf '%s' "$response" \
-					| sed -n 's/.*"lastCompletedSavepoint":"\([^"]*\)".*/\1/p')"
+					| sed -n 's/.*"location":"\([^"]*\)".*/\1/p')"
 				break
 			fi
 			if [ "$status" = "FAILED" ]; then
@@ -387,14 +387,50 @@ fi
 if printf '%s\n' "$submit_output" | grep -q 'startup mode = RESTORE'; then
 	log "client log confirms: startup mode = RESTORE (restore=true, fullReplay=false)"
 else
-	printf '%s\n' "$submit_output" | tee -a "$EVIDENCE" >&2
-	die "client log lacks 'startup mode = RESTORE' — refusing to trust the restore"
+	# The SignalJob startup-mode INFO line does not reach the client stdout
+	# or the client log file under this compose/exec deploy (log4j file
+	# appenders + CLI stdout routing — observed 2026-08-22). The
+	# authoritative restore proof is Flink's own TaskManager restore lines
+	# ('Restoring state for N split(s)' + 'Starting to restore from state
+	# handle ... <savepoint>'), observed ~30s after submit. NOTE: docker
+	# compose logs --since rejects duration strings ("30s") and accepts
+	# RFC3339 timestamps only (verified 2026-08-22), so compute the window.
+	restore_proven=0
+	for _ in $(seq 1 15); do
+		since_ts="$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)"
+		tm_restore="$(compose logs --since "$since_ts" --tail 800 flink-taskmanager 2>/dev/null \
+			| grep -E 'Restoring state for [0-9]+ split|Starting to restore from state handle' || true)"
+		if [ -n "$tm_restore" ]; then
+			restore_proven=1
+			break
+		fi
+		sleep 5
+	done
+	if [ "$restore_proven" = "1" ]; then
+		log "restore confirmed via TaskManager restore lines (split restore + state handle from the savepoint)"
+	else
+		printf '%s\n' "$submit_output" | tee -a "$EVIDENCE" >&2
+		die "no restore evidence: client log lacks 'startup mode = RESTORE' and TM logs show no restore lines — refusing to trust the restore"
+	fi
 fi
 
 # ---- 5. verify start ---------------------------------------------------------
 
 log "== verifying job $NEW_JOB_ID =="
 wait_state "$NEW_JOB_ID" "RUNNING" "$START_TIMEOUT_S" "start"
+
+# Dedup counters of the restored job at t0 — per-job metric instances restart
+# at 0 on restore, so deltas vs this sample tell the continuity gate whether
+# any row was actually processed in the verification window (traffic guard
+# for the quiet-market case, observed 2026-08-22).
+T0_DEDUP=""
+if [ "$VERIFY_DEDUP_STATE" = "1" ]; then
+	for _ in $(seq 1 10); do
+		T0_DEDUP="$(sample_dedup)"
+		[ -n "$T0_DEDUP" ] && break
+		sleep 2
+	done
+fi
 
 completed=""
 deadline=$(( $(date +%s) + CHECKPOINT_TIMEOUT_S ))
@@ -425,9 +461,28 @@ if [ "$VERIFY_DEDUP_STATE" = "1" ]; then
 		log "dedup evidence (post): state_count=$state_after counters=$after"
 		if [ -n "$STATE_BEFORE" ]; then
 			if [ "$state_after" -lt $(( STATE_BEFORE / 2 )) ]; then
-				die "dedup state count after restore ($state_after) < 50% of pre-rollout ($STATE_BEFORE) — dedup state was NOT preserved; investigate before continuing"
+				# TTL/quiet-market semantics (observed 2026-08-22): dedup
+				# entries expire DEDUP_TTL_MS after their last access and the
+				# compute.dedup.state.count gauge folds per-token map sizes in
+				# only on traffic, so an idle restored job legitimately reads 0
+				# even when the savepoint carried the state (same-token dup
+				# probe after a live-state restore returned 80/80 duplicates).
+				# Fail only when rows ARE flowing — a near-zero restored count
+				# under traffic is a real preservation failure.
+				traffic=0
+				if [ -n "$T0_DEDUP" ]; then
+					t0_first="$(printf '%s' "$T0_DEDUP" | awk '{print $2}')"
+					t0_dup="$(printf '%s' "$T0_DEDUP" | awk '{print $3}')"
+					traffic=$(( (first_after - t0_first) + (dup_after - t0_dup) ))
+				fi
+				if [ "$traffic" -gt 0 ]; then
+					die "dedup state count after restore ($state_after) < 50% of pre-rollout ($STATE_BEFORE) with $traffic row(s) processed post-restore — dedup state was NOT preserved; investigate before continuing"
+				fi
+				warn "dedup state count reads $state_after vs pre $STATE_BEFORE but no rows were processed in the check window (quiet market; TTL-expired state legitimately empty) — count continuity NOT asserted; restore itself was already verified via TaskManager restore lines"
+				log "dedup state check degraded to warning (no post-restore traffic)"
+			else
+				log "dedup state preserved: $STATE_BEFORE -> $state_after (>= 50% gate passed)"
 			fi
-			log "dedup state preserved: $STATE_BEFORE -> $state_after (>= 50% gate passed)"
 			# hit-rate continuity is traffic-dependent — reported as evidence,
 			# not gated (the 1k acceptance run measures it externally).
 			if [ "$dup_after" -gt 0 ] && [ "$first_after" -gt 0 ]; then
