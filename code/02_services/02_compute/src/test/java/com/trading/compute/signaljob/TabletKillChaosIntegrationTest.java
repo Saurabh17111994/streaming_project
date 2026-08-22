@@ -9,9 +9,13 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -44,11 +48,23 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  * the kill, so the test measures exactly the plan's "no data loss for
  * already-acked rows" invariant, not best-effort writes. After the tablet
  * container is SIGKILLed and restarted by the compose/swarm restart policy,
- * the test re-scans the whole LOG from offset 0 and asserts:
+ * the test re-scans the whole LOG from offset 0 (or a bounded tail window,
+ * {@code CHAOS_SCAN_LIMIT_ROWS}) and asserts:
  * (1) every acked fingerprint is present (set match), and
- * (2) the total LOG row count never decreased (immutable LOG contract).
+ * (2) the total LOG row count never decreased (immutable LOG contract;
+ *     measured by a streaming count that never materializes the full log).
  * A truncated tail (the repair-tablet.sh symptom) would surface as a scan
  * failure or a missing acked row, both of which fail this test.
+ *
+ * <p><b>Heap-bound knob.</b> The dev/CI box (15 GB, ~7 GB free alongside the
+ * stack) cannot hold the full raw_table_1 LOG in memory — a 13M-row backlog
+ * is ~1.3 GB of GenericRow, and the surefire fork OOM'd materializing it
+ * even at -Xmx4g (observed 2026-08-22). {@code CHAOS_SCAN_LIMIT_ROWS} bounds
+ * the scan to the last N rows seen (tail window, {@code ArrayDeque}, O(N)
+ * heap) while the row COUNT is still taken over the whole log in one
+ * streaming pass, so both invariants stay asserted. Default {@code -1} keeps
+ * the full-scan semantics (prod gate); the chaos-03 runner defaults to
+ * 200000 for heap-limited boxes.
  *
  * <p><b>Kill mechanism.</b> {@code docker kill -s KILL} on the tablet
  * container (auto-discovered like repair-tablet.sh, override with
@@ -71,6 +87,43 @@ class TabletKillChaosIntegrationTest {
     private static final Duration APPEND_TIMEOUT = Duration.ofSeconds(20);
     private static final Duration RECOVERY_TIMEOUT = Duration.ofSeconds(180);
     private static final String TABLE = "raw_table_1";
+    // Completion semantics for a point-in-time log count: the scan is done
+    // when the stream is QUIESCENT — two consecutive rounds of 12 empty polls
+    // (~6s of silence each) — NOT after a fixed window. A hard deadline was
+    // observed racing the tablet's post-restart segment replay (2026-08-22:
+    // post-kill scan cut off at 1,684,500 rows while the recovered tablet
+    // held all 2,284,955 — a probe re-scan reproduced the full count in 22s,
+    // proving a scanner race, not data loss). The double round tolerates
+    // replay pauses; a continuously-written log (writer > 1 batch/13s)
+    // defeats quiescence and fails with guidance instead of a partial count.
+    private static final int QUIESCE_POLLS = 12;
+    private static final long SCAN_TIMEOUT_MS = 1_000L
+            * Long.parseLong(System.getenv().getOrDefault("CHAOS_SCAN_TIMEOUT_SEC", "600"));
+
+    /**
+     * Runs {@code body} on a daemon worker with a hard wall-clock bound.
+     * Fluss 0.9.1 has no client fetch-timeout knob (verified in the client
+     * jar — no {@code client.*timeout} config key exists), so a leader-less
+     * {@code LogScanner.poll()} can block for many minutes; this makes every
+     * scan attempt bounded so the outer recovery deadline (180s) governs.
+     * On timeout the worker is interrupted and abandoned (daemon), and the
+     * caller's retry loop re-attempts until its deadline or fails cleanly.
+     */
+    private static <T> T withAttemptBound(String what, Duration bound, Callable<T> body)
+            throws Exception {
+        FutureTask<T> task = new FutureTask<>(body);
+        Thread t = new Thread(task, "scan-attempt");
+        t.setDaemon(true);
+        t.start();
+        try {
+            return task.get(bound.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            t.interrupt();
+            throw new IllegalStateException(what + " did not finish within "
+                    + bound.toSeconds() + "s (leader-less client or slow tablet "
+                    + "replay) — will retry");
+        }
+    }
 
     // Column indexes of the schema-v2 row builder below (DDL order).
     private static final int COL_FINGERPRINT = 0;
@@ -93,31 +146,86 @@ class TabletKillChaosIntegrationTest {
                 bs("VALID"), bs("FRESH"), bs("2"));
     }
 
-    /** Full-LOG scan from bucket 0 offset 0; returns every row seen. */
-    private static List<GenericRow> scanAll(Table table) throws Exception {
-        List<GenericRow> rows = new ArrayList<>();
+    /** One-pass scan result: full-log streaming count + kept window. */
+    private static final class ScanWindow {
+        final long totalRows;
+        final List<GenericRow> kept;
+
+        ScanWindow(long totalRows, List<GenericRow> kept) {
+            this.totalRows = totalRows;
+            this.kept = kept;
+        }
+    }
+
+    /**
+     * Single-pass LOG scan from bucket 0 offset 0: counts every row (never
+     * materialized) and keeps either all rows (limit = -1, prod semantics)
+     * or only the last {@code limit} rows seen (CHAOS_SCAN_LIMIT_ROWS), which
+     * always covers the just-acked tail the test asserts on.
+     */
+    private static ScanWindow scanWindow(Table table, long limit) throws Exception {
+        long total = 0;
+        List<GenericRow> kept = limit < 0
+                ? new ArrayList<>()
+                : new ArrayList<>((int) limit);
+        ArrayDeque<GenericRow> tail = limit < 0 ? null : new ArrayDeque<>((int) limit);
         TableInfo info = table.getTableInfo();
+        int streak = 0;
+        boolean quiescent = false;
+        long start = System.currentTimeMillis();
         try (LogScanner scanner = table.newScan().createLogScanner()) {
             for (int bucket = 0; bucket < info.getNumBuckets(); bucket++) {
                 scanner.subscribe(bucket, 0L);
             }
-            long deadline = System.currentTimeMillis() + 60_000;
-            while (System.currentTimeMillis() < deadline) {
+            while (true) {
+                if (System.currentTimeMillis() - start > SCAN_TIMEOUT_MS) {
+                    fail("scan did not catch up within " + (SCAN_TIMEOUT_MS / 1000)
+                            + "s (partial count " + total + ") — the table log is likely "
+                            + "being written continuously, so quiescence never forms: pause "
+                            + "the writers for the chaos-03 run or raise "
+                            + "CHAOS_SCAN_TIMEOUT_SEC");
+                }
                 ScanRecords records = scanner.poll(Duration.ofMillis(500));
                 if (records == null || records.isEmpty()) {
-                    // Keep polling: right after a tablet restart the log is
-                    // readable-but-still-loading — a first-empty-poll break
-                    // would race recovery and report 0 rows (observed
-                    // 2026-08-22, chaos-03: 70822 -> 0 scan race).
+                    streak++;
+                    if (streak >= QUIESCE_POLLS) {
+                        if (quiescent) {
+                            break; // second consecutive silence round: caught up
+                        }
+                        quiescent = true;
+                        streak = 0;
+                    }
                     Thread.sleep(500);
                     continue;
                 }
+                streak = 0;
+                quiescent = false;
                 for (var r : records) {
-                    rows.add((GenericRow) r.getRow());
+                    total++;
+                    if (limit < 0) {
+                        kept.add((GenericRow) r.getRow());
+                    } else {
+                        tail.addLast((GenericRow) r.getRow());
+                        if (tail.size() > limit) {
+                            tail.removeFirst();
+                        }
+                    }
                 }
             }
         }
-        return rows;
+        if (total == 0) {
+            // A post-restart scan can legitimately return 0 while the
+            // tablet is still loading segments (observed 70822 -> 0 race);
+            // signal the caller's recovery-retry loop instead of a
+            // bogus "log shrank to nothing".
+            throw new IllegalStateException(
+                    "scan returned 0 rows after quiescence — table still loading "
+                            + "after tablet restart; will retry");
+        }
+        if (tail != null) {
+            kept.addAll(tail);
+        }
+        return new ScanWindow(total, kept);
     }
 
     private static Set<String> ackedFingerprints(List<GenericRow> rows, long token) {
@@ -227,9 +335,25 @@ class TabletKillChaosIntegrationTest {
                 acked.add(fp);
             }
             w.flush();
-            long preCount = scanAll(table).size();
+            // Heap-bound knob: -1 = full scan (prod gate); N = keep only the
+            // last N scanned rows. The streaming count always covers the log.
+            long scanLimit = Long.parseLong(System.getenv()
+                    .getOrDefault("CHAOS_SCAN_LIMIT_ROWS", "-1"));
+            if (scanLimit != -1 && scanLimit <= 0) {
+                fail("CHAOS_SCAN_LIMIT_ROWS must be -1 (unlimited) or positive, got "
+                        + scanLimit);
+            }
+            if (scanLimit != -1 && scanLimit < rows) {
+                fail("CHAOS_SCAN_LIMIT_ROWS=" + scanLimit + " < acked batch size ("
+                        + rows + ") — the tail window could not contain every acked "
+                        + "fingerprint; raise the bound or use -1 (full scan)");
+            }
+            ScanWindow pre = withAttemptBound("pre-kill log scan",
+                    Duration.ofSeconds(240), () -> scanWindow(table, scanLimit));
+            long preCount = pre.totalRows;
             System.out.println("DUR-TABLETKILL-001: acked=" + acked.size()
-                    + " total-log-rows-before-kill=" + preCount);
+                    + " total-log-rows-before-kill=" + preCount
+                    + " scan-limit=" + scanLimit);
 
             // Injection: SIGKILL the tablet (unclean shutdown, mid-log).
             int rc = runHost("docker", "kill", "-s", "KILL", container);
@@ -256,10 +380,11 @@ class TabletKillChaosIntegrationTest {
             assertTrue(running, "tablet container did not come back up within "
                     + RECOVERY_TIMEOUT.toSeconds() + "s of SIGKILL+start");
 
-            List<GenericRow> after = null;
+            ScanWindow after = null;
             while (System.currentTimeMillis() < deadline) {
                 try {
-                    after = scanAll(table);
+                    after = withAttemptBound("post-kill log scan",
+                            Duration.ofSeconds(60), () -> scanWindow(table, scanLimit));
                     break;
                 } catch (Exception e) {
                     System.out.println("DUR-TABLETKILL-001: table not readable yet: " + e);
@@ -279,14 +404,14 @@ class TabletKillChaosIntegrationTest {
             //   all 70,779 pre-existing rows intact). Dev invariant = NO loss of
             //   pre-existing committed rows + table readable + loss confined to the
             //   tail window created by this test (the strictly-newest rows).
-            Set<String> ackedAfter = ackedFingerprints(after, token);
+            Set<String> ackedAfter = ackedFingerprints(after.kept, token);
             if (required) {
                 assertTrue(ackedAfter.containsAll(acked),
                         "acked rows lost after tablet kill (RF>=3 must lose none): missing = "
                                 + acked.stream().filter(f -> !ackedAfter.contains(f)).toList());
             } else {
-                assertTrue(after.size() >= preCount,
-                        "immutable LOG shrank: " + preCount + " -> " + after.size()
+                assertTrue(after.totalRows >= preCount,
+                        "immutable LOG shrank: " + preCount + " -> " + after.totalRows
                                 + " (pre-kill committed rows must survive)");
                 if (!ackedAfter.containsAll(acked)) {
                     long lost = acked.stream().filter(f -> !ackedAfter.contains(f)).count();
@@ -297,7 +422,8 @@ class TabletKillChaosIntegrationTest {
                 }
             }
             System.out.println("DUR-TABLETKILL-001: recovered acked=" + ackedAfter.size()
-                    + "/" + acked.size() + " total-log-rows-after=" + after.size()
+                    + "/" + acked.size() + " total-log-rows-after=" + after.totalRows
+                    + " kept-window=" + after.kept.size()
                     + " replication-required=" + required);
         } catch (Exception e) {
             fail("DUR-TABLETKILL-001 failed: " + e, e);

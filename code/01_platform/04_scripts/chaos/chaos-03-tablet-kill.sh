@@ -27,6 +27,14 @@
 #        CHAOS_REPLICATION_REQUIRED (default false; true on prod-like Swarm)
 #        CHAOS_REPLICATION_MIN   (default 3)
 #        TABLET_KILL_ROWS        (default 25)
+#        CHAOS_SCAN_LIMIT_ROWS   (default 200000; -1 = full-LOG scan for the
+#                                 prod gate — heap-limited dev boxes bound the
+#                                 scan to the last N rows while the row count
+#                                 still covers the whole log, one streaming
+#                                 pass, O(1) extra heap)
+#        CHAOS_SCAN_TIMEOUT_SEC  (default 600; scan fails with guidance when
+#                                 the log is written continuously and never
+#                                 reaches quiescence)
 #        MAVEN_TIMEOUT_SEC       (default 1200)
 # Exit:  0 PASS, 1 FAIL, 3 SKIP (no live stack / no docker)
 set -euo pipefail
@@ -37,6 +45,8 @@ OUT_DIR="${OUT_DIR:-$PROJECT_ROOT/logs/chaos/chaos-$(date +%Y%m%d-%H%M%S)}"
 COMPUTE_POM="${CHAOS_COMPUTE_POM:-$PROJECT_ROOT/code/02_services/02_compute/pom.xml}"
 MAVEN_TIMEOUT_SEC="${MAVEN_TIMEOUT_SEC:-1200}"
 FLUSS_BOOTSTRAP="${FLUSS_BOOTSTRAP:-localhost:9123}"
+CHAOS_SCAN_LIMIT_ROWS="${CHAOS_SCAN_LIMIT_ROWS:-200000}"
+CHAOS_SCAN_TIMEOUT_SEC="${CHAOS_SCAN_TIMEOUT_SEC:-600}"
 
 for tool in docker mvn java; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
@@ -72,11 +82,15 @@ if command -v timeout >/dev/null 2>&1; then
 	timeout --signal=KILL "$MAVEN_TIMEOUT_SEC" env \
 		COMPUTE_INT_TEST_TABLET_KILL=true TABLET_CONTAINER="$TABLET_CONTAINER" \
 		FLUSS_BOOTSTRAP="$FLUSS_BOOTSTRAP" \
+		CHAOS_SCAN_LIMIT_ROWS="$CHAOS_SCAN_LIMIT_ROWS" \
+		CHAOS_SCAN_TIMEOUT_SEC="$CHAOS_SCAN_TIMEOUT_SEC" \
 		mvn -o -f "$COMPUTE_POM" test -Dtest=TabletKillChaosIntegrationTest 2>&1 |
 		tee "$LOG"
 else
 	COMPUTE_INT_TEST_TABLET_KILL=true TABLET_CONTAINER="$TABLET_CONTAINER" \
 		FLUSS_BOOTSTRAP="$FLUSS_BOOTSTRAP" \
+		CHAOS_SCAN_LIMIT_ROWS="$CHAOS_SCAN_LIMIT_ROWS" \
+		CHAOS_SCAN_TIMEOUT_SEC="$CHAOS_SCAN_TIMEOUT_SEC" \
 		mvn -o -f "$COMPUTE_POM" test -Dtest=TabletKillChaosIntegrationTest 2>&1 |
 		tee "$LOG"
 fi
