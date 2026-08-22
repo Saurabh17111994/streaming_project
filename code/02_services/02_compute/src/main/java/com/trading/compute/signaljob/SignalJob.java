@@ -5,6 +5,7 @@ import com.trading.common.schema.CandleTableSchema;
 import com.trading.compute.telemetry.ComputeAlertLogs;
 import java.time.Duration;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExternalizedCheckpointRetention;
@@ -238,7 +239,20 @@ public final class SignalJob {
         // now bounded by the checkpoint timeout + restart policy, and the
         // checkpoint-1 zero-ack stall class was eliminated by Design B (no
         // RPC on the hot path, CHG-022).
-        candles
+        //
+        // Streaming-3000 T5 (decision 25): the KV write path is first-write-
+        // wins. CandleKvFirstWriteWinsFunction (keyed by the candle PK
+        // instrument_token + window_start) forwards the first emission of a
+        // window to the sink and drops + counts any second emission
+        // (compute.candles.duplicate_window) — a re-emission after a
+        // checkpoint-restore re-fire or a same-day rollback must never
+        // overwrite an already-written candle row.
+        candles.keyBy(CandleKvFirstWriteWinsFunction.keySelector(),
+                        Types.TUPLE(Types.LONG, Types.LONG))
+                .process(new CandleKvFirstWriteWinsFunction())
+                .returns(CandleTableColumns.ROW_TYPE_INFO)
+                .name("candle-kv-first-write-wins")
+                .uid("candle-kv-first-write-wins")
                 .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
@@ -257,6 +271,33 @@ public final class SignalJob {
                                 .build())
                 .name("feature-candles-15s-sink")
                 .uid("feature-candles-15s-sink");
+
+        // Streaming-3000 T6 (decision 24): candles that fail one of the five
+        // CandleInvariantCheck OHLC invariants never reach the main output —
+        // CandleEmitFunction routes them here, to the quarantine side output.
+        // The counter operator counts each into compute.candles.invalid.total
+        // + the per-reason compute.candles.invalid.<reason> counters and logs
+        // the violation (one bounded WARN per candle); the FlussSink appends
+        // the evidence row to ingestion_quarantine (LOG append — the same
+        // table the ingestion pipeline uses for invalid raw ticks, DDL 21).
+        candles.getSideOutput(CandleQuarantine.OUTPUT)
+                .process(new CandleQuarantine.CounterFunction())
+                .returns(CandleQuarantineColumns.ROW_TYPE_INFO)
+                .name("candle-invalid-quarantine")
+                .uid("candle-invalid-quarantine")
+                .sinkTo(FlussSink.<RowData>builder()
+                        .setBootstrapServers(config.bootstrapServers())
+                        .setDatabase(config.database())
+                        .setTable(config.quarantineTable())
+                        // LOG append-only: ingestion_quarantine has no primary
+                        // key — (true, true) serialization ignores deletes.
+                        .setSerializationSchema(new RowDataSerializationSchema(true, true))
+                        .setOption("client.request-timeout",
+                                config.sinkWriteStallTimeoutMs() + "ms")
+                        .setOption("client.writer.retries", "2")
+                        .build())
+                .name("candle-invalid-quarantine-sink")
+                .uid("candle-invalid-quarantine-sink");
 
         // Slice 2.1 (DEC-034): closed candles -> MVP signal detection ->
         // signal dual-sink (DEC-035, tracker 14 re-scoped P2).
@@ -430,7 +471,14 @@ public final class SignalJob {
             // Incremental checkpoints are enabled only on the RocksDB backend
             // (Flink ignores them on heap state) and only for the keyed
             // MapState + timer state this graph uses — both fully supported.
+            // Streaming-3000 T3 G3 Compute: RocksDB incremental is pinned for
+            // the 3000-instrument envelope (16 Fluss buckets → 8 TaskSlots,
+            // ~1 GB checkpoint at 15M entries).
             flinkConfig.set(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, true);
+            // Streaming-3000 T3 G3: SSD dirs — RocksDB local state on fast
+            // disk (dev: /tmp/flink-rocksdb on host SSD, prod: SSD mount),
+            // not on the container overlay. T3 default is explicit so p8 does
+            // not silently use the overlay's limited disk.
             if (config.stateBackendLocalDirs() != null) {
                 // RocksDBOptions.LOCAL_DIRECTORIES ("state.backend.rocksdb.localdir",
                 // singular) is the live key in Flink 2.2.1; the older
@@ -440,9 +488,17 @@ public final class SignalJob {
                 // flink-statebackend-rocksdb-2.2.1.jar).
                 flinkConfig.setString(
                         "state.backend.rocksdb.localdir", config.stateBackendLocalDirs());
+            } else {
+                flinkConfig.setString("state.backend.rocksdb.localdir", "/tmp/flink-rocksdb");
             }
             if (!config.stateBackendManagedMemory()) {
                 flinkConfig.setString("state.backend.rocksdb.memory.managed", "false");
+            } else {
+                // Streaming-3000 T3 G3: managed 0.4 — 40% of TM memory for
+                // RocksDB block cache/memtables (TM 3g → ~1.2 GB). Verified
+                // in DedupRocksDbThroughputMemoryIT (0.4). Explicit fraction
+                // so heap/TM headroom stays stable at p8.
+                flinkConfig.setString("taskmanager.memory.managed.fraction", "0.4");
             }
             // E2E root cause (2026-08-17): under LOCAL execution (no
             // flink-conf.yaml) Flink defaults taskmanager.memory.managed.size
@@ -452,21 +508,12 @@ public final class SignalJob {
             // never catches the backlog tail. Explicit passthrough
             // (TASK_MANAGER_MEMORY_MANAGED_SIZE) for embedded/local runs only;
             // unset → the deployment (flink-conf.yaml) stays authoritative.
+            // T3 G3 keeps this passthrough for E2E (2048m) but the 0.4 fraction
+            // above is the prod pin; an explicit size overrides the derived
+            // managed size and must win when present.
             if (config.taskManagerMemoryManagedSize() != null) {
                 flinkConfig.setString("taskmanager.memory.managed.size",
                         config.taskManagerMemoryManagedSize());
-            }
-            // p16 E2E (2026-08-17): local MiniCluster defaults network memory
-            // to 64 MB (2048 × 32 KB buffers) — at 16 subtasks the connected
-            // forming-bar branch fails deploy with "required 17, but only 13
-            // available". Optional passthrough for embedded runs; unset → the
-            // deployment stays authoritative.
-            if (config.taskManagerNetworkMemoryMax() != null) {
-                flinkConfig.setString("taskmanager.memory.network.max",
-                        config.taskManagerNetworkMemoryMax());
-                // min must not exceed max; pin it below so the pair is sane.
-                flinkConfig.setString("taskmanager.memory.network.min",
-                        config.taskManagerNetworkMemoryMax());
             }
             // Tracker 14 box 906 (2026-08-12): export RocksDB native-memory
             // gauges via the per-property boolean keys (verified against
@@ -486,6 +533,18 @@ public final class SignalJob {
         } else {
             flinkConfig.set(StateBackendOptions.STATE_BACKEND, "hashmap");
         }
+        // Streaming-3000 T3 G3: network max 256m for p=8 (Fluss 16 buckets →
+        // 8 slots, hash(token) rebalance). Local MiniCluster defaults to
+        // 64 MB (2048 × 32 KB buffers) — at 8 subtasks the connected
+        // forming-bar branch (connect+keyBy) needs 256m (observed 2026-08-17:
+        // p16 required 17 buffers, only 13 available; p8 needs headroom for
+        // 16→8 rebalance + checkpoint barrier). Default 256m when not
+        // overridden; min pinned below max so the pair is sane. Backend-
+        // agnostic: network buffers are for shuffles/credit, not state.
+        String netMax = config.taskManagerNetworkMemoryMax() != null
+                ? config.taskManagerNetworkMemoryMax() : "256m";
+        flinkConfig.setString("taskmanager.memory.network.max", netMax);
+        flinkConfig.setString("taskmanager.memory.network.min", netMax);
         if (config.savepointDir() != null) {
             flinkConfig.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, config.savepointDir());
         }
@@ -538,6 +597,12 @@ public final class SignalJob {
             flinkConfig.setString("fs.s3a.path.style.access", String.valueOf(config.s3PathStyle()));
             flinkConfig.setString("fs.s3a.aws.credentials.provider",
                     "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+            // G4 Durability T9: enforce encrypted S3 at-rest for checkpoints/savepoints.
+            // R2 encrypts at rest by default (AES256, verified via get_bucket_encryption);
+            // S3 uses SSE-S3. The bucket policy already enforces AES256;
+            // this Flink property makes the client request SSE explicitly so an
+            // unencrypted write is never attempted even on a non-default bucket.
+            flinkConfig.setString("fs.s3a.server-side-encryption-algorithm", "AES256");
         }
         // Effective-backend log WITHOUT secrets: the checkpoint URI is printed
         // as its scheme only, never the full path (credentials may be embedded

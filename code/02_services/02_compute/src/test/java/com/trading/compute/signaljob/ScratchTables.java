@@ -77,6 +77,22 @@ final class ScratchTables {
                 .build();
     }
 
+    /** 10-column ingestion_quarantine LOG schema mirroring DDL 21 v1 (no PK). */
+    static Schema ingestionQuarantineSchema() {
+        return Schema.newBuilder()
+                .column("quarantine_id", DataTypes.STRING())
+                .column("reason", DataTypes.STRING())
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("exchange", DataTypes.STRING())
+                .column("symbol", DataTypes.STRING())
+                .column("raw_payload", DataTypes.BYTES())
+                .column("payload_hash", DataTypes.STRING())
+                .column("detected_ts", DataTypes.BIGINT())
+                .column("detail", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING())
+                .build();
+    }
+
     /**
      * Create a fingerprint_dedup-shaped KV state table (16 buckets,
      * {@code bucket.key = instrument_token}, {@code kv.format-version = 2} —

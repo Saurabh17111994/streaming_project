@@ -44,6 +44,8 @@ class SignalJobConfigTest {
         assertEquals("default", cfg.database());
         assertEquals("raw_table_1", cfg.rawTable());
         assertEquals("feature_candles_15s", cfg.candleTable());
+        // Streaming-3000 T6: candle-invariant quarantine table (shared DDL 21)
+        assertEquals("ingestion_quarantine", cfg.quarantineTable());
         assertEquals(PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION, cfg.rawSchemaVersion());
         assertEquals("2", cfg.candleSchemaVersion());
         // signal detection tuning defaults (DEC-034)
@@ -479,10 +481,12 @@ class SignalJobConfigTest {
     void devDefaultsKeepLiveRunCompatible() {
         // Default DEPLOYMENT_ENV=dev + STATE_BACKEND=hashmap keeps the live dev
         // run's HashMapStateBackend checkpoints restorable on the next restart.
+        // Streaming-3000 T3 G3: parallelism default p=8 (16 buckets → 8 slots,
+        // hash(token) 2:1) even in dev — single-host dev keeps 8 slots.
         SignalJobConfig cfg = SignalJobConfig.from(env());
         assertEquals("dev", cfg.deploymentEnv());
         assertEquals("hashmap", cfg.stateBackend());
-        assertEquals(1, cfg.parallelism());
+        assertEquals(8, cfg.parallelism());
         assertTrue(cfg.stateBackendManagedMemory());
         assertEquals(null, cfg.savepointDir());
     }

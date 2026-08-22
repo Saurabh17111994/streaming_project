@@ -12,6 +12,8 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.util.Collector;
 
+import java.util.UUID;
+
 /**
  * Emits exactly one {@code feature_candles_15s} row per non-empty 15-second
  * window (Signal dossier operator 3, R-012: no correction rows in MVP).
@@ -22,7 +24,24 @@ import org.apache.flink.util.Collector;
  * re-trigger a no-op except for a {@code compute.candles.late.updates} count —
  * the already-written candle is never corrected or duplicated. Events arriving
  * beyond the lateness bound are dropped by the window operator (standard Flink
- * late-drop; a beyond-lateness counter is a telemetry follow-up).
+ * late-drop) to the {@link CandleLateDrop} side output, where
+ * {@code compute.candles.late.dropped} counts each drop (REQ-FC-006). The KV
+ * write path adds a second, restore-surviving first-write-wins layer:
+ * {@link CandleKvFirstWriteWinsFunction} (keyed by the candle PK
+ * {@code (instrument_token, window_start)}) drops and counts a second window
+ * emission via {@code compute.candles.duplicate_window} — the emission flag
+ * here guards a window's lifetime, the KV guard shields the already-written
+ * row across checkpoint-restore re-fires (streaming-3000 T5, decision 25).
+ *
+ * <p>Streaming-3000 T6 (decision 24): before the candle is handed off, the
+ * five {@link CandleInvariantCheck} OHLC invariants run. A violation routes
+ * the candle to the {@link CandleQuarantine#OUTPUT} side output (one
+ * evidence row in {@code ingestion_quarantine}, counted into
+ * {@code compute.candles.invalid.*}) and it is NOT emitted to the main
+ * output — so it never reaches {@code feature_candles_15s}, the KV
+ * first-write-wins guard, or signal detection. The {@code emitted}
+ * window-state flag is still set for an invalid window, so a late re-trigger
+ * cannot double-quarantine the same window.
  *
  * <p>Version columns are the pinned algorithm/configuration/schema versions
  * (REQ-FC-001: {@code algorithm_version}/{@code configuration_version} replace
@@ -61,10 +80,21 @@ public class CandleEmitFunction extends ProcessWindowFunction<CandleAccumulator,
             lateUpdateCounter.inc();
             return;
         }
-        emitted.update(true);
-        emittedCounter.inc();
-
         TimeWindow window = context.window();
+        emitted.update(true);
+        // Streaming-3000 T6: five OHLC invariants gate the emit. A violating
+        // candle is quarantined (side output + counter) and never emitted —
+        // the main output only ever carries invariant-clean candles.
+        CandleInvariantCheck.Reason violation =
+                CandleInvariantCheck.firstViolation(acc, window, config.candleWindowMs());
+        if (violation != null) {
+            context.output(CandleQuarantine.OUTPUT,
+                    CandleQuarantine.buildRow(instrumentToken, acc, window, violation,
+                            "compute-candle-" + UUID.randomUUID(),
+                            context.currentProcessingTime()));
+            return;
+        }
+        emittedCounter.inc();
         out.collect(buildRow(instrumentToken, acc, window, context.currentProcessingTime(), config));
     }
 

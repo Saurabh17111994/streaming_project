@@ -58,7 +58,16 @@ class SignalJobOperatorUidTest {
         // sink uids no longer exist.
         EXPECTED_OPERATORS.put("candle-15s", "candle-15s");
         EXPECTED_OPERATORS.put("candle-late-drop-counter", "candle-late-drop-counter");
+        // Streaming-3000 T5 (decision 25): KV first-write-wins guard between
+        // the window operator and the candle sink.
+        EXPECTED_OPERATORS.put("candle-kv-first-write-wins", "candle-kv-first-write-wins");
         EXPECTED_OPERATORS.put("feature-candles-15s-sink", "feature-candles-15s-sink");
+        // Streaming-3000 T6 (decision 24): OHLC-invariant quarantine branch —
+        // counter operator + ingestion_quarantine LOG sink off the window op's
+        // side output. Both carry pinned UIDs (new operators are restore-safe:
+        // they have no pre-existing state).
+        EXPECTED_OPERATORS.put("candle-invalid-quarantine", "candle-invalid-quarantine");
+        EXPECTED_OPERATORS.put("candle-invalid-quarantine-sink", "candle-invalid-quarantine-sink");
         EXPECTED_OPERATORS.put("signal-detection", "signal-detection");
         // Forming-bar branch (Slice 2.2, 2026-08-16): builder -> detection ->
         // writer -> sink carry pinned UIDs; added to the contract 2026-08-18
@@ -110,6 +119,7 @@ class SignalJobOperatorUidTest {
         String candleName = "p6_uid_" + suffix + "_candle";
         String signalName = "p6_uid_" + suffix + "_sig";
         String currentName = "p6_uid_" + suffix + "_cur";
+        String quarName = "p6_uid_" + suffix + "_quar";
         ScratchTables.create(connection, admin, candleName, ScratchTables.candleSchema(),
                 List.of("instrument_token", "window_start"), 16, "candle KV", TIMEOUT);
         ScratchTables.create(connection, admin, signalName, ScratchTables.signalLogSchema(), null,
@@ -117,7 +127,10 @@ class SignalJobOperatorUidTest {
         ScratchTables.create(connection, admin, currentName,
                 ScratchTables.signalCurrentSchema(), List.of("instrument_token"), 16,
                 "signal current KV", TIMEOUT);
-        // buildTopology preflights the 3-table contract against live metadata.
+        ScratchTables.create(connection, admin, quarName,
+                ScratchTables.ingestionQuarantineSchema(), null, 16,
+                "quarantine LOG", TIMEOUT);
+        // buildTopology preflights the table contracts against live metadata.
         // The scratch tables carry the DEC-035 contracts that the dev cluster's
         // legacy tables only gain in Stage 6 (live DDL application), so the
         // UID assertions never depend on Stage 6 having landed.
@@ -125,6 +138,7 @@ class SignalJobOperatorUidTest {
         cfg.put("CANDLE_TABLE", candleName);
         cfg.put("SIGNAL_CANDIDATES_TABLE", signalName);
         cfg.put("SIGNAL_CURRENT_TABLE", currentName);
+        cfg.put("QUARANTINE_TABLE", quarName);
         StreamExecutionEnvironment senv = SignalJob.buildTopology(SignalJobConfig.from(cfg));
         StreamGraph graph = senv.getStreamGraph();
 

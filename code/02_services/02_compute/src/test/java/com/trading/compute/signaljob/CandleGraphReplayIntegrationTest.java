@@ -486,6 +486,7 @@ class CandleGraphReplayIntegrationTest {
         e.put("CANDLE_TABLE", s.logName());
         e.put("SIGNAL_CANDIDATES_TABLE", s.candName());
         e.put("SIGNAL_CURRENT_TABLE", s.curName());
+        e.put("QUARANTINE_TABLE", s.quarName());
         e.put("DEDUP_TTL_MS", "300000");
         e.put("CANDLE_WINDOW_MS", "15000");
         e.put("WATERMARK_OUT_OF_ORDER_MS", "5000");
@@ -970,6 +971,7 @@ class CandleGraphReplayIntegrationTest {
         String logName = "p6_" + suffix + "_log";
         String candName = "p6_" + suffix + "_cand";
         String curName = "p6_" + suffix + "_cur";
+        String quarName = "p6_" + suffix + "_quar";
         // One raw bucket gives this event-time test one source watermark; Fluss's
         // production 16-bucket routing is covered independently by bucket tests.
         Table raw = ScratchTables.create(connection, admin, rawName, rawSchema(), null, 1,
@@ -981,12 +983,16 @@ class CandleGraphReplayIntegrationTest {
         Table cur = ScratchTables.create(connection, admin, curName,
                 ScratchTables.signalCurrentSchema(), List.of("instrument_token"), 16,
                 "signal current KV", TIMEOUT);
+        Table quar = ScratchTables.create(connection, admin, quarName,
+                ScratchTables.ingestionQuarantineSchema(), null, 16,
+                "quarantine LOG", TIMEOUT);
         TableInfo rawInfo = tableInfo(rawName);
         TableInfo logInfo = tableInfo(logName);
         TableInfo candInfo = tableInfo(candName);
         TableInfo curInfo = tableInfo(curName);
-        return new ScratchSet(suffix, rawName, logName, candName, curName,
-                raw, log, cand, cur, rawInfo, logInfo, candInfo, curInfo, cpDir);
+        TableInfo quarInfo = tableInfo(quarName);
+        return new ScratchSet(suffix, rawName, logName, candName, curName, quarName,
+                raw, log, cand, cur, quar, rawInfo, logInfo, candInfo, curInfo, quarInfo, cpDir);
     }
 
     private static TableInfo tableInfo(String name) throws Exception {
@@ -1031,14 +1037,17 @@ class CandleGraphReplayIntegrationTest {
             String logName,
             String candName,
             String curName,
+            String quarName,
             Table raw,
             Table log,
             Table cand,
             Table cur,
+            Table quar,
             TableInfo rawInfo,
             TableInfo logInfo,
             TableInfo candInfo,
             TableInfo curInfo,
+            TableInfo quarInfo,
             Path checkpointDir) {}
 
     /** Candle row identity = (instrument_token, window_start). */

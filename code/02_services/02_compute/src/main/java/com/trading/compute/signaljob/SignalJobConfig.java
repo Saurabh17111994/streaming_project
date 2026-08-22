@@ -56,6 +56,7 @@ public record SignalJobConfig(
         String database,
         String rawTable,
         String candleTable,
+        String quarantineTable,
         String rawSchemaVersion,
         String algorithmVersion,
         String configurationVersion,
@@ -129,6 +130,7 @@ public record SignalJobConfig(
                 env.getOrDefault("FLUSS_DATABASE", "default"),
                 env.getOrDefault("RAW_TABLE", "raw_table_1"),
                 env.getOrDefault("CANDLE_TABLE", "feature_candles_15s"),
+                env.getOrDefault("QUARANTINE_TABLE", "ingestion_quarantine"),
                 env.getOrDefault("RAW_SCHEMA_VERSION", PlatformConfig.RAW_TABLE_1_SCHEMA_VERSION),
                 requireCanonicalVersion(env, "ALGORITHM_VERSION",
                         CandleTableSchema.CANONICAL_ALGORITHM_VERSION),
@@ -215,6 +217,12 @@ public record SignalJobConfig(
      * replay is forbidden (it re-emits the whole backlog, balloons the dedup
      * state past the pinned checkpoint contract, and appends duplicate candle
      * rows to the immutable LOG — observed 2026-08-10).
+     *
+     * <p>T7 strict gate (G1 Safety): the missing-mode path MUST fail with
+     * explicit code {@code F005} — no silent offset-0 replay. Every
+     * validation branch is fail-closed; the missing-mode message carries
+     * {@code [F005]} so operators and tests can assert the gate without
+     * string-fragile substring checks on generic text.
      */
     private static StartupMode validateStartupMode(Map<String, String> env) {
         String path = env.get("STATE_RECOVERY_PATH");
@@ -225,7 +233,7 @@ public record SignalJobConfig(
             String trimmed = path.trim();
             if (trimmed.isEmpty()) {
                 throw new IllegalStateException(
-                        "Config STATE_RECOVERY_PATH is present but blank — a restore path must be a real path "
+                        "[F005] Config STATE_RECOVERY_PATH is present but blank — a restore path must be a real path "
                                 + "(CANDLE-KV-REPLAY-001 A3.3)");
             }
             hasPath = true;
@@ -239,12 +247,12 @@ public record SignalJobConfig(
             String trimmed = replayRaw.trim();
             if (trimmed.isEmpty()) {
                 throw new IllegalStateException(
-                        "Config ALLOW_FULL_REPLAY is present but blank — use 'true' or 'false' "
+                        "[F005] Config ALLOW_FULL_REPLAY is present but blank — use 'true' or 'false' "
                                 + "(CANDLE-KV-REPLAY-001 A3.3)");
             }
             if (!trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false")) {
                 throw new IllegalStateException(
-                        "Config ALLOW_FULL_REPLAY must be 'true' or 'false' (case-insensitive), got '"
+                        "[F005] Config ALLOW_FULL_REPLAY must be 'true' or 'false' (case-insensitive), got '"
                                 + trimmed + "' — no unsafe default may be substituted (CANDLE-KV-REPLAY-001 A3.3)");
             }
             replay = Boolean.parseBoolean(trimmed);
@@ -252,12 +260,12 @@ public record SignalJobConfig(
 
         if (hasPath && replay) {
             throw new IllegalStateException(
-                    "Config STATE_RECOVERY_PATH and ALLOW_FULL_REPLAY=true are both set — a restore and a "
+                    "[F005] Config STATE_RECOVERY_PATH and ALLOW_FULL_REPLAY=true are both set — a restore and a "
                             + "full replay cannot be combined (CANDLE-KV-REPLAY-001 A3.3); unset one of them");
         }
         if (!hasPath && !replay) {
             throw new IllegalStateException(
-                    "Missing startup mode: set STATE_RECOVERY_PATH (restore) or ALLOW_FULL_REPLAY=true "
+                    "[F005] Missing startup mode: set STATE_RECOVERY_PATH (restore) or ALLOW_FULL_REPLAY=true "
                             + "(explicit full replay) — a silent offset-0 replay is forbidden "
                             + "(CANDLE-KV-REPLAY-001 A3.3)");
         }
@@ -316,7 +324,7 @@ public record SignalJobConfig(
      * the delay (bounded retry only, never unbounded).
      */
     private static int restartMaxAttempts(Map<String, String> env) {
-        if ("production".equals(deploymentEnv(env))) {
+        if (isProduction(env)) {
             return requirePinnedInt(env, "RESTART_MAX_ATTEMPTS",
                     PlatformConfig.RESTART_MAX_ATTEMPTS);
         }
@@ -329,7 +337,7 @@ public record SignalJobConfig(
      * {@link PlatformConfig#RESTART_DELAY_MS} and required explicit.
      */
     private static long restartDelayMs(Map<String, String> env) {
-        if ("production".equals(deploymentEnv(env))) {
+        if (isProduction(env)) {
             return requirePinnedLong(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
         }
         return longValue(env, "RESTART_DELAY_MS", PlatformConfig.RESTART_DELAY_MS);
@@ -384,28 +392,50 @@ public record SignalJobConfig(
     }
 
     /**
-     * Deployment environment (tracker 14 P4.1). Defaults to {@code dev} — the
-     * fail-closed direction is toward dev-local, never silently toward
+     * Deployment environment (tracker 14 P4.1 / G4 T9). Defaults to {@code dev} —
+     * the fail-closed direction is toward dev-local, never silently toward
      * production: a production launch must set {@code DEPLOYMENT_ENV=production}
-     * explicitly, which then enforces the RocksDB backend and durable S3
-     * checkpoint/savepoint URIs (P4.2). The default keeps the live dev run
-     * (HashMap state, local checkpoints) restart-compatible.
+     * explicitly (alias {@code PROFILE=prod} accepted, also normalizes
+     * {@code PROFILE=prod} → {@code production} and case-insensitive), which
+     * then enforces the RocksDB backend and durable encrypted S3
+     * checkpoint/savepoint URIs (P4.2 / T9). The default keeps the live dev run
+     * (HashMap state, local checkpoints on the flink-checkpoints volume,
+     * {@code file:///checkpoints}) restart-compatible.
+     *
+     * <p>G4 Durability T9: production requires {@code CHECKPOINT_DIR=s3://} or
+     * {@code s3a://} with bucket encryption at rest (AES256 via R2/S3 bucket
+     * policy); a missing or local path in production fails fast with an
+     * actionable message so a mis-configured swarm deploy never silently loses
+     * checkpoints on container loss.
      */
     private static String deploymentEnv(Map<String, String> env) {
         String raw = env.get("DEPLOYMENT_ENV");
+        if (raw == null) {
+            raw = env.get("PROFILE");
+        }
         if (raw == null) {
             return "dev";
         }
         String trimmed = raw.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalStateException("Config DEPLOYMENT_ENV is present but blank — "
-                    + "use 'dev' or 'production'");
+                    + "use 'dev' or 'production' (PROFILE=prod accepted as alias)");
         }
-        if (!"dev".equals(trimmed) && !"production".equals(trimmed)) {
-            throw new IllegalStateException("Config DEPLOYMENT_ENV must be 'dev' or 'production', "
-                    + "got '" + trimmed + "' — no unsafe default may be substituted");
+        String normalized = trimmed.toLowerCase();
+        if ("prod".equals(normalized)) {
+            normalized = "production";
         }
-        return trimmed;
+        if (!"dev".equals(normalized) && !"production".equals(normalized)) {
+            throw new IllegalStateException("Config DEPLOYMENT_ENV must be 'dev' or 'production' "
+                    + "(PROFILE=prod accepted as alias), got '" + trimmed
+                    + "' — no unsafe default may be substituted");
+        }
+        return normalized;
+    }
+
+    /** Returns true when the deployment environment resolves to production (via DEPLOYMENT_ENV or PROFILE alias). */
+    private static boolean isProduction(Map<String, String> env) {
+        return "production".equals(deploymentEnv(env));
     }
 
     /**
@@ -420,8 +450,7 @@ public record SignalJobConfig(
         String envRaw = env.get("STATE_BACKEND");
         String backend;
         if (envRaw == null) {
-            backend = "production".equals(env.get("DEPLOYMENT_ENV") == null
-                    ? "dev" : env.get("DEPLOYMENT_ENV").trim()) ? "rocksdb" : "hashmap";
+            backend = isProduction(env) ? "rocksdb" : "hashmap";
         } else {
             backend = envRaw.trim();
         }
@@ -444,41 +473,59 @@ public record SignalJobConfig(
     }
 
     /**
-     * Durable checkpoint URI (tracker 14 P4.2). Production REQUIRES an S3
-     * object-store URI ({@code s3://} or {@code s3a://}) — local {@code /tmp}
-     * checkpoints silently evaporate on container loss and must never be
-     * substituted in production. Dev accepts any path (the live run uses
-     * {@code /tmp/signaljob-checkpoints}).
+     * Durable checkpoint URI (tracker 14 P4.2 / G4 T9). Production REQUIRES an
+     * encrypted S3 object-store URI ({@code s3://} or {@code s3a://}) — local
+     * {@code file://}, {@code /tmp}, or {@code /checkpoints} checkpoints
+     * silently evaporate on container loss and must never be substituted in
+     * production. Dev accepts any path and keeps the local volume default
+     * ({@code file:///checkpoints} on the {@code flink-checkpoints} Docker
+     * volume, or {@code /tmp/signaljob-checkpoints} for host runs). The
+     * production bucket must have at-rest encryption (R2 default AES256 or S3
+     * SSE-S3/SSE-KMS) — enforced via bucket policy and wired in Flink as
+     * {@code fs.s3a.server-side-encryption-algorithm=AES256} in
+     * {@code SignalJob.applyRuntimeOptions}.
+     *
+     * <p>G4 Durability: prod without s3:// fails fast with an actionable message;
+     * dev never requires S3 — the local volume is intentional for single-host
+     * development.
      */
     private static String checkpointDir(Map<String, String> env) {
         String raw = env.get("CHECKPOINT_DIR");
         String dir = raw == null ? null : raw.trim();
-        if ("production".equals(deploymentEnv(env))) {
+        if (isProduction(env)) {
             if (dir == null || dir.isEmpty()) {
-                throw new IllegalStateException("Missing required config CHECKPOINT_DIR in "
-                        + "DEPLOYMENT_ENV=production — durable S3 checkpoint storage is mandatory "
-                        + "(tracker 14 P4.2)");
+                throw new IllegalStateException("Config CHECKPOINT_DIR is required in "
+                        + "DEPLOYMENT_ENV=production (or PROFILE=prod) — durable encrypted S3 checkpoint storage is mandatory "
+                        + "(s3:// or s3a://, bucket encryption AES256) (tracker 14 P4.2 / G4 T9). "
+                        + "Set CHECKPOINT_DIR=s3://<bucket>/flink-checkpoints (or s3a://) and provide "
+                        + "S3_ENDPOINT (or R2_ENDPOINT) + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY via Swarm secrets/env. "
+                        + "Dev keeps local volume without S3: file:///checkpoints via the flink-checkpoints volume — no action needed for dev.");
             }
             if (!dir.startsWith("s3://") && !dir.startsWith("s3a://")) {
-                throw new IllegalStateException("Config CHECKPOINT_DIR must be an S3 object-store "
-                        + "URI (s3:// or s3a://) in DEPLOYMENT_ENV=production, got '" + dir
-                        + "' — a local path silently substitutes /tmp (tracker 14 P4.2)");
+                throw new IllegalStateException("Config CHECKPOINT_DIR must be an encrypted S3 object-store "
+                        + "URI (s3:// or s3a://) in DEPLOYMENT_ENV=production (or PROFILE=prod), got '" + dir
+                        + "' — a local path (file://, /tmp, /checkpoints) silently loses checkpoints on container/VM loss "
+                        + "and violates G4 durability (encrypted S3 mandatory). "
+                        + "Use s3://<bucket>/flink-checkpoints with bucket encryption AES256 (R2 default, S3 SSE-S3) "
+                        + "(tracker 14 P4.2 / T9). Dev may use file:///checkpoints (local volume) — no S3 required.");
             }
         }
         return dir;
     }
 
     /**
-     * Durable savepoint URI (tracker 14 P4.2), kept separate from the
-     * checkpoint directory. Production requires S3 when set; dev accepts any.
+     * Durable savepoint URI (tracker 14 P4.2 / G4 T9), kept separate from the
+     * checkpoint directory. Production requires encrypted S3 when set; dev accepts any.
+     * Alias PROFILE=prod is honored alongside DEPLOYMENT_ENV=production.
      */
     private static String savepointDir(Map<String, String> env) {
         String raw = env.get("SAVEPOINT_DIR");
         String dir = raw == null ? null : raw.trim();
-        if ("production".equals(deploymentEnv(env)) && dir != null && !dir.isEmpty()
+        if (isProduction(env) && dir != null && !dir.isEmpty()
                 && !dir.startsWith("s3://") && !dir.startsWith("s3a://")) {
-            throw new IllegalStateException("Config SAVEPOINT_DIR must be an S3 object-store URI "
-                    + "in DEPLOYMENT_ENV=production, got '" + dir + "' (tracker 14 P4.2)");
+            throw new IllegalStateException("Config SAVEPOINT_DIR must be an encrypted S3 object-store URI "
+                    + "(s3:// or s3a://) in DEPLOYMENT_ENV=production (or PROFILE=prod), got '" + dir
+                    + "' (tracker 14 P4.2 / G4 T9) — a local savepoint path violates encrypted S3 durability");
         }
         return dir;
     }
@@ -564,9 +611,16 @@ public record SignalJobConfig(
         return Boolean.parseBoolean(trimmed);
     }
 
-    /** Explicit task parallelism (tracker 14 P4.1). */
+    /**
+     * Explicit task parallelism — streaming-3000 T3 G3 Compute (p=8).
+     * Default 8 matches the 16 Fluss buckets → 8 TaskSlots mapping (2:1,
+     * hash(token) rebalance) and the 3000-instrument envelope (1024 tokens
+     * per slot at design cap). Single-host dev keeps 8 slots (taskmanager
+     * .numberOfTaskSlots=8) so p=8 runs without slot starvation; tests may
+     * override with explicit PARALLELISM=1/2/4 for focused unit coverage.
+     */
     private static int parallelism(Map<String, String> env) {
-        int value = intValue(env, "PARALLELISM", 1);
+        int value = intValue(env, "PARALLELISM", 8);
         if (value <= 0) {
             throw new IllegalStateException("Config PARALLELISM must be > 0, got " + value);
         }
@@ -595,29 +649,55 @@ public record SignalJobConfig(
         if (endpoint == null || endpoint.trim().isEmpty()) {
             endpoint = env.get("R2_ENDPOINT");
         }
-        String access = env.get("AWS_ACCESS_KEY_ID");
-        String secret = env.get("AWS_SECRET_ACCESS_KEY");
+        // G4 T9 / Swarm secret support: credentials may arrive via *_FILE (Docker Swarm secrets
+        // mounted at /run/secrets/...). Prefer direct env, fall back to file content.
+        String access = resolveSecret(env, "AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID_FILE");
+        String secret = resolveSecret(env, "AWS_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY_FILE");
         if (endpoint == null || endpoint.trim().isEmpty()
                 || access == null || access.trim().isEmpty()
                 || secret == null || secret.trim().isEmpty()) {
             throw new IllegalStateException("Config CHECKPOINT_DIR/SAVEPOINT_DIR uses an S3 "
                     + "object-store URI but S3_ENDPOINT (or R2_ENDPOINT), AWS_ACCESS_KEY_ID and "
                     + "AWS_SECRET_ACCESS_KEY are not all set — checkpoint credentials must come "
-                    + "from secret injection, never committed files (tracker 14 P4.2)");
+                    + "from secret injection, never committed files (tracker 14 P4.2). "
+                    + "Provide via env or Swarm secrets (AWS_ACCESS_KEY_ID_FILE=/run/secrets/aws_access_key_id, AWS_SECRET_ACCESS_KEY_FILE=/run/secrets/aws_secret_access_key)");
         }
         return endpoint.trim();
     }
 
+    /**
+     * Resolve a secret value: direct env first, then {@code *_FILE} mounted secret file
+     * (Swarm secrets model). Returns trimmed content or null.
+     */
+    private static String resolveSecret(Map<String, String> env, String directKey, String fileKey) {
+        String direct = env.get(directKey);
+        if (direct != null && !direct.trim().isEmpty()) {
+            return direct.trim();
+        }
+        String filePath = env.get(fileKey);
+        if (filePath != null && !filePath.trim().isEmpty()) {
+            try {
+                String content = java.nio.file.Files.readString(java.nio.file.Path.of(filePath.trim())).trim();
+                if (!content.isEmpty()) {
+                    return content;
+                }
+            } catch (java.io.IOException e) {
+                // Fall through to null — caller will emit actionable missing-credential message
+            }
+        }
+        return null;
+    }
+
     /** Static access key, present only when {@link #s3Endpoint(Map)} returned non-null. */
     private static String s3AccessKey(Map<String, String> env) {
-        String raw = env.get("AWS_ACCESS_KEY_ID");
-        return raw == null ? null : raw.trim();
+        String resolved = resolveSecret(env, "AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID_FILE");
+        return resolved;
     }
 
     /** Static secret key, present only when {@link #s3Endpoint(Map)} returned non-null. */
     private static String s3SecretKey(Map<String, String> env) {
-        String raw = env.get("AWS_SECRET_ACCESS_KEY");
-        return raw == null ? null : raw.trim();
+        String resolved = resolveSecret(env, "AWS_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY_FILE");
+        return resolved;
     }
 
     /**

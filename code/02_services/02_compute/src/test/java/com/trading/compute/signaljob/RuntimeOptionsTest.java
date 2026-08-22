@@ -68,6 +68,11 @@ class RuntimeOptionsTest {
                 "RocksDBOptions.LOCAL_DIRECTORIES (state.backend.rocksdb.localdir) is the "
                         + "live 2.2.1 key — the old local_directories key is dead");
         assertEquals("false", flinkConfig.getString("state.backend.rocksdb.memory.managed", null));
+        assertNull(flinkConfig.getString("taskmanager.memory.managed.fraction", null),
+                "managed fraction only when managed=true; false path uses RocksDB heap");
+        // Streaming-3000 T3 G3: network 256m default (even when not overridden) for p8
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.max", null));
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.min", null));
         // Tracker 14 box 906 (2026-08-12): native-memory gauges exported via
         // the per-property boolean keys (RocksDBProperty kebab names,
         // jar-verified against flink-statebackend-rocksdb-2.2.1).
@@ -111,6 +116,9 @@ class RuntimeOptionsTest {
                 "state.backend.rocksdb.metrics.cur-size-all-mem-tables", null));
         assertNull(flinkConfig.getString(
                 "state.backend.rocksdb.metrics.estimate-table-readers-mem", null));
+        // Streaming-3000 T3 G3: network 256m is backend-agnostic (shuffles/credit for p8)
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.max", null));
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.min", null));
     }
 
     @Test
@@ -173,6 +181,12 @@ class RuntimeOptionsTest {
         assertTrue(flinkConfig.get(CheckpointingOptions.INCREMENTAL_CHECKPOINTS));
         assertNull(flinkConfig.getString("state.backend.rocksdb.memory.managed", null),
                 "managed memory defaults true in RocksDB — key only set when disabled");
+        assertEquals("0.4", flinkConfig.getString("taskmanager.memory.managed.fraction", null),
+                "Streaming-3000 T3 G3: managed 0.4 fraction for RocksDB (TM 3g → ~1.2 GB)");
+        assertEquals("/tmp/flink-rocksdb", flinkConfig.getString("state.backend.rocksdb.localdir", null),
+                "T3 SSD dirs default when not overridden");
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.max", null));
+        assertEquals("256m", flinkConfig.getString("taskmanager.memory.network.min", null));
         assertNull(flinkConfig.getString("taskmanager.memory.managed.size", null),
                 "no TASK_MANAGER_MEMORY_MANAGED_SIZE → local-execution fallback stays "
                         + "the deployment's flink-conf.yaml default, never a hard-coded value");
