@@ -248,8 +248,8 @@ class B4SignalIntentE2ETest {
 
     private static void requirePlatformTables(Connection conn) throws Exception {
         String[] names = {"raw_table_1", "feature_candles_15s", "forming_bar",
-                "Signal_Candidates", "Signal_Candidates_current", "Trade_Decisions",
-                "Execution_Intent"};
+                "Signal_Candidates", "Signal_Candidates_current", "Position_State",
+                "Trade_Decisions", "Execution_Intent"};
         for (String n : names) {
             conn.getTable(TablePath.of("default", n));
         }

@@ -41,7 +41,10 @@ public final class FlussProjectionWriter implements ProjectionWriter {
         if (e.correlation() != null) upsert("Order_Correlation", correlationRow(e));
     }
     @Override public void writePosition(NormalizedExecutionEvent e) throws Exception {
-        if (e.position() != null) upsert("Positions", positionRow(e));
+        if (e.position() != null) {
+            upsert("Positions", positionRow(e));
+            upsert("Position_State", positionStateRow(e));
+        }
     }
 
     private void append(String name, GenericRow row) throws Exception {
@@ -89,6 +92,26 @@ public final class FlussProjectionWriter implements ProjectionWriter {
         return GenericRow.of(bs(c.instructionId()), bs(c.executionAttemptId()), bs(e.accountScopeId()),
                 bs(c.clientOrderRef()), bs(c.brokerOrderId()), bs(c.tradeContextId()), bs(c.positionId()),
                 bs(c.verificationState()), bs(c.verificationEvidence()), c.correlatedTs(), bs("2"));
+    }
+
+    /**
+     * Position_State handshake (Option B, max-one-active): per-instrument
+     * lifecycle signal for Flink's ActiveSignalFeedbackFunction. Sole writer is
+     * this gateway (Nautilus feedback). Maps Positions state to OPEN/CLOSED:
+     * FLAT/CLOSED -> CLOSED, else OPEN. No TTL — Flink clears only on CLOSED.
+     */
+    private GenericRow positionStateRow(NormalizedExecutionEvent e) {
+        var p = e.position();
+        String state = p.state() == null ? "OPEN" : p.state().trim().toUpperCase();
+        boolean isClosed = "CLOSED".equals(state) || "FLAT".equals(state);
+        String status = isClosed ? "CLOSED" : "OPEN";
+        Long closedTs = isClosed ? p.lastUpdateTs() : null;
+        String closedReason = isClosed ? state : null;
+        // GenericRow.of with boxed Long nulls needs explicit null handling: use Object[] path
+        // For Fluss GenericRow, null boxed is okay — upsert handles nullable BIGINT.
+        return GenericRow.of(p.instrumentToken(),
+                bs(status), bs(p.positionId()), p.lastUpdateTs(),
+                closedTs, bs(closedReason), bs("1"));
     }
     private static String nullable(NormalizedExecutionEvent.Correlation c, boolean instruction) {
         return c == null ? null : c.instructionId();

@@ -60,6 +60,7 @@ class FlussProjectionWriterIntegrationTest {
             createFills(admin, db);
             createOrderLifecycle(admin, db);
             createPositions(admin, db);
+            createPositionState(admin, db);
             createOrderCorrelation(admin, db);
             createExecutionAudit(admin, db);
 
@@ -79,6 +80,10 @@ class FlussProjectionWriterIntegrationTest {
                     new String[]{"pos-proj-1"}, 0)).isEqualTo("pos-proj-1");
             assertThat(readString(conn, db, "Positions",
                     new String[]{"pos-proj-1"}, 12)).isEqualTo("pb-proj-1");
+            // Position_State handshake (Option B): per-instrument OPEN/CLOSED
+            // Positions OPEN -> Position_State status OPEN, PK instrument_token.
+            assertThat(readPositionStateLong(conn, db, 12345L, 0)).isEqualTo(12345L);
+            assertThat(readPositionStateString(conn, db, 12345L, 1)).isEqualTo("OPEN");
             // Order_Lifecycle PK = (account_scope_id, broker_order_id); col 1 = broker_order_id.
             assertThat(readString(conn, db, "Order_Lifecycle",
                     new String[]{ACCOUNT, "broker-proj-1"}, 1)).isEqualTo("broker-proj-1");
@@ -128,6 +133,36 @@ class FlussProjectionWriterIntegrationTest {
         InternalRow r = lookuper.lookup(GenericRow.of((Object[]) key))
                 .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).getSingletonRow();
         if (r == null) return null;
+        return r.isNullAt(colIndex) ? null : r.getString(colIndex).toString();
+    }
+
+    private static Long readLong(Connection conn, String db, String tableName,
+                                 String[] pk, int colIndex) throws Exception {
+        Table t = conn.getTable(TablePath.of(db, tableName));
+        BinaryString[] key = new BinaryString[pk.length];
+        for (int i = 0; i < pk.length; i++) key[i] = BinaryString.fromString(pk[i]);
+        Lookuper lookuper = t.newLookup().createLookuper();
+        InternalRow r = lookuper.lookup(GenericRow.of((Object[]) key))
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).getSingletonRow();
+        if (r == null || r.isNullAt(colIndex)) return null;
+        return r.getLong(colIndex);
+    }
+
+    private static Long readPositionStateLong(Connection conn, String db, long token, int colIndex) throws Exception {
+        Table t = conn.getTable(TablePath.of(db, "Position_State"));
+        Lookuper lookuper = t.newLookup().createLookuper();
+        InternalRow r = lookuper.lookup(GenericRow.of(token))
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).getSingletonRow();
+        if (r == null || r.isNullAt(colIndex)) return null;
+        return r.getLong(colIndex);
+    }
+
+    private static String readPositionStateString(Connection conn, String db, long token, int colIndex) throws Exception {
+        Table t = conn.getTable(TablePath.of(db, "Position_State"));
+        Lookuper lookuper = t.newLookup().createLookuper();
+        InternalRow r = lookuper.lookup(GenericRow.of(token))
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).getSingletonRow();
+        if (r == null || r.isNullAt(colIndex)) return null;
         return r.getString(colIndex).toString();
     }
 
@@ -229,6 +264,22 @@ class FlussProjectionWriterIntegrationTest {
                 .build();
         admin.createTable(TablePath.of(db, "Positions"),
                 TableDescriptor.builder().schema(s).distributedBy(8, "position_id").build(), false)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private static void createPositionState(Admin admin, String db) throws Exception {
+        Schema s = Schema.newBuilder()
+                .column("instrument_token", DataTypes.BIGINT())
+                .column("status", DataTypes.STRING())
+                .column("position_id", DataTypes.STRING())
+                .column("updated_ts", DataTypes.BIGINT())
+                .column("closed_ts", DataTypes.BIGINT())
+                .column("closed_reason", DataTypes.STRING())
+                .column("schema_version", DataTypes.STRING())
+                .primaryKey("instrument_token")
+                .build();
+        admin.createTable(TablePath.of(db, "Position_State"),
+                TableDescriptor.builder().schema(s).distributedBy(16, "instrument_token").build(), false)
                 .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 

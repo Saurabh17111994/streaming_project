@@ -63,6 +63,7 @@ public final class TableContractValidator {
             "REQ-EXE-004, EXECUTION-INTENT-SCHEMA-001";
     private static final String DEDUP_CONTRACT = "DEC-038, DEDUP-SCHEMA-001";
     private static final String FORMING_BAR_CONTRACT = "DEC-038, FORMING-BAR-SCHEMA-001";
+    private static final String POSITION_STATE_CONTRACT = "Option-B, POSITION-STATE-SCHEMA-001";
 
     private TableContractValidator() {}
 
@@ -171,6 +172,25 @@ public final class TableContractValidator {
                 FORMING_BAR_CONTRACT);
         validateRouting(info, FormingBarTableColumns.NAMES[FormingBarTableColumns.INSTRUMENT_TOKEN],
                 16, FORMING_BAR_CONTRACT);
+    }
+
+    /**
+     * Position_State KV (Option B, 2026-08-18): PK exactly [instrument_token],
+     * instrument_token routing, exact 7-column v1 schema. The handshake table:
+     * Execution Gateway / Nautilus UPSERTS OPEN on fill and CLOSED on exit;
+     * Signal job reads the changelog and clears its per-instrument ACTIVE
+     * block only on CLOSED (or ADMIN_CLEAR). No TTL — survives restarts.
+     */
+    public static void validatePositionStateKvTable(TableInfo info) {
+        requireExactPrimaryKey(info,
+                List.of(PositionStateTableColumns.NAMES[PositionStateTableColumns.INSTRUMENT_TOKEN]),
+                POSITION_STATE_CONTRACT);
+        validateSchema(info, Arrays.asList(PositionStateTableColumns.NAMES),
+                PositionStateTableColumns.TYPE_ROOTS, "7-column v1 position_state",
+                POSITION_STATE_CONTRACT);
+        validateRouting(info,
+                PositionStateTableColumns.NAMES[PositionStateTableColumns.INSTRUMENT_TOKEN],
+                16, POSITION_STATE_CONTRACT);
     }
 
     /** Signal current-state KV: PK exactly [instrument_token], instrument_token routing, exact 22-col schema. */

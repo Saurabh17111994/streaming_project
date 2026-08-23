@@ -392,9 +392,35 @@ public final class SignalJob {
         // Both candidate producers feed the SAME dual-sink (candle rule +
         // forming-bar rule). The canonical filter admits the pinned forming-
         // bar rule id into the KV current-state; the LOG keeps everything.
+        // Active-signal indefinite + CLOSED handshake (max-one-active, Option B
+        // strict, 2026-08-18): if instrument already ACTIVE, drop new candidate
+        // — wait till Position_State(status=CLOSED or ADMIN_CLEAR) from
+        // Nautilus/Execution Gateway. No TTL — block survives restarts
+        // (checkpointed ValueState) and is cleared only on explicit CLOSED.
+        // Stuck ACTIVE never auto-frees — needs CLOSED or admin clear.
         DataStream<RowData> allSignals = signals.union(formingSignals);
 
-        allSignals
+        FlussSource<RowData> positionStateSource = FlussSource.<RowData>builder()
+                .setBootstrapServers(config.bootstrapServers())
+                .setDatabase(config.database())
+                .setTable(config.positionStateTable())
+                .setStartingOffsets(OffsetsInitializer.full())
+                .setDeserializationSchema(new RowDataDeserializationSchema())
+                .build();
+        DataStream<RowData> positionStates = env.fromSource(
+                        positionStateSource, WatermarkStrategy.noWatermarks(), "position-state")
+                .uid("position-state");
+
+        DataStream<RowData> filteredSignals = allSignals
+                .connect(positionStates)
+                .keyBy(
+                        row -> row.getLong(SignalCandidatesTableColumns.INSTRUMENT_TOKEN),
+                        row -> row.getLong(PositionStateTableColumns.INSTRUMENT_TOKEN))
+                .process(new ActiveSignalFeedbackFunction(config))
+                .name("active-signal-feedback")
+                .uid("active-signal-feedback");
+
+        filteredSignals
                 .sinkTo(FlussSink.<RowData>builder()
                                 .setBootstrapServers(config.bootstrapServers())
                                 .setDatabase(config.database())
@@ -407,7 +433,7 @@ public final class SignalJob {
                 .name("signal-candidates-sink")
                 .uid("signal-candidates-sink");
 
-        allSignals
+        filteredSignals
                 .filter(new CanonicalSignalFilterFunction())
                 .name("canonical-signal-filter")
                 .uid("canonical-signal-filter")
@@ -428,7 +454,7 @@ public final class SignalJob {
         // call a broker, gateway, or Arrow service. The gateway remains the
         // authoritative duplicate/quarantine boundary in T2.
         if (config.executionIntentEnabled()) {
-            allSignals
+            filteredSignals
                     .flatMap(new ExecutionIntentProducerFunction(config))
                     .returns(ExecutionIntentTableColumns.ROW_TYPE_INFO)
                     .name("execution-intent-producer")
@@ -667,6 +693,15 @@ public final class SignalJob {
                             config.database(), config.formingBarTable()))
                     .getTableInfo();
             TableContractValidator.validateFormingBarKvTable(formingBar);
+            // Position_State handshake (Option B, 2026-08-18): Signal job reads
+            // the changelog of this KV table (PK instrument_token, 7 cols, 16
+            // buckets) and clears its per-instrument ACTIVE block only on
+            // CLOSED — fail closed on drift, never degrade to TTL.
+            org.apache.fluss.metadata.TableInfo positionState = conn
+                    .getTable(org.apache.fluss.metadata.TablePath.of(
+                            config.database(), config.positionStateTable()))
+                    .getTableInfo();
+            TableContractValidator.validatePositionStateKvTable(positionState);
             if (config.executionIntentEnabled()) {
                 org.apache.fluss.metadata.TableInfo executionIntent = conn
                         .getTable(org.apache.fluss.metadata.TablePath.of(
@@ -722,6 +757,11 @@ public final class SignalJob {
             LOG.info("signal-job: {}",
                     TableContractValidator.schemaReport(
                             formingBar, FormingBarTableColumns.COLUMN_NULLABLE_IN_DDL));
+            LOG.info("signal-job: position-state KV contract OK ({})",
+                    config.positionStateTable());
+            LOG.info("signal-job: {}",
+                    TableContractValidator.schemaReport(
+                            positionState, PositionStateTableColumns.COLUMN_NULLABLE_IN_DDL));
         } catch (TableContractValidator.ContractViolation e) {
             throw e; // contract drift: fail closed, do not build a degraded graph
         } catch (Exception e) {

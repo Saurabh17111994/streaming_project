@@ -364,6 +364,20 @@
       "writer_owner": "Action Capture",
       "retention_policy": "7d",
       "lake_policy": "off"
+    },
+    {
+      "table_name": "Position_State",
+      "ddl_path": "29_position_state.sql",
+      "ddl_sha256": "74da002f8d73ef0f42e18ef5419d5ed0f700b1b2631b5a444d7f423c8f2c9cfc",
+      "table_kind": "KV",
+      "primary_key": "instrument_token",
+      "bucket_key": null,
+      "compatibility_class": "UNKNOWN",
+      "validated_matrix": "VM-FLUSS-CONN-007",
+      "schema_version": "1",
+      "writer_owner": "Execution Gateway (Nautilus) (sole writer)",
+      "retention_policy": "7d",
+      "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     }
   ]
 }
