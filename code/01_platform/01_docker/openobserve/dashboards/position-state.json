@@ -1,0 +1,208 @@
+{
+  "version": 8,
+  "title": "Position State — Max-One-Active",
+  "description": "Strict indefinite max-one-active per instrument (Option B). Active gauge + dropped/passed/cleared rates + trading_alerts audit. Source: ActiveSignalFeedbackFunction + ComputeAlertLogs -> metrics (flink-metrics-otel -> otel-collector:4318) + trading_alerts. No TTL — CLOSED/ADMIN_CLEAR only.",
+  "folder_id": "default",
+  "tabs": [
+    {
+      "tabId": "position",
+      "name": "Position State",
+      "panels": [
+        {
+          "id": "31",
+          "type": "gauge",
+          "title": "Active positions — compute.signal.active.count (indefinite, no TTL)",
+          "description": "Best-effort per-subtask gauge inc on pass, dec on CLOSED/ADMIN_CLEAR. Exact count is Position_State lake WHERE status=OPEN. Stuck ACTIVE stays blocked forever until explicit CLOSED.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, avg(value) AS y FROM \"metrics\" WHERE metric_name LIKE '%compute_signal_active_count%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 48,
+            "h": 8,
+            "i": 31
+          }
+        },
+        {
+          "id": "32",
+          "type": "bar",
+          "title": "Dropped vs Passed — compute.signal.dropped.active_exists / compute.signal.passed",
+          "description": "Dropped = suppressed because ACTIVE exists (indefinite block, wait CLOSED). Passed = first signal for instrument that created ACTIVE. Rates per bucket.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%compute_signal_dropped_active_exists%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "dropped"
+              }
+            },
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%compute_signal_passed%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "passed"
+              }
+            }
+          ],
+          "layout": {
+            "x": 48,
+            "y": 0,
+            "w": 72,
+            "h": 8,
+            "i": 32
+          }
+        },
+        {
+          "id": "33",
+          "type": "bar",
+          "title": "Cleared — CLOSED / ADMIN_CLEAR (compute.signal.cleared.*)",
+          "description": "CLOSED = normal Nautilus feedback clearing ACTIVE. ADMIN_CLEAR = break-glass ops clear (also emits trading_alerts active-signal-admin-clear WARN).",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%compute_signal_cleared_closed%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "CLOSED"
+              }
+            },
+            {
+              "query": "SELECT histogram(_timestamp) AS x, count(*) AS y FROM \"metrics\" WHERE metric_name LIKE '%compute_signal_cleared_admin%' GROUP BY x",
+              "customQuery": true,
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "ADMIN_CLEAR"
+              }
+            }
+          ],
+          "layout": {
+            "x": 120,
+            "y": 0,
+            "w": 72,
+            "h": 8,
+            "i": 33
+          }
+        },
+        {
+          "id": "34",
+          "type": "table",
+          "title": "Trading alerts — active-signal-cleared / admin-clear (trading_alerts)",
+          "description": "Structured audit from ComputeAlertLogs.emitAlertLog() via OTLP -> trading_alerts. ADMIN_CLEAR is WARN. Correlate with gauge for stuck ACTIVE incidents.",
+          "config": {
+            "show_legends": true,
+            "legends_position": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT _timestamp, event, severity, body FROM \"trading_alerts\" WHERE event IN ('active-signal-cleared','active-signal-admin-clear') ORDER BY _timestamp DESC LIMIT 100",
+              "customQuery": true,
+              "fields": {
+                "stream": "trading_alerts",
+                "stream_type": "logs",
+                "x": [],
+                "y": [],
+                "z": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": ""
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 192,
+            "h": 10,
+            "i": 34
+          }
+        }
+      ]
+    }
+  ]
+}

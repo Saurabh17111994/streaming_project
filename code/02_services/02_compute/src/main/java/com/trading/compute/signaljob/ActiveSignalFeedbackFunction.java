@@ -1,5 +1,6 @@
 package com.trading.compute.signaljob;
 
+import com.trading.compute.telemetry.ComputeAlertLogs;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
@@ -43,6 +44,10 @@ public class ActiveSignalFeedbackFunction
     private transient Counter droppedCounter;
     private transient Counter passedCounter;
     private transient Counter clearedCounter;
+    // Best-effort per-subtask active count for OpenObserve gauge (inc on pass, dec on clear).
+    // Not checkpointed — drifts after restore until next clear/pass re-sync, but sufficient for dashboards.
+    // For exact, query Position_State lake where status=OPEN count.
+    private transient long activeCount;
 
     public ActiveSignalFeedbackFunction(SignalJobConfig config) {
         this.config = config;
@@ -54,6 +59,9 @@ public class ActiveSignalFeedbackFunction
         droppedCounter = getRuntimeContext().getMetricGroup().counter("compute.signal.dropped.active_exists");
         passedCounter = getRuntimeContext().getMetricGroup().counter("compute.signal.passed");
         clearedCounter = getRuntimeContext().getMetricGroup().counter("compute.signal.cleared.closed");
+        activeCount = 0L;
+        // OpenObserve gauge: flink_taskmanager_job_task_operator_compute_signal_active_count
+        getRuntimeContext().getMetricGroup().gauge("compute.signal.active.count", () -> activeCount);
     }
 
     @Override
@@ -70,7 +78,8 @@ public class ActiveSignalFeedbackFunction
         }
         activeIdState.update(candidateId);
         passedCounter.inc();
-        LOG.info("active-signal-feedback: passing {} for token {} — now ACTIVE", candidateId, token);
+        activeCount++;
+        LOG.info("active-signal-feedback: passing {} for token {} — now ACTIVE (activeCount={})", candidateId, token, activeCount);
         out.collect(candidate);
     }
 
@@ -87,12 +96,22 @@ public class ActiveSignalFeedbackFunction
                         status, token, activeId, status);
                 activeIdState.clear();
                 clearedCounter.inc();
+                if (activeCount > 0) activeCount--;
+                // Structured event for OpenObserve trading_alerts (queryable token/status)
+                ComputeAlertLogs.emitAlertLog(config.otelCollectorHost(), "INFO",
+                        "active-signal-cleared",
+                        "token=" + token + " status=" + status + " clearedActive=" + activeId + " activeCount=" + activeCount);
             } else {
                 LOG.info("active-signal-feedback: {} for token {} — no active to clear (idempotent)", status, token);
             }
             if (PositionStateTableColumns.STATUS_ADMIN_CLEAR.equals(status)) {
                 // ADMIN_CLEAR is an ops break-glass — same as CLOSED but distinct audit.
                 getRuntimeContext().getMetricGroup().counter("compute.signal.cleared.admin").inc();
+                if (activeId != null) {
+                    ComputeAlertLogs.emitAlertLog(config.otelCollectorHost(), "WARN",
+                            "active-signal-admin-clear",
+                            "token=" + token + " clearedActive=" + activeId + " activeCount=" + activeCount);
+                }
             }
         } else if (PositionStateTableColumns.STATUS_OPEN.equals(status)) {
             // OPEN is written by execution layer when it opens position.

@@ -469,6 +469,44 @@ or `MemoryUtil` `InaccessibleObjectException` (`--add-opens` missing); later `in
 
 **Runbook now:** keep the approved baseline (≥1y), preserve all evidence bundles sanitized (no secrets) with `t*-SHA256SUMS`, and keep the R2 bucket lock provisioning validated (`audit_r2.py validate` with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Do not expire source data while any EOD manifest is unverified/retryable/under reconciliation (EOD controller owns retention extension). If a future jurisdictional change requires longer retention, record a new approval ID in `versions.pin`/`evidence.json` and a superseding `CHG` with single-operator (Saurabh, DEC-044) review.
 
+## Position State — stuck ACTIVE (indefinite block) — RB-POS-001
+
+**Scope:** instrument_token (16 buckets, Fluss `Position_State` KV PK exactly `[instrument_token]`, `bucket.key=instrument_token`). **Severity:** Warning → Critical if trading blocked. **Owner:** Trading Ops + Execution Gateway owner (Nautilus). **Gate impact:** SignalJob suppresses next signal for that instrument forever until `Position_State.status=CLOSED` or `ADMIN_CLEAR` arrives (no TTL, `ValueState` survives restarts/checkpoints). Intentional stuck = liveness cost for correctness.
+
+**Preconditions:** `ActiveSignalFeedbackFunction` is live (`SignalJob` CoProcess: Input1 signals, Input2 `Position_State` changelog `OffsetsInitializer.full()`). `TableContractValidator` passed (PK/bucket/schema). `flink-metrics-otel` -> `otel-collector:4318/v1/metrics` -> `metrics` + `ComputeAlertLogs` -> `trading_alerts` healthy.
+
+**Signals and evidence queries:**
+- Dashboard `Position State — Max-One-Active` (4 panels): gauge `compute.signal.active.count` stuck high; bar `dropped` rate high + `passed` zero for instrument; `cleared` zero for 30m+; table `trading_alerts` shows no `active-signal-cleared` for that token.
+- SQL: `SELECT _timestamp, event, severity, body FROM "trading_alerts" WHERE event='active-signal-cleared' ORDER BY _timestamp DESC LIMIT 100` (normal CLOSED) and `WHERE event='active-signal-admin-clear'` (break-glass audit).
+- SQL: `SELECT histogram(_timestamp) AS x, count(*) AS y FROM "metrics" WHERE metric_name LIKE '%compute_signal_dropped_active_exists%' GROUP BY x` and `'%compute_signal_active_count%'`.
+- Alerts: `pos-state-high-active-count` (gauge >100 10m), `pos-state-high-dropped-rate` (>5/s 5m), `pos-state-admin-clear-break-glass` (realtime on `trading_alerts`).
+- Lake truth (exact): `SELECT instrument_token, status, position_id, updated_ts, closed_ts, closed_reason FROM Position_State WHERE status='OPEN'` — count is authority (gauge is best-effort per-subtask, drifts after restore).
+
+**Immediate containment:** no gate halt — this is per-instrument suppression by design. Do NOT flush Flink state or restart to clear (state is checkpointed and would restore). Confirm `SignalJob` checkpoints complete and no `Position_State` feedback lag (Fluss reader lag <5s).
+
+**Diagnostic sequence:**
+1. Confirm stuck token(s): correlate dropped log `active-signal-feedback: dropping … wait CLOSED` for `instrument_token` with gauge token detail (if top-20 sampler includes it, else lake query). Verify `Position_State` row for that token is `OPEN` or missing (no CLOSED yet) — if `CLOSED` exists but Flink still blocks, Fluss changelog subscription (`OffsetsInitializer.full()`) may be lagging; check Fluss TabletServer and Flink `numRecordsIn` for input2.
+2. Determine why CLOSED never arrived: Execution Gateway (Nautilus) → `Position_State` write path failed, Nautilus crash, or position truly still open (correct block). Check `execution-gateway` + `nautilus` logs for `Position_State` append errors and `Signal_Candidates` → `Execution_Intent` → Nautilus → fill/close path.
+3. If position is verifiably closed at broker but Nautilus failed to write `CLOSED`, treat as feedback-loss incident (reconcile `Positions`/`Order_Lifecycle` before any clear).
+4. If position is still open at broker, block is correct — no action, monitor `closed_ts`.
+
+**Reconciliation before clear:** verify `Positions` and broker order state for that `instrument_token` agree that no position is open; verify no duplicate close pending. Record ticket, approver (single-operator Saurabh, DEC-044), and evidence hash. **Never clear an actually-open position.**
+
+**Recovery (ADMIN_CLEAR break-glass):**
+1. Obtain approved ticket; this path requires explicit approval (audit trail in `trading_alerts`).
+2. Write exactly one row to `Position_State` with the instrument's key:
+   ```sql
+   INSERT INTO Position_State (instrument_token, status, position_id, updated_ts, closed_ts, closed_reason, schema_version)
+   VALUES (<instrument_token>, 'ADMIN_CLEAR', NULL, <now_ms>, <now_ms>, 'RB-POS-001 ticket=<id> reason=<text>', 'v1');
+   ```
+   Writer MUST be the Execution Gateway path (owner of the table); direct Fluss writes are break-glass only and must still be replicated to the lake (lake enabled, 5m Iceberg commit). `ADMIN_CLEAR` follows the same `STATUS_ADMIN_CLEAR` branch as `CLOSED` in the CoProcess and decrements the gauge.
+3. Wait for changelog delivery: Flink log `active-signal-feedback: ADMIN_CLEAR … clearing active` and metric `compute.signal.cleared.admin` + `trading_alerts` `WARN active-signal-admin-clear` within 30s (depends on Fluss commit + changelog poll). If not seen in 2m, check Fluss coordinator/TabletServer and Flink input2 lag.
+4. Verify next signal for that token can now pass: dashboard `passed` increments on next trigger; or force a test signal in dev.
+
+**Validation and closure:** gauge drops by 1 for that bucket; `Position_State` lake shows `ADMIN_CLEAR` with `closed_reason` ticket; `trading_alerts` contains exactly one `active-signal-admin-clear` with token/clearedActive/activeCount; no duplicate `CLOSED`/`ADMIN_CLEAR` rows for same token. Close ticket with: token, `instrument_token`, previous active candidate id, previous `OPEN` `updated_ts`, new `ADMIN_CLEAR` `closed_ts/reason`, and Flink checkpoint id after clear. Escalate if clear did not propagate — do NOT retry blindly; check checkpoint/Savepoint consistency.
+
+**Rollback/abort:** if post-clear verification shows the position was actually still open (broker reports open), immediately open a Critical incident, halt new signals for that scope if needed, and reconcile `Positions` — the clear cannot be undone except by waiting for the next natural `OPEN`→`CLOSED` cycle (the gauge will go ACTIVE again on next signal). `ADMIN_CLEAR` is idempotent per key (second `CLOSED`/`ADMIN_CLEAR` logs "no active to clear").
+
 ## References
 
 - Operational requirements: `../02_requirements/06-operational.md`
