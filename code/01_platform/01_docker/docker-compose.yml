@@ -192,6 +192,7 @@ services:
       # plugins/<fmt>/").
       - ./fluss-plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:ro
       - ./fluss-plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:ro
+      - ./fluss-plugins/iceberg/fluss-fs-hadoop-shaded-0.9-SNAPSHOT.jar:/opt/fluss/plugins/iceberg/fluss-fs-hadoop-shaded-0.9-SNAPSHOT.jar:ro
     environment:
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       FLUSS_COORDINATOR_HOST: fluss-coordinator
@@ -263,6 +264,7 @@ services:
       # P3.2 lake tiering — same S3A + hdfs plugin overlay as the coordinator.
       - ./fluss-plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-s3-0.9.1-incubating.jar:ro
       - ./fluss-plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:/opt/fluss/plugins/iceberg/fluss-fs-hdfs-0.9.1-incubating.jar:ro
+      - ./fluss-plugins/iceberg/fluss-fs-hadoop-shaded-0.9-SNAPSHOT.jar:/opt/fluss/plugins/iceberg/fluss-fs-hadoop-shaded-0.9-SNAPSHOT.jar:ro
     environment:
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
       FLUSS_COORDINATOR_HOST: fluss-coordinator
@@ -363,6 +365,7 @@ services:
     environment:
       ARROW_APP_ID: ${ARROW_APP_ID}
       ARROW_APP_SECRET: ${ARROW_APP_SECRET}
+      ARROW_TOKEN: ${ARROW_TOKEN:-}
       ARROW_USER_ID: ${ARROW_USER_ID}
       ARROW_PASSWORD: ${ARROW_PASSWORD}
       ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
@@ -388,6 +391,7 @@ services:
       # auto-shard path covers 3000 via N=3.
       ARROW_INSTRUMENT_MANIFESTS: ${ARROW_INSTRUMENT_MANIFESTS:-}
       FLUSS_BOOTSTRAP: fluss-coordinator:9123
+      ALLOW_RUNTIME_DDL: "true"
       # Single-manifest fallback — env-driven with default to the N=1 approved
       # 1024 CSV. Overridable via host env for 3000 single-CSV sharding.
       INSTRUMENT_MANIFEST_PATH: ${INSTRUMENT_MANIFEST_PATH:-/instruments/NSE_CM_EQUITY.csv}
