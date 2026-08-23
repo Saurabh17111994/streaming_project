@@ -1,5 +1,7 @@
 # Open Items — Implementation Plan (Signal job, post-CHG-023)
 
+> **⚠️ INTEGRATED 2026-08-23 — HISTORICAL MARKER.** This plan's Items 1–6 outcomes are now **absorbed into `04-signal-job.md` § Integrated open-items backlog (17-plan, 2026-08-17 → 2026-08-23)**. That section is the current truth — it carries the 6-item table with 2026-08-23 verdicts (1 DONE `SIG-FAIL-001`, 2 DONE R2 `s3://tradingticks-aug-2026`, 3 DONE-as-run but evidence-file GAP, 4 CLOSED-AS-COVERED 0% code, 5 CLOSED-AS-DEFERRED 0% + `duplicate_window` reopen, 6 DONE doc-drift) + per-item distillation + gap honesty, and preserves 17's execution order. This file is retained as the historical execution plan (ground rules, step checkboxes, and boundary Item G remain as written for audit traceability) but **no longer carries forward work**. Consult `04-signal-job.md` for the living state. Integration commit tracks with `CHG-024` and this integration (`docs-audit` + `stale` + `full_audit` verified green before commit).
+
 > **ROLE — WORKING PLAN (open-item backlog, 2026-08-17):** this file is the
 > single execution plan for every item the 04-signal-job audit (2026-08-17)
 > found still open, partially implemented, or unverified. It follows the
