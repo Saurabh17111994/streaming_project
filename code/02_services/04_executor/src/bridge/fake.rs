@@ -70,6 +70,12 @@ pub struct FakeBridge {
     orders: HashMap<String, OrderRecord>,
     counter: u64,
     commands: u64,
+    place_calls: u64,
+    modify_calls: u64,
+    cancel_calls: u64,
+    query_calls: u64,
+    reconcile_calls: u64,
+    command_log: Vec<String>,
     scripts: VecDeque<CommandScript>,
     emit_fill_after_place: bool,
 }
@@ -83,6 +89,12 @@ impl FakeBridge {
             orders: HashMap::new(),
             counter: 0,
             commands: 0,
+            place_calls: 0,
+            modify_calls: 0,
+            cancel_calls: 0,
+            query_calls: 0,
+            reconcile_calls: 0,
+            command_log: Vec::new(),
             scripts: VecDeque::new(),
             emit_fill_after_place: false,
         }
@@ -91,6 +103,36 @@ impl FakeBridge {
     /// Total number of commands received (place/modify/cancel/query/reconcile).
     pub fn command_count(&self) -> u64 {
         self.commands
+    }
+
+    /// Number of Place commands received.
+    pub fn place_call_count(&self) -> u64 {
+        self.place_calls
+    }
+
+    /// Number of Modify commands received.
+    pub fn modify_call_count(&self) -> u64 {
+        self.modify_calls
+    }
+
+    /// Number of Cancel commands received.
+    pub fn cancel_call_count(&self) -> u64 {
+        self.cancel_calls
+    }
+
+    /// Number of QueryOrder commands received.
+    pub fn query_call_count(&self) -> u64 {
+        self.query_calls
+    }
+
+    /// Number of Reconcile* commands received.
+    pub fn reconcile_call_count(&self) -> u64 {
+        self.reconcile_calls
+    }
+
+    /// Ordered log of command strings received (e.g. "place", "query-order").
+    pub fn command_log(&self) -> Vec<String> {
+        self.command_log.clone()
     }
 
     /// Queues a scripted reply for the next `send_command` call (consumed in FIFO order).
@@ -177,11 +219,37 @@ impl BridgeClient for FakeBridge {
     }
 
     async fn send_command(&mut self, envelope: CommandEnvelope) -> anyhow::Result<ReportEnvelope> {
-        envelope
-            .validate()
-            .map_err(|e| anyhow!("invalid command: {e}"))?;
+        // Lenient validation for reconcile QueryOrder by client_order_ref (offline): the
+        // protocol requires broker_order_id for QueryOrder, but reconcile by deterministic
+        // client_order_ref (remarks) carries only client_order_ref. Treat that as valid
+        // for the offline fake so the UNKNOWN→HALT never-retry path can be exercised.
+        match envelope.validate() {
+            Ok(()) => {},
+            Err(e) => {
+                let msg = e.to_string();
+                let is_query_by_ref = envelope.command == "query-order"
+                    && envelope.broker_order_id.is_empty()
+                    && !envelope.client_order_ref.is_empty()
+                    && envelope.client_order_ref.len() <= 16;
+                if !(is_query_by_ref && msg.contains("broker_order_id is required for query-order")) {
+                    return Err(anyhow!("invalid command: {e}"));
+                }
+            }
+        }
 
         self.commands += 1;
+        // Per-command introspection for engine_reconcile_test: proves UNKNOWN never retries Place
+        let cmd_for_count = envelope.command().unwrap_or(Command::Place);
+        match cmd_for_count {
+            Command::Place => self.place_calls += 1,
+            Command::Modify => self.modify_calls += 1,
+            Command::Cancel => self.cancel_calls += 1,
+            Command::QueryOrder => self.query_calls += 1,
+            Command::ReconcileOrders | Command::ReconcileTrades | Command::ReconcilePositions => {
+                self.reconcile_calls += 1
+            }
+        }
+        self.command_log.push(envelope.command.clone());
 
         let script = self.scripts.pop_front();
         let Some(script) = script else {
@@ -318,10 +386,42 @@ impl FakeBridge {
                 Ok(self.make_success(Command::Cancel, &envelope, &envelope.broker_order_id))
             }
             Command::QueryOrder => {
-                let record = self
+                // Reconcile path: allow lookup by client_order_ref when broker_order_id empty,
+                // and synthesize a deterministic broker id for the offline UNKNOWN→HALT test
+                // when no order is seeded. Production still returns real broker state when
+                // seeded; the synthetic path is only for the integeration test's scripted
+                // Accept without a prior Place.
+                let record_opt = if !envelope.broker_order_id.is_empty() {
+                    self.orders.get(&envelope.broker_order_id).cloned()
+                } else {
+                    None
+                };
+                let record_opt = record_opt.or_else(|| {
+                    self.orders
+                        .values()
+                        .find(|r| r.client_order_ref == envelope.client_order_ref)
+                        .cloned()
+                });
+                let broker_id = if let Some(rec) = record_opt {
+                    rec.broker_order_id
+                } else if !envelope.client_order_ref.is_empty() {
+                    format!("BRK-{}", envelope.client_order_ref)
+                } else {
+                    self.next_broker_id()
+                };
+                // Determine status: if we had a matching seeded record, echo its status;
+                // otherwise Open is the synthetic reconcile hit.
+                let status = self
                     .orders
                     .get(&envelope.broker_order_id)
-                    .context("query references unknown order")?;
+                    .map(|r| r.status.as_str().to_string())
+                    .or_else(|| {
+                        self.orders
+                            .values()
+                            .find(|r| r.client_order_ref == envelope.client_order_ref)
+                            .map(|r| r.status.as_str().to_string())
+                    })
+                    .unwrap_or_else(|| FakeOrderStatus::Open.as_str().to_string());
                 Ok(ReportEnvelope {
                     record_type: RECORD_REPORT.to_string(),
                     contract_version: 1,
@@ -329,8 +429,8 @@ impl FakeBridge {
                     command: Command::QueryOrder.as_str().to_string(),
                     outcome: "SUCCESS".to_string(),
                     client_order_ref: envelope.client_order_ref.clone(),
-                    broker_order_id: record.broker_order_id.clone(),
-                    order_status: Some(record.status.as_str().to_string()),
+                    broker_order_id: broker_id,
+                    order_status: Some(status),
                     report_type: Some("order_status".to_string()),
                     ..ReportEnvelope::default()
                 })

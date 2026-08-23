@@ -33,10 +33,21 @@ public final class ExecutionGatewayMain {
             IntentReader reader = IntentReader.open(config, outbound,
                     reason -> { readiness.fail(reason); LOG.error("execution intent halted: {}", reason); });
             reader.subscribeFromBeginning();
-            readiness.fluss(true, "Fluss tables opened");
-            readiness.protocol(true, "private protocol configured");
-            readiness.durableWrites(true, "projection ledger opened");
-            readiness.fluss(true, "Execution_Gate / Execution_Attempts stores opened (WP-3)");
+            if (config.executionEnabled()) {
+                readiness.fluss(true, "Fluss tables opened");
+                readiness.protocol(true, "private protocol configured");
+                readiness.durableWrites(true, "projection ledger opened");
+                readiness.fluss(true, "Execution_Gate / Execution_Attempts stores opened (WP-3)");
+            } else {
+                // Fail-closed HALTED default when execution is disabled: keep all readiness dimensions false
+                // so executionReady stays false, intents defer, and bridge remains disabled. Offline,
+                // no FLUSS_BOOTSTRAP / Arrow deps are required to evaluate this gate.
+                String disabledReason = "execution disabled via EXECUTION_ENABLED=false";
+                readiness.fluss(false, disabledReason);
+                readiness.protocol(false, disabledReason);
+                readiness.durableWrites(false, disabledReason);
+                LOG.warn("execution disabled via EXECUTION_ENABLED=false; gateway remains HALTED (fail-closed)");
+            }
             ObjectMapper mapper = new ObjectMapper();
             try (GatewayHttpServer server = new GatewayHttpServer(config, readiness,
                     payload -> {

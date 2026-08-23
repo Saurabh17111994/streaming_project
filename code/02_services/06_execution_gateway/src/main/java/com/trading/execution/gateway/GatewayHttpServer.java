@@ -98,6 +98,9 @@ public final class GatewayHttpServer implements AutoCloseable {
     }
     private void events(HttpExchange x) throws IOException {
         if (!"POST".equalsIgnoreCase(x.getRequestMethod())) { reply(x, 405, "method not allowed"); return; }
+        // Fail-closed: when execution is disabled the bridge is disabled and the gateway remains HALTED.
+        // Offline, no FLUSS_BOOTSTRAP / Arrow deps are required to evaluate this gate.
+        if (!config.executionEnabled()) { reply(x, 503, "execution disabled via EXECUTION_ENABLED"); return; }
         String body = new String(x.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         GatewayProtocol.Verification v = protocol.verify(body, config.protocolVersion(), System.currentTimeMillis());
         if (!v.accepted()) { readiness.protocol(false, v.reason()); reply(x, 401, v.reason()); return; }

@@ -66,6 +66,13 @@ public final class NautilusIntentClient implements IntentSink {
      * command is the one already persisted in the durable gate row.
      */
     @Override public Result forward(IntentRecord i) throws Exception {
+        // Fail-closed execution gate: when EXECUTION_ENABLED=false the gateway boots HALTED,
+        // intents defer, bridge disabled, and readiness stays not executionReady. Offline, no
+        // FLUSS_BOOTSTRAP / Arrow deps required - this check is evaluated before any durable lookup.
+        if (!config.executionEnabled()) {
+            readiness.protocol(false, "execution disabled via EXECUTION_ENABLED");
+            return Result.DEFERRED;
+        }
         ControlStateStore.Lookup gate = controls.lookup(config.gateTable(), config.executionPartitionId());
         if (gate.status() != ControlStateStore.Status.FOUND) {
             readiness.fluss(false, gate.detail());

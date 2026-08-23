@@ -98,6 +98,21 @@ public final class FlussGateStateStore implements GateStateStore, AutoCloseable 
         return res;
     }
 
+    @Override public FenceResult renew(String partitionId, String ownerInstanceId, long fenceToken, long leaseMs, long nowTs) {
+        FenceResult res = delegate.renew(partitionId, ownerInstanceId, fenceToken, leaseMs, nowTs);
+        if (!res.conflict()) persist(res.row());
+        return res;
+    }
+
+    @Override public GateRow revoke(String partitionId, String ownerInstanceId, long nowTs) {
+        GateRow before = delegate.read(partitionId);
+        GateRow res = delegate.revoke(partitionId, ownerInstanceId, nowTs);
+        if (res != null && res != before) {
+            persist(res);
+        }
+        return res;
+    }
+
     @Override public ApprovalResult approve(String partitionId, String principal, long epoch, String evidenceHash, long nowTs) {
         ApprovalResult res = delegate.approve(partitionId, principal, epoch, evidenceHash, nowTs);
         if (res.outcome() == ApprovalOutcome.APPLIED) persist(res.row());

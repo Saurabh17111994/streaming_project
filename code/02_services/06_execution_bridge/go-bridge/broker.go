@@ -172,15 +172,30 @@ func classifySDKError(err error) BrokerResult {
 	if matches := statusErrorPattern.FindStringSubmatch(message); len(matches) == 3 {
 		status, _ := strconv.Atoi(matches[1])
 		body := strings.TrimSpace(matches[2])
-		// Authentication, throttling, timeout, server, and transport-like
-		// responses are never treated as broker rejection: acceptance is unknown.
-		if status == http.StatusUnauthorized || status == http.StatusForbidden ||
-			status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500 {
-			return unknownResult(fmt.Errorf("arrow status %d", status))
+		// Pure classification per dossier (broker_classification.go). This keeps the
+		// HTTP-code table offline, without Arrow/Fluss, and ensures UNKNOWN is HALT.
+		outcome := ClassifyBrokerResponse(status, body)
+		switch outcome {
+		case OutcomeSuccess:
+			// Error path must never be treated as acceptance.
+			return unknownResult(errors.New("ambiguous Arrow response"))
+		case OutcomeRejected:
+			msg := documentedRejectionMessage(body)
+			if msg == "" {
+				return unknownResult(errors.New("ambiguous Arrow response"))
+			}
+			return rejectedResult(errors.New(msg))
+		default:
+			if status == http.StatusUnauthorized || status == http.StatusForbidden ||
+				status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500 {
+				return unknownResult(fmt.Errorf("arrow status %d", status))
+			}
+			return unknownResult(errors.New("ambiguous Arrow response"))
 		}
-		if status >= 400 && status < 500 && documentedRejectionMessage(body) != "" {
-			return rejectedResult(errors.New(documentedRejectionMessage(body)))
-		}
+	}
+	// No HTTP status envelope: transport failure, malformed error wrapper, or timeout.
+	if strings.Contains(strings.ToLower(message), "timeout") {
+		return unknownResult(fmt.Errorf("timeout: %s", message))
 	}
 	return unknownResult(errors.New("ambiguous Arrow response"))
 }

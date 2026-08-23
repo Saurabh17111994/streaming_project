@@ -26,7 +26,7 @@ class GatewayHttpServerTest {
         gates.init(new GateRow("p1","acct1",GateState.HALTED,0,"boot","h0",null,null,null,null,0L,null,null,null));
         GateRow pending = new GateRow("p1","acct1",GateState.APPROVAL_PENDING,1,"reconciled","h1",null,null,null,"owner1",1L,1000L, 900000L,null);
         gates.install(pending);
-        cfg = new GatewayConfig("localhost:9123","default","Execution_Intent","Execution_Gate","Execution_Attempts","Order_Correlation","Postback_Projection_Ledger","Safety_Halt_Requests","127.0.0.1",0,"http://127.0.0.1:9190/v1/intents","execution-gateway.v1","secret1234567890123456",Duration.ofMillis(2000),Duration.ofMillis(250),"acct1","p1");
+        cfg = new GatewayConfig("localhost:9123","default","Execution_Intent","Execution_Gate","Execution_Attempts","Order_Correlation","Postback_Projection_Ledger","Safety_Halt_Requests","127.0.0.1",0,"http://127.0.0.1:9190/v1/intents","execution-gateway.v1","secret1234567890123456",Duration.ofMillis(2000),Duration.ofMillis(250),"acct1","p1", false);
         server = new GatewayHttpServer(cfg,new GatewayReadiness(), n-> {}, gates);
         server.start();
         int port = serverPort(server);

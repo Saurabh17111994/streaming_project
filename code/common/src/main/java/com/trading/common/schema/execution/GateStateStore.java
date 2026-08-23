@@ -73,6 +73,37 @@ public interface GateStateStore {
     FenceResult acquire(String partitionId, String ownerInstanceId, long leaseMs, long nowTs);
 
     /**
+     * Renew the lease for the current holder without changing fenceToken.
+     * Extends leaseExpiresTs to nowTs+leaseMs only if holder and token match
+     * and lease is still live. Do NOT increment fenceToken.
+     * Returns conflict on mismatch, stale token, expired lease, or no live lease.
+     */
+    FenceResult renew(String partitionId, String ownerInstanceId, long fenceToken, long leaseMs, long nowTs);
+
+    /**
+     * Revoke (release) the fence, clearing owner, token, lease fields.
+     * Only the current holder may revoke; others are rejected (no mutation).
+     * HALT path uses {@link #halt} which clears unconditionally.
+     * Sets fenceToken to 0 and lease fields to null, records fenceLostTs.
+     */
+    GateRow revoke(String partitionId, String ownerInstanceId, long nowTs);
+
+    /** Convenience revoke using current time for fenceLostTs. */
+    default GateRow revoke(String partitionId, String ownerInstanceId) {
+        return revoke(partitionId, ownerInstanceId, System.currentTimeMillis());
+    }
+
+    /** Alias for revoke — explicit release naming. */
+    default GateRow release(String partitionId, String ownerInstanceId, long nowTs) {
+        return revoke(partitionId, ownerInstanceId, nowTs);
+    }
+
+    /** Alias for revoke using current time. */
+    default GateRow release(String partitionId, String ownerInstanceId) {
+        return revoke(partitionId, ownerInstanceId, System.currentTimeMillis());
+    }
+
+    /**
      * Register the single required approval for the exact
      * {@code (epoch, evidenceHash)} by the authorized operator (Saurabh). A
      * changed epoch invalidates pending approvals. (DEC-044 single-operator).
@@ -83,7 +114,8 @@ public interface GateStateStore {
     /**
      * Raise a safety halt: move the gate to HALTED and increment the epoch by
      * exactly one, from {@code expected}. Idempotent (already HALTED) halts
-     * record evidence without a second epoch increment.
+     * record evidence without a second epoch increment. HALTED default is
+     * fenced-off: halt clears the fence (owner null, fenceToken 0, lease null).
      */
     GateRow halt(String partitionId, GateRow expected, String reason, String evidenceHash, long nowTs);
 

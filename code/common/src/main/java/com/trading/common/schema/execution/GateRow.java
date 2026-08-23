@@ -92,4 +92,20 @@ public record GateRow(
                 approval1, approval2, approvedEvidenceHash, ownerInstanceId, fenceToken,
                 fenceAcquiredTs, leaseExpiresTs, lostTs);
     }
+
+    /** Copy that extends the lease for the current holder without changing fenceToken. */
+    public GateRow withRenewedLease(long nowTs, long leaseMs) {
+        return new GateRow(partitionId, accountScopeId, state, epoch, reason, evidenceHash,
+                approval1, approval2, approvedEvidenceHash, ownerInstanceId, fenceToken,
+                fenceAcquiredTs, nowTs + leaseMs, null);
+    }
+
+    /** Copy that clears the fence (owner, token, lease) and records revocation/loss at clearedTs. */
+    public GateRow withFenceCleared(long clearedTs) {
+        if (ownerInstanceId == null && fenceToken == 0L && fenceAcquiredTs == null && leaseExpiresTs == null) {
+            return this;
+        }
+        return new GateRow(partitionId, accountScopeId, state, epoch, reason, evidenceHash,
+                approval1, approval2, approvedEvidenceHash, null, 0L, null, null, clearedTs);
+    }
 }

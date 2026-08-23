@@ -21,7 +21,8 @@ public record GatewayConfig(
         Duration requestTimeout,
         Duration pollTimeout,
         String accountScopeId,
-        String executionPartitionId) {
+        String executionPartitionId,
+        boolean executionEnabled) {
 
     public GatewayConfig {
         require(flussBootstrap, "FLUSS_BOOTSTRAP");
@@ -43,6 +44,50 @@ public record GatewayConfig(
                 || pollTimeout.isZero() || pollTimeout.isNegative()) {
             throw new IllegalArgumentException("timeouts must be positive");
         }
+        // executionEnabled is a fail-closed flag; no extra validation beyond boolean parsing
+    }
+
+    /**
+     * Legacy 17-arg constructor for existing call sites (defaults executionEnabled to false).
+     * New code should use the canonical 18-arg record constructor with explicit executionEnabled.
+     */
+    public GatewayConfig(
+            String flussBootstrap,
+            String flussDatabase,
+            String intentTable,
+            String gateTable,
+            String attemptsTable,
+            String correlationTable,
+            String ledgerTable,
+            String haltTable,
+            String bindHost,
+            int bindPort,
+            String nautilusEndpoint,
+            String protocolVersion,
+            String sharedSecret,
+            Duration requestTimeout,
+            Duration pollTimeout,
+            String accountScopeId,
+            String executionPartitionId) {
+        this(
+                flussBootstrap,
+                flussDatabase,
+                intentTable,
+                gateTable,
+                attemptsTable,
+                correlationTable,
+                ledgerTable,
+                haltTable,
+                bindHost,
+                bindPort,
+                nautilusEndpoint,
+                protocolVersion,
+                sharedSecret,
+                requestTimeout,
+                pollTimeout,
+                accountScopeId,
+                executionPartitionId,
+                false);
     }
 
     public static GatewayConfig fromEnvironment() {
@@ -63,7 +108,8 @@ public record GatewayConfig(
                 Map.entry("GATEWAY_REQUEST_TIMEOUT_MS", env("GATEWAY_REQUEST_TIMEOUT_MS", "2000")),
                 Map.entry("GATEWAY_POLL_TIMEOUT_MS", env("GATEWAY_POLL_TIMEOUT_MS", "250")),
                 Map.entry("ACCOUNT_SCOPE_ID", requiredEnv("ACCOUNT_SCOPE_ID")),
-                Map.entry("EXECUTION_PARTITION_ID", requiredEnv("EXECUTION_PARTITION_ID"))));
+                Map.entry("EXECUTION_PARTITION_ID", requiredEnv("EXECUTION_PARTITION_ID")),
+                Map.entry("EXECUTION_ENABLED", env("EXECUTION_ENABLED", "false"))));
     }
 
     static GatewayConfig from(Map<String, String> e) {
@@ -74,8 +120,14 @@ public record GatewayConfig(
                 e.get("GATEWAY_BIND_HOST"), integer(e, "GATEWAY_BIND_PORT"), e.get("NAUTILUS_PRIVATE_ENDPOINT"),
                 e.get("GATEWAY_PROTOCOL_VERSION"),
                 e.get("GATEWAY_SHARED_SECRET"), Duration.ofMillis(longValue(e, "GATEWAY_REQUEST_TIMEOUT_MS")),
-                Duration.ofMillis(longValue(e, "GATEWAY_POLL_TIMEOUT_MS")), e.get("ACCOUNT_SCOPE_ID"),
-                e.get("EXECUTION_PARTITION_ID"));
+                Duration.ofMillis(longValue(e, "GATEWAY_POLL_TIMEOUT_MS")),
+                e.get("ACCOUNT_SCOPE_ID"), e.get("EXECUTION_PARTITION_ID"),
+                parseExecutionEnabled(e.get("EXECUTION_ENABLED")));
+    }
+
+    private static boolean parseExecutionEnabled(String value) {
+        if (value == null || value.isBlank()) return false;
+        return Boolean.parseBoolean(value.trim());
     }
 
     private static String env(String key, String fallback) {

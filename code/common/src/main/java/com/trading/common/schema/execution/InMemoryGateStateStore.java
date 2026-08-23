@@ -76,6 +76,57 @@ public final class InMemoryGateStateStore implements GateStateStore {
     }
 
     @Override
+    public synchronized FenceResult renew(String partitionId, String ownerInstanceId, long fenceToken,
+                                          long leaseMs, long nowTs) {
+        GateRow row = rows.get(partitionId);
+        if (row == null) {
+            return FenceResult.conflict(null, "no gate row for partition " + partitionId);
+        }
+        if (row.ownerInstanceId() == null) {
+            return FenceResult.conflict(row, "no live lease to renew");
+        }
+        if (!row.ownerInstanceId().equals(ownerInstanceId)) {
+            return FenceResult.conflict(row,
+                    "renew rejected: holder is " + row.ownerInstanceId() + " not " + ownerInstanceId);
+        }
+        if (row.fenceToken() != fenceToken) {
+            return FenceResult.conflict(row,
+                    "renew rejected: token mismatch expected " + row.fenceToken() + " got " + fenceToken);
+        }
+        if (row.fenceExpiredAt(nowTs)) {
+            return FenceResult.conflict(row,
+                    "renew rejected: lease expired at " + row.leaseExpiresTs() + " now " + nowTs);
+        }
+        // Success: extend lease without changing fenceToken (offline lease semantics)
+        GateRow next = row.withRenewedLease(nowTs, leaseMs);
+        rows.put(partitionId, next);
+        audit(new AuditRecord(partitionId, "FENCE_RENEW", nowTs, next.epoch(), next.fenceToken(),
+                "owner=" + ownerInstanceId + " leaseMs=" + leaseMs, null));
+        return FenceResult.acquired(next, ownerInstanceId, fenceToken);
+    }
+
+    @Override
+    public synchronized GateRow revoke(String partitionId, String ownerInstanceId, long nowTs) {
+        GateRow row = rows.get(partitionId);
+        if (row == null) {
+            return null;
+        }
+        if (row.ownerInstanceId() == null) {
+            // already cleared — idempotent
+            return row;
+        }
+        if (!row.ownerInstanceId().equals(ownerInstanceId)) {
+            // not holder — fail closed, no mutation (offline fencing constraint)
+            return row;
+        }
+        GateRow cleared = row.withFenceCleared(nowTs);
+        rows.put(partitionId, cleared);
+        audit(new AuditRecord(partitionId, "FENCE_REVOKE", nowTs, cleared.epoch(), cleared.fenceToken(),
+                "owner=" + ownerInstanceId, null));
+        return cleared;
+    }
+
+    @Override
     public synchronized ApprovalResult approve(String partitionId, String principal,
                                                long epoch, String evidenceHash, long nowTs) {
         GateRow row = rows.get(partitionId);
@@ -125,10 +176,17 @@ public final class InMemoryGateStateStore implements GateStateStore {
         GateRow next;
         if (row.state() == GateState.HALTED) {
             // Idempotent safe halt while already HALTED: record evidence, no second epoch increment.
-            next = row;
+            // HALTED default is fenced-off: ensure fence is cleared even on idempotent halt.
+            next = row.withFenceCleared(nowTs);
+            // if fence already cleared, withFenceCleared returns same instance — still audit
+            if (next == row) {
+                // no fence to clear, keep row as-is for idempotent epoch semantics
+                next = row;
+            }
         } else {
-            next = row.withState(GateState.HALTED, reason, evidenceHash == null
+            GateRow halted = row.withState(GateState.HALTED, reason, evidenceHash == null
                     ? row.evidenceHash() : evidenceHash, nowTs);
+            next = halted.withFenceCleared(nowTs);
         }
         rows.put(partitionId, next);
         audit(new AuditRecord(partitionId, "HALT", nowTs, next.epoch(), next.fenceToken(),
