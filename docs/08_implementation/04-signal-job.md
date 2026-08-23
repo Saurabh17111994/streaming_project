@@ -1196,6 +1196,10 @@ current (Design-B) topology per `18-signal-job-remaining-work-plan.md` Items C/D
 
 **Ground-rule carry-forward (from 17 §Execution order):** cheap-and-safe first (Item 6), valuable-and-self-contained next (Item 1), decision-gated whenever ready (Item 2), evidence-gathering opportunistically (Item 3), judgment calls last (Items 4/5) — the integrated table preserves that order; 17's `Execution order` section is now historical.
 
+### Cross-ref: ingestion hardening (15-plan) → 03-ingestion — absorbed
+
+> **CROSS-REF 2026-08-23:** `15-ingestion-test-hardening.md` (8 gaps G1–G8, 26 IDs M1–M5 + CHG-032/033 follow-ups, suite 236/0/8) is an **ingestion-side** plan. Its substance — gap resolutions, per-ID implementing classes, and milestone gates — is **absorbed in `03-ingestion.md` § Integrated test-hardening backlog (15-plan)**; `04-signal-job.md` does not own ingestion tests and holds no duplicate table. This note is the only 04 pointer to 15 (ingestion ↔ signal job contract boundary is `raw_table_1` / `feature_candles_15s`). The standalone 15 file is retained as a historical marker with an INTEGRATED banner; consult `03-ingestion.md` for current ingestion hardening truth.
+
 ### P11 — DEC-038 state ownership: dedup externalization
 
 **Status (2026-08-15):** COMPLETED — design/DDL/pins/code + live wiring landed

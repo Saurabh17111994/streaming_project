@@ -250,3 +250,39 @@ Implementation is complete only when the broker corpus and versions are pinned, 
 ## Verification mapping
 
 The required behavior above is verified by the canonical [Ingestion test design](./11-testing-and-release.md#ingestion): `ING-UNIT-001` to `ING-UNIT-005`, `ING-INT-001` to `ING-INT-003`, `BROKER-MD-001`, `ING-FAIL-001` to `ING-FAIL-003`, `ING-TCP-001`, and `ING-PERF-001` to `ING-PERF-002`.
+
+## Integrated test-hardening backlog (15-plan, 2026-08-15 → 2026-08-23) — absorbed
+
+> **INTEGRATED 2026-08-23:** `15-ingestion-test-hardening.md` was the 2026-08-15 hardening plan for 8 audit gaps (G1–G8) and 26 hardening IDs across M1–M5 plus CHG-032/CHG-033 follow-ups. Its **all 8 gaps are RESOLVED, all 26 IDs are landed, suite 236/0/8-skips** (was 193 at audit — now 236 via +43). The substance — gap resolutions, per-ID implementing classes, and milestone gates — is absorbed here. The standalone 15 file is retained as a historical marker with an INTEGRATED banner; consult this section for current truth. Out-of-scope explicitly deferred (3,000-instrument / 3-connection envelope via DEC-036/037, 90k peak retired) is **correctly not implemented** and does not block current 1,024 / 1 operation (see §Status). Go path note: docs say `go-bridge/` but code lives at `code/02_services/01_ingestion/go-bridge/` — functionally identical, no missing behavior. Changes tracked via `CHG-015`..`CHG-019` / `CHG-032` / `CHG-033`.
+
+| Gap | Severity | Resolution 2026-08-15 | Tests / evidence |
+| --- | --- | --- | --- |
+| G1 `TIME_JUMP` never emitted | High (code gap) | **RESOLVED M1** — `TimeJumpMonitor` + periodic clock re-measurement in `IngestionService` (`CLOCK_OFFSET_LIMIT_MS`) emits one `TIME_JUMP` row per episode | `discontinuity/TimeJumpMonitor.java` `TimeJumpMonitorTest` (8) + `DiscontinuityReasonMappingTest` `ING-FAIL-007` |
+| G2 halt latch never auto-resets | Medium | **RESOLVED M1** — pinned `halted until restart` (fail-closed, needs operator restart) | `write/AppendTracker.java` `AppendTrackerTest.haltLatchPersistsAfterDrain` `ING-FAIL-005` |
+| G3 `reconcile-compare.py` zero tests | High | **RESOLVED M2** — comparator suite 20 `unittest` cases, fail-closed on empty/trunc, chunked, `-1` sentinel | `code/01_platform/04_scripts/tests/test_reconcile_compare.py` `ING-TCP-002` |
+| G4 no fuzz on parse path | Medium | **RESOLVED M4** (landed early) — seeded `FuzzIngestionTest` 3 seeds × ~810 lines, no external lib | `FuzzIngestionTest.java` `ING-DQ-011` |
+| G5 Go bridge tests minimal | Medium | **RESOLVED M2+M5** — 13 exec-self FATAL (wrong pins `CONNECTIONS=2`, non-int, OOR) + missing `ARROW_APP_ID` + FATAL message text, env stripped | `code/02_services/01_ingestion/go-bridge/hft_policy_test.go` `ING-UNIT-018` + `ING-UNIT-020` (14 tests) |
+| G6 metrics secret scrubbing untested | Medium | **RESOLVED M5** — `OtlpMetricsEmitter` now scrubs `ARROW_TOKEN=`/`Bearer`/`raw_payload` from reason labels (found real leak) | `telemetry/OtlpMetricsEmitter.java` `OtlpMetricsEmitterTest.exportBodyScrubsSecrets` `ING-UNIT-021` |
+| G7 Java↔Go parity by convention | Medium | **RESOLVED M2** — 11-key table mirrored Java `ConfigParityTest` + Go `hft_policy_test.go` (`hftPin`/`hftRange` for `ARROW_HFT_LATENCY_MS`/`CONNECTIONS`) | `config/ConfigParityTest.java` + `hft_policy_test.go` `ING-UNIT-018` |
+| G8 READY gating no exhaustive test | Low | **RESOLVED M3** — `ReadinessGatingMatrixTest` walks 8 dimensions (liveness/Fluss/tracker/broker/sub/data/frame/clock) | `health/ReadinessGatingMatrixTest.java` `ING-INT-005` |
+
+| Milestone | IDs | Evidence / implementing classes | Suite after |
+| --- | --- | --- | --- |
+| **M1 Safety core** | `ING-FAIL-004` `005` `007` `ING-DQ-010` | `AppendTrackerTest.concurrentAcceptReleaseKeepsInvariants` (16×100k), `haltLatchPersists…`, `TimeJumpMonitor` + `IngestionNoSilentDropTest` (no-op-sink seam, `accepted+quarantined+rejected==lines`) | `204/0/8` |
+| **M2 Losslessness+config** | `ING-TCP-002` `ING-UNIT-018` `019` | comparator 20 + parity 11-key + `docs_audit.py` **C16** `c16_env_key_drift` `PASS` | `211/0/8` |
+| **M3 Failure-path E2E** | `ING-FAIL-008` `009` `010` `ING-INT-005` | `BridgeCrashLoopE2ETest` (scripted `2× BRIDGE_CRASH` `one restart`) `BridgeAuthFailureE2ETest` (exit 2 `auth_failure`) `ShutdownDeadlockTest` (`DRAIN_DEADLINE_SECONDS` 30 `UncertaintyJournal.Entry` R-260) `ReadinessGatingMatrixTest` | `224/0/8` |
+| **M4 Go bridge+data quality** | `ING-UNIT-014` `015` `016` `017` `ING-RES-002` `003` `004` `ING-TCP-003` | `StaleDataTradeGuardTest.exactBoundaryMatrix` (7-case) `PayloadHashValidatorTest` (R-186 `sha256("")`) `FingerprintBuilderTest.goldenHashFrozen` `aec03d3d…` + `dedupSemanticsPinned`, `subscription_plan_test.go` `reconnect_test.go` (`Backoff` `1,2,4,8,16,30…`) `ndjson_test.go` (`contract_version=2` + chunked 52×`<603B` `file==stderr`) | `231/0/8` |
+| **M5 Telemetry+ops** | `ING-UNIT-021` `022` `ING-INT-006` `ING-FAIL-006` `ING-UNIT-020` | `OtlpMetricsEmitterTest` (scrub+`labelCardinalityBounded` `{service.name…}` `hft-\d+`) `tests/test_docker_entrypoint.sh` (3 FATAL codes/messages, `shellcheck` clean, `run-monday-gates.sh` wired) `AppendTrackerTest.warningThrottledToOncePer30sWindow` (reflection, no sleep) | `234/0/8` |
+| **Follow-up CHG-032** | `ING-UNIT-023` | `BridgeShutdownRegressionTest.java` (16 threads? in-process `a980a33` drain `bridge loop ended` `single journal`, ING-DQ-010 seam, no Fluss/Go) | `235/0/8` |
+| **Follow-up CHG-033** | `ING-UNIT-024` | `BridgeShutdownHookTest.java` + `BridgeShutdownDriver.java` (spawned JVM `SIGTERM` exit `143` `main-thread join`, real hook layer) | **`236/0/8`** |
+
+**Per-gap distillation (what 03 now carries, not just where 15 pointed):**
+
+- **G1/G2 (code gaps):** `TIME_JUMP` is now a wired discontinuity (not an enum gap) and the halt latch semantic is pinned fail-closed — both have explicit `ING-FAIL-007/005` tests, not just docs.
+- **G3/G4 (tooling / fuzz):** `reconcile-compare.py` fails closed and `FuzzIngestionTest` covers malformed/oversized/NUL/1 MB lines — both default-run via no-op-sink seam (no Fluss needed).
+- **G5/G7 (Go):** Java `exactInt`/`intRange` ↔ Go `hftPin`/`hftRange` are tested by the same 11-key table; the `go-bridge/` vs `code/02_services/01_ingestion/go-bridge/` path difference is cosmetic (49 `*.go` files present, `91` grep hits).
+- **G6 (telemetry):** the OTLP scrub found and fixed a real `ARROW_TOKEN=` leak in the export body — `C15` group-writable still `PASS`.
+- **G8 (readiness):** `isReady()` false when any single dimension false — `10` cases incl. fail-closed clock.
+
+**Ground-rule carry-forward (from 15 §2):** pure JDK / Go stdlib / Python `unittest` only (no new deps), every `ING-*` ID now in `11-testing-and-release.md` §Ingestion and `docs_audit.py` C6 line `341/236/294` (prior `341/235…` etc — see 03 §Status); 3k envelope stays `ACCEPTED DEFERRAL` per §5.
+
