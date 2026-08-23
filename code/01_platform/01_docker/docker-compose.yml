@@ -117,6 +117,16 @@ x-flink-common: &flink-common
       # nested env.java.opts.all key in YamlParserUtils and aborts startup
       # (ClassCastException: String cannot be cast to Map).
     FLUSS_BOOTSTRAP: fluss-coordinator:9123
+    # Signal job Fluss wiring (prod wiring for Position_State handshake,
+    # Option B max-one-active): explicit bootstrap alias + database + Position_State
+    # table. SignalJobConfig accepts either FLUSS_BOOTSTRAP_SERVERS or the
+    # compose alias FLUSS_BOOTSTRAP; setting both keeps the contract explicit
+    # and lets `docker compose config` show the resolved value. POSITION_STATE_TABLE
+    # defaults to Position_State (DDL 29) — explicit here so Swarm parity is
+    # visible and DDL drift is caught at `docker compose config` time.
+    FLUSS_BOOTSTRAP_SERVERS: ${FLUSS_BOOTSTRAP_SERVERS:-${FLUSS_BOOTSTRAP:-fluss-coordinator:9123}}
+    FLUSS_DATABASE: ${FLUSS_DATABASE:-default}
+    POSITION_STATE_TABLE: ${POSITION_STATE_TABLE:-Position_State}
 
 networks:
   trading-net:

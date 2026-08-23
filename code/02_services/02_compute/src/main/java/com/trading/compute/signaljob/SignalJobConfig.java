@@ -127,7 +127,7 @@ public record SignalJobConfig(
                     + "EXECUTION_INTENT_ENABLED=true — no implicit execution contract version");
         }
         return new SignalJobConfig(
-                env.getOrDefault("FLUSS_BOOTSTRAP_SERVERS", "localhost:9123"),
+                bootstrapServers(env),
                 env.getOrDefault("FLUSS_DATABASE", "default"),
                 env.getOrDefault("RAW_TABLE", "raw_table_1"),
                 env.getOrDefault("CANDLE_TABLE", "feature_candles_15s"),
@@ -191,6 +191,20 @@ public record SignalJobConfig(
                 executionProductType(env, executionIntentEnabled),
                 executionTimeInForce(env, executionIntentEnabled),
                 executionIntentEnabled);
+    }
+
+    /**
+     * Bootstrap servers (prod wiring): accepts both {@code FLUSS_BOOTSTRAP_SERVERS}
+     * (SignalJob contract) and {@code FLUSS_BOOTSTRAP} (compose/stack Fluss alias).
+     * The alias lets the Flink job resolve {@code fluss-coordinator:9123} via compose
+     * DNS without requiring a duplicate env key; explicit SERVERS wins.
+     */
+    private static String bootstrapServers(Map<String, String> env) {
+        String v = env.get("FLUSS_BOOTSTRAP_SERVERS");
+        if (v != null && !v.isBlank()) return v.trim();
+        v = env.get("FLUSS_BOOTSTRAP");
+        if (v != null && !v.isBlank()) return v.trim();
+        return "localhost:9123";
     }
 
     /**

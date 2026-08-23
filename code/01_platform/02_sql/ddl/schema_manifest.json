@@ -373,9 +373,9 @@
       "primary_key": "instrument_token",
       "bucket_key": null,
       "compatibility_class": "UNKNOWN",
-      "validated_matrix": "VM-FLUSS-CONN-007",
+      "validated_matrix": "VM-FLUSS-SRV-005",
       "schema_version": "1",
-      "writer_owner": "Execution Gateway (Nautilus) (sole writer)",
+      "writer_owner": "Execution Gateway (Nautilus) \u2014 sole writer",
       "retention_policy": "7d",
       "lake_policy": "enabled=true,format=iceberg,freshness=5min,auto-compaction=true"
     }
