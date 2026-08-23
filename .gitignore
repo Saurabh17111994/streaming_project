@@ -66,3 +66,5 @@ docs/08_implementation/14-candle-log-kv-replay-safety_2.md
 
 *.factorypath
 .freebuff/
+CLAUDE.md
+TASK_CONTEXT.md
