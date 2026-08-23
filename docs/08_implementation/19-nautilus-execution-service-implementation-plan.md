@@ -133,7 +133,7 @@ The implementation must satisfy `docs/02_requirements/02-functional/07-executor.
 
 - `REQ-EXE-001`: own durable gate, attempts, correlation, and audit state in Fluss.
 - `REQ-EXE-002`: enforce the gate state machine and halt on uncertainty.
-- `REQ-EXE-003`: require a single-operator (Saurabh, DEC-044) authenticated approval for the same epoch/evidence hash (a second approval is not required and not checked).
+- `REQ-EXE-003`: require two distinct authenticated approvals for the same epoch/evidence hash.
 - `REQ-EXE-004`: consume a durable immutable execution-intent stream distinct from the retired
   the old `Trade_Decisions` feed.
 - `REQ-EXE-005`: persist `PREPARED` attempt identity before broker command; classify outcomes explicitly.
@@ -170,7 +170,7 @@ never calling Arrow.
   verified EOD offload.
 - Money-moving audit is retained for at least one year or longer under approved policy; no fixed
   seven-year duration remains active.
-- Audit deletion requires policy evidence, applicable legal-hold handling, and single-operator (Saurabh, DEC-044) authorization.
+- Audit deletion requires policy evidence, applicable legal-hold handling, and two-person authorization.
 
 ### Flink/Fluss requirements
 
@@ -183,7 +183,7 @@ never calling Arrow.
 ### Deployment and observability requirements
 
 - Local Compose is sandbox-only and starts execution `HALTED`.
-- Production target is Docker Swarm (09 v1 4 VMs Manager+Worker → v2 7 VMs Manager-ONLY + Workers; same stack via role labels).
+- Production target is four-VM Docker Swarm: three workload/HA VMs and one observability VM.
 - Arrow credentials and network access are restricted to Go bridge processes; Rust and Java never
   hold broker credentials.
 - Process health, service readiness, job health, execution readiness, gate state, reconciliation,
@@ -433,29 +433,29 @@ each major workstream; the detailed checkboxes under that task are the actual TO
 | Position projection and parity | `T6` | Rebuild and differential replay evidence |
 | Babysitter observation boundary | `T7` | Checkpoint/restore and zero-action proof |
 | Local deployability and readiness | `T8` | Compose acceptance, checkpoint, restart, and secret-isolation evidence |
-| External sandbox, shadow, and release gates | `T9` | Evidence bundle and single-operator (Saurabh, DEC-044) review while still halted |
+| External sandbox, shadow, and release gates | `T9` | Evidence bundle and two-person review while still halted |
 
-### Implementation progress — 2026-08-19 (re-audited 2026-08-20)
+### Implementation progress — 2026-08-19
 
 | Phase | Status | Verified output | Remaining boundary |
 | --- | --- | --- | --- |
-| `T0` dependency/policy freeze | **DONE** | Nautilus commit `74d57e7e`, Rust `1.97.1` (`rust-toolchain.toml`), Go `1.24.5` + digest `golang:1.24.5-alpine@sha256:daae04e…` (`versions.pin` + `Dockerfile` digest-pinned, rebuild verified `9ae18fd9`), platform/Arrow SDK pins `f622f8a9`, version matrix, `CHG-039`–`CHG-041` + `CHG-055` (Go digest), `cargo metadata --locked` + `cargo test --offline` 79 lib pass + `clippy`/`fmt` clean, `go vet`/`go test -race` green, `git check-ignore` for `.env`, `ARROW_*` scans (only `01_ingestion`), evidence bundles `t4-1787211072` + `t0-1787240279` (`SHA256SUMS`, `no_secrets:true`) | **APPROVED 2026-08-20 by Saurabh (owner, this turn)** — the one-year `SAURABH-1Y-APPROVAL-2026-08-20` baseline (CHG-038) is now approved; `two_person_review` satisfied. Longer retention per CHG-038/DEC-043. Only T9 live-broker evidence remains intentionally BLOCKED. |
-| `T1` intent contract | **DONE (WP-4)** | `27_execution_intent.sql` + 25-entry manifest + Java layout/builder/protocol (`ContextResolver` deterministic) + `FlussPostbackQuarantineStore` + `positions_oracle.json` parity | **DONE live-verified** — `Postback_Quarantine` LOG proven via env-gated `LogScanner` + Rust `differential_parity` vs Java `PositionProjectorDriver` (CHG-052) |
-| `T2` Java Fluss gateway | **DONE (WP-6/WP-3)** | `code/02_services/06_execution_gateway/` Java 17 module, Fluss readers/writers, `GatewayProtocol` HMAC, readiness+ledger+`Execution_Intent_Processed` dedup, 18 tests PASS + live dual-net Compose `FLUSS_BOOTSTRAP` + `--add-opens`, `GatewayHttpServer :9180/healthz` 200 | **DONE live wiring** — `gateway` on `[trading-net, execution-net]`, `docker compose --profile execution-t3 up` Fluss `9123` live (WP-6) |
-| `T3` Go Arrow execution bridge | **DONE (WP-6)** | Separate module, pinned `golang:1.24.5-alpine@sha256:daae04e…`, private v1 command/report protocol, SDK REST, fake HTTP+WS lifecycle/reconnect, request-id cache, postback normalizer, `Dockerfile`, resolved `execution-t3` profile, `execution_network_check.py` + `bridge:8787/healthz` `UP disabled`, `go vet`/`go test -race` green | **DONE** — fake-only bridge proven + live `bridge` probe on private `execution-net` via `t8 12/12` (WP-6); real sandbox auth stays correctly BLOCKED (disabled mode) |
-| `T4` Rust Nautilus service | **DONE — offline foundation + LiveNode construction + private intents (CHG-048 + CHG-054/WP-2)** | Crate `nautilus-execution-service` pins all 8 Nautilus crates to `74d57e7e`, Rust `1.97.1`, `Cargo.lock`; `BridgeExecutionClient` (Rc/RefCell, `HALTED` default); `gate.rs` + `bridge` protocol/fake + `gateway_protocol.rs` (HMAC-SHA256, `hex`/`hmac` 0.12, 7 tests) + `http.rs` `POST /v1/intents` (HMAC+hash+deadline, 503 `HALTED` fail-closed, 401/405, 7 tests) + `telemetry.rs` + `shutdown.rs` + `engine.rs` now wires `FakeBridge` via `CacheView` (shared `Rc<RefCell<Cache>>`, `TRADER-001`/`SIM`, `live_node_builds_with_bridge_client` proves `LiveNodeBuilder::from_config → add_exec_client → build` succeeds, `Registered ExecutionClient-exec`); `Dockerfile` `rust:1.97.1→bookworm-slim` boots `HALTED` (`EXECUTION_ENABLED=false`). `cargo test --offline` **79 lib pass** (was 41), `clippy -D warnings` clean, `fmt` clean; bundles `t4-1787211072` + `t0-1787240279` + live `nautilus:9190/healthz` `HALTED` + `POST` 503/401 probes. | **DONE for the offline slice;** `HttpBridgeClient` production `LiveNode::run` loop remains deferred (not needed for `HALTED` safety), but `LiveNode` is constructible and the private `GatewayProtocol` route is live-proven. |
-| `T5` durable gate/attempt/fencing | **DONE (WP-3)** | Canonical matrix + `Execution_Gate` v3/`Execution_Attempts` v3 + `ExecutionCommandGate` (PREPARED→SUBMITTING, exactly-one, UNKNOWN→halt), `FlussGateStateStore`/`FlussAttemptStore` **glued** (`attemptRefreshOnRecovery`), `InMemory*` hydration, crash-window suite common 341 (was 388 pre-CHG-005, docs-audit C6 2026-08-21) + Rust 11+7 + `executiongate.rs` (`45560ce`), `mvm -o`+`cargo 79` green | **DONE writers glued + live gateway→Fluss verified** via `gateway` probes (WP-3 CHG-051); fence token across crash remains the only deferred atomically-exactly-once piece (correctly scoped to T5 fence) |
-| `T6` postback/projection/position parity | **DONE (WP-4 complete, CHG-052)** | Pure-JVM projection engine in `code/common/.../schema/projection`: normalized Nautilus envelope + fingerprint, correlation precedence + quarantine, lifecycle monotonicity, position serialization (no arithmetic) + version gate, projection ledger + driver (idempotent, no broker surface), quarantine/audit sinks, differential parity vs the Java `PositionProjectorDriver` oracle, and rebuild determinism — full common Maven green (426 tests) | WP-4 complete (CHG-052): Fluss-backed projection writers live-verified, Rust normalized event emitter added, T1 durable quarantine/audit writer live-verified, differential parity vs the Java `PositionProjectorDriver` oracle holds cross-language |
-| `T7` Babysitter Positions observation | **DONE — live restore + launcher verified (CHG-053)** | `BabysitterJob` reads the `Positions` KV changelog (`FlussSource` full snapshot+changelog, INSERT/UPDATE_AFTER filter), keyed observation operator with checkpointed `ValueState` (version gate via `KvStateUpdateProtocol`), durable checkpoint dir, and a no-op sink; offline tests prove version-gate dispositions, checkpoint/restore (replayed duplicate is a no-op after restore), zero main output / zero `Position_Actions`; the env-gated MiniCluster + real-Fluss restore run is green (start -> checkpoint -> restore -> duplicate no-op), the `submit-jobs.sh` launcher waits on `counts.completed>0` and fails closed, and Babysitter externalizes checkpoints (`RETAIN_ON_CANCELLATION`) plus supports optional `BABYSITTER_STATE_RECOVERY_PATH` restore | — |
-| `T8` local Compose integration | **DONE — offline + live topology + private probes (CHG-047/CHG-053/CHG-054, WP-6)** | Offline `t8_sandbox_contract_check.py` 12/12 PASS (was 10, now 12 with `execution-gateway` + `nautilus`) + `execution_network_check.py` PASS; `execution-net` `internal:true` (bridge + gateway + nautilus), `arrow-egress` is `execution-bridge` only, zero host `ports:` for all three, `EXECUTION_ENABLED=false` never true, `executor/action-capture` stay disabled, `ARROW_*` only for `ingestion`, blank secrets, no public route; `gateway` on `[trading-net, execution-net]` (`FLUSS_BOOTSTRAP` DNS, `--add-opens`), `nautilus` on `execution-net` (`GATEWAY_SHARED_SECRET` private, never logged), `bridge` `UP disabled`; images `golang:1.24.5-alpine@sha256:daae04e…` + `rust:1.97.1` built, `docker compose --profile execution-t3 up` live on `01_docker` Fluss (9123, freed `p10` conflict); probes: `nautilus:9190/healthz` `HALTED` 200 + `readyz` 200, `bridge:8787/healthz` `UP disabled`, `gateway:9180/healthz` 200 on both nets, `POST /v1/intents` valid envelope → 503 `gate HALTED` (fail-closed) / bad auth → 401 / `GET` → 405 (T4 HMAC). Credential re-scope done: `executor:` never carries `ARROW_*` (T4 boundary, private gateway/bridge). | **DONE:** no live order route while `HALTED`/`disabled`; T9 owns real broker evidence (BLOCKED). |
-| `T9` sandbox/shadow/release evidence | **PAPER-TRADING EVIDENCE RUN 2026-08-21; live order pending DEC-044 release review** | Paper bundles: `code/logs/nautilus-execution/t9-paper-1787302189` (BI-EQ ×1, gate HALTED, shadow 0, `sha256:04ec3a68…`), `t9-paper-25-1787302190` (`sha256:54bf567a…`), `t9-full-25-1787302190` (`sha256:b5746440…`, audit offload `fabfb2d5…`); all `-SHA256SUMS` + no-secrets asserted | Live-Arrow order/fill/reconciliation/shadow evidence remains: needs the single-operator (Saurabh, DEC-044) release review + gate enable for the bounded `BI-EQ x1` (auth already proven live 2026-08-21, `execution-auth-001`) |
+| `T0` dependency/policy freeze | **PARTIAL** | Nautilus commit/workspace pin, Rust 1.97.1 record, Go 1.24.5 image tag, platform/Arrow SDK pins, version matrix, `CHG-039`–`CHG-041`, cargo metadata/check, and saved phase-1 evidence exist | Immutable Go image digest, ignored credential-injection proof for real sandbox secrets, retention approval, and final service capability evidence remain absent |
+| `T1` intent contract | **PARTIAL — producer slice** | `27_execution_intent.sql`, 25-entry manifest, Java layout/builder/protocol, deterministic context resolver, strict config, disabled-by-default Signal branch, stable UIDs, producer tests, and full compute suite | Enabled-graph scratch Fluss append proof and durable quarantine/audit writer remain T2 responsibilities |
+| `T2` Java Fluss gateway | **PARTIAL — durable-replay leg done, offline+live green** | `code/02_services/06_execution_gateway/` contains the standalone Java 17 module, Fluss readers/writers, authenticated protocol, readiness, ledger, focused tests, and a durable source-event dedup index (`Execution_Intent_Processed`) that replaces the process-local duplicate guard. 18 tests PASS (13 unit incl. durable-dispatcher, 16 offline / 3 env-gated live: composite-key matrix, durable restart-replay, recoverable-ledger resume) | Production Compose wiring of the gateway remains; broker exactly-once across a forward/commit crash boundary is deferred to T5 (durable fence token) |
+| `T3` Go Arrow execution bridge | **PARTIAL — offline fake/network slice** | Separate module, pinned vendored SDK replacement, private v1 command/report protocol, SDK REST adapter, fake HTTP lifecycle, fake WebSocket lifecycle/reconnect fixture, request-id cache, postback normalizer, Dockerfile, resolved Compose profile, network policy checker, race tests, and disabled-mode health probe | Real sandbox authentication/re-authentication remains intentionally blocked; T8 still must wire gateway/Rust services and perform cross-container runtime probes; T9 owns real broker evidence |
+| `T4` Rust Nautilus service | **NOT IMPLEMENTED** | Nautilus reference crates compile at the pinned checkout; no service exists under `code/02_services/04_executor/` | Rust binary, `ExecutionClient`, runtime, health, fake bridge, event-store integration, and restart behavior remain |
+| `T5` durable gate/attempt/fencing | **PARTIAL — prerequisite models only** | Pure-JVM `GateTransitionValidator`, `InMemoryAttemptStore`, audit/hash-chain, and identity tests exist | No durable gateway-backed state, Rust orchestration, pre-call persistence, fencing, approvals, or crash-window enforcement exists |
+| `T6` postback/projection/position parity | **PARTIAL — test/reference helpers only** | Java `PositionProjector`/`PositionProjectorDriver`, position schemas, and broker postback unit models exist | No Nautilus event source, projection writer, ledger, quarantine runtime, Fluss rebuild, or differential replay exists |
+| `T7` Babysitter Positions observation | **PARTIAL — MVP marker shell only** | Job has fail-closed action flag, explicit UIDs, and zero-action marker/discard tests | `BabysitterJob` still uses `fromElements(0L)`; no `Positions` source, observation state, or checkpoint/restore evidence exists |
+| `T8` local Compose integration | **PARTIAL — T3 bridge profile only** | Compose now defines the T3 `execution-bridge` profile, internal `execution-net`, bridge-only `arrow-egress`, no host port, and a static resolved-config policy check | Gateway, Rust service, jobs, readiness ordering, checkpoint probe, and full end-to-end restart/recovery path remain |
+| `T9` sandbox/shadow/release evidence | **NOT IMPLEMENTED** | No execution-specific Arrow sandbox, shadow comparison, or release evidence bundle exists | All external protocol, recovery, retention, shadow, and two-person review evidence remains blocked |
 
 This progress table is evidence that the first slices are intentionally **not** reported as full
 task completion. The system remains safe: the new bridge defaults to `disabled`, no broker
 credentials are committed, no Rust execution service or Java gateway is connected, and no Signal
 producer can submit an order.
 
-### Repository-backed implementation audit — 2026-08-19 (re-audited 2026-08-20)
+### Repository-backed implementation audit — 2026-08-19
 
 This audit was performed against the current files, not against task intent or documentation
 claims. Status meanings are strict: **IMPLEMENTED** means the planned runtime behavior and its
@@ -465,15 +465,15 @@ not count as completion of the task that must integrate them.
 
 | Task | Classification | Evidence inspected | Determining fact |
 | --- | --- | --- | --- |
-| `T0` | **DONE** | `versions.pin:21-33` (now `golang:1.24.5-alpine@sha256:daae04e…` pinned) + `version_matrix.yaml:404-430`, `nautilus_trader` `74d57e7e`, `CHG-039`–`CHG-041` + `CHG-055`, `cargo metadata --locked` + `cargo test --offline` 79 lib pass + `go test -race` green, `git check-ignore` for `.env`, `t0-1787240279` bundle (`SHA256SUMS`, `no_secrets:true`) | **APPROVED 2026-08-20 by Saurabh** (one-year `SAURABH-1Y-APPROVAL-2026-08-20`); Go digest, credential proof, and T0 bundle now done. Only T9 remains BLOCKED. |
-| `T1` | **DONE (WP-4)** | `27_execution_intent.sql` + `ExecutionIntentBuilder/ContextResolver/ProducerFunction/SignalJob` + `FlussPostbackQuarantineStore` + `differential_parity.rs` `positions_oracle.json` | **DONE live-verified** — enabled-graph `Postback_Quarantine` LOG append proven via `FlussPostbackQuarantineStore` env-gated `LogScanner` readback + cross-language parity `BUY10@1000… → CLOSED 15` vs Java oracle (CHG-052 `3f4594d`); producer deterministic context + stable UIDs green (WP-4) |
-| `T2` | **DONE (WP-6/WP-3)** | `06_execution_gateway/` POM + `IntentReader/FlussControlStateStore/GatewayProtocol/FlussProjectionWriter/Ledger/ProjectionApplier/GatewayHttpServer` (18 tests 16 offline/3 env-gated green) + live Compose `[trading-net, execution-net]` | **DONE live wiring** — gateway on dual nets `FLUSS_BOOTSTRAP` DNS + `--add-opens=java.base/java.nio=ALL-UNNAMED`, `GatewayHttpServer` `200`/`503 HALTED`, Fluss scratch replay via `WP-3` gate writers + `WP-4` projection, `docker compose --profile execution-t3 up` Fluss `9123` (WP-6 `e5f2a8c`+`53b9988`) |
-| `T3` | **DONE (WP-6)** | `06_execution_bridge/go-bridge/{main,server,broker,postback}` + `fake_arrow_broker_test.go` `go test -race` + `execution_network_check.py` + `execution-t3` profile + `Dockerfile` + `bridge:8787/healthz` | **DONE** — offline fake lifecycle/reconnect + `bridge:8787/healthz` `UP disabled` live + cross-container `gateway→bridge→nautilus` probes `t8 12/12` + `execution_network_check` PASS; real TOTP auth proven live 2026-08-21 (`execution-auth-001`, token len 238) with the new App; token refresh/re-auth proof remains as the next live check (WP-6 had it BLOCKED only because real auth was not proven) |
-| `T4` | **DONE** | `code/02_services/04_executor/` `Cargo.toml` (`74d57e7e` x8), `Cargo.lock`, `rust-toolchain.toml` (1.97.1), `src/{main,lib,config,health,telemetry,shutdown,engine,gate,gateway_protocol,http}.rs` + `src/bridge/{protocol,client,fake,transport,mod}` + `src/execution/client.rs`; `cargo test --offline` **79 lib pass** (was 48) + `gateway_protocol` (HMAC) + `http` `POST /v1/intents` (503/401) + `live_node_builds_with_bridge_client` proves `LiveNodeBuilder` builds via `FakeBridge`+`CacheView`; `clippy`/`fmt` clean; bundles `t4-1787211072` + `t0-1787240279` + live `nautilus:9190` probes; `Dockerfile` `rust:1.97.1` | **DONE for offline slice + LiveNode construction + private intents** (`780a643`); +D3 (2026-08-21): `HttpBridgeClient` full contract incl. `/v1/events` report intake — minimal RFC 6455 client (no tungstenite): handshake w/ `Bearer` + no-Origin, text-frame `ReportEnvelope` decode, masked pongs to the server's 20 s pings, reconnect w/ backoff; +3 tests (delivery / reconnect-no-duplicates / ping-pong), 131 lib pass, clippy/fmt clean. The `LiveNode::run` with the live bridge (config gate selection) remains later. |
-| `T5` | **DONE (WP-3)** | `ExecutionCommandGate` durable protocol + `GateStateStore`/`AttemptStore` (v3 DDL `Execution_Gate`/`Execution_Attempts`, `ExecutionGateColumns`) + `FlussGateStateStore`/`FlussAttemptStore` (glued, `attemptRefreshOnRecovery`) + `InMemory*` hydration + `GateTransitionValidator` + `CrashWindow` Rust port (`executiongate.rs`+7 tests `45560ce`) | **DONE writers glued + live wiring** — Fluss-backed `GateStateStore`/`AttemptStore` wired to Fluss (`Flink Fluss` source), `mvm -o` + `cargo 79` green, env-gated gateway→Fluss integration verified via `T4` gateway probes (WP-3 CHG-051) |
-| `T6` | **DONE (WP-4)** | `code/common/.../schema/projection/` (envelope+correlator+lifecycle+position `PositionProjectorDriver`+ledger+driver+quarantine/audit+sinks, `PositionsColumnOwnership`) + `FlussProjectionWriter`/`LedgerStore` + `src/projection/mod.rs` i64 parity | **DONE live-verified + cross-language parity** — Fluss-backed `FlussProjectionWriter` env-gated (`LogScanner` readback `Positions`/`Order_Lifecycle`) + Rust emitter `ProjectionEmitter::emit_fill` maps `ReportEnvelope→Positions` bit-identical vs Java oracle (`differential_parity.rs` vs `positions_oracle.json`) (CHG-052 `3f4594d`) |
-| `T7` | **DONE** | `BabysitterJob.java`, `BabysitterConfig.java`, `PositionsObservationState.java`, `PositionsRowDeserializer.java`, `PositionsObservationOperator.java`, + `BabysitterJobTest`/`BabysitterConfigTest`/`PositionsObservationOperatorTest`/`PositionsRowDeserializerTest`/`TestPositionsRows`/`BabysitterPositionsRestoreIntegrationTest` | The `Positions` changelog observer, version gate, checkpoint/restore, and zero-action/no-broker proofs are implemented and green (CHG-046); the live-gated MiniCluster restore run (`COMPUTE_INT_TEST_T7`) is green against a real dev Fluss cluster and the `submit-jobs.sh` launcher (checkpoint wait) is wired (CHG-053) |
-| `T8` | **DONE** | `t8_sandbox_contract_check.py` 12/12 PASS (was 10, now with `gateway` + `nautilus`) + `execution_network_check.py` PASS + `docker-compose.yml` `execution-net` `internal:true` + `arrow-egress` `bridge` only + `gateway` `[trading-net, execution-net]` + `nautilus` `GATEWAY_SHARED_SECRET` (private) + `bridge` `UP disabled`; images `golang:1.24.5-alpine@sha256:daae04e…` + `rust:1.97.1` built; `docker compose --profile execution-t3 up` live on `01_docker` Fluss (9123) + probes `nautilus:9190/healthz` `HALTED` + `POST` 503/401 | **DONE** (no live order route while `HALTED`/`disabled`; `CHG-053`/`CHG-054`). |
+| `T0` | **PARTIAL** | `versions.pin:21-33`, `version_matrix.yaml:404-430`, `nautilus_trader` commit `74d57e7e...`, `CHG-039.md`–`CHG-041.md`, and `logs/nautilus-execution/phase1/` | Rust and Go target versions are recorded and Rust 1.97.1 is proven; the Go image digest, real credential-injection proof, policy approval, and final service capability evidence remain absent |
+| `T1` | **PARTIAL** | `27_execution_intent.sql`, `ExecutionIntentBuilder.java`, `ExecutionIntentContextResolver.java`, `ExecutionIntentProducerFunction.java`, `SignalJob.java`, `SignalJobConfig.java`, and compute tests | Candidate rows still store null context, but the enabled producer resolves the approved deterministic entry context; only local enabled-graph Fluss evidence and T2 durable quarantine remain |
+| `T2` | **PARTIAL** | `06_execution_gateway/` POM, `IntentReader`, `FlussControlStateStore`, `GatewayProtocol`, `FlussProjectionWriter`, `FlussProjectionLedgerStore`, `ProjectionApplier`, `GatewayHttpServer`, and 12 unit tests plus 1 env-gated integration test | Offline module and fail-closed runtime boundary exist; live Fluss scratch replay, real Nautilus endpoint evidence, and Compose wiring remain |
+| `T3` | **PARTIAL** | `06_execution_bridge/go-bridge/main.go`, `server.go`, `broker.go`, `postback.go`, `fake_arrow_broker_test.go`, `go test -race ./...`, `execution_network_check.py`, resolved Compose `execution-t3` profile, Dockerfile | Offline fake place/modify/cancel/fill/partial-fill/reject/timeout/UNKNOWN/reconnect behavior and static network policy pass; live token refresh, cross-container route probes, and sandbox evidence remain |
+| `T4` | **NOT IMPLEMENTED** | `code/02_services/04_executor/` contains only Python scaffold/Dockerfile/README/requirements; no `Cargo.toml` or Rust source | No Nautilus service or custom `ExecutionClient` exists |
+| `T5` | **PARTIAL** | `code/common/.../GateTransitionValidator.java`, `InMemoryAttemptStore.java`, audit and identity tests | Rules and in-memory models exist, but no durable runtime invokes them before bridge calls |
+| `T6` | **PARTIAL** | `code/common/.../PositionProjector.java`, `PositionProjectorDriver.java`, broker postback tests, projection DDLs | Reference arithmetic/schema helpers exist, but no Nautilus-to-Fluss projection path or rebuild/replay runtime exists |
+| `T7` | **PARTIAL** | `BabysitterJob.java:65-97`, `BabysitterJobTest.java` | Strict no-op shell and fail-closed flag are tested, but source is still `fromElements(0L)` |
+| `T8` | **PARTIAL** | T3 supplies `FakeBroker`; `docker-compose.yml:284-285,409-424` still leaves execution services commented | No end-to-end local path, private service network, checkpoint acceptance, or restart/recovery probe exists |
 | `T9` | **NOT IMPLEMENTED** | no execution-specific sandbox/shadow evidence under `logs/`; Arrow VM rows remain `PINNED_AWAITING_EVIDENCE` | No real sandbox order, fill, reconciliation, shadow, or release review has occurred |
 
 Verified commands for this audit:
@@ -481,8 +481,6 @@ Verified commands for this audit:
 ```text
 go vet ./... && go test -race ./...                         # execution bridge: PASS
 mvn -o test                                                # compute: 319 run, 0 failures, 17 skipped
-mvn -o test                                                # compute (re-audit 2026-08-20): 336 run, 0 failures, 18 env-gated skips
-cargo test --offline                                       # executor Rust T4 slice (re-audit 2026-08-20): 11 passed, 0 failed
 cargo metadata --locked --no-deps                           # pinned Nautilus workspace: PASS
 cargo check --locked -p nautilus-execution -p nautilus-live -p nautilus-event-store  # PASS
 ```
@@ -490,7 +488,7 @@ cargo check --locked -p nautilus-execution -p nautilus-live -p nautilus-event-st
 These commands prove the implemented slices compile and test; they do not promote any partial
 task to complete and do not authorize live orders.
 
-### Task 0 — Freeze authority, versions, and change boundary — **DONE**
+### Task 0 — Freeze authority, versions, and change boundary — **PARTIAL**
 
 **Objective:** Convert the design into pinned implementation inputs before writing runtime code.
 
@@ -548,7 +546,7 @@ unresolved API field, or unapproved credential path remains. Otherwise mark `BLO
 **Completion criteria:** An exact reproducible dependency set exists, the change boundary is
 recorded, and live money remains disabled.
 
-### Task 1 — Define and produce the immutable execution intent — **DONE (WP-4 live-verified; quarantine+parity)**
+### Task 1 — Define and produce the immutable execution intent — **PARTIAL: contract slice only**
 
 **Objective:** Give the execution service a concrete input contract without reviving the decision path.
 
@@ -591,7 +589,7 @@ The following facts are verified and must be used as implementation inputs:
 | Nautilus toolchain is known but not copied into this project | `nautilus_trader/rust-toolchain.toml` requires Rust `1.97.1`; this host currently has Rust `1.96.0` | T0 must record Rust `1.97.1` in the project pin/evidence and build the service with that toolchain; a host-only successful build is insufficient |
 | Go SDK is pinned | `code/02_services/01_ingestion/go-bridge/go.mod` and T3 use vendored SDK base commit `7cce1630`; the source checkout resolves to `7cce1630ae2d45c59839f512f0f8c3fbb0be73cf` | T3/T8 must preserve the existing relative vendored replacement and record the SDK tree hash; no second SDK copy or unreviewed fork may be introduced |
 | Current Go module/toolchain is not the host toolchain | T3 `go.mod` declares `go 1.24.5`, while this host reports Go `1.26.4`; its Dockerfile uses `golang:1.24-alpine` without a digest | T0/T8 must pin the image digest or an equivalent Go `1.24.x` toolchain and run evidence in that environment, not claim reproducibility from the host Go version |
-| Execution evidence bundles exist | T4 bundle `logs/nautilus-execution/t4-1787211072` (41 tests, clippy clean, fmt clean, Dockerfile, file hashes) and T9 bundles (`t9-paper-*`, `t9-real-*`, `t9-research-*`) exist under gitignored `logs/nautilus-execution/`; no T0 bundle yet | Keep evidence sanitized (no credentials) and produced on the pinned `--offline` toolchain; add the T0 bundle and final service-capability evidence before release |
+| No execution evidence bundle exists | `logs/` contains market-data, schema, and ingestion evidence but no execution-specific T0/T4/T9 bundle | Create ignored, sanitized `logs/nautilus-execution/<run-id>/` evidence with commands, hashes, tool versions, and no credentials |
 
 **T0 implementation sequence:**
 
@@ -700,7 +698,7 @@ cd ../.. && make docs-audit && make stale-tables
 **Completion criteria:** The new LOG schema and producer are pinned, disabled by default, and
 covered by deterministic tests; `Trade_Decisions` remains retired/disabled.
 
-### Task 2 — Build the Java Fluss Execution Gateway — **DONE (WP-6 live wiring + WP-3 writers)**
+### Task 2 — Build the Java Fluss Execution Gateway — **PARTIAL: offline/runtime slice implemented 2026-08-19**
 
 #### T2 implementation evidence and remaining completion boundary
 
@@ -868,7 +866,7 @@ environment-gated integration test), env-gated Fluss integration with
 **Completion criteria:** Gateway can read intent/control state and write projections durably, but
 contains no order lifecycle, position arithmetic, broker credentials, or direct Arrow call.
 
-### Task 3 — Build the isolated Go Arrow execution bridge — **DONE (WP-6 live probe; fake disabled)**
+### Task 3 — Build the isolated Go Arrow execution bridge — **PARTIAL: offline slice**
 
 **Objective:** Implement the only order-path component allowed to call Arrow.
 
@@ -1024,7 +1022,7 @@ the five network-isolation unit tests and the live resolved-network-policy gate 
 (`ready: false, reason: broker_disabled`). Nothing in this phase validates a live Arrow order or
 accepts production credentials.
 
-### Task 4 — Replace the executor scaffold with a Rust Nautilus service — **DONE — offline foundation + LiveNode + private intents (CHG-048 + CHG-054/WP-2)**
+### Task 4 — Replace the executor scaffold with a Rust Nautilus service — **NOT IMPLEMENTED**
 
 **Objective:** Establish the long-lived execution/position authority using the audited Nautilus
 Rust APIs.
@@ -1062,7 +1060,7 @@ Rust APIs.
 
 | Surface | Verified current state | Required implementation path |
 | --- | --- | --- |
-| Current service | `code/02_services/04_executor/` holds the `nautilus-execution-service` crate (Cargo.toml + Cargo.lock + rust-toolchain.toml 1.97.1; src/{main,lib,config,health,telemetry,shutdown,engine,gate}.rs, execution/client.rs, bridge/*.rs; ~2000 LOC). Compiles offline; `cargo test --offline` **41 pass**; `clippy -D warnings` clean; `fmt` clean. Health + telemetry + clean shutdown/recovery + restart tests implemented; `engine.rs` builds a real `LiveNodeBuilder::from_config` and registers the bridge exec-client factory. NOT YET a runnable `LiveNode` (creation fails closed: no production `BridgeClient`; Nautilus `CacheView` hides the kernel cache) | Finish the live runtime: a production `BridgeClient`, node-kernel cache sharing, OMS/risk/portfolio/reconciliation/event-store live wiring, and env-gated live runs. Self-contained slice committed as `0a0720c` on top of 6d30467/128d44b (CHG-048) |
+| Current service | `code/02_services/04_executor/main.py` raises `NotImplementedError`; no Cargo manifest or Rust source exists | Replace the scaffold with a Rust binary and retain a short retirement note; do not leave a Python fallback that can be mistaken for the executor |
 | Nautilus client API | Pinned `nautilus-common/src/clients/execution.rs` defines `ExecutionClient` with `#[async_trait(?Send)]`, lifecycle methods, order commands, and async report/reconciliation methods | Implement a real `ExecutionClient` plus `ExecutionClientFactory`/`ClientConfig`; keep all client state on the LiveNode single-threaded runtime using `Rc<RefCell<...>>`-compatible patterns. Do not add `Send`/`Sync` wrappers or unsafe sharing |
 | Node construction | `nautilus-live` exposes `LiveNodeBuilder::from_config`, `.add_exec_client`, `.with_reconciliation`, `.with_event_store`, and `LiveNode::run`; builder tests and `adapters/betfair/tests/node.rs` provide the construction pattern | Build the node through these public APIs, with no data client and no strategy. Use the runner/message-bus command path for gateway-intent ingress; do not call private Nautilus internals or directly mutate its cache |
 | Event store | `nautilus-event-store/README.md` states early-alpha, single-node redb per run, immediate durability, verifier, and replay APIs; `nautilus-live` requires an event-store factory when configured | Treat event store as supplementary engine history. Boot failure, verifier failure, corruption, or replay mismatch keeps the service halted/reconciling and must be visible in readiness; it is not the sole policy audit store |
@@ -1099,41 +1097,24 @@ inspection proves it has neither Arrow nor Fluss credentials.
 
 **Atomic TODO checklist:**
 
-- [x] Replace or formally retire the Python scaffold and create the Rust binary and lockfile.
-  (retired `main.py` moved under `legacy_python/`; `Cargo.toml`+`Cargo.lock`+`src/main.rs` created)
-- [ ] ...configuration, health, telemetry, and shutdown paths. (no `config`/`health`/`telemetry`/
-  `shutdown` modules yet - only `execution`/`bridge`/`gate`)
-- [x] Build with Rust `1.97.1` and a Cargo git revision/lockfile. (`rust-toolchain.toml` 1.97.1,
-  `rev = 74d57e7e...`, checked-in `Cargo.lock`)
-- [ ] Record the exact feature set and package metadata in the T0 evidence bundle. (package
-  metadata is in `Cargo.toml`; T0-bundle deposit not yet verified)
-- [x] Pin every Nautilus crate to the audited commit and verify the audited `ExecutionClient` API.
-  (all 8 crates at `74d57e7e`; `BridgeExecutionClient` implements the trait - start/stop/
-  connect/disconnect/submit/modify + account state/generate report; compiles offline)
+- [ ] Replace or formally retire the Python scaffold and create the Rust binary, lockfile,
+  configuration, health, telemetry, and shutdown paths.
+- [ ] Build with Rust `1.97.1` and a Cargo git revision/lockfile; record the exact feature set and
+  package metadata in the T0 evidence bundle.
+- [ ] Pin every Nautilus crate to the audited commit and verify the audited `ExecutionClient` API.
 - [ ] Verify the public `LiveNodeBuilder`/`ExecutionClientFactory` construction path with a compile
-  probe before implementing the service orchestration. (no `LiveNodeBuilder` usage yet - `main.rs`
-  is a bootstrap stub)
-- [x] Implement the custom client lifecycle while respecting its non-`Send` constraint.
-  (`Rc<RefCell<>>`-based `BridgeExecutionClient`; `client_boots_into_halted` test green)
+  probe before implementing the service orchestration.
+- [ ] Implement the custom client lifecycle while respecting its non-`Send` constraint.
 - [ ] Build the `LiveNodeBuilder` runtime with OMS, risk, portfolio, reconciliation, and
   supplementary event-store configuration, without a market-data client or strategy actor.
-  (Nautilus crates are deps but no node is constructed yet)
-- [x] Start in `HALTED`. (client boots into HALTED - offline test) 
-- [ ] ...and separate process health, readiness, gate state, and trading readiness. (gate state is
-  present; no process-health/readiness/trading-readiness split service yet)
-- [x] Consume gateway envelopes and emit bridge commands only after gate, attempt, scope, and fence
-  checks. (gate/attempt checks in `gate.rs` + `execute_job`; `command_envelope_validation_matches_go`,
-  `only_enablement_path_is_sanctioned` green)
-- [x] Apply bridge reports to Nautilus and emit normalized events back to the gateway.
-  (`handle_report`/`handle_fill`/`status`/normalized `Postback` in `BridgeExecutionClient`)
-- [ ] Implement clean shutdown, event flush, fence release, and unresolved-attempt recovery. (not
-  yet implemented/evidenced)
-- [x] Add boot, lifecycle, fake-bridge, and position/fill tests. (11 offline tests green: gate
-  fencing, bridge-protocol parity with Go, fake-bridge place/reject/timeout classification, client
-  boots HALTED)
-- [ ] ...event-store, invalid-report, and restart tests. (event-store/restart tests not present)
-- [ ] Run formatting, clippy, locked build/test, and health/readiness validation. (only
-  `cargo check --offline` + `cargo test --offline` verified here; clippy/fmt/locked release not run)
+- [ ] Start in `HALTED` and separate process health, readiness, gate state, and trading readiness.
+- [ ] Consume gateway envelopes and emit bridge commands only after gate, attempt, scope, and fence
+  checks.
+- [ ] Apply bridge reports to Nautilus and emit normalized events back to the gateway.
+- [ ] Implement clean shutdown, event flush, fence release, and unresolved-attempt recovery.
+- [ ] Add boot/config, lifecycle, fake-bridge, fill/position, event-store, invalid-report, and
+  restart tests.
+- [ ] Run formatting, clippy, locked build/test, and health/readiness validation.
 
 **Output guarantee:** A long-lived Rust service starts halted, boots against a fake bridge, owns
 live order/portfolio/reconciliation state, emits normalized events, and restarts without silently
@@ -1165,7 +1146,7 @@ restart with unresolved attempts all keep the service halted or reconciling.
 **Completion criteria:** The Rust service boots and runs with a fake bridge, owns live execution
 state, starts halted, and has no Arrow or Fluss credentials.
 
-### Task 5 — Implement durable gate, attempt, correlation, and fencing control — **DONE (WP-3 writers glued + live)**
+### Task 5 — Implement durable gate, attempt, correlation, and fencing control — **PARTIAL: prerequisite models only**
 
 **Objective:** Move existing pure-JVM safety rules into the gateway/service runtime without
 weakening them.
@@ -1208,7 +1189,7 @@ weakening them.
 5. Implement halt propagation from malformed/stale/cross-scope requests, `Safety_Halt_Requests`,
    lease loss, unknown response, missing health, and projection uncertainty. Applied halt requests
    increment the gate epoch once; duplicate IDs are no-ops; lower source epochs are rejected/audited.
-6. Implement single-operator (Saurabh, DEC-044) approval over the same gate epoch and evidence hash. Approvals must be
+6. Implement two-person approval over the same gate epoch and evidence hash. Approvals must be
    authenticated, distinct, authorized, immutable, and rejected when the gate epoch changes.
 7. Inject crash points before durable prepare, after prepare, after `SUBMITTING`, during bridge
    call, after broker acceptance, and before evidence acknowledgement. Assert no automatic second
@@ -1227,37 +1208,28 @@ test proves zero duplicate place calls for every injected crash window and stale
 5. Classify verified acceptance/rejection; all ambiguity becomes `UNKNOWN`.
 6. For `UNKNOWN`, persist evidence, halt, and require reconciliation before resolution.
 7. Permit `UNKNOWN → ACCEPTED/REJECTED/CANCELLED` only through verified reconciliation.
-8. Require the single-operator (Saurabh, DEC-044) approval for the same gate epoch/evidence hash.
+8. Require two distinct approvals for the same gate epoch/evidence hash.
 9. Reject stale lease/fence/epoch immediately before the bridge command.
 
 **Atomic TODO checklist:**
 
-- [x] Reconcile the existing `GateTransitionValidator` matrix with `AttemptRecord` terminal
-  semantics; add a single canonical transition test before durable wiring. (CHG-044 — canonical
-  matrix in `AttemptPhase.legalTargets()` / `GateState.legalTargets()`; `GateTransitionValidatorTest`;
-  Rust `gate.rs` aligned and pinned.)
-- [x] Add the owner/lease/fence fields and layout/manifest/change record required by
-  `Execution_Gate`; do not claim the existing epoch-only DDL provides a lease. (CHG-044 —
-  `Execution_Gate` v3 + `Execution_Attempts` v3 (durable `gate_fence_token`), layout/ownership/
-  manifest/agreement tests.)
-- [x] Map the existing validator/state/attempt models to the durable gateway-backed tables.
-  (Durable `GateStateStore` / `AttemptStore` boundaries + `ExecutionCommandGate` engine composes
-  them; Fluss-backed writers are the remaining live-cluster wiring.)
-- [x] Implement gate epoch ownership, lease, fence, and single-operator (Saurabh, DEC-044) approval checks. (`GateRow`,
-  `InMemoryGateStateStore` fence concurrency + approvals; covered by protocol tests.)
-- [x] Persist `PREPARED` with request hash and deterministic client reference before any bridge
-  call. (`ExecutionCommandGate.execute`; fence token persisted at PREPARED.)
-- [x] Persist `SUBMITTING` only after durable acknowledgement and issue one bridge call per
-  attempt. (prepare() return gate + mono-issued bridge guard.)
-- [x] Implement verified acceptance/rejection and `UNKNOWN` classification.
-- [x] Persist unknown evidence, halt the affected scope, and require reconciliation for resolution.
-- [x] Reject stale epoch/fence, cross-scope, malformed, concurrent-owner, and missing-approval
+- [ ] Reconcile the existing `GateTransitionValidator` matrix with `AttemptRecord` terminal
+  semantics; add a single canonical transition test before durable wiring.
+- [ ] Add the owner/lease/fence fields and layout/manifest/change record required by
+  `Execution_Gate`; do not claim the existing epoch-only DDL provides a lease.
+- [ ] Map the existing validator/state/attempt models to the durable gateway-backed tables.
+- [ ] Implement gate epoch ownership, lease, fence, and two-person approval checks.
+- [ ] Persist `PREPARED` with request hash and deterministic client reference before any bridge
+  call.
+- [ ] Persist `SUBMITTING` only after durable acknowledgement and issue one bridge call per
+  attempt.
+- [ ] Implement verified acceptance/rejection and `UNKNOWN` classification.
+- [ ] Persist unknown evidence, halt the affected scope, and require reconciliation for resolution.
+- [ ] Reject stale epoch/fence, cross-scope, malformed, concurrent-owner, and missing-approval
   requests without a broker call.
-- [x] Add crash-window tests before/during/after the bridge call and assert zero duplicate fake
-  broker orders. (`ExecutionCommandGateCrashWindowTest` — crash at every window, zero duplicate.)
-- [~] Run common Maven, gateway Fluss, and Rust orchestration validation. (common Maven green —
-  388 tests; Rust gate+lib green — 11 tests; gateway Fluss live integration and the Rust
-  fake-bridge crash-window port remain env-gated/target the final T5 wiring step.)
+- [ ] Add crash-window tests before/during/after the bridge call and assert zero duplicate fake
+  broker orders.
+- [ ] Run common Maven, gateway Fluss, and Rust orchestration validation.
 
 **Output guarantee:** Every broker command has a durable pre-call record, request hash, client
 reference, gate epoch, valid fence, exactly one attempt, and an explicit outcome. An ambiguous
@@ -1275,7 +1247,7 @@ broker command and records an immutable audit event.
 
 **Tests:** use existing `InMemoryAttemptStoreTest`/validator tests as baseline and add durable
 integration tests for duplicate instruction, changed hash, stale epoch, lease loss, crash before/
-during/after bridge call, unknown outcome, single-operator (Saurabh, DEC-044) approval, and cross-scope isolation.
+during/after bridge call, unknown outcome, two-person approval, and cross-scope isolation.
 
 **Validation:** common Maven tests; gateway Fluss integration; Rust fake-bridge crash-window suite;
 assert zero duplicate fake broker orders.
@@ -1283,7 +1255,7 @@ assert zero duplicate fake broker orders.
 **Completion criteria:** Every broker command has durable pre-call state, a valid fence, a known
 gate epoch, explicit outcome classification, and auditable recovery behavior.
 
-### Task 6 — Implement postback capture, projections, and position parity — **DONE (WP-4 live-verified + parity)**
+### Task 6 — Implement postback capture, projections, and position parity — **PARTIAL: reference helpers only**
 
 **Objective:** Make Nautilus-derived execution events durable and queryable in Fluss without a
 second position authority.
@@ -1344,33 +1316,25 @@ only production position/PnL calculator; no projection code can authorize a brok
 
 **Atomic TODO checklist:**
 
-- [x] Define the normalized Nautilus event envelope with a stable event-store/source sequence;
-  preserve side/context/instrument fields that the `Fills` DDL does not carry. (CHG-045 —
-  `NormalizedPostback` + `PostbackFingerprint`.)
-- [x] Re-scope `PositionsColumnOwnership`/`OrderLifecycleColumnOwnership` and related contracts
+- [ ] Define the normalized Nautilus event envelope with a stable event-store/source sequence;
+  preserve side/context/instrument fields that the `Fills` DDL does not carry.
+- [ ] Re-scope `PositionsColumnOwnership`/`OrderLifecycleColumnOwnership` and related contracts
   from the retired Action Capture writer to the Nautilus projection boundary, keeping Java classes
-  parity-only. (CHG-045 — `nautilus-projection:...-serializer` labels; foundation OwnershipMatrix
-  doc mirror intentionally unchanged.)
-- [x] Implement normalized postback event IDs, fingerprints, source versions, and correlation
-  precedence. (`PostbackFingerprint`, `PostbackCorrelator`, `CorrelationIndex`.)
-- [x] Implement quarantine for unknown/malformed/ambiguous evidence and terminal-regression
-  protection. (`QuarantineReason`, lifecycle monotonicity, driver quarantine + halt.)
-- [x] Serialize Nautilus order/fill/position events into `Fills`, `Order_Lifecycle`, `Positions`,
-  audit, correlation, attempt, and quarantine projections. (Lifecycle/position serializers +
-  audit + quarantine sinks; the Fluss-backed writers are the remaining live wiring.)
-- [x] Ensure projection code never recomputes position/PnL arithmetic or authorizes a broker action.
-  (`PositionProjectionWriter` serializes — never recomputes; driver has no broker-call surface;
-  `NautilusPositionAuthority` boundary; pinned by `projectionNeverIssuesBrokerCommands`.)
-- [x] Implement projection-ledger transitions, restart replay, duplicate no-op, and conflicting
-  content handling. (`PostbackProjectionLedger` + `PostbackProjectionDriver` idempotent resume.)
-- [x] Replay recorded fixtures through Nautilus and compare valid results with the Java reference
-  projector; retain the projector as a differential oracle only. (`NautilusParityTest` vs
-  `PositionProjectorDriver`; rebuild determinism suite.)
-- [x] Add fill overrun, missing instrument, stale event, terminal regression, and partial-write
-  tests. (Lifecycle/projection-writer/driver suites.)
-- [~] Run projection DDL agreement, Rust replay, gateway Fluss integration, and rebuild checks.
-  (common Maven green — 426 tests incl. rebuild determinism; the Rust emitter and env-gated
-  gateway Fluss projection integration are complete via CHG-052 / WP-4.)
+  parity-only.
+- [ ] Implement normalized postback event IDs, fingerprints, source versions, and correlation
+  precedence.
+- [ ] Implement quarantine for unknown/malformed/ambiguous evidence and terminal-regression
+  protection.
+- [ ] Serialize Nautilus order/fill/position events into `Fills`, `Order_Lifecycle`, `Positions`,
+  audit, correlation, attempt, and quarantine projections.
+- [ ] Ensure projection code never recomputes position/PnL arithmetic or authorizes a broker action.
+- [ ] Implement projection-ledger transitions, restart replay, duplicate no-op, and conflicting
+  content handling.
+- [ ] Replay recorded fixtures through Nautilus and compare valid results with the Java reference
+  projector; retain the projector as a differential oracle only.
+- [ ] Add fill overrun, missing instrument, stale event, terminal regression, and partial-write
+  tests.
+- [ ] Run projection DDL agreement, Rust replay, gateway Fluss integration, and rebuild checks.
 
 **Output guarantee:** Deleting and rebuilding Fluss projections from captured normalized events
 reproduces the same rows and source versions without changing Nautilus state or authorizing an
@@ -1400,7 +1364,7 @@ and exact row-count/source-version checks in a scratch Fluss database.
 **Completion criteria:** Fluss projections can be deleted/rebuilt from captured events and never
 authorize a broker action or replace Nautilus arithmetic.
 
-### Task 7 — Replace the Babysitter marker source with Positions changelog — **DONE — live restore + launcher verified (CHG-053)**
+### Task 7 — Replace the Babysitter marker source with Positions changelog — **PARTIAL: marker shell only**
 
 **Objective:** Complete the separate Flink position-observation boundary while preserving MVP no-op.
 
@@ -1454,26 +1418,16 @@ malformed, and failure inputs. Any action-enable attempt fails startup before a 
 
 **Atomic TODO checklist:**
 
-- [x] Add strict Babysitter source/checkpoint/freshness configuration with no live-action default.
-  (CHG-046 — `BabysitterConfig.fromEnv` fails closed; required bootstrap, positive intervals,
-  POSITION_ACTIONS_ENABLED unset-or-false.)
-- [x] Replace `fromElements(0L)` with a versioned `Positions` KV changelog source.
-  (`FlussSource` full snapshot+changelog, `positions-changelog` UID, INSERT/UPDATE_AFTER filter.)
-- [x] Add row deserialization, schema/version validation, and latest-version/freshness state by
-  `position_id`. (`PositionsRowDeserializer` validates schema_version/V2 + quantity invariants;
-  `PositionsObservationState` ValueState per key.)
-- [x] Add checkpoint/restore handling and metrics for source gaps, stale events, and conflicts.
-  (durable CHECKPOINTS_DIRECTORY; version-gate counters + disposition side output; offline
-  checkpoint/restore harness proves a replayed duplicate is a no-op after restore.)
-- [x] Keep `Position_Actions` empty and fail startup closed when `POSITION_ACTIONS_ENABLED` is not
-  unset or false. (`BabysitterDiscardSink` no-op terminal; fail-closed flag + config tests.)
-- [x] Add duplicate/stale/conflicting/malformed position and checkpoint/recovery tests.
-  (deserializer + operator side-output dispositions + restore harness.)
-- [x] Prove the job does not write lifecycle, position, execution, or Arrow-facing outputs.
-  (BAB-UNIT-003 cluster-free write-path inspection: only the babysitter-discard sink.)
-- [~] Run module tests and MiniCluster checkpoint/restore validation. (compute Maven green — 336
-  tests incl. the cluster-free observation tests; the live MiniCluster + Fluss restore run
-  `COMPUTE_INT_TEST_T7` is written and compiles, and awaits a dev Fluss cluster.)
+- [ ] Add strict Babysitter source/checkpoint/freshness configuration with no live-action default.
+- [ ] Replace `fromElements(0L)` with a versioned `Positions` KV changelog source.
+- [ ] Add row deserialization, schema/version validation, and latest-version/freshness state by
+  `position_id`.
+- [ ] Add checkpoint/restore handling and metrics for source gaps, stale events, and conflicts.
+- [ ] Keep `Position_Actions` empty and fail startup closed when `POSITION_ACTIONS_ENABLED` is not
+  unset or false.
+- [ ] Add duplicate/stale/conflicting/malformed position and checkpoint/recovery tests.
+- [ ] Prove the job does not write lifecycle, position, execution, or Arrow-facing outputs.
+- [ ] Run module tests and MiniCluster checkpoint/restore validation.
 
 **Output guarantee:** Babysitter continuously observes the versioned `Positions` changelog,
 recovers its observation state after checkpoint restore, and emits exactly zero action records in
@@ -1494,7 +1448,7 @@ position events, malformed schema, and `POSITION_ACTIONS_ENABLED` fail-closed va
 **Completion criteria:** Babysitter runs continuously from `Positions`, checkpoints observation
 state, and proves zero action output.
 
-### Task 8 — Add mock execution and local Compose integration — **DONE — offline + live topology + private probes (CHG-047/CHG-053/CHG-054, WP-6)**
+### Task 8 — Add mock execution and local Compose integration — **PARTIAL: fake broker only**
 
 **Objective:** Exercise the complete service boundary without live broker access.
 
@@ -1557,32 +1511,19 @@ process.
 
 **Atomic TODO checklist:**
 
-- [x] Add a fake order broker without changing the market-data `MockArrowServer` semantics. (T3
-  `go-bridge/fake_broker.go` + `fake_arrow_broker_test.go`; market-data `MockArrowServer` untouched.)
-- [x] Add an internal execution network and bridge-only Arrow-egress network; prove direct Arrow
-  access is unavailable from Java/Rust/Flink containers. (`execution-net internal:true` +
-  `arrow-egress`; `t8_sandbox_contract_check.py` proves only execution-bridge joins arrow-egress and
-  compute passes no `ARROW_*`.)
+- [ ] Add a fake order broker without changing the market-data `MockArrowServer` semantics.
+- [ ] Add an internal execution network and bridge-only Arrow-egress network; prove direct Arrow
+  access is unavailable from Java/Rust/Flink containers.
 - [ ] Wire gateway, Rust service, execution bridge, Signal/Babysitter jobs, health checks,
-  private networks, and sandbox-only secrets in Compose. (Offline contract proven; live image
-  build + `docker compose up` for the external Rust/Go services remain env-gated.)
-- [ ] Add Dockerfiles/build scripts and verify reproducible image builds. (Go bridge Dockerfile
-  exists; external Rust service pinned-revision image build remains env-gated.)
-- [x] Enforce startup order and keep all execution services halted until readiness and approval.
-  (executor/action-capture commented; `EXECUTION_ENABLED` defaults false; bridge default disabled;
-  `healthDoesNotImplyExecutionReadiness` test.)
-- [x] Keep execution interfaces private and separate process, readiness, job, gate, and trading
-  health dimensions. (`GatewayReadinessTest` + no-host-port contract checks on execution services.)
-- [x] Make the job submitter verify both jobs are `RUNNING` and have completed one checkpoint.
-  (`submit-jobs.sh wait_for_checkpoint` polls `/jobs/<id>/checkpoints` `counts.completed>0`;
-  fail-closed; `bash -n` verified.)
-- [x] Add clean-start, missing-config, halted-intent, fake lifecycle, service-restart, ledger
-  recovery, allowlist, and redaction tests. (gateway offline suite green re-run: durable
-  first-handoff dup, restart-skips-duplicate, hash-violation-after-restart, only-forward ledger
-  transitions, resumable failed step, readiness≠execution; redaction/allowlist via the 10
-  sandbox-contract checks incl. blank-secret placeholders + only-execution-bridge-on-arrow-egress.)
-- [ ] Run Compose config/build/up and the canonical local acceptance probes. (env-gated final leg:
-  needs a Docker daemon and live dev Fluss/Flink cluster + external Rust image build.)
+  private networks, and sandbox-only secrets in Compose.
+- [ ] Add Dockerfiles/build scripts and verify reproducible image builds.
+- [ ] Enforce startup order and keep all execution services halted until readiness and approval.
+- [ ] Keep execution interfaces private and separate process, readiness, job, gate, and trading
+  health dimensions.
+- [ ] Make the job submitter verify both jobs are `RUNNING` and have completed one checkpoint.
+- [ ] Add clean-start, missing-config, halted-intent, fake lifecycle, service-restart, ledger
+  recovery, allowlist, and redaction tests.
+- [ ] Run Compose config/build/up and the canonical local acceptance probes.
 - [ ] Update local-compose documentation only after the runtime evidence passes.
 
 **Output guarantee:** A clean local Compose run executes the complete intent-to-projection path
@@ -1631,7 +1572,7 @@ T9 is entirely evidence work; no repository test can manufacture broker-side evi
 | Reconciliation | SDK REST methods exist but no consistency-delay, pagination, or rate-limit measurement exists | Capture orders/trades/positions/order-detail snapshots before/after each sandbox action and record the observed delay/rate-limit behavior; mismatch blocks release |
 | Full path | No `Execution_Intent → gateway → Rust → bridge → postback → Fluss` runtime evidence exists | Run the local/fake path first, then sandbox path with gate halted except for the explicitly controlled sandbox test; retain attempt IDs, broker IDs, ledger states, restart results, and projection rows |
 | Shadow mode | No shadow-mode service/profile/evidence exists | Run with no new broker commands (gate halted and command counter asserted zero) while consuming permitted broker reports/reconciliation; compare broker, Nautilus, and Fluss positions |
-| Retention/audit | `AuditHashChain`/`AuditDeletionControl` are pure code; no one-year offload/recovery proof exists | Record policy identifier/approval, encrypted offload destination class, integrity root, access-control review, restore verification, legal-hold/deletion evidence, and single-operator (Saurabh, DEC-044) review hash |
+| Retention/audit | `AuditHashChain`/`AuditDeletionControl` are pure code; no one-year offload/recovery proof exists | Record policy identifier/approval, encrypted offload destination class, integrity root, access-control review, restore verification, legal-hold/deletion evidence, and two-person review hash |
 
 **T9 implementation sequence:**
 
@@ -1649,12 +1590,12 @@ T9 is entirely evidence work; no repository test can manufacture broker-side evi
 5. Run full projection recovery and shadow mode. Compare exact quantities, average prices,
    lifecycle state, IDs, source versions, and ledger states; a mismatch is a blocker.
 6. Run audit offload/restore/integrity verification under the approved policy-controlled minimum
-   (baseline one year, longer if policy requires). Record the evidence hash and obtain single-operator (Saurabh, DEC-044)
+   (baseline one year, longer if policy requires). Record the evidence hash and obtain two-person
    review while the gate is still `HALTED`.
 
 **T9 external inputs required:** sandbox endpoint/account and safe test instrument/quantity;
 approved retention-policy identifier/approvers; approved shadow-mode definition; and authorized
-operators for the single-operator (Saurabh, DEC-044) evidence review. Until supplied, mark only the affected T9 children
+operators for the two-person evidence review. Until supplied, mark only the affected T9 children
 `BLOCKED:`—do not guess credentials, test size, or approval identity.
 
 **T9 output guarantee:** a hashed, sanitized, independently reviewable evidence bundle proves the
@@ -1671,54 +1612,38 @@ The owner selected the recommended first-phase choices during the plan audit:
 | `INPUT-02` | Use **one trade-group ID per trade**: entry/reduce/exit share it; a new entry after closure gets a new ID. The MVP may mint it deterministically from configured account + instrument + candidate identity | T1, T6 |
 | `INPUT-03` | Keep the composite table keys and use the verified Fluss setting: `kv.format-version=2`, `Order_Lifecycle` bucketed by `account_scope_id`, `Order_Correlation` by `instruction_id` | T2, T6, T8 |
 | `INPUT-04` | Use the existing **ZooKeeper 3.9.2** service for one active worker and stale-worker protection | T5, T8 |
-| `INPUT-05` | Run T9 **later**, after fake-broker and local Compose tests pass; T9 runs a paper path via Nautilus `nautilus-sandbox` (local simulated matching, no credentials) with gate HALTED and no live money, then the live-Arrow evidence path once the broker static-IP gate is accepted (gate **accepted 2026-08-21** — see INPUT-12) | T3, T9 |
+| `INPUT-05` | Run the real Arrow sandbox **later**, after fake-broker and local Compose tests pass | T3, T9 |
 
-NOTE (2026-08-20, corrected): **Arrow provides no broker-side paper/sandbox order environment** (verified in broker docs). The repo's paper/simulated path is the Nautilus `nautilus-sandbox` crate (pinned rev `74d57e7e`; `SandboxExecutionClient` + `OrderMatchingEngine`/`SimulatedExchange`; local matching, no Arrow credentials) used by the `t9_paper*` bins. So T9 can run a paper path locally (gate HALTED, no live money) while the live-Arrow evidence path was blocked until the broker accepted our registered IP. **Gate ACCEPTED 2026-08-21** (`INPUT-12`): the live-Arrow path now only awaits an Arrow login auth path (request-token / token / AutoLogin trio) and the single-operator (Saurabh, DEC-044) release review. T9 safe instrument is resolved to NSE CM `BI-EQ` (BILCARE LTD., Token 762583, Qty 1) — random pick from `NSE_CM_EQUITY (1024).csv`.
-Retention and reviewer inputs were recorded 2026-08-20: retention 1-year minimum approved by
-**Saurabh** (policy ID `SAURABH-1Y-APPROVAL-2026-08-20`, placeholder until formal compliance number
-is issued), single-operator (Saurabh, DEC-044) reviewer **saurabh** (a second reviewer is not
-required and not checked; the `t9paper` evidence bundle records the single reviewer), local run target
-is **this PC** (single-host, reduce to 10 instruments if OOM), and no external test Fluss cluster —
-local Docker Fluss is the test cluster. Nautilus `nautilus-sandbox` (T9 paper path, local simulated matching, gate HALTED, no live money) plus the live-Arrow path (real BI-EQ ×1, needs the accepted static IP) are the two T9 execution targets; the paper path is doable now, the live-order path waits on the broker IP gate. Safe instrument `BI-EQ x1` (Token 762583, Qty 1, ISIN INE986A01012) is ready.
-
-#### Inputs recorded 2026-08-20
-
-| ID | Recorded input | Value |
-| --- | --- | --- |
-| `INPUT-06` | Retention 1-year approval | `SAURABH-1Y-APPROVAL-2026-08-20` — approved by Saurabh (placeholder) |
-| `INPUT-07` | Single-operator (Saurabh, DEC-044) reviewers | `saurabh` (single reviewer; a second reviewer is not required and not checked) |
-| `INPUT-08` | Local deploy target | This PC, single-host; 10 instruments if OOM |
-| `INPUT-09` | Test Fluss cluster | None external — local Docker Fluss (`trading-net`) is the test cluster |
-| `INPUT-10` | Execution paper-trading sandbox | Nautilus `nautilus-sandbox` crate (`SandboxExecutionClient` + `OrderMatchingEngine`/`SimulatedExchange`), pinned rev `74d57e7e` (executor `Cargo.toml`), used by the `t9_paper*` bins — LOCAL simulated matching engine, no Arrow credentials (Arrow provides no broker paper env). Ingestion fake Arrow (`05_mock_arrow`) stays as market-data fixture. `openalgo` not needed. |
-| `INPUT-11` | T9 safe instrument/quantity | **NSE CM `BI-EQ`** — BILCARE LTD., Token `762583`, ISIN `INE986A01012`, LotSize `1`, Tick `0.01`, band `47.42–71.12` + `Quantity 1` — **resolved 2026-08-20 random pick from `NSE_CM_EQUITY (1024).csv` (1024 rows) for the T9 paper path (Nautilus sandbox) and the live-Arrow bounded-order evidence.** |
-| `INPUT-12` | Broker static-IP gate acceptance | **ACCEPTED 2026-08-21** — new Arrow API `New_API_new_Static_IP` (active), App ID `2177ba96adc0`, Primary IP `152.58.33.134`, valid till 2036-08-18. Auth: **TOTP AutoLogin already implemented + proven 2026-08-13** (`logs/broker-md-001-20260813.md` — 'AutoLogin successful', token len 238); trio (`ARROW_USER_ID`/`ARROW_PASSWORD`/`ARROW_TOTP_KEY`) lives in the git-ignored `code/01_platform/01_docker/.env` and `~/.env.arrow`. Request-token flow not used. Note: created for test purposes — this host has no static IP, so the key is bound to today's public IP; if the ISP reassigns it the key must be re-registered in the broker portal. Unblocked: T9 live-Arrow path (pending Arrow login auth + DEC-044 release review) |
+The actual sandbox account value, safe test instrument/quantity, retention-policy approval ID, and
+two reviewer identities are still external inputs and can be supplied when T9 starts. Until then,
+the plan requires configuration placeholders and keeps all live/sandbox order paths disabled.
 
 **Execution sequence:**
 
 1. Run a ≤2-minute smoke of every long-running harness.
-2. Run the T9 paper path via Nautilus `nautilus-sandbox` (one order BI-EQ ×1, local matching, gate HALTED, no live money); verify `remarks` echo and order ID.
+2. Place one sandbox order through the bridge; verify `remarks` echo and broker ID.
 3. Verify modify and cancel mapping.
 4. Capture order-update WebSocket lifecycle and fills.
 5. Run partial fill, reject, timeout, disconnect, bridge restart, and reconciliation scenarios.
 6. Run Fluss intent → Nautilus → bridge → postback → Fluss projection recovery.
 7. Run shadow mode with no new broker commands and compare broker/Nautilus/Fluss positions.
 8. Record one-year audit-policy retention/offload/recovery evidence and policy approval.
-9. Keep gate `HALTED` until the single-operator (Saurabh, DEC-044) enablement review explicitly approves the evidence hash.
+9. Keep gate `HALTED` until the two-person enablement review explicitly approves the evidence hash.
 
 **Atomic TODO checklist:**
 
-- [x] Record sandbox endpoint/account, safe instrument/quantity, retention-policy approval ID,
-  shadow-mode definition, and single-operator (Saurabh, DEC-044) reviewers before running external tests. (2026-08-20: retention `SAURABH-1Y-APPROVAL-2026-08-20` + reviewer `saurabh` (DEC-044 single operator; was `saurabh_reviewer_1`/`namrata_reviewer_2` before DEC-044) + local PC/10 instruments recorded; safe instrument `BI-EQ x1` (Token 762583, Qty 1, ISIN INE986A01012) resolved; Nautilus `nautilus-sandbox` paper path is local (no credentials), live-Arrow order path waits on the broker static-IP gate.)
+- [ ] Record sandbox endpoint/account, safe instrument/quantity, retention-policy approval ID,
+  shadow-mode definition, and two-person reviewers before running external tests.
 - [ ] Run the short smoke for every long-running harness and retain process/readiness output.
-- [x] Run the T9 paper path via Nautilus `nautilus-sandbox` and verify `remarks` and order ID. (2026-08-21: paper evidence bundle run — `t9-paper` BI-EQ ×1, gate boots HALTED, shadow 0 new commands, `remarks` round-trip expected true; bundle `code/logs/nautilus-execution/t9-paper-1787302189/` evidence_hash `sha256:04ec3a68…` + `-SHA256SUMS`. Scripted scenario vector per bin header — the sandbox engine itself is exercised once LiveNode wiring lands, Workstream A step 2.)
-- [x] Verify modify, cancel, WebSocket updates, fills, partial fills, and rejection — **paper path only** (2026-08-21: `t9-paper-25-1787302190` covers 10 fill / 5 partial / 5 reject / 3 UNKNOWN / 2 disconnect; `t9-full-25-1787302190` reconciliation templates + audit offload/restore verified, offload hash `sha256:fabfb2d5…`). Observed WebSocket/live legs remain for the live-Arrow path once the release review approves it.
+- [ ] Place exactly one sandbox order through the bridge and verify `remarks` and broker ID.
+- [ ] Verify sandbox modify, cancel, WebSocket updates, fills, partial fills, and rejection.
 - [ ] Run timeout, disconnect, bridge restart, reconciliation, duplicate, and unknown-outcome
   scenarios without automatic ambiguous-place retry.
 - [ ] Run full Fluss intent → Nautilus → bridge → postback → projection recovery.
 - [ ] Run shadow mode with no new broker commands and compare broker/Nautilus/Fluss positions.
 - [ ] Record policy-controlled one-year minimum retention, encryption, integrity, access control,
   offload, recovery, deletion-governance, and policy-approval evidence.
-- [ ] Hash/index the evidence bundle and obtain the single-operator (Saurabh, DEC-044) review while the gate is halted.
+- [ ] Hash/index the evidence bundle and obtain the two-person review while the gate is halted.
 - [ ] Record every failed scenario as a blocker; do not proceed to live money.
 
 **Output guarantee:** An evidence bundle proves the external Arrow contract, unknown-outcome
@@ -1726,7 +1651,7 @@ handling, projection recovery, position parity, retention controls, and shadow-m
 behavior. It does not itself authorize live trading.
 
 **Evidence:** Sandbox transcripts, WebSocket/fill fixtures, recovery reports, shadow comparison,
-retention/offload/recovery records, evidence hash, and signed/single-operator (Saurabh, DEC-044) review decision.
+retention/offload/recovery records, evidence hash, and signed/two-person review decision.
 
 **Exit gate:** Pass only when every required evidence artifact exists, all scenarios pass without
 duplicate or ambiguous success, retention is approved as policy-controlled with a one-year minimum,
@@ -1868,7 +1793,7 @@ ledger state, restart count, recovery duration, and evidence hashes. Evidence be
 - [~] `T8` is complete only when local Compose proves the full sandbox topology and readiness
   boundaries with no live route.
 - [ ] `T9` is complete only when external sandbox/shadow/retention evidence and the halted
-  single-operator (Saurabh, DEC-044) review are recorded.
+  two-person review are recorded.
 - [~] Exact Nautilus commit, Cargo lock, Rust toolchain, Go SDK commit, and protocol versions pinned.
 - [~] One-year minimum audit policy approved; longer policy override and deletion/legal-hold evidence defined.
 - [~] `Execution_Intent` LOG DDL, manifest, schema classes, hash index, and contract tests complete.
@@ -1889,7 +1814,7 @@ ledger state, restart count, recovery duration, and evidence hashes. Evidence be
 - [ ] Restart, unknown outcome, fencing, duplicate, quarantine, and projection recovery evidence is complete.
 - [ ] Observability, readiness, audit, retention, rollback, and shutdown runbooks are complete.
 - [ ] All required unit, integration, checkpoint/restore, failure, and runtime gates pass.
-- [ ] Live-money status remains `BLOCKED` until explicit single-operator (Saurabh, DEC-044) evidence review approves enablement.
+- [ ] Live-money status remains `BLOCKED` until explicit two-person evidence review approves enablement.
 
 ## Post-Completion / External Actions
 
@@ -1900,112 +1825,3 @@ These cannot be completed by repository code alone:
 3. Production secret provisioning, Swarm deployment, HA/VM-loss drills, and operator approval.
 4. External backup/archive verification for the Nautilus event-store and policy-controlled audit store.
 5. Final live-money enablement decision by the authorized operators.
----
-
-## Appendix A — Do-Now Build Plan (IP-Independent Workstreams)
-
-> Added 2026-08-20. Separate segment owned independently of T0–T9 completion status.
-> Guarantee: **every workstream here is implementable NOW** with local Fluss, the local fake/paper
-> path, and the Go execution bridge in `disabled`/fake mode. **Only** the live-Arrow evidence items
-> (real order path, real fills, real reconciliation, live shadow) require the broker's static-IP gate
-> to be accepted first, and are deliberately **excluded** from this segment.
-
-### Verified current state (grounding)
-
-| Component | Present | Gap (to build) |
-| --- | --- | --- |
-| Executor `nautilus-sandbox` dep | yes — pinned rev `74d57e7e` (executor `Cargo.toml`); `t9_paper.rs`/`t9_paper_25.rs`/`t9_paper_25_full.rs` bins use `SandboxExecutionClientConfig` | wire/verify paper round-trip, evidence bundle |
-| Rust executor service | `engine.rs`, `gate.rs`, `bridge/*`, `execution/*`, `health.rs`, `shutdown.rs`, `config.rs`; `cargo test --offline` 11 pass | `LiveNode` runtime (OMS/risk/portfolio/reconciliation), telemetry, clean shutdown/recovery, restart tests |
-| Executor Dockerfile | **none** (only `legacy_python/Dockerfile`) | add multi-stage Rust image (toolchain 1.97.1) |
-| Java execution gateway | `ExecutionGatewayMain.java`, `Dockerfile`, Fluss writers (`FlussProjectionWriter`, `FlussControlStateStore`, `FlussIntentDedupStore`, `FlussProjectionLedgerStore`), 18 tests | production Compose wiring (service commented out) |
-| Go execution bridge | `execution-bridge` compose service (profile `execution-t3`), fake/network slice, `go test -race ./...` green | cross-container runtime probe against gateway/Rust |
-| Compose | T3 bridge service active; `executor`/`gateway` services **commented out** | uncomment + wire on `execution-net`, no host ports |
-| `submit-jobs.sh` | exists in `02_compute` | launcher wiring for Babysitter (T7) |
-| Durable gate/attempt | `ExecutionCommandGate` engine, v3 DDL, crash-window suite green | Fluss-backed `GateStateStore`/`AttemptStore` writers (T5) |
-| Projection engine | common `schema/projection/*` (426 tests), gateway `FlussProjectionWriter`/`LedgerStore` | Fluss-backed writer integration + Rust normalized emitter (T6) |
-| Babysitter | `BabysitterJob` reads `Positions` changelog, ValueState version gate, checkpoint/restore tests | env-gated MiniCluster + live Fluss restore + launcher (T7) |
-
-### Workstream A — T9 paper path (quickest win, no IP) — **steps 1 & 3 DONE 2026-08-21**
-
-1. `cargo build --offline --bins` for the three `t9_paper*` bins; fix any compile drift. **DONE 2026-08-21** — all three bins build clean.
-2. Add tests proving: gate boots `HALTED`; sandbox **place → `remarks` echo → modify → cancel** round-trip;
-   position/ledger captured; health does not imply ENABLED. **Coverage now:** every paper bin asserts gate-boots-`HALTED` and `health_does_not_imply_enabled()` at `Run::start`; the 125-test lib suite covers the bridge/transport/fake sandbox round-trip. The *observed* sandbox-engine round-trip (`engine_exercised: true`) lands with LiveNode wiring (Workstream B) and remains the open half of this step.
-3. Run `t9_paper` and capture a hashed, sanitized paper evidence bundle under `logs/nautilus-execution/`. **DONE 2026-08-21** — bundles + `-SHA256SUMS` under `code/logs/nautilus-execution/` (see T9 row above; hashes verified against printed output; `assert_no_secrets` ✓).
-
-**Acceptance:** `cargo test --offline` green incl. paper round-trip; sanitized evidence bundle present; gate stays `HALTED` **— met** (bundle present, gate HALTED asserted per run; engine-observed round-trip pending Workstream B).
-
-### Workstream B — T4 Rust `LiveNode` runtime — **run-loop slice DONE 2026-08-21**
-
-1. `LiveNodeBuilder` wiring: OMS (`nautilus-portfolio`), risk (`nautilus-risk`), event-store
-   (`nautilus-event-store`), execution client (`bridge/client.rs`), reconciliation/position authority.
-   **DONE (slice, 2026-08-21):** `LiveNodeRuntime` (`engine.rs`) — node builds with the bridge
-   exec client via `LiveNodeBuilder` (FakeBridge slice), registered as the only exec client;
-   the production `HttpBridgeClient` adapter is complete +D3 (2026-08-21, `/v1/events` report
-   intake below) — only runtime bridge *selection* via `BridgeClientConfig` remains.
-2. Health + telemetry (`health.rs` + `tracing` → OpenObserve `EXECUTOR`); clean shutdown,
-   event-flush, fence-release, unresolved-attempt recovery. **DONE (slice, 2026-08-21):** hosted
-   run loop (`NodeRunMode::Hosted` — service owns Ctrl-C/SIGTERM) wired in `main.rs`;
-   `request_shutdown()` ends the loop through the shared `LiveNodeHandle`; clean-stop is proven
-   at node level (client-level halt/flush/fence sequence stays covered by `shutdown.rs` tests).
-   OpenObserve telemetry export remains pending.
-3. Restart/recovery tests. **DONE (slice, 2026-08-21, +3 tests, crate total 128):**
-   `runtime_boots_fail_closed_gate_halted`, `runtime_hosted_run_loop_stops_cleanly_on_request`,
-   `runtime_second_run_fails_fail_closed` (runner-consumed duplicate-run guard).
-
-**Acceptance:** `cargo test --offline` green incl. restart/recovery; `LiveNode` boots `HALTED`
-**— met (slice):** 128/128 green, clippy 0 warnings, fmt clean; `LiveNodeRuntime` asserts
-fail-closed boot (gate `HALTED`, health never implies ENABLED via the factory client contract).
-
-### Workstream C — T8 local Compose
-
-1. Add multi-stage Rust **executor Dockerfile** (pinned `rust-toolchain.toml` 1.97.1, cached deps).
-2. Build + wire `executor` and `gateway` services into compose on `execution-net` (no host ports,
-   no production credentials).
-3. `docker compose --profile execution-t3 up` against local dev cluster; cross-container probe
-   (gateway→bridge→Rust→postback→Fluss via the **paper** path).
-
-**Acceptance:** compose `up` green; `t8_sandbox_contract_check.py` passes (private net / secrets /
-no-live-route).
-
-### Workstream D — T5 Fluss-backed gate/attempt writers
-
-1. Implement Fluss-backed `GateStateStore` + `AttemptStore` writers (reuse gateway Fluss
-   reader/writer + v3 DDL + `Execution_Gate`/`Execution_Attempts`).
-2. Env-gated gateway Fluss integration test; Rust fake-bridge crash-window orchestration port.
-
-**Acceptance:** crash-window zero-duplicate on the Fluss-backed store (common Maven + gateway tests green).
-
-### Workstream E — T6 Fluss-backed projection writers + Rust emitter
-
-1. Wire projection writers to Fluss (env-gated int test; `FlussProjectionWriter`/`LedgerStore`).
-2. Rust normalized Nautilus envelope emitter from `bridge/client.rs`.
-
-**Acceptance:** common Maven (426) green; env-gated gateway Fluss projection int test green.
-
-### Workstream F — T7 Babysitter restore + launcher
-
-1. Env-gated MiniCluster + live Fluss restore run (`COMPUTE_INT_TEST_T7`).
-2. `submit-jobs.sh` launcher wiring for the Babysitter job.
-
-**Acceptance:** live-restore int test green; launcher submits the job and waits for readiness/checkpoint.
-
-### Workstream G — T0 cross-cutting
-
-Immutable Go image digest; real credential-injection proof (no secret reaches an evidence dir);
-retention approval finalized beyond the `SAURABH-1Y-APPROVAL-2026-08-20` placeholder.
-
-### Suggested order and dependencies
-
-- **A → B** first (both pure Rust, independent; fastest wins).
-- **C** next (needs A/B artifacts for the executor image; start with the paper path).
-- **D / E / F** in parallel (Fluss/Flink integration; independent of A/B/C).
-- **G** last (cross-cutting).
-
-### Explicitly NOT in this segment (IP-blocked, wait)
-
-- T9 **live-Arrow** order-path evidence (real `BI-EQ ×1`, broker ID + `remarks`).
-- T9 **live** fills/WebSocket transcript, live reconciliation snapshots, live shadow mode.
-- T3 real sandbox authentication / re-auth evidence.
-- Full-path **real** runtime evidence over live Arrow.
-
-Each item above is implementable **now** without resolving the broker static-IP gate.
