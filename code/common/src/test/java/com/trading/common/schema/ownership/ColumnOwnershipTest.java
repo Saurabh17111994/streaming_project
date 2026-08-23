@@ -185,4 +185,29 @@ class ColumnOwnershipTest {
         assertThatThrownBy(() -> valid().checkWrite(" ", 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void checkWritePartialUpdateRespectsOwnership_Sch15() {
+        // SCH-15: partial_update must respect column ownership — a writer may only
+        // touch its declared column group; identity columns are creation-only.
+        ColumnOwnership m = new ColumnOwnership("t", "1", "svc",
+                new String[] {"id", "a", "b", "c"}, new int[] {0},
+                new ColumnOwnership.Writer("svc:w1", 1, 2),
+                new ColumnOwnership.Writer("svc:w2", 3));
+        // w1 can partial-update its own columns
+        m.checkWrite("svc:w1", 1);
+        m.checkWrite("svc:w1", 2);
+        m.checkWrite("svc:w1", 1, 2);
+        // w1 cannot touch w2's column
+        assertThatThrownBy(() -> m.checkWrite("svc:w1", 3))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("svc:w2");
+        // neither writer can partial-update identity
+        assertThatThrownBy(() -> m.checkWrite("svc:w1", 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("identity column");
+        assertThatThrownBy(() -> m.checkWrite("svc:w2", 0, 3))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("identity column");
+    }
 }
