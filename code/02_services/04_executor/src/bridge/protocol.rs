@@ -181,7 +181,7 @@ impl fmt::Display for OrderCommandError {
 impl std::error::Error for OrderCommandError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct OrderCommand {
     pub exchange: String,
     pub symbol: String,
@@ -300,7 +300,7 @@ fn all_digits(s: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CommandEnvelope {
     #[serde(default)]
     pub record_type: String,
@@ -424,7 +424,7 @@ fn validate_client_order_ref(r: &str) -> Result<(), OrderCommandError> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ReportEnvelope {
     #[serde(default)]
     pub record_type: String,
@@ -502,8 +502,8 @@ mod tests {
         o.validate().unwrap();
         let v = serde_json::to_value(&o).unwrap();
         assert_eq!(v["exchange"], "NFO");
-        assert_eq!(v["transactionType"], "BUY");
-        assert_eq!(v["orderType"], "LMT");
+        assert_eq!(v["transaction_type"], "BUY");
+        assert_eq!(v["order_type"], "LMT");
         assert_eq!(v["product"], "C");
         assert_eq!(v["validity"], "DAY");
         // MKT with a price is invalid
