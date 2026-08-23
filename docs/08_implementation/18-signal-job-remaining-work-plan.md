@@ -1,5 +1,7 @@
 # Signal Job — Remaining Work Plan (post-audit backlog, 2026-08-17)
 
+> **⚠️ INTEGRATED 2026-08-23 — HISTORICAL MARKER.** This plan's Items A–F outcomes are now **absorbed into `04-signal-job.md` § Integrated remaining-work backlog (18-plan, 2026-08-17 → 2026-08-23)**. That section is the current truth — it carries the 18-item table with 2026-08-23 verdicts (A DONE, B DONE, C PARTIAL DONE per CHG-025, D DONE, E DONE USER-APPROVAL per CHG-026, F BLOCKED-by-policy, G boundary) and per-item distillation + evidence pointers. This file is retained as the historical execution plan (ground rules, step checkboxes, and boundary Item G remain as written for audit traceability) but **no longer carries forward work**. Consult `04-signal-job.md` for the living state. Integration commit tracks with `CHG-025/026` and this integration (`docs-audit` + `stale` + `full_audit` + 2-min smoke `b9c302ecf` verified green before commit).
+
 <!-- markdownlint-disable MD013 -->
 
 > **ROLE — EXECUTION PLAN:** this file is the single execution plan for
