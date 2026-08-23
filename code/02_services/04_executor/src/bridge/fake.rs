@@ -20,6 +20,8 @@ pub enum CommandScript {
     Accept,
     /// Successful acknowledgement followed by an asynchronous full-fill on the report stream.
     AcceptThenFill,
+    /// Scripted mass-status snapshot for ReconcileOrders/ReconcileTrades/ReconcilePositions.
+    ReconcileSnapshot(Vec<OrderRecord>),
     /// Resource-side rejection with a reason.
     Reject(String),
     /// A response the service cannot classify as success or rejection.
@@ -102,6 +104,17 @@ impl FakeBridge {
     pub fn emit_fill_after_place(&mut self, enabled: bool) -> &mut Self {
         self.emit_fill_after_place = enabled;
         self
+    }
+
+    /// Directly seed an order record for mass-status / query tests (offline only).
+    pub fn seed_order(&mut self, rec: OrderRecord) -> &mut Self {
+        self.orders.insert(rec.broker_order_id.clone(), rec);
+        self
+    }
+
+    /// Snapshot of all known orders (mass-status view, offline).
+    pub fn open_orders_snapshot(&self) -> Vec<OrderRecord> {
+        self.orders.values().cloned().collect()
     }
 
     fn next_broker_id(&mut self) -> String {
@@ -206,6 +219,34 @@ impl BridgeClient for FakeBridge {
                 broker_order_id: envelope.broker_order_id.clone(),
                 ..ReportEnvelope::default()
             }),
+            CommandScript::ReconcileSnapshot(snapshot) => {
+                for rec in &snapshot {
+                    self.push_report(ReportEnvelope {
+                        record_type: RECORD_REPORT.to_string(),
+                        contract_version: 1,
+                        request_id: envelope.request_id.clone(),
+                        command: cmd.as_str().to_string(),
+                        outcome: "SUCCESS".to_string(),
+                        client_order_ref: rec.client_order_ref.clone(),
+                        broker_order_id: rec.broker_order_id.clone(),
+                        order_status: Some(rec.status.as_str().to_string()),
+                        report_type: Some("order_status".to_string()),
+                        ..ReportEnvelope::default()
+                    });
+                }
+                Ok(ReportEnvelope {
+                    record_type: RECORD_REPORT.to_string(),
+                    contract_version: 1,
+                    request_id: envelope.request_id.clone(),
+                    command: cmd.as_str().to_string(),
+                    outcome: "SUCCESS".to_string(),
+                    client_order_ref: envelope.client_order_ref.clone(),
+                    broker_order_id: envelope.broker_order_id.clone(),
+                    order_status: Some(if snapshot.is_empty() { "NO_OPEN_ORDERS".to_string() } else { "OPEN_SNAPSHOT".to_string() }),
+                    report_type: Some("reconcile_snapshot".to_string()),
+                    ..ReportEnvelope::default()
+                })
+            },
             CommandScript::Accept => self.handle_accept(cmd, envelope).await,
             CommandScript::AcceptThenFill => {
                 let report = self.handle_accept(cmd, envelope.clone()).await?;
@@ -291,6 +332,35 @@ impl FakeBridge {
                     broker_order_id: record.broker_order_id.clone(),
                     order_status: Some(record.status.as_str().to_string()),
                     report_type: Some("order_status".to_string()),
+                    ..ReportEnvelope::default()
+                })
+            }
+            Command::ReconcileOrders | Command::ReconcileTrades | Command::ReconcilePositions => {
+                let snap = self.open_orders_snapshot();
+                for rec in &snap {
+                    self.push_report(ReportEnvelope {
+                        record_type: RECORD_REPORT.to_string(),
+                        contract_version: 1,
+                        request_id: envelope.request_id.clone(),
+                        command: cmd.as_str().to_string(),
+                        outcome: "SUCCESS".to_string(),
+                        client_order_ref: rec.client_order_ref.clone(),
+                        broker_order_id: rec.broker_order_id.clone(),
+                        order_status: Some(rec.status.as_str().to_string()),
+                        report_type: Some("order_status".to_string()),
+                        ..ReportEnvelope::default()
+                    });
+                }
+                Ok(ReportEnvelope {
+                    record_type: RECORD_REPORT.to_string(),
+                    contract_version: 1,
+                    request_id: envelope.request_id.clone(),
+                    command: cmd.as_str().to_string(),
+                    outcome: "SUCCESS".to_string(),
+                    client_order_ref: envelope.client_order_ref.clone(),
+                    broker_order_id: envelope.broker_order_id.clone(),
+                    order_status: Some(if snap.is_empty() { "NO_OPEN_ORDERS".to_string() } else { "OPEN_SNAPSHOT".to_string() }),
+                    report_type: Some("reconcile_snapshot".to_string()),
                     ..ReportEnvelope::default()
                 })
             }

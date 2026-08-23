@@ -261,6 +261,42 @@ impl LiveNodeRuntime {
     }
 }
 
+
+/// Offline mass-status reconciliation (Tier 11). Iterates UNKNOWN attempts, read-only via bridge, never re-issues Place.
+pub mod reconcile {
+    use super::*;
+    use crate::bridge::protocol::{Command, CommandEnvelope};
+    use crate::bridge::BridgeClient;
+    use crate::execution::client::{classify_bridge_report, BridgeOutcome};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum ReconcileDecision { Accepted, Rejected, StillUnknownHalted }
+
+    pub async fn reconcile_execution_mass_status<B: BridgeClient>(
+        bridge: &mut B,
+        unknown_client_order_refs: &[String],
+    ) -> anyhow::Result<Vec<(String, ReconcileDecision)>> {
+        if !bridge.is_connected() { bridge.connect().await?; }
+        let mut out = Vec::new();
+        for cor in unknown_client_order_refs {
+            let mut q = CommandEnvelope::new(Command::QueryOrder, &format!("reconcile-q-{}", cor));
+            q.client_order_ref = cor.clone();
+            let rep = bridge.send_command(q).await.unwrap_or_else(|e| {
+                crate::bridge::protocol::ReportEnvelope { outcome: "UNKNOWN".into(), reason: e.to_string(), client_order_ref: cor.clone(), ..Default::default() }
+            });
+            let dec = match classify_bridge_report(&rep) {
+                BridgeOutcome::Accepted => ReconcileDecision::Accepted,
+                BridgeOutcome::Rejected => ReconcileDecision::Rejected,
+                BridgeOutcome::Unknown => ReconcileDecision::StillUnknownHalted,
+            };
+            out.push((cor.clone(), dec));
+        }
+        let mut mass = CommandEnvelope::new(Command::ReconcileOrders, "reconcile-mass-1");
+        let _ = bridge.send_command(mass).await;
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -59,6 +59,27 @@ fn deterministic_client_order_ref(format_version: &str, instruction_id: &str, ex
     hex[..14].to_string()
 }
 
+/// Bridge outcome classification (dossier §Reconciliation, offline).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeOutcome { Accepted, Rejected, Unknown }
+
+/// Classify a synchronous bridge report. Pure function — no I/O, no retry.
+pub fn classify_bridge_report(report: &crate::bridge::protocol::ReportEnvelope) -> BridgeOutcome {
+    use crate::bridge::protocol::ReportOutcome;
+    match report.outcome() {
+        Some(ReportOutcome::Success) if !report.broker_order_id.is_empty() => BridgeOutcome::Accepted,
+        Some(ReportOutcome::Rejected) => BridgeOutcome::Rejected,
+        Some(ReportOutcome::Unknown) => BridgeOutcome::Unknown,
+        _ => BridgeOutcome::Unknown,
+    }
+}
+
+/// UNKNOWN→HALT never retry guard.
+pub fn unknown_halts_never_retries(outcome: BridgeOutcome) -> bool {
+    outcome == BridgeOutcome::Unknown
+}
+
+
 #[cfg(test)]
 mod deterministic_ref_tests {
     use super::deterministic_client_order_ref;

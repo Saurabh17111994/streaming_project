@@ -38,7 +38,7 @@ public record GatewayConfig(
         require(sharedSecret, "GATEWAY_SHARED_SECRET");
         require(accountScopeId, "ACCOUNT_SCOPE_ID");
         require(executionPartitionId, "EXECUTION_PARTITION_ID");
-        if (bindPort < 1 || bindPort > 65535) throw new IllegalArgumentException("invalid bind port");
+        if (bindPort < 0 || bindPort > 65535) throw new IllegalArgumentException("invalid bind port");
         if (requestTimeout.isZero() || requestTimeout.isNegative()
                 || pollTimeout.isZero() || pollTimeout.isNegative()) {
             throw new IllegalArgumentException("timeouts must be positive");

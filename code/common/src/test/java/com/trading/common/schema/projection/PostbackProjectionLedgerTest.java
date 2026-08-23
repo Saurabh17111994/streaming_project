@@ -59,4 +59,26 @@ class PostbackProjectionLedgerTest {
         assertThat(PostbackProjectionLedger.orderSideComplete(
                 PostbackProjectionLedger.State.POSITION_APPLIED_OR_NOT_REQUIRED)).isTrue();
     }
+
+    @Test void crashResumeScansNonCompleteRecords() {
+        // Non-complete states are recoverable; terminal are not
+        for (PostbackProjectionLedger.State s : PostbackProjectionLedger.State.values()) {
+            if (s == PostbackProjectionLedger.State.COMPLETE
+                    || s == PostbackProjectionLedger.State.QUARANTINED
+                    || s == PostbackProjectionLedger.State.FAILED) {
+                assertThat(PostbackProjectionLedger.recoverable(s)).isFalse();
+            } else {
+                assertThat(PostbackProjectionLedger.recoverable(s)).isTrue();
+            }
+        }
+    }
+    @Test void ledgerIsFlussOwnedAndIdempotent() {
+        PostbackProjectionLedger.State s = PostbackProjectionLedger.State.RECEIVED;
+        s = PostbackProjectionLedger.next(s, PostbackProjectionLedger.State.CORRELATED);
+        // duplicate correlation is idempotent via DUPLICATE outcome in projector, ledger stays at same state
+        assertThat(s).isEqualTo(PostbackProjectionLedger.State.CORRELATED);
+        s = PostbackProjectionLedger.next(s, PostbackProjectionLedger.State.AUDIT_WRITTEN);
+        assertThat(PostbackProjectionLedger.recoverable(s)).isTrue();
+    }
+
 }

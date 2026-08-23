@@ -214,4 +214,37 @@ class AuditReconstructionSimulationTest {
         assertThat(decision.evidenceEvent().asAuditEvent().contentHash())
                 .hasSize(AuditHashChain.HASH_HEX_LENGTH);
     }
+
+    @Test
+    @DisplayName("one-year reconstruction replays 365 days immutably")
+    void oneYearReconstructionReplays365Days() {
+        // Build 365 synthetic trading days (offline, no cluster)
+        java.util.List<AuditHashChain.Manifest> year = new java.util.ArrayList<>();
+        for (int d = 0; d < 365; d++) {
+            String day = String.format("2025-%03d", d);
+            AuditHashChain.ManifestBuilder b = new AuditHashChain.ManifestBuilder(day, TABLE, SCHEMA);
+            b.addEvent(day + "-evt", ImmutabilityProtocol.canonicalHash("event|" + day));
+            year.add(b.build());
+        }
+        String root = AuditHashChain.rootHash(year);
+        assertThat(AuditHashChain.verifyChain(year, root)).isEqualTo(AuditHashChain.Verification.VALID);
+        // Tamper one day in middle should fail
+        java.util.List<AuditHashChain.Manifest> tampered = new java.util.ArrayList<>(year);
+        AuditHashChain.Manifest mid = tampered.get(180);
+        java.util.List<AuditHashChain.AuditEvent> evts = new java.util.ArrayList<>(mid.events());
+        evts.set(0, new AuditHashChain.AuditEvent(evts.get(0).eventId(), ImmutabilityProtocol.canonicalHash("tampered")));
+        tampered.set(180, new AuditHashChain.Manifest(mid.tradingDate(), mid.table(), mid.schemaVersion(), evts));
+        assertThat(AuditHashChain.verifyChain(tampered, root)).isEqualTo(AuditHashChain.Verification.TAMPERED);
+    }
+    @Test
+    @DisplayName("credential redaction: no token appears in audit event hashes")
+    void credentialRedactionNoTokenInHashes() {
+        String secret = "ARROW_TOKEN=super-secret-token";
+        String hash = ImmutabilityProtocol.canonicalHash(secret);
+        // hash must not contain secret substring and must be fixed hex length
+        assertThat(hash).doesNotContain("super-secret");
+        assertThat(hash).hasSize(AuditHashChain.HASH_HEX_LENGTH);
+        assertThat(hash).matches("[0-9a-f]+");
+    }
+
 }

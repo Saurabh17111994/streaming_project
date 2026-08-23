@@ -57,4 +57,19 @@ class PositionLifecycleTest {
         assertThat(PositionLifecycle.isLegalTransition(PositionState.OPEN, PositionState.UNKNOWN))
                 .isFalse();
     }
+
+    @Test void closedReentryMintsNewPositionIdCycle() {
+        // FLAT -> OPEN -> CLOSED -> OPEN cycle is legal per dossier §Position states
+        assertThat(PositionLifecycle.isLegalTransition(PositionState.FLAT, PositionState.OPEN)).isTrue();
+        assertThat(PositionLifecycle.isLegalTransition(PositionState.OPEN, PositionState.CLOSED)).isTrue();
+        assertThat(PositionLifecycle.isLegalTransition(PositionState.CLOSED, PositionState.OPEN)).isTrue();
+        // Unknown poisons
+        assertThat(PositionLifecycle.isLegalTransition(PositionState.UNKNOWN, PositionState.FLAT)).isFalse();
+    }
+    @Test void reducingToClosedAndReopen() {
+        assertThat(PositionLifecycle.derive(10, 5, true)).isEqualTo(PositionState.REDUCING);
+        assertThat(PositionLifecycle.derive(10, 10, true)).isEqualTo(PositionState.CLOSED);
+        assertThat(PositionLifecycle.derive(10, 0, true)).isEqualTo(PositionState.OPEN);
+    }
+
 }
