@@ -61,12 +61,7 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 			if !sleepContext(ctx, backoff) {
 				return
 			}
-			if backoff < maxBackoff {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
+			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
 		// Reset after a healthy connect. Reset to the caller-supplied initial
@@ -77,18 +72,22 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 		backoff = initialBackoff
 		updates := make(chan map[string]any, 16)
 		errors := make(chan error, 1)
+		readDone := make(chan struct{})
 		readCtx, cancel := context.WithCancel(ctx)
-		go source.Read(readCtx, func(update map[string]any) {
-			select {
-			case updates <- update:
-			case <-readCtx.Done():
-			}
-		}, func(readErr error) {
-			select {
-			case errors <- readErr:
-			default:
-			}
-		})
+		go func() {
+			defer close(readDone)
+			source.Read(readCtx, func(update map[string]any) {
+				select {
+				case updates <- update:
+				case <-readCtx.Done():
+				}
+			}, func(readErr error) {
+				select {
+				case errors <- readErr:
+				default:
+				}
+			})
+		}()
 
 		closed := false
 		for !closed && ctx.Err() == nil {
@@ -121,6 +120,25 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 						break
 					}
 				}
+			case <-readDone:
+				// Reader returned without an explicit error (clean close).
+				// Drain any queued postbacks that were sequenced before the
+				// return, then trigger a reconnect.
+				for {
+					select {
+					case drained := <-updates:
+						dreport := NormalizeOrderUpdate(drained)
+						if err := publish(dreport); err != nil && onError != nil {
+							onError(err)
+						}
+					default:
+						closed = true
+						break
+					}
+					if closed {
+						break
+					}
+				}
 			case <-ctx.Done():
 				closed = true
 			}
@@ -131,12 +149,7 @@ func runPostbackLoop(ctx context.Context, connect func() (OrderUpdateSource, err
 			if !sleepContext(ctx, backoff) {
 				return
 			}
-			if backoff < maxBackoff {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
+			backoff = nextBackoff(backoff, maxBackoff)
 		}
 	}
 }
@@ -150,6 +163,17 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func nextBackoff(current, maximum time.Duration) time.Duration {
+	if current <= 0 {
+		return 2 * time.Nanosecond
+	}
+	next := current * 2
+	if next > maximum {
+		return maximum
+	}
+	return next
 }
 
 // NormalizeOrderUpdate maps Arrow's JSON postback shape without making the

@@ -20,6 +20,7 @@ public final class FlussProjectionWriter implements ProjectionWriter {
     private final GatewayConfig config;
     private final Duration timeout;
     private final Map<String, Table> tables = new HashMap<>();
+    private final PostbackQuarantineStore quarantineStore;
 
     public static FlussProjectionWriter open(GatewayConfig config) {
         try {
@@ -28,8 +29,23 @@ public final class FlussProjectionWriter implements ProjectionWriter {
                     config.requestTimeout());
         } catch (Exception e) { throw new IllegalStateException("cannot open projection writer", e); }
     }
+
+    public static FlussProjectionWriter open(GatewayConfig config, PostbackQuarantineStore quarantineStore) {
+        try {
+            Configuration c = new Configuration(); c.setString("bootstrap.servers", config.flussBootstrap());
+            return new FlussProjectionWriter(ConnectionFactory.createConnection(c), config,
+                    config.requestTimeout(), quarantineStore);
+        } catch (Exception e) { throw new IllegalStateException("cannot open projection writer", e); }
+    }
+
     FlussProjectionWriter(Connection connection, GatewayConfig config, Duration timeout) {
+        this(connection, config, timeout, null);
+    }
+
+    FlussProjectionWriter(Connection connection, GatewayConfig config, Duration timeout,
+                          PostbackQuarantineStore quarantineStore) {
         this.connection = connection; this.config = config; this.timeout = timeout;
+        this.quarantineStore = quarantineStore;
     }
 
     @Override public void writeAudit(NormalizedExecutionEvent e) throws Exception {
@@ -45,6 +61,48 @@ public final class FlussProjectionWriter implements ProjectionWriter {
             upsert("Positions", positionRow(e));
             upsert("Position_State", positionStateRow(e));
         }
+    }
+
+    /**
+     * Tier 0 #6 quarantine path — fail-closed bijective guard.
+     * Appends an immutable row to Postback_Quarantine LOG.
+     * Caller must halt the affected scope after calling this (no further
+     * lifecycle/position writes for the same postbackEventId).
+     *
+     * <p>If a {@link PostbackQuarantineStore} was supplied, delegates to it;
+     * otherwise uses the same inline Fluss append pattern as {@link #writeAudit}.
+     */
+    public void writeQuarantine(NormalizedExecutionEvent e, String reason) throws Exception {
+        String evidenceSummary = reason;
+        byte[] rawPayload = e.fill() != null && e.fill().originalPayload() != null
+                ? e.fill().originalPayload() : new byte[0];
+        if (quarantineStore != null) {
+            quarantineStore.quarantine(e.postbackEventId(), reason, evidenceSummary, rawPayload);
+            return;
+        }
+        append("Postback_Quarantine", quarantineRow(e, reason, evidenceSummary, rawPayload));
+    }
+
+    /**
+     * Direct quarantine API for callers that already have the four store fields.
+     * Mirrors {@link PostbackQuarantineStore#quarantine} and also appends to
+     * Postback_Quarantine via the same Fluss append path when no store is wired.
+     */
+    public void writeQuarantine(String postbackEventId, String reason, String evidenceSummary, byte[] rawPayload) throws Exception {
+        if (quarantineStore != null) {
+            quarantineStore.quarantine(postbackEventId, reason, evidenceSummary, rawPayload);
+            return;
+        }
+        // Build a minimal quarantine row when only the four store fields are known.
+        // Fabricate a minimal NormalizedExecutionEvent envelope for row mapping.
+        NormalizedExecutionEvent minimal = new NormalizedExecutionEvent(
+                postbackEventId, config.accountScopeId(), config.executionPartitionId(),
+                0L, "gateway", "QUARANTINE", System.currentTimeMillis(),
+                null,
+                new NormalizedExecutionEvent.Fill("unknown", "2", null, null, null, null, "UNKNOWN",
+                        0L, 0L, null, null, null, null, 0L, 0L, rawPayload, "unknown", "QUARANTINED", reason, "2"),
+                null, null, null);
+        append("Postback_Quarantine", quarantineRow(minimal, reason, evidenceSummary, rawPayload));
     }
 
     private void append(String name, GenericRow row) throws Exception {
@@ -92,6 +150,45 @@ public final class FlussProjectionWriter implements ProjectionWriter {
         return GenericRow.of(bs(c.instructionId()), bs(c.executionAttemptId()), bs(e.accountScopeId()),
                 bs(c.clientOrderRef()), bs(c.brokerOrderId()), bs(c.tradeContextId()), bs(c.positionId()),
                 bs(c.verificationState()), bs(c.verificationEvidence()), c.correlatedTs(), bs("2"));
+    }
+
+    /**
+     * Postback_Quarantine LOG row (13 cols, 16_postback_quarantine.sql).
+     * Uses BinaryString for STRING cols and BYTES for payload, same pattern as auditRow/fillRow.
+     */
+    private GenericRow quarantineRow(NormalizedExecutionEvent e, String reason, String evidenceSummary, byte[] rawPayload) {
+        String quarantineId = "q-" + e.postbackEventId();
+        String payloadHash = null;
+        String brokerOrderId = null;
+        String instructionId = null;
+        String correlationAttempt = null;
+        if (e.fill() != null) {
+            payloadHash = e.fill().payloadHash();
+            brokerOrderId = e.fill().brokerOrderId();
+            instructionId = e.fill().instructionId();
+            correlationAttempt = e.fill().executionAttemptId();
+        }
+        if (brokerOrderId == null && e.correlation() != null) brokerOrderId = e.correlation().brokerOrderId();
+        if (instructionId == null && e.correlation() != null) instructionId = e.correlation().instructionId();
+        if (correlationAttempt == null && e.correlation() != null) correlationAttempt = e.correlation().executionAttemptId();
+        if (payloadHash == null && e.audit() != null) payloadHash = e.audit().evidenceHash();
+        if (payloadHash == null) payloadHash = "unknown";
+        long quarantinedTs = e.eventTs() != 0 ? e.eventTs() : System.currentTimeMillis();
+        Object[] v = new Object[13];
+        v[0] = bs(quarantineId);
+        v[1] = bs(e.postbackEventId());
+        v[2] = bs(reason);
+        v[3] = rawPayload == null ? new byte[0] : rawPayload;
+        v[4] = bs(payloadHash);
+        v[5] = bs(brokerOrderId);
+        v[6] = bs(instructionId);
+        v[7] = bs(correlationAttempt);
+        v[8] = bs("OPEN");
+        v[9] = bs(evidenceSummary);
+        v[10] = quarantinedTs;
+        v[11] = null;
+        v[12] = bs("2");
+        return GenericRow.of(v);
     }
 
     /**

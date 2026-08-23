@@ -26,6 +26,13 @@ public final class IntentValidator {
             throw invalid("limit order requires positive limit_price_paise");
         }
         if (i.expiryTs() != null && i.expiryTs() <= nowMs) throw invalid("intent expired");
+        if (!i.requestHash().matches("(?i)[0-9a-f]{64}")) throw invalid("request_hash must be hex sha256");
+        if (i.supersedesInstructionId() != null && !i.supersedesInstructionId().isBlank()) {
+            if (i.supersedesInstructionId().equals(i.instructionId())) throw invalid("self-supersede not allowed");
+            if (!i.supersedesInstructionId().matches("^[A-Za-z0-9_-]{1,64}$")) throw invalid("invalid supersedes_instruction_id");
+        }
+        if (i.orderType().equals("MARKET") && i.limitPricePaise() != null) throw invalid("market order must not have limit_price_paise");
+        if (i.strategyId().isBlank() || i.strategyVersion().isBlank() || i.configurationVersion().isBlank()) throw invalid("strategy fields must not be blank");
         return "accepted";
     }
 
