@@ -1,6 +1,6 @@
 # Foundation
 
-> **2026-08-22 current test truth:** unit suites green 436/247/376 (common/ingestion/compute) — Streaming-3000 hardening (T2 tunable backpressure +1 IngestionConfig leg, T3 RuntimeOptions passthrough legs, T5 CandleKvFirstWriteWinsFunctionTest ×6, T6 OHLC invariant/quarantine suites ×20, T7 SignalJobStrictGateT7Test ×10); plain-suite totals re-verified 2026-08-22 (mvn -o test per module).
+> **2026-08-23 current test truth:** unit suites green 437/247/383 (common/ingestion/compute) — fix-compose-health + hygiene (C1/C9 26→27 Position_State, DdlBootstrap Position_State, common SchemaCompliance 26→27, C14 placeholders, docs_audit 27); plain-suite totals re-verified 2026-08-23 (mvn test per module).
 > The longer historical status line below remains a dated implementation record; the current
 > C6 machine gate reads this line.
 

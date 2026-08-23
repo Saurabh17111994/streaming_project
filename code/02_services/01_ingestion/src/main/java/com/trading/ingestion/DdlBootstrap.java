@@ -492,6 +492,11 @@ public final class DdlBootstrap {
                             kvTable("instruction_id")),
                     Map.entry("eod_offload_state",
                             kvTable("record_id")),
+                    Map.entry("Position_State",
+                            TableDescriptor.builder()
+                                    .schema(MINIMAL_SCHEMA)
+                                    .distributedBy(16, "instrument_token")
+                                    .build()),
                     Map.entry("Execution_Intent_Processed",
                             TableDescriptor.builder().schema(MINIMAL_SCHEMA).distributedBy(8, "instruction_id").build())
             );
