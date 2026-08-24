@@ -94,6 +94,33 @@ pub fn place_envelope_from_payload(payload: &serde_json::Value) -> Result<Comman
     Ok(envelope)
 }
 
+/// Builds a cancel [`CommandEnvelope`] from a verified gateway payload
+/// (`"action": "cancel"` on `/v1/intents`).
+///
+/// Required: `instruction_id` (correlation) and `broker_order_id` (the bridge's
+/// cancel keys on the broker id — protocol validation rejects a cancel without
+/// one). The identity rule mirrors the place leg exactly: fresh UUID v4
+/// `execution_attempt_id`, deterministic 14-hex `client_order_ref` over
+/// `v1|instruction_id|execution_attempt_id`. No `order` block is attached.
+pub fn cancel_envelope_from_payload(
+    payload: &serde_json::Value,
+) -> Result<CommandEnvelope, String> {
+    let instruction_id = required_str(payload, "instruction_id")?;
+    let broker_order_id = required_str(payload, "broker_order_id")
+        .map_err(|_| "broker_order_id required for cancel".to_string())?;
+
+    let execution_attempt_id = UUID4::new().to_string();
+    let client_order_ref =
+        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
+    let mut envelope = CommandEnvelope::new(Command::Cancel, &UUID4::new().to_string());
+    envelope.instruction_id = instruction_id;
+    envelope.execution_attempt_id = execution_attempt_id;
+    envelope.client_order_ref = client_order_ref;
+    envelope.broker_order_id = broker_order_id;
+    envelope.validate().map_err(|e| e.to_string())?;
+    Ok(envelope)
+}
+
 fn required_str(payload: &serde_json::Value, key: &str) -> Result<String, String> {
     payload
         .get(key)
@@ -218,5 +245,45 @@ mod tests {
             env.client_order_ref,
             deterministic_client_order_ref("v1", "T9-SB-0001", &env.execution_attempt_id)
         );
+    }
+
+    fn cancel_payload() -> serde_json::Value {
+        json!({
+            "action": "cancel",
+            "instruction_id": "T9-SB-0001",
+            "broker_order_id": "BRK-0001",
+        })
+    }
+
+    #[test]
+    fn maps_cancel_payload_to_cancel_envelope() {
+        let env = cancel_envelope_from_payload(&cancel_payload()).expect("cancel payload maps");
+        assert_eq!(env.command, "cancel");
+        assert_eq!(env.instruction_id, "T9-SB-0001");
+        assert_eq!(env.broker_order_id, "BRK-0001");
+        // Same deterministic identity rule as the place leg.
+        assert_eq!(env.client_order_ref.len(), 14);
+        assert!(env.client_order_ref.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            env.client_order_ref,
+            deterministic_client_order_ref("v1", "T9-SB-0001", &env.execution_attempt_id)
+        );
+        assert!(env.order.is_none(), "cancel carries no order block");
+    }
+
+    #[test]
+    fn cancel_requires_broker_order_id() {
+        let mut p = cancel_payload();
+        p.as_object_mut().unwrap().remove("broker_order_id");
+        let err = cancel_envelope_from_payload(&p).unwrap_err();
+        assert!(err.contains("broker_order_id"), "err: {err}");
+    }
+
+    #[test]
+    fn cancel_requires_instruction_for_correlation() {
+        let mut p = cancel_payload();
+        p.as_object_mut().unwrap().remove("instruction_id");
+        let err = cancel_envelope_from_payload(&p).unwrap_err();
+        assert!(err.contains("instruction_id"), "err: {err}");
     }
 }

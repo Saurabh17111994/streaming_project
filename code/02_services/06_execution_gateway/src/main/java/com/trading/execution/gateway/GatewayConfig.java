@@ -22,7 +22,8 @@ public record GatewayConfig(
         Duration pollTimeout,
         String accountScopeId,
         String executionPartitionId,
-        boolean executionEnabled) {
+        boolean executionEnabled,
+        int maxPendingProjectionRecords) {
 
     public GatewayConfig {
         require(flussBootstrap, "FLUSS_BOOTSTRAP");
@@ -45,6 +46,27 @@ public record GatewayConfig(
             throw new IllegalArgumentException("timeouts must be positive");
         }
         // executionEnabled is a fail-closed flag; no extra validation beyond boolean parsing
+        if (maxPendingProjectionRecords <= 0) throw new IllegalArgumentException(
+                "MAX_PENDING_PROJECTION_RECORDS must be positive");
+    }
+
+    /** Dossier staleness bound default (WP-2): flood beyond this flips readiness false. */
+    public static final int DEFAULT_MAX_PENDING_PROJECTION_RECORDS = 1000;
+
+    /**
+     * Legacy 18-arg constructor: defaults MAX_PENDING_PROJECTION_RECORDS to the
+     * dossier default. New code should pass it explicitly or use fromEnvironment.
+     */
+    public GatewayConfig(
+            String flussBootstrap, String flussDatabase, String intentTable, String gateTable,
+            String attemptsTable, String correlationTable, String ledgerTable, String haltTable,
+            String bindHost, int bindPort, String nautilusEndpoint, String protocolVersion,
+            String sharedSecret, Duration requestTimeout, Duration pollTimeout,
+            String accountScopeId, String executionPartitionId, boolean executionEnabled) {
+        this(flussBootstrap, flussDatabase, intentTable, gateTable, attemptsTable,
+                correlationTable, ledgerTable, haltTable, bindHost, bindPort, nautilusEndpoint,
+                protocolVersion, sharedSecret, requestTimeout, pollTimeout, accountScopeId,
+                executionPartitionId, executionEnabled, DEFAULT_MAX_PENDING_PROJECTION_RECORDS);
     }
 
     /**
@@ -109,7 +131,9 @@ public record GatewayConfig(
                 Map.entry("GATEWAY_POLL_TIMEOUT_MS", env("GATEWAY_POLL_TIMEOUT_MS", "250")),
                 Map.entry("ACCOUNT_SCOPE_ID", requiredEnv("ACCOUNT_SCOPE_ID")),
                 Map.entry("EXECUTION_PARTITION_ID", requiredEnv("EXECUTION_PARTITION_ID")),
-                Map.entry("EXECUTION_ENABLED", env("EXECUTION_ENABLED", "false"))));
+                Map.entry("EXECUTION_ENABLED", env("EXECUTION_ENABLED", "false")),
+                Map.entry("MAX_PENDING_PROJECTION_RECORDS",
+                        env("MAX_PENDING_PROJECTION_RECORDS", "1000"))));
     }
 
     static GatewayConfig from(Map<String, String> e) {
@@ -122,7 +146,10 @@ public record GatewayConfig(
                 e.get("GATEWAY_SHARED_SECRET"), Duration.ofMillis(longValue(e, "GATEWAY_REQUEST_TIMEOUT_MS")),
                 Duration.ofMillis(longValue(e, "GATEWAY_POLL_TIMEOUT_MS")),
                 e.get("ACCOUNT_SCOPE_ID"), e.get("EXECUTION_PARTITION_ID"),
-                parseExecutionEnabled(e.get("EXECUTION_ENABLED")));
+                parseExecutionEnabled(e.get("EXECUTION_ENABLED")),
+                e.get("MAX_PENDING_PROJECTION_RECORDS") == null
+                        ? DEFAULT_MAX_PENDING_PROJECTION_RECORDS
+                        : integer(e, "MAX_PENDING_PROJECTION_RECORDS"));
     }
 
     private static boolean parseExecutionEnabled(String value) {

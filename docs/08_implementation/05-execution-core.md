@@ -529,14 +529,14 @@ stored in audit (only redacted hashes and summaries).
 | `BROKER_CLIENT_REFERENCE_FORMAT_TO_BE_VERIFIED` | Length/charset/echo evidence for the ≤16-char `client_order_ref` (carried in `remarks`) |
 | `BRIDGE_LISTEN_ADDR` | Localhost bind for the go-arrow bridge (loopback only) |
 | `EXECUTOR_ACCOUNT_SCOPE` / `EXECUTION_PARTITION_ID` | Fencing and gate scope |
-| `FENCING_LEASE_PROFILE_TO_BE_DEFINED` | Durable single-owner protocol |
+| `FENCING_LEASE_PROFILE` | Durable single-owner protocol — PINNED `30s` (`config.rs`, CHG-094); no longer TO_BE_DEFINED |
 | `GATE_INITIAL_STATE` | Must be `HALTED`; `GATE_EPOCH_POLICY_VERSION` monotonic |
 | `MAX_DECISION_LAG_MS` / `MAX_PROJECTION_LAG_MS` / `MAX_PENDING_PROJECTION_RECORDS` | Staleness and backlog bounds |
 | `POSTBACK_FINGERPRINT_VERSION` / `CORRELATION_POLICY_VERSION` / `LIFECYCLE_TRANSITION_VERSION` / `POSITION_PROJECTION_VERSION` | Capture-path versioned policies (evidence-gated) |
 | `BROKER_STATUS_MAPPING_VERSION_TO_BE_VERIFIED` / `BROKER_CLIENT_REFERENCE_ECHO_TO_BE_VERIFIED` | Status vocabulary + reference echo evidence |
 | `POSITION_ACTIONS_ENABLED` | Must be `false` for MVP; any other value fails startup |
 | `BABYSITTER_JOB_VERSION` / `POSITIONS_SCHEMA_VERSION` / `POSITION_FRESHNESS_POLICY_VERSION` | Versioned observation policy |
-| `CHECKPOINT_PROFILE_ID` / `POSITION_ACTIONS_SCHEMA_VERSION_TO_BE_DEFINED` | Babysitter checkpoint profile; future action schema |
+| `CHECKPOINT_PROFILE_ID_TO_BE_DEFINED` / `POSITION_ACTIONS_SCHEMA_VERSION_TO_BE_DEFINED` | Babysitter checkpoint profile / future action schema — deliberately UNPINNED until the Position_Actions work package lands a consumer (CHG-094): defining an unread constant now would be a placeholder, not a pin |
 | `AUDIT_SCHEMA_VERSION` / `ARROW_REQUEST_SCHEMA_VERSION_TO_BE_VERIFIED` | Immutable audit envelope / approved API contract version |
 | `NAUTILUS_RISK_MAX_ORDER_SUBMIT` / `NAUTILUS_RISK_MAX_NOTIONAL_PER_ORDER` | Pre-trade risk limits |
 | Fluss table/schema/version identifiers | Reader + projection sinks |

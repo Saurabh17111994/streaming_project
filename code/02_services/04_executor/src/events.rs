@@ -51,10 +51,20 @@ pub fn lifecycle_event_value(
             format!("v1|{}|{}", place.instruction_id, place.execution_attempt_id).as_bytes()
         )
     );
+    // Evidence names the leg honestly: a routed cancel ack is not a place ack.
+    let is_cancel = place.command() == Some(crate::bridge::protocol::Command::Cancel);
+    let verification_evidence = if is_cancel {
+        "sync-cancel-ack"
+    } else {
+        "sync-place-ack"
+    };
+    // Default state per leg: a cancel ack without an explicit status normalizes
+    // to CANCELED (never ACCEPTED — that would misstate the lifecycle).
+    let default_state = if is_cancel { "CANCELED" } else { "ACCEPTED" };
     let normalized_state = report
         .order_status
         .clone()
-        .unwrap_or_else(|| "ACCEPTED".to_string());
+        .unwrap_or_else(|| default_state.to_string());
     let pending_qty = place
         .order
         .as_ref()
@@ -93,7 +103,7 @@ pub fn lifecycle_event_value(
             "tradeContextId": trade_context_id,
             "positionId": serde_json::Value::Null,
             "verificationState": "VERIFIED",
-            "verificationEvidence": "sync-place-ack",
+            "verificationEvidence": verification_evidence,
             "correlatedTs": now_ms,
         },
     })
@@ -232,6 +242,23 @@ mod tests {
         let a = lifecycle_event_value(&report(), &place_env(), "s", "p", 1, "tc", 1);
         let b = lifecycle_event_value(&report(), &place_env(), "s", "p", 1, "tc", 2);
         assert_eq!(a["postbackEventId"], b["postbackEventId"]);
+    }
+
+    #[test]
+    fn cancel_ack_normalizes_to_canceled_with_cancel_evidence() {
+        let mut env = CommandEnvelope::new(Command::Cancel, "req-2");
+        env.instruction_id = "T9-SB-0001".into();
+        env.execution_attempt_id = "att-0002".into();
+        env.client_order_ref = "b1b2c3d4e5f6a7b8".into();
+        env.broker_order_id = "BRK-0001".into();
+        // Sync cancel ack carries no explicit status (the fake pushes CANCELED on
+        // the async report) — the lifecycle image must still normalize honestly.
+        let mut rep = report();
+        rep.order_status = None;
+        let v = lifecycle_event_value(&rep, &env, "s", "p", 1, "tc", 5);
+        assert_eq!(v["lifecycle"]["normalizedState"], "CANCELED");
+        assert_eq!(v["lifecycle"]["pendingQty"], 0);
+        assert_eq!(v["correlation"]["verificationEvidence"], "sync-cancel-ack");
     }
 
     #[tokio::test]

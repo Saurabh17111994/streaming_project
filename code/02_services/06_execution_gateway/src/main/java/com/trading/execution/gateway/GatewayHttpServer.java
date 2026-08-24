@@ -24,6 +24,10 @@ public final class GatewayHttpServer implements AutoCloseable {
     private final Consumer<JsonNode> eventConsumer;
     private final GateStateStore gateStore;
     private final ObjectMapper mapper = new ObjectMapper();
+    /** Concurrent in-flight projection applies (WP-2 MAX_PENDING_PROJECTION_RECORDS). */
+    private final java.util.concurrent.atomic.AtomicInteger projectionInFlight =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.Executor httpExecutor;
 
     public GatewayHttpServer(GatewayConfig config, GatewayReadiness readiness,
             Consumer<JsonNode> eventConsumer) throws IOException {
@@ -31,10 +35,21 @@ public final class GatewayHttpServer implements AutoCloseable {
     }
     public GatewayHttpServer(GatewayConfig config, GatewayReadiness readiness,
             Consumer<JsonNode> eventConsumer, GateStateStore gateStore) throws IOException {
+        this(config, readiness, eventConsumer, gateStore, null);
+    }
+    /**
+     * Full constructor. {@code httpExecutor} {@code null} keeps the platform default
+     * (serial handler dispatch); a pool is how the flood soak drives real concurrency.
+     */
+    public GatewayHttpServer(GatewayConfig config, GatewayReadiness readiness,
+            Consumer<JsonNode> eventConsumer, GateStateStore gateStore,
+            java.util.concurrent.Executor httpExecutor) throws IOException {
         this.config = config; this.readiness = readiness; this.eventConsumer = eventConsumer;
         this.gateStore = java.util.Objects.requireNonNull(gateStore, "gateStore");
+        this.httpExecutor = httpExecutor;
         this.protocol = new GatewayProtocol(config.sharedSecret());
         this.server = HttpServer.create(new InetSocketAddress(config.bindHost(), config.bindPort()), 16);
+        if (httpExecutor != null) server.setExecutor(httpExecutor);
         server.createContext("/healthz", this::health);
         server.createContext("/readyz", this::ready);
         server.createContext("/v1/events", this::events);
@@ -109,8 +124,28 @@ public final class GatewayHttpServer implements AutoCloseable {
             reply(x, 503, "gateway not ready"); return;
         }
         if (eventConsumer == null) { reply(x, 503, "projection consumer unavailable"); return; }
-        eventConsumer.accept(v.envelope().payload());
-        reply(x, 202, "accepted");
+        // WP-2 backpressure bound: concurrent in-flight applies beyond
+        // MAX_PENDING_PROJECTION_RECORDS flip durableWrites readiness false and
+        // shed load (503) instead of queueing without bound.
+        int inFlightNow = projectionInFlight.incrementAndGet();
+        int maxPending = config.maxPendingProjectionRecords();
+        try {
+            if (inFlightNow > maxPending) {
+                readiness.durableWrites(false,
+                        "projection backlog " + inFlightNow + " > " + maxPending);
+                reply(x, 503, "projection backlog exceeds MAX_PENDING_PROJECTION_RECORDS");
+                return;
+            }
+            eventConsumer.accept(v.envelope().payload());
+            reply(x, 202, "accepted");
+        } finally {
+            // Restore only on FULL drain: while any apply is in flight past a
+            // flagged bound the gateway stays conservatively not-ready.
+            if (projectionInFlight.decrementAndGet() == 0
+                    && !readiness.snapshot().durableWriteReady()) {
+                readiness.durableWrites(true, "projection backlog drained");
+            }
+        }
     }
     private static void reply(HttpExchange x, int code, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);

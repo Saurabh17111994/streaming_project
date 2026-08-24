@@ -53,6 +53,12 @@ struct Snapshot {
     shared_secret: String,
     protocol_version: String,
     gateway_endpoint: String,
+    /// First unresolved UNKNOWN outcome (WP-2 §UNKNOWN): arms the 15 s escalation.
+    unknown_first_seen: Option<std::time::Instant>,
+    /// Escalation window; production pins 15 s (dossier), tests shrink it.
+    unknown_escalation: std::time::Duration,
+    /// Set once the escalation fires: an operator must review before any re-enable.
+    operator_review_required: bool,
 }
 
 impl ServerState {
@@ -66,10 +72,17 @@ impl ServerState {
                 shared_secret: String::new(),
                 protocol_version: "execution-gateway.v1".into(),
                 gateway_endpoint: String::new(),
+                unknown_first_seen: None,
+                unknown_escalation: Self::UNKNOWN_ESCALATION,
+                operator_review_required: false,
             })),
             forwarder: None,
         }
     }
+
+    /// Production escalation window for an unresolved UNKNOWN outcome (dossier
+    /// WP-2 §UNKNOWN: 15 s global halt timer + operator review hook).
+    pub const UNKNOWN_ESCALATION: std::time::Duration = std::time::Duration::from_secs(15);
 
     /// With private gateway auth (shared secret + expected protocol version) for POST /v1/intents.
     pub fn with_gateway_auth(
@@ -85,9 +98,21 @@ impl ServerState {
                 shared_secret,
                 protocol_version,
                 gateway_endpoint: String::new(),
+                unknown_first_seen: None,
+                unknown_escalation: Self::UNKNOWN_ESCALATION,
+                operator_review_required: false,
             })),
             forwarder: None,
         }
+    }
+
+    /// Shrinks the UNKNOWN escalation window (tests only — production keeps 15 s).
+    #[cfg(test)]
+    fn with_unknown_escalation(self, d: std::time::Duration) -> Self {
+        if let Ok(mut s) = self.inner.lock() {
+            s.unknown_escalation = d;
+        }
+        self
     }
 
     /// Attaches the bridge transport for the ENABLED sync forward (T4a). When absent the
@@ -123,7 +148,56 @@ impl ServerState {
             shared_secret: String::new(),
             protocol_version: "execution-gateway.v1".into(),
             gateway_endpoint: String::new(),
+            unknown_first_seen: None,
+            unknown_escalation: Self::UNKNOWN_ESCALATION,
+            operator_review_required: true,
         })
+    }
+
+    /// Records the first unresolved UNKNOWN outcome and arms its one-shot escalation
+    /// task (WP-2 §UNKNOWN: never retried; after 15 s force-HALT + operator review).
+    fn record_unknown_outcome(&self) {
+        let escalation = {
+            let mut s = match self.inner.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            if s.unknown_first_seen.is_some() || s.operator_review_required {
+                return; // already armed / already escalated
+            }
+            s.unknown_first_seen = Some(std::time::Instant::now());
+            s.unknown_escalation
+        };
+        let st = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(escalation).await;
+            st.escalate_unknown_review();
+        });
+    }
+
+    /// Escalation hook: force the gate back to HALTED (safety halt from any state)
+    /// and raise the operator-review flag. Idempotent; a no-op when the outcome was
+    /// resolved (first-seen cleared) or already escalated.
+    fn escalate_unknown_review(&self) {
+        let mut s = match self.inner.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let Some(t0) = s.unknown_first_seen else {
+            return;
+        };
+        if t0.elapsed() < s.unknown_escalation || s.operator_review_required {
+            return;
+        }
+        if s.gate != ExecState::Halted {
+            // Forced safety halt from any state (gate invariant: uncertain → HALTED).
+            s.gate = ExecState::Halted;
+        }
+        s.operator_review_required = true;
+        tracing::error!(
+            "UNKNOWN bridge outcome unresolved for >= {:?}: gate force-HALTED, operator review required before re-enable",
+            s.unknown_escalation
+        );
     }
 }
 
@@ -136,6 +210,9 @@ impl Clone for Snapshot {
             shared_secret: self.shared_secret.clone(),
             protocol_version: self.protocol_version.clone(),
             gateway_endpoint: self.gateway_endpoint.clone(),
+            unknown_first_seen: self.unknown_first_seen,
+            unknown_escalation: self.unknown_escalation,
+            operator_review_required: self.operator_review_required,
         }
     }
 }
@@ -151,6 +228,7 @@ pub fn health_json(state: &ServerState) -> serde_json::Value {
         "trading_ready": trading_ready,
         "draining": s.draining,
         "enabled": s.gate == ExecState::Enabled,
+        "operator_review_required": s.operator_review_required,
     })
 }
 
@@ -239,7 +317,21 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
             let envelope = ver
                 .envelope
                 .expect("accepted verification carries the decoded envelope");
-            let place = match intent::place_envelope_from_payload(&envelope.payload) {
+            // Optional `action` field: absent → "place" (back-compatible with the
+            // pinned schema-v1 payload bytes); "cancel" → cancel mapping (requires
+            // broker_order_id). Anything else fails closed with 422.
+            let action = envelope
+                .payload
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("place")
+                .to_ascii_lowercase();
+            let cmd_env = match action.as_str() {
+                "place" => intent::place_envelope_from_payload(&envelope.payload),
+                "cancel" => intent::cancel_envelope_from_payload(&envelope.payload),
+                other => Err(format!("unsupported action: {other}")),
+            };
+            let cmd_env = match cmd_env {
                 Ok(p) => p,
                 Err(reason) => {
                     return json(
@@ -257,7 +349,7 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
             // otherwise stall every subsequent order submit).
             let submit = {
                 let mut guard = forwarder.lock().await;
-                guard.send_command(place.clone()).await
+                guard.send_command(cmd_env.clone()).await
             };
             match submit {
                 Ok(report) if report.is_success() => {
@@ -273,7 +365,7 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
                     let now = now_ms();
                     let event = events::lifecycle_event_value(
                         &report,
-                        &place,
+                        &cmd_env,
                         &envelope.account_scope_id,
                         &envelope.execution_partition_id,
                         envelope.gate_epoch,
@@ -303,9 +395,10 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
                         &serde_json::json!({
                             "accepted": true,
                             "gate_state": snap.gate.as_str(),
-                            "instruction_id": place.instruction_id,
-                            "execution_attempt_id": place.execution_attempt_id,
-                            "client_order_ref": place.client_order_ref,
+                            "action": action,
+                            "instruction_id": cmd_env.instruction_id,
+                            "execution_attempt_id": cmd_env.execution_attempt_id,
+                            "client_order_ref": cmd_env.client_order_ref,
                             "broker_order_id": report.broker_order_id,
                             "order_status": report.order_status,
                             "event_emission": delivery,
@@ -321,28 +414,34 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
                         "gate_state": snap.gate.as_str(),
                     }),
                 ),
-                Ok(report) => json(
-                    503,
-                    &serde_json::json!({
-                        "accepted": false,
-                        "outcome": "UNKNOWN",
-                        "reason": if report.reason.is_empty() {
-                            "bridge UNKNOWN outcome".to_string()
-                        } else {
-                            report.reason
-                        },
-                        "gate_state": snap.gate.as_str(),
-                    }),
-                ),
-                Err(e) => json(
-                    503,
-                    &serde_json::json!({
-                        "accepted": false,
-                        "outcome": "UNKNOWN",
-                        "reason": e.to_string(),
-                        "gate_state": snap.gate.as_str(),
-                    }),
-                ),
+                Ok(report) => {
+                    state.record_unknown_outcome();
+                    json(
+                        503,
+                        &serde_json::json!({
+                            "accepted": false,
+                            "outcome": "UNKNOWN",
+                            "reason": if report.reason.is_empty() {
+                                "bridge UNKNOWN outcome".to_string()
+                            } else {
+                                report.reason
+                            },
+                            "gate_state": snap.gate.as_str(),
+                        }),
+                    )
+                }
+                Err(e) => {
+                    state.record_unknown_outcome();
+                    json(
+                        503,
+                        &serde_json::json!({
+                            "accepted": false,
+                            "outcome": "UNKNOWN",
+                            "reason": e.to_string(),
+                            "gate_state": snap.gate.as_str(),
+                        }),
+                    )
+                }
             }
         }
         (m, "/healthz") | (m, "/readyz") if m != "GET" => text(405, "method_not_allowed"),
@@ -687,6 +786,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_outcome_escalates_to_halt_and_operator_review() {
+        // Shrunk escalation window (production pins 15 s): UNKNOWN → 503, then the
+        // watchdog force-HALTs the gate and raises operator_review_required.
+        let state = enabled_state(fake_forwarder(CommandScript::Unknown(
+            "synthetic-unknown".into(),
+        )))
+        .with_unknown_escalation(std::time::Duration::from_millis(80));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 503, "body: {b}");
+        // Poll /healthz until the escalation fires.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let (_, hb) = raw_request(addr, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n").await;
+            let review = hb.contains("\"operator_review_required\":true");
+            if review || std::time::Instant::now() > deadline {
+                assert!(review, "escalation never fired; last body: {hb}");
+                assert!(
+                    hb.contains("\"gate_state\":\"HALTED\""),
+                    "watchdog must force HALT; last body: {hb}"
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+    #[tokio::test]
     async fn intents_enabled_bridge_rejected_returns_409() {
         let state = enabled_state(fake_forwarder(CommandScript::Reject(
             "synthetic-reject".into(),
@@ -712,6 +839,56 @@ mod tests {
         assert_eq!(s, 422, "body: {b}");
         assert!(b.contains("\"accepted\":false"), "body: {b}");
         assert!(b.contains("symbol required"), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_cancel_action_cancels_placed_order() {
+        // Two scripts: one per bridge round-trip (place, then cancel) — the fake
+        // consumes scripts FIFO, one per send_command.
+        let mut fake = FakeBridge::new();
+        fake.script(CommandScript::Accept);
+        fake.script(CommandScript::Accept);
+        let forwarder = Arc::new(tokio::sync::Mutex::new(
+            Box::new(fake) as Box<dyn BridgeClient + Send>
+        ));
+        let state = enabled_state(forwarder);
+        let addr = spawn_server(state).await;
+        // Place first: the fake mints BRK-0001 into its order book.
+        let (sp, bp) = raw_request(addr, &encoded_bieq_request("s3cr3t").await).await;
+        assert_eq!(sp, 202, "place body: {bp}");
+        assert!(
+            bp.contains("\"broker_order_id\":\"BRK-0001\""),
+            "body: {bp}"
+        );
+        // Cancel it via the action discriminator: same forwarder state, 202 + CANCELED.
+        let payload = serde_json::json!({
+            "action": "cancel",
+            "instruction_id": "T9-SB-0001",
+            "broker_order_id": "BRK-0001",
+        });
+        let (sc, bc) =
+            raw_request(addr, &encoded_request_with_payload("s3cr3t", payload).await).await;
+        assert_eq!(sc, 202, "cancel body: {bc}");
+        assert!(bc.contains("\"action\":\"cancel\""), "body: {bc}");
+        assert!(
+            bc.contains("\"broker_order_id\":\"BRK-0001\""),
+            "body: {bc}"
+        );
+        // The fake carries the terminal CANCELED status on the async report; the
+        // sync ack may omit order_status (null here) — the lifecycle event leg
+        // normalizes that to CANCELED (see events.rs default_state).
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_rejects_unknown_action_with_422() {
+        let state = enabled_state(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        let mut payload: serde_json::Value = serde_json::from_str(&bieq_payload_json()).unwrap();
+        payload["action"] = serde_json::json!("amend");
+        let req = encoded_request_with_payload("s3cr3t", payload).await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 422, "body: {b}");
+        assert!(b.contains("unsupported action"), "body: {b}");
     }
 
     #[tokio::test]
