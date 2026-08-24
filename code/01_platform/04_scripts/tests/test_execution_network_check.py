@@ -51,7 +51,7 @@ class ExecutionNetworkCheckTest(unittest.TestCase):
     def test_rejects_arrow_credentials_outside_market_data_exception(self):
         config = valid_config()
         config["services"]["rust-executor"]["environment"] = {
-            "ARROW_TOKEN": "must-not-be-here"
+            "ARROW_APP_SECRET": "must-not-be-here"
         }
         errors = MODULE.validate_config(config)
         self.assertTrue(any("rust-executor" in error for error in errors))

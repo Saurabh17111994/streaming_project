@@ -56,12 +56,16 @@ class LiveClaimClassificationTests(unittest.TestCase):
 
     def test_truth_live_counts_are_filtered(self):
         # Once fixed to the current truth, the same constructions stay silent.
+        # Truth is DERIVED from the scanner constants so a future truth bump
+        # cannot silently re-red this gate (3rd occurrence of this failure class).
+        ing = s.SUITE_TRIPLE_TRUTH["ingestion"]
+        com = s.SUITE_TRIPLE_TRUTH["common"]
         hits = scan_text(
             "The 2026-08-15 audit verified the suites are green — "
-            "now 236/0/8-skips, common 341/0/1-skip, Go bridge PASS.\n")
+            f"now {ing[0]}/0/{ing[2]}-skips, common {com[0]}/0/{com[2]}-skip, Go bridge PASS.\n")
         self.assertEqual(hits, [])
         hits = scan_text(
-            "the current default-run totals are 341 common / 0 failures / 1 skip\n")
+            f"the current default-run totals are {com[0]} common / 0 failures / {com[2]} skip\n")
         self.assertEqual(hits, [])
 
     def test_dated_claim_without_live_marker_stays_annotated(self):
@@ -71,14 +75,18 @@ class LiveClaimClassificationTests(unittest.TestCase):
                          {("test-count-stale", "LINE-ANNOTATED")})
 
     def test_c6_citation_not_double_fired(self):
-        # "current truth is 341/236/294" is a C6-triple citation (checked by
-        # C6_TRIPLE_CLAIM_TYPES), not a suite-triple live claim.
+        # "current truth is N/N/N" is a C6-triple citation (checked by
+        # C6_TRIPLE_CLAIM_TYPES), not a suite-triple live claim — derived from
+        # C6_TRIPLE_TRUTH so a truth bump cannot break the silent path.
+        c6 = "/".join(str(n) for n in s.C6_TRIPLE_TRUTH)
         hits = scan_text(
-            "the current truth is 341/236/294 (docs-audit C6 line 341/236/294)\n")
+            f"the current truth is {c6} (docs-audit C6 line {c6})\n")
         self.assertEqual(hits, [])
 
     def test_now_that_is_not_a_live_marker(self):
-        hits = scan_text("now that the suite is common 341/0/1, nothing fires 2026-08-13\n")
+        com = s.SUITE_TRIPLE_TRUTH["common"]
+        hits = scan_text(
+            f"now that the suite is common {com[0]}/0/{com[2]}, nothing fires 2026-08-13\n")
         self.assertEqual(hits, [])
 
     def test_status_word_current_is_not_live(self):
@@ -119,9 +127,12 @@ class LiveClaimVerdictTests(unittest.TestCase):
 
     def test_clean_tree_passes_verdict(self):
         with tempfile.TemporaryDirectory() as d:
+            ing = s.SUITE_TRIPLE_TRUTH["ingestion"]
+            com = s.SUITE_TRIPLE_TRUTH["common"]
             (pathlib.Path(d) / "clean.md").write_text(
-                "suites green (ingestion 193 at 2026-08-15 — now 236/0/8-skips, "
-                "common 341/0/1-skip)\n", encoding="utf-8")
+                "suites green (ingestion 193 at 2026-08-15 — "
+                f"now {ing[0]}/0/{ing[2]}-skips, common {com[0]}/0/{com[2]}-skip)\n",
+                encoding="utf-8")
             self.assertEqual(self._main("--dir", d), 0)
 
 

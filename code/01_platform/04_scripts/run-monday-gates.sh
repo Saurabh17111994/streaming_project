@@ -200,10 +200,10 @@ fi
 
 # ── 3. Full Java gate with ALL integration flags ──────────────────────────────
 echo "=== [8/12] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
-if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
+	if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_E2E=true INGESTION_INT_TEST_FLUSS=true \
 	INGESTION_INT_TEST_MANIFEST=true INGESTION_INT_TEST_PERF=true \
-	mvn -o test -pl 02_services/01_ingestion -am"; then
+	mvn -o test -pl 02_services/01_ingestion -am" >"$JAVA_LOG" 2>&1; then
 	echo "FAIL: Java suite failed or timed out — see $JAVA_LOG" | tee -a "$SUMMARY"
 	gate_fail
 fi

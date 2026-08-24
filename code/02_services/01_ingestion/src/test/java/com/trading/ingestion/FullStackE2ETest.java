@@ -179,6 +179,10 @@ class FullStackE2ETest {
             env.put("ARROW_USER_ID", "e2e-user");
         env.put("ARROW_PASSWORD", "e2e-pass");
         env.put("ARROW_TOTP_KEY", "JBSWY3DPEHPK3PXP");
+            // TOTP migration (2026-08-24): the bridge AutoLogins against the real
+            // API. E2E must use the fake-broker auth mode so no login API call
+            // happens (e2e-user is not a real account — "user not found" 400).
+            env.put("ARROW_FAKE_BROKER", "1");
             env.put("FLUSS_BOOTSTRAP", "localhost:9123");
             env.put("RAW_TABLE_NAME", "raw_table_1");
             env.put("ARROW_MAX_EVENT_AGE_MS", "5000");

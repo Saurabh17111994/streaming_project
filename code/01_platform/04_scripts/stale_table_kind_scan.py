@@ -41,12 +41,12 @@ that time" (e.g. "(2026-08-10: ... 21 tables ...)") — a distant date on the
 same line does NOT hide a stale code description.
 
 Test-count drift claims (same tiers, truth from the docs-audit C6 line,
-01-foundation.md L3 — common 341 / ingestion 236 / compute 319):
+01-foundation.md L3 — TEST_COUNT_TRUTH below, currently 464/247/387):
 
   * test-count-stale -> "common N" / "ingestion N" / "compute N" (or
                         "N common/ingestion/compute tests") claims where N
                         differs from the C6 truth. The correct values
-                        (341/236/294) are filtered in code.
+                        (TEST_COUNT_TRUTH) are filtered in code.
   * c6-triple-stale   -> "docs-audit C6 line N/N/N" citations where any of
                         the three counts (common/ingestion/compute) differs
                         from the C6 truth.
@@ -599,7 +599,7 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                              f"truth: {truth}"))
 
         # Test-count drift (common/compute counts vs the docs-audit C6 truth)
-        # — same line loop; the truth-filter skips the correct values (340/325).
+        # — same line loop; the truth-filter skips the correct values (TEST_COUNT_TRUTH).
         for claim_type, rx in TEST_COUNT_CLAIM_TYPES:
             for m in rx.finditer(line):
                 if m.group(1):
@@ -635,7 +635,7 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                     continue
                 seen.add(key)
                 hits.append((TIER_RANK[tier], i + 1, claim_type, line.strip(),
-                             "truth: 341/236/294 common/ingestion/compute (docs-audit C6)"))
+                             f"truth: {C6_TRIPLE_TRUTH[0]}/{C6_TRIPLE_TRUTH[1]}/{C6_TRIPLE_TRUTH[2]} common/ingestion/compute (docs-audit C6)"))
 
         # Bare "now/current N/M/K" suite-triple claims (no module word) — a
         # live current-state claim; always the failing LIVE-STALE tier (there
@@ -651,9 +651,13 @@ def scan_file(path: Path) -> list[tuple[int, int, str, str, str]]:
                 if key in seen:
                     continue
                 seen.add(key)
+                st_com = SUITE_TRIPLE_TRUTH["common"]
+                st_ing = SUITE_TRIPLE_TRUTH["ingestion"]
+                st_cpt = SUITE_TRIPLE_TRUTH["compute"]
                 hits.append((TIER_RANK["LIVE-STALE"], i + 1, claim_type, line.strip(),
-                             "truth: current suite triples common 341/0/1, "
-                             "ingestion 236/0/8, compute 319/0/17 (docs-audit C6)"))
+                             f"truth: current suite triples common {st_com[0]}/0/{st_com[2]}, "
+                             f"ingestion {st_ing[0]}/0/{st_ing[2]}, compute {st_cpt[0]}/0/{st_cpt[2]} "
+                             "(docs-audit C6)"))
 
     # Section-heading kind assertions: "### LOG/KV contract" headings that
     # introduce a now-contradictory table within the following few lines.

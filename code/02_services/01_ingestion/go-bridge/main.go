@@ -84,24 +84,36 @@ func main() {
 	client := arrow.NewClient(appID, appSecret)
 	var refreshAuth func(context.Context) error
 
-	if userID == "" || password == "" || totpKey == "" {
-		logf("live mode requires ARROW_USER_ID+PASSWORD+TOTP_KEY (ARROW_TOKEN removed 2026-08-24)")
-		// Fatal auth failure → status 2 (plan §main.go).
-		os.Exit(exitFatalStart)
-	}
-	refreshAuth = func(ctx context.Context) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	// Test-only fake-broker auth mode (ARROW_FAKE_BROKER=1, paired with the
+	// ARROW_HFT_URL development override): skip AutoLogin so bridge lifecycle
+	// tests (FullStackE2E) can run against faketool without hitting the real
+	// login API. Production is unchanged — without the flag the TOTP trio is
+	// mandatory and AutoLogin is the only auth path (ARROW_TOKEN removed
+	// 2026-08-24).
+	if isFakeBrokerMode() {
+		logf("fake-broker auth mode (test-only): skipping AutoLogin")
+		client.SetToken("fake-token")
+		refreshAuth = func(context.Context) error { return nil }
+	} else {
+		if userID == "" || password == "" || totpKey == "" {
+			logf("live mode requires ARROW_USER_ID+PASSWORD+TOTP_KEY (ARROW_TOKEN removed 2026-08-24)")
+			// Fatal auth failure → status 2 (plan §main.go).
+			os.Exit(exitFatalStart)
 		}
-		return client.AutoLogin(userID, password, totpKey)
+		refreshAuth = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return client.AutoLogin(userID, password, totpKey)
+		}
+		logf("auto-login user=%s", userID)
+		if err := client.AutoLogin(userID, password, totpKey); err != nil {
+			fmt.Fprintf(os.Stderr, "arrow-bridge: AutoLogin failed: %v\n", err)
+			// Fatal auth failure → status 2 (plan §main.go).
+			os.Exit(exitFatalStart)
+		}
+		logf("authenticated (token_len=%d)", len(client.GetToken()))
 	}
-	logf("auto-login user=%s", userID)
-	if err := client.AutoLogin(userID, password, totpKey); err != nil {
-		fmt.Fprintf(os.Stderr, "arrow-bridge: AutoLogin failed: %v\n", err)
-		// Fatal auth failure → status 2 (plan §main.go).
-		os.Exit(exitFatalStart)
-	}
-	logf("authenticated (token_len=%d)", len(client.GetToken()))
 
 	// instrument tokens — auto-extracted from Arrow broker CSV
 	// Priority: 1) ARROW_INSTRUMENT_TOKENS env var, 2) CSV at
@@ -213,6 +225,13 @@ func main() {
 	// lost to a goroutine/main exit race.
 	finalTickCountReport.Do(reportTickCounts)
 	emitShutdownEvent()
+}
+
+// isFakeBrokerMode reports the test-only fake-broker auth mode
+// (ARROW_FAKE_BROKER=1/true, see main()).
+func isFakeBrokerMode() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("ARROW_FAKE_BROKER")))
+	return v == "1" || v == "true"
 }
 
 // bridgeShutdownOnce collapses duplicate shutdown paths so the
