@@ -74,6 +74,53 @@ def _b64(s: str) -> str:
     return base64.b64encode(s.encode()).decode()
 
 
+EMPTY_FILTER = {
+    "type": "condition",
+    "values": [],
+    "logicalOperator": "AND",
+    "filterType": "condition",
+}
+
+
+def _normalize(doc: dict) -> None:
+    """Complete a dashboard file to the full v8 schema O2 v0.91.5 requires.
+
+    Fill-in defaults only — existing values are never overwritten. Without
+    this the POST 422s (`missing field show_legends`) because the repo files
+    carry a reduced panel shape. Field requirements verified against the live
+    API (see o2-provision.py make_panel_v8 / managed skill
+    o2-v8-dashboard-provisioning): PanelConfig.show_legends and
+    QueryConfig.promql_legend have no serde default.
+    """
+    for tab in doc.get("tabs", []):
+        for index, panel in enumerate(tab.get("panels", [])):
+            config = panel.setdefault("config", {})
+            config.setdefault("show_legends", True)
+            is_promql = panel.get("queryType") == "promql"
+            for query in panel.get("queries", []):
+                query.setdefault("customQuery", True)
+                fields = query.setdefault("fields", {})
+                fields.setdefault("stream_type", "metrics")
+                fields.setdefault("x", [])
+                fields.setdefault("y", [])
+                fields.setdefault("z", [])
+                fields.setdefault("filter", dict(EMPTY_FILTER))
+                if not is_promql and not fields["x"] and not fields["y"]:
+                    fields["x"] = [
+                        {"label": "_timestamp", "alias": "_timestamp",
+                         "column": "_timestamp"}
+                    ]
+                    fields["y"] = [
+                        {"label": "value", "alias": "value", "column": "value"}
+                    ]
+                qconfig = query.setdefault("config", {})
+                qconfig.setdefault(
+                    "promql_legend", "{{task_name}}" if is_promql else ""
+                )
+            layout = panel.setdefault("layout", {"x": 0, "y": 0, "w": 96, "h": 4})
+            layout.setdefault("i", index)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
@@ -93,6 +140,8 @@ def main() -> int:
     user = os.environ.get("O2_USER", "admin@example.com")
 
     manifest, dashboards = _load()
+    for _, doc in dashboards:
+        _normalize(doc)
     existing = {}
     if not args.dry_run:
         status, body = _api(base, org, user, password, "/dashboards")

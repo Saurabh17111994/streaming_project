@@ -32,9 +32,14 @@ def _b64(s: str) -> str:
 
 
 def _api(base: str, org: str, user: str, pwd: str, path: str, method="GET", body=None):
-    url = f"{base.rstrip('/')}/api/{org}{path}"
+    # v0.91.5: v2 alerts live at /api/v2/{org}/... (v2 BEFORE the org id;
+    # /api/{org}/v2/alerts 404s). Callers signal v2 with a "v2/" path prefix.
+    if path.startswith("v2/"):
+        url = f"{base.rstrip('/')}/api/v2/{org}/{path[len('v2/'):]}"
+    else:
+        url = f"{base.rstrip('/')}/api/{org}{path}"
     headers = {
-        "Authorization": "Basic " + _b64(f"{user}:{pwd}"),
+        "Authorization": f"Basic {_b64(f'{user}:{pwd}')}",
         "Content-Type": "application/json",
     }
     data = json.dumps(body).encode() if body is not None else None
@@ -76,7 +81,7 @@ def main() -> int:
 
     existing: dict[str, dict] = {}
     if not args.dry_run:
-        status, body = _api(base, org, user, pwd, "/alerts")
+        status, body = _api(base, org, user, pwd, "v2/alerts")
         if status == 200:
             try:
                 data = json.loads(body)
@@ -104,7 +109,7 @@ def main() -> int:
                 untouched += 1
             continue
         if not exists:
-            status, body = _api(base, org, user, pwd, "/alerts", "POST", alert)
+            status, body = _api(base, org, user, pwd, "v2/alerts", "POST", alert)
             if status not in (200, 201):
                 print(f"exit 1: create {name} failed ({status}): {body[:400]}", file=sys.stderr)
                 return 1
@@ -113,7 +118,7 @@ def main() -> int:
             # PUT by id if we can find it, else POST is already handled
             aid = existing[name].get("id") or existing[name].get("alert_id")
             if aid:
-                status, body = _api(base, org, user, pwd, f"/alerts/{aid}", "PUT", alert)
+                status, body = _api(base, org, user, pwd, f"v2/alerts/{aid}", "PUT", alert)
                 if status == 200:
                     updated += 1
                 else:

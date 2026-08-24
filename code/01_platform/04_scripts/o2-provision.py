@@ -623,10 +623,10 @@ ALERTS = [
         desc="FD usage >= 80%: approaching the halting threshold",
     ),
     dict(
-        name="ING-warn-reconnect-streak-5",
+        name="ING-crit-reconnect-consecutive",
         stream="bridge_reconnect_consecutive",
         conditions=[("value", ">=", 5)],
-        desc="Reconnect streak >= 5: broker link unstable",
+        desc="[Critical/ingestion][contract #4] Consecutive reconnects >= 5: broker link unstable",
     ),
     dict(
         name="ING-crit-fd-90",
@@ -657,6 +657,85 @@ ALERTS = [
         stream="otelcol_exporter_send_failed_metric_points",
         conditions=[("value", ">", 0)],
         desc="Collector failed to deliver metrics to OpenObserve: data gap started",
+    ),
+    # --- Contract reconciliation (docs/06_operations/02-ingestion-alerting.md
+    # rule table; wired live 2026-08-24). The 11 pinned ingestion-plane alerts,
+    # exact thresholds from the doc. Slot metrics are per-slot gauges; counters
+    # (bridge.reconnects, decode.errors, heartbeat.failures) are cumulative
+    # (AGGREGATION_TEMPORALITY_CUMULATIVE in OtlpMetricsEmitter), so rate
+    # windows use increase().
+    dict(
+        name="ING-warn-capacity-90",
+        stream="bridge_slot_capacity_used_percent",
+        conditions=[("value", ">=", 90)],
+        period=5,
+        desc="[Warning/ingestion][contract #1] Slot capacity >= 90% for 5 min: subscription headroom low",
+    ),
+    dict(
+        name="ING-crit-capacity-98",
+        stream="bridge_slot_capacity_used_percent",
+        conditions=[("value", ">=", 98)],
+        period=2,
+        desc="[Critical/ingestion][contract #2] Slot capacity >= 98% for 2 min: subscription headroom critical",
+    ),
+    dict(
+        name="ING-crit-reconnect-storm",
+        stream="bridge_reconnects",
+        promql="sum(increase(bridge_reconnects[600s]))",
+        promql_condition=(">=", 5),
+        period=1,
+        desc="[Critical/ingestion][contract #3] >= 5 reconnects / 10 min: reconnect storm",
+    ),
+    dict(
+        name="ING-crit-stale-feed",
+        stream="bridge_slot_last_frame_age_ms",
+        conditions=[("value", ">=", 5000)],
+        period=1,
+        desc="[Critical/ingestion][contract #5] Last-frame age >= 5000 ms (freshness limit) for 1 min: stale feed",
+    ),
+    dict(
+        name="ING-crit-decode-error-burst",
+        stream="decode_errors",
+        promql="sum(increase(decode_errors[70s]))",
+        promql_condition=(">=", 100),
+        period=1,
+        desc="[Critical/ingestion][contract #6] Decode errors >= 100 within ~1 min (doc pins 100/10 s; 70 s range guarantees counter samples across the 10 s flush): decode error burst",
+    ),
+    dict(
+        name="ING-warn-partial-subscription",
+        stream="bridge_slot_rejected",
+        conditions=[("value", ">", 0)],
+        period=5,
+        desc="[Warning/ingestion][contract #7] bridge.slot.rejected > 0 for 5 min: partial subscription",
+    ),
+    dict(
+        name="ING-crit-not-ready",
+        stream="ingestion_ready",
+        conditions=[("value", "=", 0)],
+        period=2,
+        desc="[Critical/ingestion][contract #8] ingestion.ready == 0 for 2 min: pipeline not ready",
+    ),
+    dict(
+        name="ING-crit-bridge-disconnected",
+        stream="bridge_connected",
+        conditions=[("value", "=", 0)],
+        period=1,
+        desc="[Critical/ingestion][contract #9] bridge.connected == 0 for 1 min: bridge disconnected",
+    ),
+    dict(
+        name="ING-warn-heartbeat-failures",
+        stream="heartbeat_failures",
+        promql="sum(increase(heartbeat_failures[300s]))",
+        promql_condition=(">=", 3),
+        period=1,
+        desc="[Warning/ingestion][contract #10] Heartbeat failures >= 3 / 5 min",
+    ),
+    dict(
+        name="ING-warn-otlp-collector-unhealthy",
+        stream="otel_collector_healthy",
+        conditions=[("value", "=", 0)],
+        period=10,
+        desc="[Warning/ingestion][contract #11] otel.collector.healthy == 0 for 10 min: OTLP delivery degraded",
     ),
     # Compute phase (SIGNAL- prefix): schema-version drift between the raw-tick
     # producer (ingestion) and the compute gate. Emitter sends DELTA per 10 s

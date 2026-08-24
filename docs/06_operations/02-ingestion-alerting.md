@@ -31,5 +31,9 @@ so any operator can recreate them.
   connection; alert #1 fires when the account is 90% subscribed.
 - All gauges are labeled by `slot_id` only — never by token/symbol (plan
   §Monitoring redaction rule).
-- Alerts are **not** expected to be wired into a live OpenObserve instance
-  during development; this file is the source of truth for the thresholds.
+- All 11 rules ARE wired into the local OpenObserve instance as of 2026-08-24
+  (see `code/01_platform/04_scripts/o2-provision.py`, ALERTS catalog; CHG-093).
+  This file remains the source of truth for names/thresholds/severity — any
+  catalog drift is a defect. Note: with the pinned dev config (1 connection ×
+  1024 tokens fully subscribed) the capacity gauges sit at 100%, so rules #1/#2
+  fire continuously until the C5.2 multi-connection decision changes headroom.
