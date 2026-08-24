@@ -39,13 +39,13 @@
 | Normal 13-step trade | `LiveNodeRuntime` HALTED boot, `FakeBridge` accept->fill offline | Live Arrow `Place` + WS fill |
 | Unknown 8-step | `UNKNOWN` never retried (`resilience007`), gate HALTED, `reconcile_execution_mass_status` read-only | 15s global halt timer, operator review |
 | Position engine | Weighted avg wrapping, `nextState` CLOSED re-entry, broker recon read-only | PnL + broker position convergence live |
-| Gate HALTED->RECONCILING->WAITING->ENABLED | New `gate.rs:enter_reconciling_if_needed(true)` HALTED->RECONCILING, `ExecutionGate` same-hash Duplicate no call, changed-hash `ContractViolation` halt (20/20), `fence` stale token/block 0 calls, `clockwatch` 7/7 | Changelog-gap lease acquire, live HA |
+| Gate HALTED->RECONCILING->APPROVAL_PENDING->ENABLED | New `gate.rs:enter_reconciling_if_needed(true)` HALTED->RECONCILING, `Gate::record_approval` (operator) then `Gate::enable` -> ENABLED (a bare transition to `Enabled` is rejected), `ExecutionGate` same-hash Duplicate no call, changed-hash `ContractViolation` halt (20/20), `fence` stale token/block 0 calls, `clockwatch` 7/7 | Changelog-gap lease acquire, live HA |
 | Capture correlation | New `PostbackCorrelator.java` `InMemoryCorrelationIndex` bijective pure; `PostbackFingerprint` sorted `key=value|` SHA-256 | `Order_Correlation` Fluss KV live |
 | Babysitter MVP | New `babysitter.rs:NoOpPositionObserver` counts by state/reason, 0 actions, `POSITION_ACTIONS_ENABLED=true`->fail-closed 3/3 | Flink checkpoint merge, `Position_Actions` Fluss |
-| Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + `SERVICE_HALTED` default 12/12 | 6 keys `TO_BE_VERIFIED` (Arrow timeout/retry profile, broker status/reference format+echo, Arrow request schema) |
+| Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + halted-by-default via `EXECUTION_ENABLED` rejected-at-boot (`config.rs:81`, `execution_enabled=false`, `is_halted_default()`) 12/12 | 6 keys `TO_BE_VERIFIED` (Arrow timeout/retry profile, broker status/reference format+echo, Arrow request schema) |
 | Readiness / Backpressure | 11 readiness flags (broker/bridge/Fluss/gate/backlog/clock), `MAX_PENDING` logic, `health` not-ready | Load flood `MAX_PENDING_PROJECTION_RECORDS` live |
 | Metrics 30 | `telemetry` 3/3 OTLP native, bridge 14/14, Go `go-bridge` ok | O2 dashboards for execution domain |
-| Tests | Rust 164/164, common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 16 Running) — historical count not C6 464/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
+| Tests | Rust 164/164, common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 12 long-running of 18 compose services) — historical count not C6 466/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
 
 
 ## Why one dossier
@@ -689,7 +689,7 @@ each major workstream; the detailed checkboxes under that task are the actual TO
 | `T8` | **FULLY DONE OFFLINE+SINGLE-VM** | `docker-compose.yml` `execution-net`/`arrow-egress` + `execution-gateway` + `nautilus` `profiles:[execution-t3]` + `make up --profile execution-t3` → `execution-gateway Running` `execution-bridge Healthy` `nautilus Started` `gate HALTED health on 0.0.0.0:9190` | — |
 | `T9` | **NOT IMPLEMENTED** | No sandbox bundle `logs/` | All live Arrow place/fill/reconciliation + shadow + R2 1-year lock + 4VM HA `docker-stack.yml` needs **market + 4VM** |
 
-All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 164/164`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 464/247/387. Only T3/T9 live market remain.
+All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 164/164`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 466/247/387. Only T3/T9 live market remain.
 ### Live single-VM evidence — 2026-08-24 07:37/07:45 UTC (fluss-coordinator:9123)
 
 ```text

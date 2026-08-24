@@ -14,6 +14,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 /**
@@ -105,6 +107,28 @@ public final class DdlApplyTool {
 
     static int run(String[] args) throws Exception {
         Options opts = Options.parse(args);
+
+        // Sweep mode: detect/repair fixture rows left by the pre-CHG-100 smoke
+        // path (smokeRoundTrip writing defaultValue fixtures into live tables).
+        // Bypasses the apply contract entirely (no manifest/catalog preconditions).
+        if (opts.sweepOnly) {
+            Connection connection = null;
+            Admin admin = null;
+            try {
+                Configuration conf = new Configuration();
+                conf.setString("bootstrap.servers", opts.bootstrap);
+                connection = ConnectionFactory.createConnection(conf);
+                admin = connection.getAdmin();
+                return sweep(connection, admin, opts);
+            } finally {
+                if (admin != null) {
+                    admin.close();
+                }
+                if (connection != null) {
+                    connection.close();
+                }
+            }
+        }
 
         // Dev capability: drop every live table whose name starts with the
         // prefix (leftovers from interrupted prefixed runs).
@@ -306,18 +330,43 @@ public final class DdlApplyTool {
                     for (int i = 0; i < ordered.size(); i++) {
                         DdlText.ParsedDdl ddl = parsed.get(ordered.get(i).tableName);
                         String target = targetNames.get(i);
+                        // CHG-100: smoke NEVER writes fixture rows to the real
+                        // table (LOG fixture rows are undeletable and would
+                        // permanently halt fail-closed consumers). The round
+                        // trip runs against a scratch twin created from the
+                        // same descriptor and dropped immediately after.
+                        String smokeName = opts.allowLiveSmoke ? target
+                                : smokeTwinName(opts.prefix, ordered.get(i).tableName);
                         try {
-                            String outcome = smokeRoundTrip(connection, admin, target, ddl);
+                            if (opts.allowLiveSmoke) {
+                                System.out.println("ddl-apply: WARNING --allow-live-smoke: "
+                                        + "fixture rows go to the REAL table " + target
+                                        + " (LOG rows are undeletable; do NOT use on "
+                                        + "consumer-bearing catalogs)");
+                            } else {
+                                dropIfExists(admin, smokeName);
+                                admin.createTable(TablePath.of("default", smokeName),
+                                        DdlText.toDescriptor(ddl), false)
+                                        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                            }
+                            String outcome = smokeRoundTrip(connection, admin, smokeName, ddl);
                             records.get(i).smoke(outcome);
                             if (outcome != null && !isKnownLimitation(outcome)) {
                                 failures.add(target + " smoke failed: " + outcome);
                             }
+                            System.out.println("ddl-apply: smoke " + target + " via twin "
+                                    + smokeName + " -> " + (outcome == null ? "PASS"
+                                            : isKnownLimitation(outcome) ? "LIMITATION" : "FAIL"));
                         } catch (Exception e) {
                             String outcome = e.getMessage() == null
                                     ? e.getClass().getSimpleName() : e.getMessage();
                             records.get(i).smoke(outcome);
                             if (!isKnownLimitation(outcome)) {
                                 failures.add(target + " smoke failed: " + outcome);
+                            }
+                        } finally {
+                            if (!opts.allowLiveSmoke) {
+                                dropIfExists(admin, smokeName);
                             }
                         }
                     }
@@ -738,7 +787,7 @@ public final class DdlApplyTool {
                 + " not in columns");
     }
 
-    private static Object defaultValue(DataType type, int index) {
+    static Object defaultValue(DataType type, int index) {
         DataTypeRoot root = type.getTypeRoot();
         return switch (root) {
             case STRING -> BinaryString.fromString("smoke-" + index);
@@ -762,10 +811,226 @@ public final class DdlApplyTool {
     }
 
     // ── options / record types ────────────────────────────────────────────
+    // ── CHG-100: scratch-twin smoke + fixture sweep ────────────────────────
+
+    /** Scratch twin name for step-7 smoke (the real table is never written). */
+    static String smokeTwinName(String prefix, String logicalName) {
+        return (prefix == null ? "" : prefix) + "smoke_twin_" + logicalName;
+    }
+
+    /** Drop a table, swallowing only not-exist (leftover hygiene). */
+    private static void dropIfExists(Admin admin, String name) {
+        try {
+            admin.dropTable(TablePath.of("default", name), false)
+                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            System.out.println("ddl-apply: dropped " + name);
+        } catch (Exception e) {
+            if (e.getMessage() == null || !e.getMessage().toLowerCase().contains("not exist")) {
+                System.err.println("ddl-apply: drop " + name + " failed: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Fixture signature: every field equals {@link #defaultValue(DataType, int)}
+     * at its column index — exactly what the pre-CHG-100 smoke path wrote.
+     */
+    static boolean isSmokeFixtureRow(InternalRow row, RowType rowType) {
+        if (row == null) {
+            return false;
+        }
+        int n = rowType.getFieldCount();
+        if (row.getFieldCount() != n) {
+            return false;
+        }
+        for (int i = 0; i < n; i++) {
+            if (row.isNullAt(i)) {
+                return false;
+            }
+            DataType type = rowType.getFields().get(i).getType();
+            Object want = defaultValue(type, i);
+            switch (type.getTypeRoot()) {
+                case STRING -> {
+                    if (!want.equals(row.getString(i))) {
+                        return false;
+                    }
+                }
+                case BIGINT -> {
+                    if (row.getLong(i) != ((Number) want).longValue()) {
+                        return false;
+                    }
+                }
+                case INTEGER -> {
+                    if (row.getInt(i) != ((Number) want).intValue()) {
+                        return false;
+                    }
+                }
+                case DOUBLE -> {
+                    if (row.getDouble(i) != ((Number) want).doubleValue()) {
+                        return false;
+                    }
+                }
+                case BOOLEAN -> {
+                    if (row.getBoolean(i) != (Boolean) want) {
+                        return false;
+                    }
+                }
+                case BYTES -> {
+                    if (!Arrays.equals((byte[]) want, row.getBytes(i))) {
+                        return false;
+                    }
+                }
+                default -> {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static Object fieldValue(InternalRow row, RowType rowType, int index) {
+        DataTypeRoot root = rowType.getFields().get(index).getType().getTypeRoot();
+        return switch (root) {
+            case STRING -> row.getString(index);
+            case BIGINT -> row.getLong(index);
+            case INTEGER -> row.getInt(index);
+            case DOUBLE -> row.getDouble(index);
+            case BOOLEAN -> row.getBoolean(index);
+            case BYTES -> row.getBytes(index);
+            default -> throw new IllegalArgumentException("unsupported row type " + root);
+        };
+    }
+
+    private static int indexByName(RowType rowType, String name) {
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (rowType.getFields().get(i).getName().equals(name)) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException("column not found: " + name);
+    }
+
+    /** Full scan (drain loop — the CHG-099 contention lesson) collecting fixture rows. */
+    private static List<InternalRow> scanFixtures(Table table, TableInfo info)
+            throws Exception {
+        List<InternalRow> matches = new ArrayList<>();
+        for (int b = 0; b < info.getNumBuckets(); b++) {
+            TableBucket tb = new TableBucket(info.getTableId(), b);
+            try (BatchScanner scanner = table.newScan()
+                    .limit(Integer.MAX_VALUE)
+                    .createBatchScanner(tb)) {
+                while (true) {
+                    CloseableIterator<InternalRow> it =
+                            scanner.pollBatch(Duration.ofMillis(250));
+                    boolean any = false;
+                    while (it != null && it.hasNext()) {
+                        InternalRow row = it.next();
+                        any = true;
+                        if (isSmokeFixtureRow(row, info.getRowType())) {
+                            matches.add(row);
+                        }
+                    }
+                    if (!any) {
+                        break;
+                    }
+                }
+            }
+        }
+        return matches;
+    }
+
+    /** Delete KV fixture rows by primary key (LOG rows are undeletable). */
+    private static int deleteKvFixtures(Table table, TableInfo info,
+            List<InternalRow> rows) throws Exception {
+        List<String> pks = info.getPrimaryKeys();
+        int[] idx = new int[pks.size()];
+        int fullArity = info.getRowType().getFieldCount();
+        for (int k = 0; k < pks.size(); k++) {
+            idx[k] = indexByName(info.getRowType(), pks.get(k));
+        }
+        int deleted = 0;
+        UpsertWriter writer = table.newUpsert().createWriter();
+        try {
+            for (InternalRow row : rows) {
+                // The delete writer validates arity against the FULL schema;
+                // only the PK fields are used to identify the row.
+                Object[] key = new Object[fullArity];
+                for (int k = 0; k < idx.length; k++) {
+                    key[idx[k]] = fieldValue(row, info.getRowType(), idx[k]);
+                }
+                writer.delete(GenericRow.of(key))
+                        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                deleted++;
+            }
+        } finally {
+            writer.flush();
+        }
+        return deleted;
+    }
+
+    /**
+     * Detect (and with {@code --sweep-fix-kv} repair) fixture rows left by the
+     * pre-CHG-100 smoke path. Exit 0 when no fixture rows remain (or all KV
+     * fixtures were deleted); exit 3 when LOG fixtures remain (undeletable —
+     * operator must re-create the table).
+     */
+    static int sweep(Connection connection, Admin admin, Options op) throws Exception {
+        List<String> live = admin.listTables("default")
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        List<String> scoped = op.sweepTables.isEmpty() ? live : op.sweepTables;
+        List<String> kvReports = new ArrayList<>();
+        List<String> logReports = new ArrayList<>();
+        int kvTotal = 0;
+        int kvDeleted = 0;
+        int scanned = 0;
+        for (String name : scoped) {
+            TableInfo info;
+            try {
+                info = info(admin, name);
+            } catch (Exception e) {
+                System.err.println("ddl-apply: sweep: " + name + " skipped: "
+                        + e.getMessage());
+                continue;
+            }
+            Table table = connection.getTable(TablePath.of("default", name));
+            scanned++;
+            List<InternalRow> matches = scanFixtures(table, info);
+            if (matches.isEmpty()) {
+                continue;
+            }
+            if (info.hasPrimaryKey()) {
+                kvTotal += matches.size();
+                kvReports.add(name + ": " + matches.size() + " fixture row(s)");
+                if (op.sweepFixKv) {
+                    kvDeleted += deleteKvFixtures(table, info, matches);
+                }
+            } else {
+                logReports.add(name + ": " + matches.size()
+                        + " fixture row(s) — LOG rows are undeletable; re-create the table");
+            }
+        }
+        boolean kvFixed = kvTotal == kvDeleted;
+        boolean clean = logReports.isEmpty() && (kvTotal == 0 || (op.sweepFixKv && kvFixed));
+        if (!clean) {
+            System.err.println("ddl-apply: SWEEP POLLUTED TABLES:");
+            kvReports.forEach(f -> System.err.println("  [KV] " + f));
+            logReports.forEach(f -> System.err.println("  [LOG] " + f));
+        }
+        if (op.sweepFixKv && kvDeleted > 0) {
+            System.out.println("ddl-apply: sweep deleted " + kvDeleted
+                    + " KV fixture row(s)");
+        }
+        int exit = clean ? 0 : 3;
+        System.out.println("ddl-apply: SWEEP RESULT=" + (clean ? "CLEAN" : "POLLUTED")
+                + " EXIT=" + exit + " SCANNED=" + scanned);
+        return exit;
+    }
 
     record Options(Path ddlDir, String bootstrap, Path evidenceOut, String prefix,
                    String cleanupPrefix, String flinkVersion, String flussVersion,
-                   boolean skipSmoke, List<String> ackLimitations) {
+                   boolean skipSmoke, boolean sweepOnly, boolean sweepFixKv,
+                   boolean allowLiveSmoke, List<String> sweepTables,
+                   List<String> ackLimitations) {
 
         static Options parse(String[] args) {
             String ddlDir = null;
@@ -776,6 +1041,10 @@ public final class DdlApplyTool {
             String flinkVersion = System.getenv().getOrDefault("FLINK_VERSION", "unknown");
             String flussVersion = System.getenv().getOrDefault("FLUSS_VERSION", "unknown");
             boolean skipSmoke = false;
+            boolean sweepOnly = false;
+            boolean sweepFixKv = false;
+            boolean allowLiveSmoke = false;
+            List<String> sweepTables = new ArrayList<>();
             List<String> ackLimitations = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 switch (args[i]) {
@@ -787,6 +1056,10 @@ public final class DdlApplyTool {
                     case "--flink-version" -> flinkVersion = args[++i];
                     case "--fluss-version" -> flussVersion = args[++i];
                     case "--skip-smoke" -> skipSmoke = true;
+                    case "--sweep" -> sweepOnly = true;
+                    case "--sweep-fix-kv" -> sweepFixKv = true;
+                    case "--allow-live-smoke" -> allowLiveSmoke = true;
+                    case "--sweep-table" -> sweepTables.add(args[++i]);
                     // "auto" = confirm-only: the tool fills the composite-PK
                     // tables detected from the manifest (no name guessing).
                     case "--ack-limitations" -> {
@@ -800,7 +1073,7 @@ public final class DdlApplyTool {
                     default -> throw new IllegalArgumentException("unknown option " + args[i]);
                 }
             }
-            if (ddlDir == null) {
+            if (ddlDir == null && !sweepOnly) {
                 throw new IllegalArgumentException("--ddl-dir is required");
             }
             if (prefix != null && !prefix.matches("[a-zA-Z0-9_]+")) {
@@ -809,10 +1082,11 @@ public final class DdlApplyTool {
             if (cleanupPrefix != null && !cleanupPrefix.matches("[a-zA-Z0-9_]+")) {
                 throw new IllegalArgumentException("--cleanup-prefix must be [a-zA-Z0-9_]+");
             }
-            return new Options(Path.of(ddlDir), bootstrap,
+            return new Options(ddlDir == null ? null : Path.of(ddlDir), bootstrap,
                     evidenceOut == null ? null : Path.of(evidenceOut), prefix,
                     cleanupPrefix, flinkVersion, flussVersion, skipSmoke,
-                    List.copyOf(ackLimitations));
+                    sweepOnly, sweepFixKv, allowLiveSmoke,
+                    List.copyOf(sweepTables), List.copyOf(ackLimitations));
         }
     }
 

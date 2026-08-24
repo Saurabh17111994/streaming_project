@@ -40,9 +40,17 @@ write/read smoke, DDL_APPLY_ACK_LIMITATIONS=auto (or <tables>) to acknowledge
 the documented composite-PK raw-client limitation (COMPAT-FLUSS-005): 'auto'
 prefills the exact tables detected from the manifest (composite PK + default
 bucket key) so the operator only confirms, never guesses; without an
-acknowledgment an apply with limited tables refuses with exit 1. Application requires capability evidence instead of the
-historical reconciliation blocker (superseded 2026-08-10, removed 2026-08-15):
-versions are pinned and live dev-cluster applies have run.
+acknowledgment an apply with limited tables refuses with exit 1. The smoke
+(CHG-100) runs against a scratch twin (<prefix>smoke_twin_<table>) created from
+the same descriptor and dropped immediately — fixture rows never reach real
+tables (LOG fixture rows are undeletable). DDL_APPLY_ALLOW_LIVE_SMOKE=1 restores
+the old live-table smoke (debug/evidence only). Leftover fixture rows from the
+old smoke path are detected and repaired with DDL_APPLY_SWEEP=1
+(DDL_APPLY_SWEEP_FIX_KV=1 deletes KV fixtures; LOG fixtures are reported with
+exit 3); DDL_APPLY_SWEEP_TABLES=name1,name2 scopes the sweep. Application
+requires capability evidence instead of the historical reconciliation blocker
+(superseded 2026-08-10, removed 2026-08-15): versions are pinned and live
+dev-cluster applies have run.
 
 Every run also echoes the non-root ownership contract the gate enforces — host
 parity with the ddl-apply container wrapper's emit — so operators see the same
@@ -384,6 +392,42 @@ def enrich_evidence(evidence_path, matrix_evidence):
         print(f"WARNING: cannot enrich apply evidence {evidence_path}: {exc}")
 
 
+def run_sweep_tool():
+    """CHG-100: detect/repair smoke-fixture rows (see DdlApplyTool --sweep).
+
+    Env: DDL_APPLY_SWEEP=1, DDL_APPLY_SWEEP_FIX_KV=1 (delete KV fixtures),
+    DDL_APPLY_SWEEP_TABLES=name1,name2 (scope; default = all live tables).
+    """
+    try:
+        versions = load_versions(VERSIONS_PIN)
+    except OSError as exc:
+        print(f"cannot read {VERSIONS_PIN}: {exc}")
+        return 2
+    classpath = build_tool_classpath(versions.get("FLUSS_VERSION", "unknown"))
+    if classpath is None:
+        return 2
+    cmd = [
+        "java",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "-cp", classpath,
+        "com.trading.common.schema.ddl.DdlApplyTool",
+        "--bootstrap", os.environ.get("FLUSS_BOOTSTRAP", "localhost:9123"),
+        "--sweep",
+    ]
+    if os.environ.get("DDL_APPLY_SWEEP_FIX_KV") == "1":
+        cmd.append("--sweep-fix-kv")
+    tables = os.environ.get("DDL_APPLY_SWEEP_TABLES", "")
+    for t in tables.split(","):
+        if t.strip():
+            cmd += ["--sweep-table", t.strip()]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="")
+    return result.returncode
+
+
 def run_apply_tool(versions, matrix_evidence):
     """Execute the 9-step DDL application contract via the Java engine."""
     fluss_version = versions.get("FLUSS_VERSION", "unknown")
@@ -415,6 +459,11 @@ def run_apply_tool(versions, matrix_evidence):
         cmd += ["--table-prefix", prefix]
     if os.environ.get("DDL_APPLY_SKIP_SMOKE") == "1":
         cmd.append("--skip-smoke")
+    if os.environ.get("DDL_APPLY_ALLOW_LIVE_SMOKE") == "1":
+        # CHG-100 default is twin-only smoke (fixtures to scratch twins, never
+        # real tables). This escape hatches the OLD behavior with fixture rows
+        # in REAL tables — LOG rows undeletable; do NOT use on consumer catalogs.
+        cmd.append("--allow-live-smoke")
     ack = os.environ.get("DDL_APPLY_ACK_LIMITATIONS") or ""
     if ack.strip():
         # Operator acknowledgment of the documented composite-PK raw-client
@@ -573,6 +622,10 @@ def main():
     )
     args = parser.parse_args()
     echo_ownership_contract()
+
+    # CHG-100: fixture-pollution sweep — bypasses the apply contract entirely.
+    if os.environ.get("DDL_APPLY_SWEEP") == "1":
+        return run_sweep_tool()
 
     try:
         versions = load_versions(VERSIONS_PIN)

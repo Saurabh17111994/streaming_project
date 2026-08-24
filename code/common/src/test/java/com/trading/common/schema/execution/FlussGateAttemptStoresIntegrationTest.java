@@ -185,17 +185,17 @@ class FlussGateAttemptStoresIntegrationTest {
                     .isEqualTo("exec-1");
             assertThat(fenced.getLong(ExecutionGateColumns.FENCE_TOKEN)).isEqualTo(1L);
 
-            // --- DEC-044: a single approval persists; an optional second approval is
-            // accepted without being required or checked. ---
+            // --- DEC-044 single-operator gate: one approval completes the gate;
+            // a second distinct principal on a complete gate is ALREADY_APPLIED
+            // (no second slot — matches InMemoryGateStateStore). ---
             assertThat(gate.approve(partition, "op-a", 0L, "ev-1", NOW).outcome())
                     .isEqualTo(GateStateStore.ApprovalOutcome.APPLIED);
             assertThat(gate.approve(partition, "op-b", 0L, "ev-1", NOW).outcome())
-                    .isEqualTo(GateStateStore.ApprovalOutcome.APPLIED);
+                    .isEqualTo(GateStateStore.ApprovalOutcome.ALREADY_APPLIED);
             InternalRow approved = rawLookup(gateT, partition);
             assertThat(approved.getString(ExecutionGateColumns.APPROVAL_1).toString())
                     .isEqualTo("op-a");
-            assertThat(approved.getString(ExecutionGateColumns.APPROVAL_2).toString())
-                    .isEqualTo("op-b");
+            assertThat(approved.getString(ExecutionGateColumns.APPROVAL_2)).isNull();
 
             // --- PREPARED-before-bridge: prepare() mints a PREPARED attempt durable in Fluss. ---
             PrepareRequest req = new PrepareRequest("try-1", "acc-1", "instr-1", "buy",

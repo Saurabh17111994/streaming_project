@@ -41,7 +41,7 @@ that time" (e.g. "(2026-08-10: ... 21 tables ...)") — a distant date on the
 same line does NOT hide a stale code description.
 
 Test-count drift claims (same tiers, truth from the docs-audit C6 line,
-01-foundation.md L3 — TEST_COUNT_TRUTH below, currently 464/247/387):
+01-foundation.md L3 — TEST_COUNT_TRUTH below, currently 466/247/387):
 
   * test-count-stale -> "common N" / "ingestion N" / "compute N" (or
                         "N common/ingestion/compute tests") claims where N
@@ -184,13 +184,19 @@ NUMERIC_CLAIM_TYPES = (
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
 # current docs-audit C6 truth (01-foundation.md L3: unit suites green
-# 464/247/387 — common/ingestion/compute; 2026-08-24 bump common 437→464 compute 383→387
-# for execution-core stubs + docs_audit alignment; prior 341/236/319 2026-08-18).
+# 466/247/387 — common/ingestion/compute; 2026-08-25 CHG-102 re-verified
+# 466/247/387 (surefire 469 minus 3 gated FlussBundleReader* reports — C6
+# counts only classes present in src/test; the C6 gate reads live surefire);
+# prior 2026-08-25 CHG-100 +2 net (DdlSmokeTwinSweepUnitTest
+# +2 run everywhere; live half class-level env-gated, skipped in plain runs);
+# prior 2026-08-24 bump common 437→464 compute 383→387 for execution-core stubs
+# + docs_audit alignment; prior 341/236/319 2026-08-18).
 # Historical evolution retained in comment: ingestion +2 2026-08-18 (ING-UNIT-023
 # CHG-032 + ING-UNIT-024 CHG-033), common +1 2026-08-18 SlotAssignmentResolver, compute −19
-# DEC-038, −10/−2/−11 CHG-023, +2 forming-bar CHG-030; 2026-08-24 bump to 464/247/387.
+# DEC-038, −10/−2/−11 CHG-023, +2 forming-bar CHG-030; 2026-08-24 bump to 464/247/387,
+# 2026-08-25 CHG-100 to 466/247/387.
 # counts fire.
-TEST_COUNT_TRUTH = {"common": 464, "ingestion": 247, "compute": 387}
+TEST_COUNT_TRUTH = {"common": 466, "ingestion": 247, "compute": 387}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",
@@ -204,11 +210,11 @@ TEST_COUNT_CLAIM_TYPES = (
 
 # docs-audit C6 triple citations: "docs-audit C6 line N/N/N" where the three
 # counts (common/ingestion/compute) differ from the current C6 truth.
-C6_TRIPLE_TRUTH = (464, 247, 387)
+C6_TRIPLE_TRUTH = (466, 247, 387)
 
 # Current suite triples per module ("N run / 0 failures / M skips") — bare
 # N/0/M-skips claims carry no module word, so they need their own truth.
-SUITE_TRIPLE_TRUTH = {"common": (464, 0, 1), "ingestion": (247, 0, 8), "compute": (387, 0, 17)}
+SUITE_TRIPLE_TRUTH = {"common": (466, 0, 2), "ingestion": (247, 0, 8), "compute": (387, 0, 22)}
 
 # A "now/current N" count claim reads as CURRENT state regardless of any
 # nearby date marker (2026-08-18 masking class, CHG-033 follow-up): the

@@ -46,7 +46,7 @@ boundaries:
       Laptop host + flink:2.2.1-scala_2.12-java17 image, 2026-08-24
     scenario: >-
       docker run --rm flink:2.2.1-scala_2.12-java17 java -version; host
-      java -version + mvn -v; full module test suites (common 464,
+            java -version + mvn -v; full module test suites (common 466,
       ingestion 247, compute 387) on this JVM
     result: COMPATIBLE (17.0.19+10 exact on host and pinned image)
     observed_behavior: >-
