@@ -201,13 +201,16 @@ boundaries:
       FULL row images (SCH-14); compatFluss006BucketDistributionSkew —
       distinct keys spread evenly, constant key collapses (COMPAT-FLUSS-006).
     limitations: >-
-      Local single-tablet evidence. Replication/failover, checkpoint/restore,
-      FULL changelog image, and policy-controlled lake reconstruction remain UNKNOWN
-      (need multi-node + tiered storage). Retention live-alter NOT supported:
-      Admin.alterTable rejects table.log.ttl ("not supported to alter yet");
-      log.retention.ms/comment alters are silent no-ops (getLogTTLMs
-      unchanged, verified 2026-08-13); only table.datalake.enabled applies —
-      TTL is set at create time only (foundation L853).
+      Single-tablet dev evidence. Replication/failover and policy-controlled
+      lake reconstruction remain UNKNOWN (need multi-node + tiered storage).
+      FULL changelog image CLOSED 2026-08-24 (SCH-14). Retention live-alter NOT
+      supported: Admin.alterTable rejects table.log.ttl ("not supported to
+      alter yet"); log.retention.ms/comment alters are silent no-ops
+      (getLogTTLMs unchanged, verified 2026-08-13); only table.datalake.enabled
+      applies — TTL is set at create time only (foundation L853). Lake
+      re-enable after disable is create-only on 0.9.1
+      (LakeTableAlreadyExistException; recovery = ZK registration patch +
+      coordinator restart, 2026-08-24) — limitation, not an alter path.
     date: 2026-08-24
     status: LIMITATION_RECORDED_REPLICATION_PENDING
 
@@ -271,9 +274,11 @@ boundaries:
       2026-08-24: compatFluss006BucketDistributionSkew — distinct keys
       spread evenly, constant key collapses (COMPAT-FLUSS-006).
     limitations: >-
-      Compile + append/ack/no-batching/BYTES/LOG/KV/partial_update.
-      Routing/bucket-key stress, connector checkpoint, and replication
-      behavior not yet exercised.
+      Routing/bucket-key stress closed 2026-08-24 (COMPAT-FLUSS-006 bucket
+      skew probe — distinct keys spread evenly, constant key collapses);
+      connector checkpoint/restore closed 2026-08-24 via VM-FLUSS-CONN-007.
+      Replication/failover is a server/topology boundary (VM-ZK-013 / swarm),
+      not client behavior — not evidenced here.
     date: 2026-08-24
     status: EVIDENCE_RECORDED
 
@@ -319,9 +324,9 @@ boundaries:
       1/1 (checkpoint → restore at 2x parallelism, serializer-change blocked
       as asserted; COMPUTE_INT_TEST_COMPAT_FLINK=true).
     limitations: >-
-      Checkpoint/restore-rescale of the connector boundary, serializer change,
-      and sink partial-visibility remain UNKNOWN (STATE-COMPAT-001,
-      COMPAT-FLINK-001, SIG-INT-002 pending; 2026-08-10 resolution plan).
+      Single-node dev cluster; multi-node replication/failover is a server
+      boundary (VM-ZK-013 / swarm), not exercised here. All previously open
+      connector items are closed (see observed_behavior).
     date: 2026-08-24
     status: EVIDENCE_RECORDED_LIVE
 

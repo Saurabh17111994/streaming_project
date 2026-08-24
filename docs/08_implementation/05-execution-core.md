@@ -524,7 +524,7 @@ stored in audit (only redacted hashes and summaries).
 | Key | Rule |
 | --- | --- |
 | `ARROW_APP_ID` / `ARROW_APP_SECRET` / `ARROW_TOKEN` / `ARROW_USER_ID` / `ARROW_PASSWORD` / `ARROW_TOTP_KEY` | Bridge credentials — secret refs only, never in Nautilus, never committed |
-| `ARROW_REST_URL_TO_BE_VERIFIED` | Bridge → Arrow base URL; no unsafe production default |`ARROW_REST_URL` (**RESOLVED 2026-08-24:** `https://edge.arrow.trade` in `.env`, consumed by bridge; TOTP AutoLogin proven live 2026-08-21 `execution-auth-001`; static `ARROW_TOKEN` path removed 2026-08-24) | Bridge → Arrow base URL; no unsafe production default |
+| `ARROW_REST_URL` (**RESOLVED 2026-08-24:** `https://edge.arrow.trade` in `.env`, consumed by bridge; TOTP AutoLogin proven live 2026-08-21 `execution-auth-001`; static `ARROW_TOKEN` path removed 2026-08-24) | Bridge → Arrow base URL; no unsafe production default |
 | `ARROW_TIMEOUT_PROFILE_TO_BE_VERIFIED` / `ARROW_RETRY_POLICY_TO_BE_VERIFIED` | Timeout + classification; unknown outcomes never blind-retried |
 | `BROKER_CLIENT_REFERENCE_FORMAT_TO_BE_VERIFIED` | Length/charset/echo evidence for the ≤16-char `client_order_ref` (carried in `remarks`) |
 | `BRIDGE_LISTEN_ADDR` | Localhost bind for the go-arrow bridge (loopback only) |
