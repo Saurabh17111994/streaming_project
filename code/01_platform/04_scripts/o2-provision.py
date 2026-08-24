@@ -5,8 +5,8 @@
 # Creates, in org `default`:
 #   - INGESTION folder (via dashboards carrying folder="INGESTION")
 #   - 4 dashboards: Overview, Slots, Resources, Quality
-#   - 4 dashboards: Overview, Slots, Resources, Quality
-#   - 33 alert rules (8 ING- ingestion + 16 SIGNAL- + 9 INFRA- infra/JVM/host 2026-08-22 single-pane)
+#   - 43 alert rules (18 ING- ingestion incl. the 11-rule 02-ingestion-alerting
+#     contract + 16 SIGNAL- + 9 INFRA- infra/JVM/host; CHG-093)
 #     (SIGNAL includes P8.3 15 + SIGNAL-crit-schema 1; INFRA 9: host CPU 80/90, JVM heap 85, GC 500ms,
 #     disk 20%, disk IO 20ms, net 80%, O2 mem 14GB, collector export failed)
 #   - one dev webhook destination ("dev-webhook" -> localhost:9999 in O2's
