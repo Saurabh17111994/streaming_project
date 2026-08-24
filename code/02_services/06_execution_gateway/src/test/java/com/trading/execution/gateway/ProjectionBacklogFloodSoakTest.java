@@ -120,12 +120,11 @@ class ProjectionBacklogFloodSoakTest {
                 + " reason=" + readiness.snapshot().reason());
         // Bound is 4: at most 4 in flight can be accepted while blocked.
         assertTrue(accepted <= 4, "accepted=" + accepted + " shed=" + shed);
+        assertTrue(shed > 0, "flood past MAX_PENDING must shed load (503)");
         // Full drain: all blocked applies finished, so readiness must restore.
         assertTrue(readiness.snapshot().durableWriteReady(),
                 "after drain readiness must restore; reason="
                         + readiness.snapshot().reason());
-
-        // Intake resumes: a fresh post is accepted again.
 
         // Intake resumes: a fresh post is accepted again.
         var resumed = client.send(HttpRequest.newBuilder(URI.create(base + "/v1/events"))
