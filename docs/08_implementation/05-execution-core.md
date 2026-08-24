@@ -42,7 +42,7 @@
 | Gate HALTED->RECONCILING->WAITING->ENABLED | New `gate.rs:enter_reconciling_if_needed(true)` HALTED->RECONCILING, `ExecutionGate` same-hash Duplicate no call, changed-hash `ContractViolation` halt (20/20), `fence` stale token/block 0 calls, `clockwatch` 7/7 | Changelog-gap lease acquire, live HA |
 | Capture correlation | New `PostbackCorrelator.java` `InMemoryCorrelationIndex` bijective pure; `PostbackFingerprint` sorted `key=value|` SHA-256 | `Order_Correlation` Fluss KV live |
 | Babysitter MVP | New `babysitter.rs:NoOpPositionObserver` counts by state/reason, 0 actions, `POSITION_ACTIONS_ENABLED=true`->fail-closed 3/3 | Flink checkpoint merge, `Position_Actions` Fluss |
-| Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + `SERVICE_HALTED` default 12/12 | 12 keys `TO_BE_VERIFIED` (Arrow URL/timeout/retry) |
+| Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + `SERVICE_HALTED` default 12/12 | 6 keys `TO_BE_VERIFIED` (Arrow timeout/retry profile, broker status/reference format+echo, Arrow request schema) |
 | Readiness / Backpressure | 11 readiness flags (broker/bridge/Fluss/gate/backlog/clock), `MAX_PENDING` logic, `health` not-ready | Load flood `MAX_PENDING_PROJECTION_RECORDS` live |
 | Metrics 30 | `telemetry` 3/3 OTLP native, bridge 14/14, Go `go-bridge` ok | O2 dashboards for execution domain |
 | Tests | Rust 164/164, common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 16 Running) — historical count not C6 464/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
@@ -524,7 +524,7 @@ stored in audit (only redacted hashes and summaries).
 | Key | Rule |
 | --- | --- |
 | `ARROW_APP_ID` / `ARROW_APP_SECRET` / `ARROW_TOKEN` / `ARROW_USER_ID` / `ARROW_PASSWORD` / `ARROW_TOTP_KEY` | Bridge credentials — secret refs only, never in Nautilus, never committed |
-| `ARROW_REST_URL_TO_BE_VERIFIED` | Bridge → Arrow base URL; no unsafe production default |
+| `ARROW_REST_URL_TO_BE_VERIFIED` | Bridge → Arrow base URL; no unsafe production default |`ARROW_REST_URL` (**RESOLVED 2026-08-24:** `https://edge.arrow.trade` in `.env`, consumed by bridge; TOTP AutoLogin proven live 2026-08-21 `execution-auth-001`; static `ARROW_TOKEN` path removed 2026-08-24) | Bridge → Arrow base URL; no unsafe production default |
 | `ARROW_TIMEOUT_PROFILE_TO_BE_VERIFIED` / `ARROW_RETRY_POLICY_TO_BE_VERIFIED` | Timeout + classification; unknown outcomes never blind-retried |
 | `BROKER_CLIENT_REFERENCE_FORMAT_TO_BE_VERIFIED` | Length/charset/echo evidence for the ≤16-char `client_order_ref` (carried in `remarks`) |
 | `BRIDGE_LISTEN_ADDR` | Localhost bind for the go-arrow bridge (loopback only) |

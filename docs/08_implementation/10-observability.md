@@ -10,7 +10,7 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | **Partially implemented (offline) — 8/8 dashboards + collector `0.123.0` validate + 650-tick 1% + top-20 + alerts `33` + JVM `ingestion/gateway` + traces `4317` green on `1-host`; live `4VM` `M3` firing + `PERF-PROD-60000` still blocked** |
+| Status | **Partially implemented (offline) — 8/8 dashboards + collector `0.123.0` validate + 650-tick 1% + top-20 + alerts `43` + JVM `ingestion/gateway` + traces `4317` green on `1-host` + OPS-INT-001/OPS-FAIL-001 evidence 2026-08-24 (DR-004); live `4VM` `M3` firing + `PERF-PROD-60000` still blocked** |
 | Owner | Platform/Operations; component owners emit telemetry (infra/JVM/host owners added 2026-08-22) |
 | Backend | **OpenObserve is the ONLY live observability backend for all trading + project infrastructure (metrics/logs/traces/alerts); immutable execution audit remains a separate S3/object-store system per `DEC-043` (not O2 retention) — see `docs/04_contracts/openobserve.md#K`.** |
 | Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |

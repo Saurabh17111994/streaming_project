@@ -1,6 +1,6 @@
 # 21 — Savepoint rollout (G5 Ops T12)
 
-**Status:** Partially implemented (offline) — script + Makefile + SignalJobConfig F005 gate verified offline (`bash -n`/`shellcheck`/`DRY_RUN`), live savepoint/restore against Flink cluster still `TO_BE_VERIFIED` (needs Docker + `RUNNING` job + Prometheus; prod `s3://` also `TO_BE_VERIFIED`).
+**Status:** Partially implemented (offline) + **LIVE VERIFIED 2026-08-24 (Phase D #5)** — script + Makefile + SignalJobConfig F005 gate verified offline (`bash -n`/`shellcheck`/`DRY_RUN`); live savepoint/restore PASSED 2026-08-24: savepoint `file:/checkpoints/savepoints/savepoint-565320-eb7c86bee968` COMPLETED → graceful cancel → redeploy → new job `5869c40e7073768a7593fea2bc24b58b` RUNNING restored `is_savepoint=true` (id 1250), checkpoints continue (1255), 0 failed (evidence `logs/rollout/rollout-signal-job-compute-20260824-213501.log`, `logs/phase-d-20260824T151952Z/05-final-health.md`; dedup continuity honestly degraded — no live traffic post-window). Prod `s3://` path still `TO_BE_VERIFIED` (prod VMs).
 
 
 ## Problem

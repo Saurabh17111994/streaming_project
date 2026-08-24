@@ -172,7 +172,7 @@ boundaries:
       Apache Fluss 0.9.1-incubating release
       (github.com/apache/fluss, 2026) — official Docker image
       apache/fluss:0.9.1-incubating
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE_WITH_LIMITATION
     evidence_owner: Platform
     evidence_method: >-
       Pin Fluss server by digest; run LOG/KV table, partial_update,
@@ -189,7 +189,7 @@ boundaries:
       CompatFlussIntegrationTest (BYTES round-trip, LOG append-only,
       KV upsert/lookup, partial_update merge, stale-write retention,
       clean-break replay).
-    result: COMPATIBLE (append/ack/no-batching/BYTES/LOG/KV/partial_update)
+    result: COMPATIBLE_WITH_LIMITATION (append/ack/no-batching/BYTES/LOG/KV/partial_update; KV changelog FULL images; bucket-distribution skew)
     observed_behavior: >-
       100 appends acked with 0 uncertain, 0 duplicates;
       1000 ticks -> 1000 individual appends (no application batching);
@@ -197,6 +197,9 @@ boundaries:
       KV upsert+lookup works; partial_update merges targeted column while
       preserving others; last-write-wins retained; clean-break rebuild
       converges to latest state.
+      2026-08-24: compatFluss003ChangelogFullImage — KV changelog records are
+      FULL row images (SCH-14); compatFluss006BucketDistributionSkew —
+      distinct keys spread evenly, constant key collapses (COMPAT-FLUSS-006).
     limitations: >-
       Local single-tablet evidence. Replication/failover, checkpoint/restore,
       FULL changelog image, and policy-controlled lake reconstruction remain UNKNOWN
@@ -205,8 +208,8 @@ boundaries:
       log.retention.ms/comment alters are silent no-ops (getLogTTLMs
       unchanged, verified 2026-08-13); only table.datalake.enabled applies —
       TTL is set at create time only (foundation L853).
-    date: 2026-07-31
-    status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
+    date: 2026-08-24
+    status: LIMITATION_RECORDED_REPLICATION_PENDING
 
   - compatibility_id: VM-ZK-013
     boundary: ZooKeeper ensemble
@@ -238,7 +241,7 @@ boundaries:
     boundary: Fluss Java client
     proposed_version: "0.9.1-incubating"
     evidence_source: "Apache Fluss 0.9.1-incubating client (Maven Central)"
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
       Lock fluss-client dep; assert client equals server; exercise
@@ -258,18 +261,21 @@ boundaries:
     result: >-
       COMPATIBLE (append/ack/no-batching/BYTES/LOG/KV/partial_update
       via official client)
+      ; routing/bucket-key stress COMPAT-FLUSS-006 (2026-08-24)
     observed_behavior: >-
       Official 0.9.1-incubating client connects to coordinator 9123,
       routes to tablet 9124, appends 100 + 1000 rows to raw_table_1
       with ack timestamps; BYTES/STRING columns round-trip; KV
       upsert/lookup/partial_update work; no API breakage vs local
       SNAPSHOT build.
+      2026-08-24: compatFluss006BucketDistributionSkew — distinct keys
+      spread evenly, constant key collapses (COMPAT-FLUSS-006).
     limitations: >-
       Compile + append/ack/no-batching/BYTES/LOG/KV/partial_update.
       Routing/bucket-key stress, connector checkpoint, and replication
       behavior not yet exercised.
-    date: 2026-07-31
-    status: PARTIAL_EVIDENCE_LOG_KV_PARTIAL_UPDATE
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED
 
   - compatibility_id: VM-FLUSS-CONN-007
     boundary: Fluss Flink connector
@@ -277,7 +283,7 @@ boundaries:
     evidence_source: >-
       Apache Fluss fluss-flink-2.2 0.9.1-incubating
       (Maven Central)
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
       Lock fluss-flink-2.2 connector dep; assert matches Flink 2.2 +
@@ -298,17 +304,26 @@ boundaries:
     result: >-
       COMPATIBLE (source consume + sink append live; KV upsert/lookup; 48
       EXACTLY_ONCE checkpoints)
+      ; checkpoint/restore+rescale green; serializer-change blocked as asserted;
+      sink partial-visibility reconciled
     observed_behavior: >-
       FlussSource.build() performs live Admin.getTableInfo (fail-fast startup);
       source read raw_table_1 end-to-end; sink appended 205,146 candle rows /
       1,074 instruments; SAFETY-INT-001 passed 2026-08-09
       (logs/safety-int-001/safety-int-001-20260809-122201.out).
+      2026-08-13: SIG-INT-001/002 CandleGraphReplayIntegrationTest 3/3
+      (COMPUTE_INT_TEST_P6, live dev Fluss scratch tables — source/sink boundary
+      on approved versions + dual-sink partial-visibility reconciliation);
+      2026-08-15: STATE-COMPAT-001 serializer-change half;
+      2026-08-24: COMPAT-FLINK-001 CompatFlinkCheckpointRescaleIntegrationTest
+      1/1 (checkpoint → restore at 2x parallelism, serializer-change blocked
+      as asserted; COMPUTE_INT_TEST_COMPAT_FLINK=true).
     limitations: >-
       Checkpoint/restore-rescale of the connector boundary, serializer change,
       and sink partial-visibility remain UNKNOWN (STATE-COMPAT-001,
       COMPAT-FLINK-001, SIG-INT-002 pending; 2026-08-10 resolution plan).
-    date: 2026-08-09
-    status: PARTIAL_EVIDENCE_CONNECTOR_SOURCE_SINK
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED_LIVE
 
   - compatibility_id: VM-BROKER-MKT-008
     boundary: Broker market protocol
@@ -390,20 +405,22 @@ boundaries:
       Sandbox Arrow REST: assert request schema, auth, timeout,
       response, broker identity (orderNo), idempotency/retry (remarks
       = client_order_ref, max 16 chars).
-    source_artifact: null
+    source_artifact: >-
+      code/01_platform/01_docker/.env (ARROW_REST_URL) + go-arrow
+      orders.go/constants.go + logs/execution-auth-001
     fixture: null
     scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    result: PARTIAL (URL + auth + request schema verified; order round-trip pending)
+    observed_behavior: ARROW_REST_URL=https://edge.arrow.trade pinned and consumed (.env, TOTP-only auth since 2026-08-24, static ARROW_TOKEN path removed); TOTP AutoLogin PROVEN live 2026-08-21 (execution-auth-001, token len 238, IP gate ACCEPTED); request schema pinned in go-arrow orders.go/constants.go
+    limitations: No order round-trip evidence yet (sandbox order = market hours + approval); ARROW_TIMEOUT_PROFILE / ARROW_RETRY_POLICY still unpinned
+    date: 2026-08-24
+    status: PARTIAL_EVIDENCE_AUTH_URL_SCHEMA
 
   - compatibility_id: VM-OPENOBS-011
     boundary: OpenObserve ingestion
     proposed_version: "v0.91.5-amd64 (public.ecr.aws/zinclabs/openobserve)"
     evidence_source: "docs/04_contracts/openobserve.md (self-hosted spec)"
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE_WITH_LIMITATION
     evidence_owner: Operations
     evidence_method: >-
       Runtime test: assert OTLP telemetry delivery via otel-collector:4317,
@@ -413,11 +430,11 @@ boundaries:
     source_artifact: null
     fixture: null
     scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    result: COMPATIBLE_WITH_LIMITATION (single-host live stack - OTLP delivery + 8/8 dashboards + 43 alerts + OPS-INT-001 redaction + OPS-FAIL-001 outage drill)
+    observed_behavior: 2026-08-24, 43 alerts provisioned idempotently (ING 18 / SIGNAL 16 / INFRA 9, o2-provision.py); 650-tick 1% + top-20 verified; JVM ingestion/gateway series; traces 4317; DR-004 O2 kill+recreate RTO 19.4s — durable execution audit (separate S3/object store per DEC-043) unaffected
+    limitations: Multi-host M3 firing (4VM) + PERF-PROD-60000 (prod VMs) remain; single-host evidence only
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED_LIVE
 
   - compatibility_id: VM-IMAGES-012
     boundary: Base images
