@@ -85,6 +85,21 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 9 | OpenObserve | VM-OPENOBS-011 | `OPS-INT-001`, `OPS-FAIL-001` | Telemetry envelope/redaction correct; OpenObserve outage leaves durable audit available — `TO_BE_VERIFIED` |
 | 10 | Base images | VM-IMAGES-012 | `LOCAL-INT-002`; `SWARM-INT-001`; `SEC-IMAGE-001` | Images referenced by digest; no mutable tag; SBOM/vulnerability policy passes |
 
+**Matrix evidence recorded (2026-08-24, laptop-only):** `version_matrix.yaml` rows 1/3/4
+flipped `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE` / `EVIDENCE_RECORDED`):
+
+| Row | Status | Evidence (captured 2026-08-24) |
+|---|---|---|
+| VM-JAVA-001 | `COMPATIBLE` (`17.0.19` exact) | `docker run --rm flink:2.2.1-scala_2.12-java17 java -version` → Temurin 17.0.19+10; host JVM 17.0.19 identical; full module suites green on it (common 464 / ingestion 247 / compute 387) |
+| VM-FLINK-SRV-003 | `COMPATIBLE` | `FLINK_IMAGE=flink:2.2.1-scala_2.12-java17` + pin-check 4/4 PASS (`FLINK_VERSION pinned`); live signal job on 2.2.1 — 463/463 EXACTLY_ONCE checkpoints, `STATE_RECOVERY_PATH` restore; `SignalHarnessContractTest` 4/4 (2026-08-24); 2026-08-09 48-checkpoint exactly-once evidence (`logs/safety-int-001/`) |
+| VM-FLINK-API-004 | `COMPATIBLE` | pom `flink.version` 2.2.1 (streaming-java/clients/table-*/connector-base/test-utils); compute module green (387 tests) against the 2.2.1 API on JVM 17.0.19 |
+| VM-PYTHON-002 | `COMPATIBLE_WITH_LIMITATION` (**PIN DRIFT**) | Host 3.11.15 runs `version_matrix_verify.py` (`OK: 15 boundaries; pin discipline satisfied`) + `ddl_apply.py --help` fine; **the ddl-apply image ships Python 3.14.4** — the pinned 3.11.9 is NOT the execution-image runtime (image rebuild or pin update required; `DRIFT_RECORDED_PIN_UNSATISFIED`) |
+
+Python drift is a real finding from this pass: proposed `3.11.9` never matched any
+runtime — host is 3.11.15 (3.11-series, acceptable for tooling) and the execution
+image runs 3.14.4. The pin must be re-decided before the DDL gate can treat
+VM-PYTHON-002 as `COMPATIBLE`.
+
 **Live evidence recorded (2026-08-13, BROKER-MD-001):** real wire frames from the HFT
 Arrow feed (socket.arrow.trade HFT 40/196 B zstd LE) captured raw and decoded to
 typed fields; paise scaling verified; AutoLogin (non-interactive, no device token)
@@ -124,6 +139,9 @@ Run the evidence in this order (matches the mandatory build order):
 
 - `VM-JAVA-001`, `VM-PYTHON-002`, `VM-FLINK-SRV-003`, `VM-FLINK-API-004`,
   `VM-FLUSS-SRV-005`, `VM-FLUSS-CONN-007` are `COMPATIBLE`.
+  (2026-08-24: JAVA + FLINK-SRV/API done; PYTHON-002 is pinned `3.11.9` but the
+  execution image runs 3.14.4 — the drift must be resolved first; FLUSS-SRV/CONN
+  remain `PARTIAL_EVIDENCE_*` pending multi-node evidence.)
 - `COMPAT-FLUSS-001`..`004` and `COMPAT-FLINK-001` pass (passed to `make ddl`
   as the `--matrix-evidence` capability evidence).
 - `make ddl APPLY=1 EVIDENCE=<file>` completes the 9-step contract with exit 0.

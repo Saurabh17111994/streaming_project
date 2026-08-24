@@ -33,73 +33,134 @@ boundaries:
     evidence_source: >-
       Eclipse Temurin 17.0.19 (Adoptium, May 2026); Flink 2.2
       requires Java 17
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
       Capture running JVM version from pinned base image; assert equals
       matrix; verify Flink 2.2 / Fluss 0.9.1 client JVM compatibility.
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    source_artifact: >-
+      flink:2.2.1-scala_2.12-java17 (FLINK_IMAGE, code/01_platform/01_docker/docker-compose.yml)
+      java -version inside the image = Temurin 17.0.19+10; host JVM java -version
+      = openjdk 17.0.19 2026-04-21 (identical)
+    fixture: >-
+      Laptop host + flink:2.2.1-scala_2.12-java17 image, 2026-08-24
+    scenario: >-
+      docker run --rm flink:2.2.1-scala_2.12-java17 java -version; host
+      java -version + mvn -v; full module test suites (common 464,
+      ingestion 247, compute 387) on this JVM
+    result: COMPATIBLE (17.0.19+10 exact on host and pinned image)
+    observed_behavior: >-
+      Image reports OpenJDK Temurin-17.0.19+10 build 17.0.19+10; host mvn
+      compiles and runs all modules on 17.0.19 with zero JVM-version
+      errors; Flink 2.2.1 + Fluss 0.9.1 client deps resolve and run on it.
+    limitations: >-
+      Flink/Fluss images referenced by tag (digest pinning documented as
+      .env example); docker-compose.yml requires FLINK_IMAGE/FLUSS_IMAGE.
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED_LIVE
 
   - compatibility_id: VM-PYTHON-002
     boundary: Python runtime
     proposed_version: "3.11.9"
-    evidence_source: "Runtime image / build record (to be captured)"
-    compatibility_class: UNKNOWN
+    evidence_source: >-
+      Runtime image / build record; ddl-apply image build record
+      (01_docker-ddl-apply); host toolchain python3 (miniconda)
+    compatibility_class: COMPATIBLE_WITH_LIMITATION
     evidence_owner: Platform
     evidence_method: >-
       Capture Python version from Executor/mock image; assert equals
       matrix.
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: OPEN
+    source_artifact: >-
+      docker run --rm --entrypoint python3 01_docker-ddl-apply:latest
+      --version -> Python 3.14.4; host python3 --version -> 3.11.15
+    fixture: Laptop host + 01_docker-ddl-apply:latest image, 2026-08-24
+    scenario: >-
+      version_matrix_verify.py (OK: 15 boundaries; pin discipline
+      satisfied) and ddl_apply.py --help execute on host 3.11.15; image
+      python3 --version captured from ddl-apply image
+    result: >-
+      PASS on host (3.11.15); DRIFT vs pin on execution image
+      (3.14.4 != 3.11.9)
+    observed_behavior: >-
+      Host 3.11.15 runs the version-matrix verifier and ddl_apply CLI
+      cleanly. The ddl-apply Docker image ships Python 3.14.4 — the
+      pinned 3.11.9 is NOT the runtime inside the execution image.
+    limitations: >-
+      PIN DRIFT: execution image python 3.14.4 vs proposed 3.11.9.
+      Either the image must be rebuilt on python:3.11.9 or the pin
+      updated — decision required before treating 3.11.9 as verified.
+      Host 3.11.15 is 3.11-series (compatible class limited to host
+      tooling). Image-to-matrix mismatch is the blocking limitation.
+    date: 2026-08-24
+    status: DRIFT_RECORDED_PIN_UNSATISFIED
 
   - compatibility_id: VM-FLINK-SRV-003
     boundary: Flink server/image
     proposed_version: "2.2.1"
     evidence_source: "Apache Flink 2.2.1 release (flink.apache.org, May 2026)"
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
       Pin Flink image by digest; run state backend, checkpoint,
       savepoint, rescale compatibility tests.
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    source_artifact: >-
+      FLINK_IMAGE=flink:2.2.1-scala_2.12-java17 (compose) + pin-check
+      4/4 PASS (FLINK_VERSION pinned) + pom flink.version 2.2.1 +
+      live signal-job-compute jid aaccc1cc786e4a48d4898d30350ff43e
+      (120/120 tasks, 463/463 EXACTLY_ONCE checkpoints)
+    fixture: >-
+      Docker Compose Flink 2.2.1 (jobmanager+taskmanager, RocksDB state
+      backend), live dev stack; offline SignalHarnessContractTest
+    scenario: >-
+      Live signal job ran/restarted on Flink 2.2.1 with checkpoint +
+      STATE_RECOVERY_PATH restore; SignalHarnessContractTest 4/4
+      (2026-08-24 P3.1); 48-checkpoint exactly-once live evidence
+      2026-08-09 (logs/safety-int-001)
+    result: COMPATIBLE (checkpoint/restore + exactly-once on 2.2.1)
+    observed_behavior: >-
+      Live job on flink:2.2.1 completed 463/463 EXACTLY_ONCE checkpoints
+      and restored state after restart from STATE_RECOVERY_PATH
+      (CHG-030 pattern); Fluss connector FlussSource checkpoints aligned
+      (log-offset offsets); RocksDB state backend operational.
+    limitations: >-
+      Rescale/hot-migration compatibility test (COMPAT-FLINK-001 full
+      rescale) not yet run — UID anchors pinned for rescale readiness
+      (JobGraphDump). Image referenced by tag in .env (digest pin
+      documented as example; pin-check PASS covers versions.pin).
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED_LIVE
 
   - compatibility_id: VM-FLINK-API-004
     boundary: Flink Java API
     proposed_version: "2.2.1"
     evidence_source: "Apache Flink 2.2.1 dependency (Maven Central)"
-    compatibility_class: UNKNOWN
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
       Lock flink-clients / flink-streaming deps; assert API equals
       server; compile Signal/Action Capture/Executor against it.
-    source_artifact: null
-    fixture: null
-    scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    source_artifact: >-
+      code/pom.xml flink.version 2.2.1 (flink-streaming-java,
+      flink-clients, flink-table-*, flink-connector-base, test-utils,
+      flink-statebackend-rocksdb)
+    fixture: Laptop maven build (Java 17.0.19), 2026-08-24
+    scenario: >-
+      mvn test -pl 02_services/02_compute -am common,02_services/02_compute:
+      compute suite green (387 tests) against flink 2.2.1 API deps
+    result: COMPATIBLE (compile + 387 green against 2.2.1 API)
+    observed_behavior: >-
+      SignalJob/SafetyHaltJob/JobGraphDump compile and run against
+      flink-streaming-java/flink-clients 2.2.1; test harnesses
+      (KeyedProcessFunctionTestHarness, MiniCluster FlinkMiniCluster
+      via flink-test-utils 2.2.1) execute; no API breakage vs server
+      2.2.1 (same version).
+    limitations: >-
+      Executor (Rust) unaffected — Java API boundary only. Server-side
+      binary API equality asserted by identical version resolvable in
+      the local .m2; runtime cross-version (client<->server) not
+      exercised (same-version only).
+    date: 2026-08-24
+    status: EVIDENCE_RECORDED
 
   - compatibility_id: VM-FLUSS-SRV-005
     boundary: Fluss server

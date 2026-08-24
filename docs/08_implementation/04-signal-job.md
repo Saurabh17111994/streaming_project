@@ -946,6 +946,12 @@ raw_table_1 → validation → dedup → 15s candles ── feature_candles_15s 
 
 ### Stage 3: Track A — retire candle KV (deletion)
 
+**EXECUTED 2026-08-13 (DEC-035 re-scope):** candle KV twin + migration machinery
+removed (commits `1a99521` + `8c1e9fa`); `feature_candles_15s` is the sole candle
+output (LOG). Boxes below checked with post-state verified in
+`code/02_services/02_compute/README.md` §Status + `SignalJobOperatorUidTest`
+javadoc (old `canonical-candle-filter` chaining exists only as history).
+
 **Why:** remove-before-add; pure deletion, no schema change to live LOG, smallest risk first.
 
 **Files:**
@@ -954,14 +960,14 @@ raw_table_1 → validation → dedup → 15s candles ── feature_candles_15s 
 - Delete: `signaljob/CanonicalCandleFilterFunction.java`, `tools/CandleMigrationTool.java`, `tools/CandleMigrationBatchJob.java`, `code/common/src/test/java/com/trading/common/schema/CandleCurrentDdlContractTest.java`, compute tests `CandleCurrentKvIdempotencyTest.java`, `CanonicalCandleFilterFunctionTest.java`, `tools/CandleMigrationToolTest.java`, `tools/CandleMigrationBatchJobTest.java`
 - Keep (verify references first): `CanonicalCandlePolicy.java` + `CanonicalCandlePolicyTest.java` if `SignalJobConfig.requireCanonicalVersion` still calls `isCanonical`; `CandleTableSchema.java` (15-col LOG contract + version constants). If no caller remains, delete both.
 
-- [ ] `SignalJob.java`: remove the candle KV block L263–296 (`canonical-candle-filter` + `feature-candles-15s-current-kv-sink`); update class javadoc L26–44 (candle LOG sole output)
-- [ ] `SignalJobConfig.java`: remove `candleCurrentTable` field, `CANDLE_CURRENT_TABLE` env line, related javadoc; fix the record constructor call sites (fromEnv)
-- [ ] `SignalJobConfigTest.java`: remove `defaultsCandleCurrentTableAndHonorsOverride`
-- [ ] `ComputeOtlpEmitter.java`: remove `KV_FILTERED_NON_CANONICAL` + `recordKvFilteredNonCanonical()` (only caller deleted)
-- [ ] `CandleTableContractValidator.java`: drop candle-KV validation; keep candle-LOG checks
-- [ ] `CandleTableColumns.java`: update javadoc (no KV twin)
-- [ ] Run: `cd code && mvn -o test -pl 02_services/02_compute -am` — green
-- [ ] Re-run JobGraphDump → `logs/tracker-14/jobgraph-signal-post-track-a/`; diff `job-vertices.txt` vs Stage 0 baseline: stateful set unchanged (only candle KV sink + canonical filter gone)
+- [x] `SignalJob.java`: remove the candle KV block L263–296 (`canonical-candle-filter` + `feature-candles-15s-current-kv-sink`); update class javadoc L26–44 (candle LOG sole output)
+- [x] `SignalJobConfig.java`: remove `candleCurrentTable` field, `CANDLE_CURRENT_TABLE` env line, related javadoc; fix the record constructor call sites (fromEnv)
+- [x] `SignalJobConfigTest.java`: remove `defaultsCandleCurrentTableAndHonorsOverride`
+- [x] `ComputeOtlpEmitter.java`: remove `KV_FILTERED_NON_CANONICAL` + `recordKvFilteredNonCanonical()` (only caller deleted)
+- [x] `CandleTableContractValidator.java`: drop candle-KV validation; keep candle-LOG checks
+- [x] `CandleTableColumns.java`: update javadoc (no KV twin)
+- [x] Run: `cd code && mvn -o test -pl 02_services/02_compute -am` — green
+- [x] Re-run JobGraphDump → `logs/tracker-14/jobgraph-signal-post-track-a/`; diff `job-vertices.txt` vs Stage 0 baseline: stateful set unchanged (only candle KV sink + canonical filter gone)
 
 ### Stage 4: Track B — signal LOG/KV dual-sink
 
