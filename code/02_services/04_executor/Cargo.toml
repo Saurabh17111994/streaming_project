@@ -36,7 +36,7 @@ thiserror = "2"
 async-trait = "0.1"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }  # payload key order must match Java/Python signers (GatewayProtocol canonical — Jackson ObjectNode inserts in order; BTreeMap default sorted and breaks cross-language HMAC)
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"

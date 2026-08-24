@@ -17,9 +17,6 @@ use nautilus_execution_service::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    telemetry::init_logging("info")?;
-    telemetry::METRICS.record_restart();
-
     let config = ServiceConfig::from_env()?;
     let addr: SocketAddr = config.listen_addr()?;
     // WP-2 remainder (2026-08-21): a configured BRIDGE_ENDPOINT selects the production
@@ -29,7 +26,16 @@ async fn main() -> anyhow::Result<()> {
     let selection = BridgeSelection::from_config(&config);
     let bridge_mode = selection.mode();
     let runtime = Runtime::init(config)?;
+    // Nautilus's kernel registers the process-wide `log` logger (LoggerConfig owns
+    // set_boxed_logger); our own tracing subscriber registers a `log` bridge
+    // (tracing-subscriber's tracing-log feature) and must therefore come SECOND —
+    // otherwise the kernel errors "A non-Nautilus logger is already registered" and the
+    // service aborts at boot. Tracing still works: set_global_default is a separate
+    // system; only the `log` bridge is skipped.
     let mut node = LiveNodeRuntime::build_with_bridge(selection)?;
+
+    telemetry::init_logging("info")?;
+    telemetry::METRICS.record_restart();
 
     tracing::info!(
         "nautilus-execution-service boot: gate HALTED, bridge mode {bridge_mode}, LiveNode hosted run loop armed, health on {addr} (execution enabled: false)"

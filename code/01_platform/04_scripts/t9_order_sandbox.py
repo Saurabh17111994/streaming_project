@@ -249,10 +249,11 @@ class HostTransport(Transport):
 
 
 class DockerExecTransport(Transport):
-    """In-network via `docker compose --profile execution-t3 exec -T <svc>`.
-    Only works when the target image carries the probe tool (wget/curl/python);
-    a missing tool is recorded by the caller as probe-unavailable, never as a
-    pass or a fail."""
+    """In-network via `docker run` curl attached to execution-net (no host
+    port is published — T8 gate 3). A missing/failed probe is reported as
+    status 0, classified as probe-unavailable by the caller — never as a
+    pass or a fail. `exec()` shells into a service; `http_json()` makes an
+    in-network HTTP call."""
 
     def __init__(self, compose=COMPOSE, profile="execution-t3"):
         self.compose = compose
@@ -265,6 +266,35 @@ class DockerExecTransport(Transport):
         return self._run(["docker", "compose", "-f", self.compose,
                           "--profile", self.profile, "exec", "-T", service,
                           "sh", "-lc", shell])
+
+    def _network(self):
+        """Resolve the execution-net compose network name (project-prefixed)."""
+        net = _compose_json().get("networks", {}).get("execution-net", {})
+        name = net.get("name")
+        if not name:
+            raise RuntimeError("execution-net network name not resolvable")
+        return name
+
+    def http_json(self, method, url, body=None, headers=None):
+        cmd = ["docker", "run", "--rm", "-i", "--network", self._network(),
+               "curlimages/curl:latest", "-sS", "-o", "-", "-w", "\n%{http_code}",
+               "-X", method]
+        for k, v in (headers or {}).items():
+            cmd += ["-H", f"{k}: {v}"]
+        cmd += ["--data-binary", "@-", url]
+        try:
+            p = subprocess.run(cmd, input=body or "", capture_output=True,
+                               text=True, timeout=60)
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            return 0, f"probe-unavailable: {exc}"
+        if not p.stdout or "\n" not in p.stdout:
+            return 0, (f"probe-unavailable: rc={p.returncode} "
+                       f"{p.stderr.strip()[:200]}")
+        body_txt, status = p.stdout.rsplit("\n", 1)
+        try:
+            return int(status), body_txt
+        except ValueError:
+            return 0, f"probe-unavailable: bad curl status {status!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +480,9 @@ def run_live(transport=None, secret="local-dev-only", now=None,
     status, body = transport.http_json(
         "POST", "http://nautilus:9190/v1/intents", body=env_json,
         headers={"Content-Type": "application/json"})
+    if status == 0:
+        print(f"BLOCKED: probe tool unavailable — {body}")
+        return 2, "BLOCKED", f"probe tool unavailable: {body}"
     if status == 401:
         print("FAIL: envelope rejected by nautilus verifier — parity broke: "
               f"{body}")
