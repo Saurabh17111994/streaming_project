@@ -252,8 +252,14 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
                     );
                 }
             };
-            let mut guard = forwarder.lock().await;
-            match guard.send_command(place.clone()).await {
+            // Scope the bridge lock to the send only: a concurrent /v1/intents must not
+            // serialize behind the gateway emission round-trip (a hung gateway would
+            // otherwise stall every subsequent order submit).
+            let submit = {
+                let mut guard = forwarder.lock().await;
+                guard.send_command(place.clone()).await
+            };
+            match submit {
                 Ok(report) if report.is_success() => {
                     // A2.4 leg: emit the normalized lifecycle+correlation image to the
                     // gateway /v1/events intake. The order is already accepted — a failed
