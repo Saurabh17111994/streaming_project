@@ -45,12 +45,32 @@ if ! docker kill -s KILL "${TM_CONTAINER}" 2>&1; then
   echo "TM-KILL-CHAOS-02: [leg B] FAIL — docker kill" >&2
   exit 1
 fi
-# wait for restart (compose restart policy)
-sleep 5
+# wait for restart — explicit `docker start` after a SIGKILL: on this docker
+# daemon `docker kill -s KILL` does not trigger the restart policy
+# (RestartCount stays 0 even with restart: unless-stopped; observed
+# 2026-08-22 for the tablet and again 2026-08-24 for the TM — the
+# TabletKillChaosIntegrationTest documents and compensates for the same
+# quirk). Fall back to docker start, then poll until the container is up.
 if ! docker ps --filter "name=flink-taskmanager" --format "{{.Names}}" 2>/dev/null | grep -q "flink-taskmanager"; then
-  echo "TM-KILL-CHAOS-02: [leg B] FAIL — taskmanager not restarted" >&2
+  echo "TM-KILL-CHAOS-02: [leg B] docker kill did not trigger the restart policy — explicit docker start"
+  if ! docker start "${TM_CONTAINER}" 2>&1; then
+    echo "TM-KILL-CHAOS-02: [leg B] FAIL — docker start" >&2
+    exit 1
+  fi
+fi
+TM_UP=0
+for _ in $(seq 1 30); do
+  if docker ps --filter "name=flink-taskmanager" --format "{{.Names}}" 2>/dev/null | grep -q "flink-taskmanager"; then
+    TM_UP=1
+    break
+  fi
+  sleep 2
+done
+if [[ "${TM_UP}" -ne 1 ]]; then
+  echo "TM-KILL-CHAOS-02: [leg B] FAIL — taskmanager not restarted within 60s" >&2
   exit 1
 fi
+echo "TM-KILL-CHAOS-02: [leg B] taskmanager container is up again"
 # verify job RUNNING via REST (best-effort)
 if command -v curl >/dev/null 2>&1; then
   if ! curl -sf "${FLINK_REST_URL}/jobs/overview" 2>/dev/null | grep -q "RUNNING"; then

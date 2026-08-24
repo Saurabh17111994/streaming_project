@@ -1,6 +1,6 @@
 # 22 — Failure chaos suite (T13, G5 Ops)
 
-**Status:** Partially implemented (offline) — 5 runner scripts created, `make chaos-suite` `PASS 01 PASS 02 PASS 03 SKIP 04 SKIP RESULT=PASS EXIT 0` on laptop (single-VM `docker-compose.yml`, single-node Swarm), live tablet-kill `x3` + VM-loss `multi-node` + `3k×30` still `TO_BE_VERIFIED`.
+**Status:** Partially implemented — 5 runner scripts created; offline legs green. Live stack results 2026-08-24 (CHG-096, evidence `logs/phase-d-20260824T151952Z/`): 01 slot PASS, 02 TM kill **PASS** (both legs; leg B after a runner fix — this docker daemon does not auto-restart a `docker kill -s KILL`ed container despite `restart: unless-stopped`, the runner now falls back to explicit `docker start`; job survived via checkpoint failover, checkpoint strictly newer), 03 tablet kill **FAIL (reproducible 2/2)** — coordinator re-registers the tablet in ~1s but data-plane reads do not return within the drill's 180s bound on this RF1 single-tablet dev box (16 buckets, 7.8M rows); post-recovery probe returns the exact pre-kill count (no acked-row loss); prod x3 tablet validation is the actionable residual. VM-loss `multi-node` + `3k×30` still `TO_BE_VERIFIED`.
 
 
 The four planned failure tests (plan `streaming-3000-flink-fluss-hardening.md`
