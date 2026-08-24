@@ -123,10 +123,13 @@ boundaries:
       (CHG-030 pattern); Fluss connector FlussSource checkpoints aligned
       (log-offset offsets); RocksDB state backend operational.
     limitations: >-
-      Rescale/hot-migration compatibility test (COMPAT-FLINK-001 full
-      rescale) not yet run — UID anchors pinned for rescale readiness
-      (JobGraphDump). Image referenced by tag in .env (digest pin
-      documented as example; pin-check PASS covers versions.pin).
+      COMPAT-FLINK-001 rescale COVERED-GREEN 2026-08-24:
+      CompatFlinkCheckpointRescaleIntegrationTest (env-gated
+      COMPUTE_INT_TEST_COMPAT_FLINK=true, host-runnable embedded
+      MiniCluster + file:// checkpoints) — checkpoint dedup sub-graph,
+      restore at 2× parallelism green, serializer-change blocks startup
+      (asserted). Image referenced by tag in .env (digest pin documented
+      as example; pin-check PASS covers versions.pin).
     date: 2026-08-24
     status: EVIDENCE_RECORDED_LIVE
 
