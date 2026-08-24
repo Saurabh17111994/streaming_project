@@ -510,6 +510,10 @@ services:
       EXECUTION_PARTITION_ID: ${EXECUTION_PARTITION_ID:-dev-partition}
       GATEWAY_REQUEST_TIMEOUT_MS: "2000"
       GATEWAY_POLL_TIMEOUT_MS: "250"
+      # CHG-092: GatewayConfig.fromEnv reads EXECUTION_ENABLED (default false, fail-closed);
+      # without this mapping the gateway stays locked even when .env flips — /v1/events and
+      # /control/approve would 503. Default false preserves the .env.example safety rule.
+      EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
   nautilus:
     profiles: [execution-t3]
     build:

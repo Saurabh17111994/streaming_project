@@ -215,7 +215,7 @@ This plan closes the remaining gaps in five phases:
 - [ ] `A2.1` Verify `EXECUTION_INTENT_ENABLED=true` is settable on `SignalJob` (`SignalJobConfig.java` line 120) and that the gateway dispatch path is wired (`DurableIntentDispatcher` + `NautilusIntentClient`).
 - [ ] `A2.2` Stand up compose with `--profile execution-t3`; confirm `gateway:9180/healthz` 200, `nautilus:9190/healthz` reports `HALTED`, `bridge:8787/healthz` reports `UP disabled` until approval.
 - [ ] `A2.3` Place ONE sandbox order `BI-EQ x1` via `POST /v1/intents` with `T9_APPROVED_BY=saurabh` + sandbox broker config (`execution-auth-001` token pattern, len 238 proven live 2026-08-21).
-- [ ] `A2.4` Assert: Arrow returns `broker_order_id`; `Execution_Intent` LOG + `Order_Lifecycle` KV + `Execution_Attempts` KV populated; `client_order_ref` echoed.
+- [ ] `A2.4` Assert: Arrow returns `broker_order_id`; `Order_Lifecycle` KV + `Order_Correlation` KV populated; `client_order_ref` echoed. (`Execution_Attempts` is asserted in its own dispatcher-path test — the harness posts directly to nautilus and bypasses the Java `DurableIntentDispatcher` that writes attempts; populating it on this path needs the B7.5 durable-flag decision, deferred — CHG-092.)
 - [x] `A2.5` Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel. (CHG-084: `t9_order_sandbox.py` + `tests/test_12_t9_order_sandbox.py` — t8 12/12 reuse, 20 offline checks, gateway-envelope signing port pinned to a REAL JVM run of `GatewayProtocol.java`, BI-EQ x1 payload schema, DDL poll columns, `T9_APPROVED_BY` fail-closed gate; live leg implemented but honestly classified `LIVE-CHAIN-UNWIRED` (exit 3) until A2.3/A2.4 + T4 bridge wiring land. pytest 11/11, full suite 351.)
 - [ ] `A2.6` Run `python3 code/01_platform/04_scripts/t8_sandbox_contract_check.py` (expect 12/12) + the new test.
 - [ ] `A2.7` Evidence `logs/tracker-14/t9-order-sandbox-<yyyymmdd>.md` + `CHG-058`.
@@ -230,7 +230,12 @@ This plan closes the remaining gaps in five phases:
   failure; deterministic postback id = ledger idempotency). Still open for A2.4/A2.6:
   B7.5 durable-flag decision (`Execution_Attempts` for the route path), fill/WS
   correlation leg (A3, kernel-ingress design), cancel command path.
-**DoD:** one sandbox order placed end-to-end; attempt/lifecycle tables populated; cancel succeeds; no real order possible without `T9_APPROVED_BY`.
+- **A2.4 assert rescope (CHG-092, 2026-08-24, operator-approved Option A):** the live
+  harness run asserts `Order_Lifecycle` + `Order_Correlation` only; the
+  `Execution_Attempts` check moves to the dispatcher-path test (B7.5 durable-flag
+  decision deferred). Enable-prep: gateway compose service now maps
+  `EXECUTION_ENABLED` (default false) so the `.env` flip unlocks both services.
+**DoD:** one sandbox order placed end-to-end; lifecycle + correlation tables populated (attempt table asserted in the dispatcher-path test); cancel succeeds; no real order possible without `T9_APPROVED_BY`.
 
 ### Task A3 — Live postback capture evidence (VM-BROKER-PBK-009)
 **Why:** Postback WebSocket behavior is currently `TO_BE_VERIFIED`; the capture path must be proven against real broker confirmations.
