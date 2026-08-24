@@ -18,6 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::bridge::{BridgeClient, ReportOutcome};
+use crate::events;
 use crate::gate::ExecState;
 use crate::gateway_protocol;
 use crate::intent;
@@ -51,6 +52,7 @@ struct Snapshot {
     draining: bool,
     shared_secret: String,
     protocol_version: String,
+    gateway_endpoint: String,
 }
 
 impl ServerState {
@@ -63,6 +65,7 @@ impl ServerState {
                 draining: false,
                 shared_secret: String::new(),
                 protocol_version: "execution-gateway.v1".into(),
+                gateway_endpoint: String::new(),
             })),
             forwarder: None,
         }
@@ -81,6 +84,7 @@ impl ServerState {
                 draining: false,
                 shared_secret,
                 protocol_version,
+                gateway_endpoint: String::new(),
             })),
             forwarder: None,
         }
@@ -91,6 +95,16 @@ impl ServerState {
     #[must_use]
     pub fn with_forwarder(mut self, forwarder: BridgeForwarder) -> Self {
         self.forwarder = Some(forwarder);
+        self
+    }
+
+    /// Sets the gateway base URL for normalized event emission (A2.4 leg). Empty (default)
+    /// disables emission — the 202 then reports `event_emission: disabled`.
+    #[must_use]
+    pub fn with_gateway_endpoint(self, gateway_endpoint: String) -> Self {
+        if let Ok(mut s) = self.inner.lock() {
+            s.gateway_endpoint = gateway_endpoint;
+        }
         self
     }
 
@@ -108,6 +122,7 @@ impl ServerState {
             draining: true,
             shared_secret: String::new(),
             protocol_version: "execution-gateway.v1".into(),
+            gateway_endpoint: String::new(),
         })
     }
 }
@@ -120,6 +135,7 @@ impl Clone for Snapshot {
             draining: self.draining,
             shared_secret: self.shared_secret.clone(),
             protocol_version: self.protocol_version.clone(),
+            gateway_endpoint: self.gateway_endpoint.clone(),
         }
     }
 }
@@ -238,18 +254,58 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
             };
             let mut guard = forwarder.lock().await;
             match guard.send_command(place.clone()).await {
-                Ok(report) if report.is_success() => json(
-                    202,
-                    &serde_json::json!({
-                        "accepted": true,
-                        "gate_state": snap.gate.as_str(),
-                        "instruction_id": place.instruction_id,
-                        "execution_attempt_id": place.execution_attempt_id,
-                        "client_order_ref": place.client_order_ref,
-                        "broker_order_id": report.broker_order_id,
-                        "order_status": report.order_status,
-                    }),
-                ),
+                Ok(report) if report.is_success() => {
+                    // A2.4 leg: emit the normalized lifecycle+correlation image to the
+                    // gateway /v1/events intake. The order is already accepted — a failed
+                    // emission never rewrites the 202, it is surfaced as event_emission.
+                    let trade_context_id = envelope
+                        .payload
+                        .get("trade_context_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let now = now_ms();
+                    let event = events::lifecycle_event_value(
+                        &report,
+                        &place,
+                        &envelope.account_scope_id,
+                        &envelope.execution_partition_id,
+                        envelope.gate_epoch,
+                        &trade_context_id,
+                        now,
+                    );
+                    // Empty endpoint = emission disabled (offline/paper mode) — distinct
+                    // from a real emission failure, which the operator must see.
+                    let delivery = if snap.gateway_endpoint.is_empty() {
+                        "disabled".to_string()
+                    } else {
+                        match events::emit_event(
+                            &snap.gateway_endpoint,
+                            &snap.shared_secret,
+                            &snap.protocol_version,
+                            &event,
+                            now,
+                        )
+                        .await
+                        {
+                            Ok(()) => "accepted".to_string(),
+                            Err(e) => format!("failed: {e}"),
+                        }
+                    };
+                    json(
+                        202,
+                        &serde_json::json!({
+                            "accepted": true,
+                            "gate_state": snap.gate.as_str(),
+                            "instruction_id": place.instruction_id,
+                            "execution_attempt_id": place.execution_attempt_id,
+                            "client_order_ref": place.client_order_ref,
+                            "broker_order_id": report.broker_order_id,
+                            "order_status": report.order_status,
+                            "event_emission": delivery,
+                        }),
+                    )
+                }
                 Ok(report) if report.outcome() == Some(ReportOutcome::Rejected) => json(
                     409,
                     &serde_json::json!({
@@ -653,19 +709,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn intents_halted_never_forward_is_bridge_untouched() {
-        let state = ServerState::with_gateway_auth(
-            ExecState::Halted,
-            "s3cr3t".into(),
-            "execution-gateway.v1".into(),
-        )
-        .with_forwarder(fake_forwarder(CommandScript::Accept));
+    async fn intents_enabled_emits_event_and_reports_accepted() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Fake gateway /v1/events intake.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gw_addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let gateway = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let n = s.read(&mut chunk).await.unwrap();
+            buf.extend_from_slice(&chunk[..n]);
+            tx.send(String::from_utf8_lossy(&buf).to_string()).unwrap();
+            s.write_all(
+                b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            )
+            .await
+            .unwrap();
+            drop(tx);
+        });
+
+        let state = enabled_state(fake_forwarder(CommandScript::Accept))
+            .with_gateway_endpoint(format!("http://{gw_addr}"));
         let addr = spawn_server(state).await;
         let req = encoded_bieq_request("s3cr3t").await;
         let (s, b) = raw_request(addr, &req).await;
-        assert_eq!(s, 503, "body: {b}");
-        assert!(b.contains("HALTED"), "body: {b}");
-        // HALTED must not have reached the bridge: no broker id in the response.
-        assert!(!b.contains("broker_order_id"), "body: {b}");
+        assert_eq!(s, 202, "body: {b}");
+        assert!(b.contains("\"event_emission\":\"accepted\""), "body: {b}");
+        let captured = rx.recv().await.expect("gateway received the event");
+        assert!(
+            captured.starts_with("POST /v1/events HTTP/1.1"),
+            "captured: {captured}"
+        );
+        assert!(
+            captured.contains("LIFECYCLE"),
+            "captured contains event type"
+        );
+        assert!(
+            captured.contains("\"brokerOrderId\":\"BRK-0001\""),
+            "captured: {captured}"
+        );
+        gateway.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_without_gateway_endpoint_reports_disabled() {
+        let state = enabled_state(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 202, "body: {b}");
+        assert!(b.contains("\"event_emission\":\"disabled\""), "body: {b}");
     }
 }

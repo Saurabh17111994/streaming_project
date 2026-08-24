@@ -42,9 +42,9 @@ const OP_PONG: u8 = 0xA;
 const MAX_WS_FRAME: usize = 1 << 20;
 
 /// A parsed HTTP/1.1 response (status + headers + raw body).
-struct HttpResponse {
-    status: u16,
-    body: Vec<u8>,
+pub(crate) struct HttpResponse {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
 }
 
 /// Minimal loopback HTTP/1.1 request (no redirects, no TLS, `Connection: close`).
@@ -100,7 +100,11 @@ async fn http_request(
 }
 
 /// Minimal loopback HTTP/1.1 `POST`.
-async fn http_post(url: &str, auth_token: &str, body_json: &[u8]) -> Result<HttpResponse> {
+pub(crate) async fn http_post(
+    url: &str,
+    auth_token: &str,
+    body_json: &[u8],
+) -> Result<HttpResponse> {
     http_request("POST", url, auth_token, body_json).await
 }
 

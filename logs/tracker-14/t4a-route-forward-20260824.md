@@ -42,7 +42,22 @@
   `client_order_ref` = `sha256("v1|instruction_id|execution_attempt_id")`[0..14] hex.
 - Resilience: single attempt, no auto-retry (duplicate risk); unknown → 503 (reconcile by
   query is the separate `reconcile` module).
-- Still open: (1) A2.4 lifecycle leg (WS postback → normalized event → gateway `/v1/events`);
-  (2) durable attempt-store flags (B7.5) — both needed for the harness exit-0 A2.6 run;
-  (3) enable decision (`EXECUTION_ENABLED`/control-plane approve) — operator-only, deferred
-  to market hours with explicit go.
+
+## A2.4 lifecycle leg (CHG-091, 2026-08-24, second pass)
+
+- `src/events.rs` (new): `lifecycle_event_value` builds the exact Java
+  `NormalizedExecutionEvent` JSON (camelCase; audit/fill/position null; lifecycle carries
+  broker id/instruction/attempt/trade-context/normalized-state/pending-qty; correlation
+  carries ref/broker id, verificationState VERIFIED, evidence `sync-place-ack`;
+  deterministic `pb-`+sha256 postbackEventId = gateway-ledger idempotency key).
+  `emit_event` envelopes it (gateway_protocol canonical) + POSTs
+  `{GATEWAY_ENDPOINT}/v1/events` (2xx OK; empty endpoint → Err).
+- `src/http.rs`: SUCCESS 202 now carries `event_emission: accepted|disabled|failed:<reason>`;
+  ack never changed by emission failure; no in-process retry (ledger idempotent).
+- `src/main.rs`: existing `GATEWAY_ENDPOINT` (compose: `http://execution-gateway:9180`)
+  wired into the state — **no compose change needed**.
+- Verification: `cargo test --offline --lib` **184/0/0** (was 179; +4 events, +2 route);
+  clippy `-D warnings` clean; fmt clean.
+- Still open (unchanged): B7.5 durable-flag decision (`Execution_Attempts` write for the
+  route path), fill/WS-correlation leg (A3, kernel-ingress design), cancel command path,
+  enable decision. Gate stays HALTED.

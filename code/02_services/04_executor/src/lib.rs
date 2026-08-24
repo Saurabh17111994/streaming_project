@@ -5,6 +5,7 @@ pub mod clockwatch;
 pub mod config;
 pub mod durable;
 pub mod engine;
+pub mod events;
 pub mod execution;
 pub mod executiongate;
 pub mod executor_offline_contract;

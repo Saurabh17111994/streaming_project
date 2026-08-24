@@ -48,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
     let bridge_mode = selection.mode();
     let route_forwarder: http::BridgeForwarder =
         Arc::new(tokio::sync::Mutex::new(build_route_forwarder(&selection)));
+    let gateway_endpoint = config.gateway_endpoint.clone();
     let runtime = Runtime::init(config)?;
     // Nautilus's kernel registers the process-wide `log` logger (LoggerConfig owns
     // set_boxed_logger); our own tracing subscriber registers a `log` bridge
@@ -64,7 +65,10 @@ async fn main() -> anyhow::Result<()> {
         "nautilus-execution-service boot: gate HALTED, bridge mode {bridge_mode}, LiveNode hosted run loop armed, health on {addr} (execution enabled: false)"
     );
 
-    let state = runtime.server_state().with_forwarder(route_forwarder);
+    let state = runtime
+        .server_state()
+        .with_forwarder(route_forwarder)
+        .with_gateway_endpoint(gateway_endpoint);
     let server = tokio::spawn(http::serve(addr, state));
 
     tokio::select! {
