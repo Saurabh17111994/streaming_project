@@ -2,6 +2,32 @@ use std::net::SocketAddr;
 
 use anyhow::{bail, Context, Result};
 
+/// Pinned execution-core constants (dossier §Configuration contract — §Boundary contracts).
+/// Fail-closed defaults: changing these requires dossier update + approval.
+pub const FENCING_LEASE_PROFILE: &str = "30s";
+pub const BROKER_CLIENT_REF_PATTERN: &str = r"^[A-Za-z0-9._-]{1,16}$";
+pub const BROKER_CLIENT_REF_MAX_LEN: usize = 16;
+pub const CORRELATION_POLICY_VERSION: &str = "corr.v1";
+pub const GATE_FENCE_TOKEN_BITS: u32 = 64;
+
+/// Validates a `client_order_ref` against the pinned format (≤16 safe ASCII).
+pub fn validate_client_order_ref(s: &str) -> Result<(), String> {
+    if s.is_empty() || s.len() > BROKER_CLIENT_REF_MAX_LEN {
+        return Err(format!(
+            "client_order_ref length must be 1..{}, got {}",
+            BROKER_CLIENT_REF_MAX_LEN,
+            s.len()
+        ));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(format!("client_order_ref must match {}: {}", BROKER_CLIENT_REF_PATTERN, s));
+    }
+    Ok(())
+}
+
 /// Strict service configuration — HALTED default, fail-closed.
 ///
 /// Endpoints (gateway/bridge) are optional at boot so the service can start health-only and

@@ -86,6 +86,8 @@ pub trait AttemptStore {
     fn put(&self, attempt: &Attempt) -> Result<()>;
     /// True when an attempt with this `(instruction_id, request_hash)` already exists.
     fn has_duplicate(&self, instruction_id: &str, request_hash: &str) -> bool;
+    /// True when any attempt with this `instruction_id` exists (regardless of hash).
+    fn has_instruction(&self, instruction_id: &str) -> bool;
 }
 
 /// Durable gate row for a partition.
@@ -153,6 +155,8 @@ pub enum Outcome {
     Rejected,
     /// Same `(instruction_id, request_hash)` on another attempt — no new call.
     Duplicate,
+    /// Same `instruction_id` but different `request_hash` — contract violation, halted, no call.
+    ContractViolation,
     /// Gate not ENABLED or epoch/fence mismatch — no call.
     Blocked,
     /// Restart on `SUBMITTING`/`UNKNOWN` or a bridge `UNKNOWN` — gate halted, reconcile.
@@ -218,6 +222,11 @@ impl ExecutionGate {
                     .has_duplicate(&cmd.instruction_id, &cmd.request_hash)
                 {
                     return Ok(Outcome::Duplicate);
+                }
+                // Same instruction but different request hash → contract violation: quarantine, halt, no call.
+                if self.attempts.has_instruction(&cmd.instruction_id) {
+                    self.halt(cmd);
+                    return Ok(Outcome::ContractViolation);
                 }
                 // Fresh attempt: persist PREPARED durably before any bridge call.
                 self.attempts.put(&Attempt::new(
@@ -326,6 +335,7 @@ impl ExecutionGate {
 pub struct InMemoryAttemptStore {
     by_id: RefCell<HashMap<String, Attempt>>,
     dup: RefCell<HashMap<(String, String), ()>>,
+    by_instruction: RefCell<HashMap<String, ()>>,
 }
 
 impl InMemoryAttemptStore {
@@ -346,12 +356,20 @@ impl AttemptStore for InMemoryAttemptStore {
             (attempt.instruction_id.clone(), attempt.request_hash.clone()),
             (),
         );
+        self.by_instruction
+            .borrow_mut()
+            .insert(attempt.instruction_id.clone(), ());
         Ok(())
     }
     fn has_duplicate(&self, instruction_id: &str, request_hash: &str) -> bool {
         self.dup
             .borrow()
             .contains_key(&(instruction_id.to_string(), request_hash.to_string()))
+    }
+    fn has_instruction(&self, instruction_id: &str) -> bool {
+        self.by_instruction
+            .borrow()
+            .contains_key(instruction_id)
     }
 }
 
@@ -599,6 +617,39 @@ mod tests {
             Outcome::Duplicate
         );
         assert_eq!(total_handle.get(), 1);
+    }
+
+    #[test]
+    fn changed_request_hash_for_same_instruction_halts_and_never_calls_bridge() {
+        let total_handle = Rc::new(Cell::new(0usize));
+        let counter = Rc::new(CountingBridge::new(Rc::clone(&total_handle), false));
+        let attempts: Rc<dyn AttemptStore> = Rc::new(InMemoryAttemptStore::new());
+        let gates = shared_gates();
+        let bridge: Rc<dyn BridgeCaller> = counter.clone();
+
+        let mut g = ExecutionGate::new(attempts.clone(), gates.clone(), bridge);
+        assert_eq!(
+            g.execute(&cmd("a-1"), CrashHooks::default()).unwrap(),
+            Outcome::Accepted
+        );
+        assert_eq!(total_handle.get(), 1);
+        // Same instruction but different request_hash → contract violation, halted, no call.
+        let mutated = Command {
+            execution_attempt_id: "a-2".into(),
+            instruction_id: "ins-1".into(),
+            request_hash: "h-2-changed".into(),
+            ..cmd("a-2")
+        };
+        assert_eq!(
+            g.execute(&mutated, CrashHooks::default()).unwrap(),
+            Outcome::ContractViolation
+        );
+        assert_eq!(total_handle.get(), 1, "contract violation must never invoke bridge");
+        assert_eq!(
+            gates.read(PARTITION).unwrap().state,
+            GateState::Halted,
+            "gate must be halted for reconciliation on contract violation"
+        );
     }
     // --------------------------------------------------------------------------
     // FENCE-* / INVARIANT-002 — at most one active owner per partition.

@@ -1,3 +1,4 @@
+pub mod babysitter;
 pub mod bootstrap;
 pub mod clockwatch;
 pub mod durable;

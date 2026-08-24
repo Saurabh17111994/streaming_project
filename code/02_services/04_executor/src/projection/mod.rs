@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use crate::bridge::protocol::ReportEnvelope;
 
 /// Position lifecycle (DEC-013). Mirrors `com.trading.common.model.PositionState`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PositionState {
     Flat,
     Open,

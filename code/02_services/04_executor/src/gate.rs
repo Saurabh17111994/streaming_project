@@ -219,6 +219,28 @@ impl Gate {
         Ok(())
     }
 
+    /// Orchestrates entry to RECONCILING when reconciliation is required.
+    /// If `reconciliation_needed` and currently HALTED, transitions HALTED→RECONCILING.
+    /// Returns `Ok(true)` when transition occurred, `Ok(false)` when staying HALTED.
+    /// Fails closed if not HALTED.
+    pub fn enter_reconciling_if_needed(
+        &mut self,
+        reconciliation_needed: bool,
+    ) -> Result<bool, InvalidTransition> {
+        if !reconciliation_needed {
+            return Ok(false);
+        }
+        if self.state != ExecState::Halted {
+            return Err(InvalidTransition {
+                from: self.state,
+                to: ExecState::Reconciling,
+            });
+        }
+        self.state = ExecState::Reconciling;
+        Ok(true)
+    }
+
+
     /// Records one operator approval binding an evidence hash (DEC-044). INVARIANT-003 requires
     /// an **authorized** operator approval before `enable` becomes possible; the first approval
     /// binds the evidence hash. A second approval, if supplied, is not required and not checked
@@ -489,5 +511,19 @@ mod tests {
             g.enable(1),
             Err(EnableError::NotApprovalPending(ExecState::Halted))
         );
+    }
+
+    #[test]
+    fn enter_reconciling_if_needed_orchestrates_halted_to_reconciling() {
+        let mut g = Gate::new_with_authorized(&["saurabh"]);
+        assert_eq!(g.state(), ExecState::Halted);
+        // No reconciliation needed → stays HALTED, returns false.
+        assert_eq!(g.enter_reconciling_if_needed(false).unwrap(), false);
+        assert_eq!(g.state(), ExecState::Halted);
+        // Needed → transitions to RECONCILING, returns true.
+        assert_eq!(g.enter_reconciling_if_needed(true).unwrap(), true);
+        assert_eq!(g.state(), ExecState::Reconciling);
+        // Already RECONCILING → fails closed.
+        assert!(g.enter_reconciling_if_needed(true).is_err());
     }
 }
