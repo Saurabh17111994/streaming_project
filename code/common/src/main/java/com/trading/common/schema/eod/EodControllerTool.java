@@ -246,7 +246,7 @@ public final class EodControllerTool {
                 Duration live = liveTtls.get(p.table());
                 Duration newTtl = EodRetentionPolicy.extendedTtl(live, opts.extension);
                 String shadow = p.table() + "__eod_ext_"
-                        + now.atZone(zone).format(DateTimeFormatter.BASIC_ISO_DATE);
+                        + now.atZone(zone).toLocalDate().format(DateTimeFormatter.BASIC_ISO_DATE);
                 // Block-guard: this table's delete is currently BLOCKED — the
                 // protected bound is unverified, so the shadow rewrite (extended
                 // 7d + extra) must succeed before the old table is allowed to

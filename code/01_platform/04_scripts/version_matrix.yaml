@@ -455,11 +455,11 @@ boundaries:
     source_artifact: null
     fixture: null
     scenario: null
-    result: null
-    observed_behavior: null
-    limitations: null
-    date: null
-    status: PINNED_AWAITING_EVIDENCE
+    result: PARTIAL — digest pinning PASS (12/12 RepoDigests match versions.pin/.env, pin-check no SNAPSHOT); SBOM attestations present (fluss/flink/zookeeper/golang, absent openobserve); OS-layer trivy HIGH/CRITICAL disclosed per image (python 50/3 worst, golang 17/2, zookeeper 13/0, fluss 2/0, flink 0/0)
+    observed_behavior: 2026-08-24, docker inspect RepoDigests + trivy image --severity HIGH,CRITICAL --pkg-types os (12 images, 3-6s each) + docker buildx imagetools inspect attestations + flink SPDX at /tmp/flink-spdx.json (322kB); evidence logs/version-matrix/images-012-20260824T171559Z.md
+    limitations: Trivy Java-library layer scan-unavailable (Java DB download network-blocked, 2x300s); 5 builder images not present locally; SEC-IMAGE-001 numeric threshold still TO_BE_VERIFIED — vuln-policy verdict cannot be asserted
+    date: 2026-08-24
+    status: PARTIAL_EVIDENCE_DIGEST_SBOM_OS_ONLY
 
   - compatibility_id: VM-PERF-001
     boundary: Mock-broker socket throughput (local loopback)

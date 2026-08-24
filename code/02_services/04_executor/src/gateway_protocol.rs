@@ -349,4 +349,201 @@ mod tests {
             "payload must round-trip byte-identically (TIME-008)"
         );
     }
+
+    // -------------------------------------------------------------------------
+    // Cross-language gateway-protocol HMAC parity (Java ↔ Rust)
+    // Fixed fixture mirrors Java GatewayProtocolParityTest.FIXED_PAYLOAD_JSON etc.
+    // Deterministic inputs — secret, deadline, request_id, gate_epoch, fence_token
+    // and a DELIBERATELY non-alphabetical payload key order (zulu before alpha)
+    // that diverges if either side sorts keys (BTreeMap / ORDER_MAP_ENTRIES_BY_KEYS).
+    // If canonicalisation differed, the HMAC and outer envelope would mismatch.
+    // -------------------------------------------------------------------------
+    const PARITY_SECRET: &str = "parity-test-secret-v1-2026-08-24";
+    const PARITY_PROTOCOL_VERSION: &str = "execution-gateway.v1";
+    const PARITY_MESSAGE_TYPE: &str = "EXECUTION_INTENT";
+    const PARITY_REQUEST_ID: &str = "parity-req-0001";
+    const PARITY_ACCOUNT_SCOPE_ID: &str = "parity-acct-001";
+    const PARITY_EXECUTION_PARTITION_ID: &str = "parity-partition-1";
+    const PARITY_GATE_EPOCH: i64 = 42;
+    const PARITY_FENCE_TOKEN: &str = "parity-fence-token-xyz";
+    const PARITY_DEADLINE_EPOCH_MS: i64 = 2_000_000_000_000;
+    // Canonical payload bytes — must be byte-identical on both sides. The key order
+    // zulu,alpha,qty is intentionally non-alphabetical (sorted would be alpha,qty,zulu).
+    const PARITY_PAYLOAD_JSON: &str = r#"{"zulu":"z","alpha":"a","qty":100}"#;
+    const PARITY_PAYLOAD_HASH: &str =
+        "bceb5c2c5139f412f53bf7d27178ea551f68d333566d52485fc5d705e3d06e71";
+    const PARITY_AUTH: &str = "ae9003e44be67518aafd38be98d9cb6132120890925bc1dc713fc2708fa0e9ba";
+    const PARITY_ENVELOPE_JSON: &str = r#"{"protocol_version":"execution-gateway.v1","message_type":"EXECUTION_INTENT","request_id":"parity-req-0001","account_scope_id":"parity-acct-001","execution_partition_id":"parity-partition-1","payload_hash":"bceb5c2c5139f412f53bf7d27178ea551f68d333566d52485fc5d705e3d06e71","gate_epoch":42,"fence_token":"parity-fence-token-xyz","deadline_epoch_ms":2000000000000,"payload":{"zulu":"z","alpha":"a","qty":100},"authentication":"ae9003e44be67518aafd38be98d9cb6132120890925bc1dc713fc2708fa0e9ba"}"#;
+    const PARITY_NOW_MS: i64 = 1_000_000_000_000; // well before deadline
+
+    fn parity_envelope() -> Envelope {
+        // Use from_str to preserve the exact FIXED key order; json! with preserve_order
+        // would also work but from_str is the most direct proof that deserializing the
+        // Java-produced payload bytes round-trips identically.
+        let payload: serde_json::Value =
+            serde_json::from_str(PARITY_PAYLOAD_JSON).expect("fixture payload must parse");
+        Envelope {
+            protocol_version: PARITY_PROTOCOL_VERSION.to_string(),
+            message_type: PARITY_MESSAGE_TYPE.to_string(),
+            request_id: PARITY_REQUEST_ID.to_string(),
+            account_scope_id: PARITY_ACCOUNT_SCOPE_ID.to_string(),
+            execution_partition_id: PARITY_EXECUTION_PARTITION_ID.to_string(),
+            payload_hash: PARITY_PAYLOAD_HASH.to_string(),
+            gate_epoch: PARITY_GATE_EPOCH,
+            fence_token: PARITY_FENCE_TOKEN.to_string(),
+            deadline_epoch_ms: PARITY_DEADLINE_EPOCH_MS,
+            payload,
+            authentication: String::new(),
+        }
+    }
+
+    #[test]
+    fn parity_payload_serialization_is_byte_identical_to_java() {
+        // This is the core preserve_order check: serde_json with preserve_order must
+        // emit keys in insertion order (zulu first), matching Jackson ObjectNode.
+        // Without preserve_order the output would be {"alpha":"a","qty":100,"zulu":"z"}.
+        let payload: serde_json::Value = serde_json::from_str(PARITY_PAYLOAD_JSON).unwrap();
+        let json = serde_json::to_string(&payload).unwrap();
+        assert_eq!(
+            json, PARITY_PAYLOAD_JSON,
+            "payload JSON bytes must be byte-identical to Java fixture (preserve_order)"
+        );
+        // Also verify the json! macro preserves order (insertion order = source order)
+        let mac_payload = json!({"zulu":"z","alpha":"a","qty":100});
+        let mac_json = serde_json::to_string(&mac_payload).unwrap();
+        assert_eq!(
+            mac_json, PARITY_PAYLOAD_JSON,
+            "json! macro payload must also preserve insertion order"
+        );
+        // Hash must match the fixture
+        let hash = sha256_hex(json.as_bytes());
+        assert_eq!(hash, PARITY_PAYLOAD_HASH);
+    }
+
+    #[test]
+    fn parity_encode_produces_byte_identical_envelope_to_java_fixture() {
+        let e = parity_envelope();
+        let encoded = encode_envelope(PARITY_SECRET, &e).unwrap();
+        assert_eq!(
+            encoded, PARITY_ENVELOPE_JSON,
+            "Rust encode must be byte-identical to Java fixture (canonical + HMAC match)"
+        );
+    }
+
+    #[test]
+    fn parity_verify_java_signed_token_accepted() {
+        // PARITY_ENVELOPE_JSON is documented as the Java-produced token (see
+        // GatewayProtocolParityTest.EXPECTED_ENVELOPE_JSON). Rust must accept it.
+        let v = verify(
+            PARITY_ENVELOPE_JSON,
+            PARITY_SECRET,
+            PARITY_PROTOCOL_VERSION,
+            PARITY_NOW_MS,
+        );
+        assert!(
+            v.accepted,
+            "Rust must accept Java-signed parity fixture, got: {}",
+            v.reason
+        );
+        let env = v.envelope.unwrap();
+        assert_eq!(env.request_id, PARITY_REQUEST_ID);
+        assert_eq!(env.payload_hash, PARITY_PAYLOAD_HASH);
+        // Payload round-trip bytes must remain identical after verify decode/encode
+        let payload_json = serde_json::to_string(&env.payload).unwrap();
+        assert_eq!(payload_json, PARITY_PAYLOAD_JSON);
+    }
+
+    #[test]
+    fn parity_tampered_payload_rejected() {
+        // Tamper the payload inside the otherwise valid envelope — must be rejected
+        // (authentication failed or payload hash mismatch, depending on tamper path).
+        let mut v: serde_json::Value = serde_json::from_str(PARITY_ENVELOPE_JSON).unwrap();
+        v["payload"] = json!({"zulu":"tampered","alpha":"a","qty":100});
+        let tampered = serde_json::to_string(&v).unwrap();
+        let vr = verify(
+            &tampered,
+            PARITY_SECRET,
+            PARITY_PROTOCOL_VERSION,
+            PARITY_NOW_MS,
+        );
+        assert!(
+            !vr.accepted,
+            "tampered payload must be rejected, got accepted"
+        );
+        assert!(
+            vr.reason == "authentication failed" || vr.reason == "payload hash mismatch",
+            "unexpected tamper reason: {}",
+            vr.reason
+        );
+        // Also test the subtle hash-mismatch path: recompute a valid auth for the
+        // new payload but keep the old hash — should hit payload hash mismatch.
+        let mut e = parity_envelope();
+        e.payload = json!({"zulu":"tampered","alpha":"a","qty":100});
+        // Instead construct correctly: encode tampered with correct hash then overwrite hash.
+        let correct_hash_payload = json!({"zulu":"tampered","alpha":"a","qty":100});
+        let correct_payload_json = serde_json::to_string(&correct_hash_payload).unwrap();
+        let correct_hash = sha256_hex(correct_payload_json.as_bytes());
+        let mut e2 = e.clone();
+        e2.payload_hash = correct_hash.clone();
+        let enc2 = encode_envelope(PARITY_SECRET, &e2).unwrap();
+        let mut v2: serde_json::Value = serde_json::from_str(&enc2).unwrap();
+        v2["payload_hash"] = serde_json::Value::String(PARITY_PAYLOAD_HASH.to_string());
+        // re-sign with the stale hash's canonical
+        let stale_canonical = [
+            PARITY_PROTOCOL_VERSION,
+            PARITY_MESSAGE_TYPE,
+            PARITY_REQUEST_ID,
+            PARITY_ACCOUNT_SCOPE_ID,
+            PARITY_EXECUTION_PARTITION_ID,
+            PARITY_PAYLOAD_HASH,
+            &PARITY_GATE_EPOCH.to_string(),
+            PARITY_FENCE_TOKEN,
+            &PARITY_DEADLINE_EPOCH_MS.to_string(),
+            &correct_payload_json,
+        ]
+        .join("\n");
+        let mut mac = HmacSha256::new_from_slice(PARITY_SECRET.as_bytes()).unwrap();
+        mac.update(stale_canonical.as_bytes());
+        let stale_auth = hex::encode(mac.finalize().into_bytes());
+        v2["authentication"] = serde_json::Value::String(stale_auth);
+        let tampered2_json = serde_json::to_string(&v2).unwrap();
+        let vr2 = verify(
+            &tampered2_json,
+            PARITY_SECRET,
+            PARITY_PROTOCOL_VERSION,
+            PARITY_NOW_MS,
+        );
+        assert!(!vr2.accepted);
+        assert_eq!(vr2.reason, "payload hash mismatch");
+    }
+
+    #[test]
+    fn parity_rust_encode_verified_by_rust_and_hash_matches_fixture() {
+        // Full round-trip: Rust encodes fixed inputs -> verify with same secret succeeds
+        // and all decoded fields match the fixture constants.
+        let e = parity_envelope();
+        let encoded = encode_envelope(PARITY_SECRET, &e).unwrap();
+        let v = verify(
+            &encoded,
+            PARITY_SECRET,
+            PARITY_PROTOCOL_VERSION,
+            PARITY_NOW_MS,
+        );
+        assert!(
+            v.accepted,
+            "self-encoded parity fixture must verify: {}",
+            v.reason
+        );
+        let env = v.envelope.unwrap();
+        assert_eq!(env.protocol_version, PARITY_PROTOCOL_VERSION);
+        assert_eq!(env.message_type, PARITY_MESSAGE_TYPE);
+        assert_eq!(env.account_scope_id, PARITY_ACCOUNT_SCOPE_ID);
+        assert_eq!(env.execution_partition_id, PARITY_EXECUTION_PARTITION_ID);
+        assert_eq!(env.gate_epoch, PARITY_GATE_EPOCH);
+        assert_eq!(env.fence_token, PARITY_FENCE_TOKEN);
+        assert_eq!(env.deadline_epoch_ms, PARITY_DEADLINE_EPOCH_MS);
+        // Authentication must equal the pre-computed fixture auth
+        let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(parsed["authentication"].as_str().unwrap(), PARITY_AUTH);
+    }
 }
