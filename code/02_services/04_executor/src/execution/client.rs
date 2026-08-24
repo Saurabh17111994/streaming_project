@@ -50,7 +50,7 @@ use crate::resilience::{AttemptError, RetryConfig, RetryError, RetryOrchestrator
 
 /// Deterministic broker-facing reference: sha256(format_version|instruction_id|execution_attempt_id) 14 hex chars.
 /// Format_version is pinned to `v1` per 05-execution-core §Reconciliation (fits Arrow 16-char remarks).
-fn deterministic_client_order_ref(
+pub(crate) fn deterministic_client_order_ref(
     format_version: &str,
     instruction_id: &str,
     execution_attempt_id: &str,

@@ -17,13 +17,31 @@ use anyhow::{Context as _, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::bridge::{BridgeClient, ReportOutcome};
 use crate::gate::ExecState;
 use crate::gateway_protocol;
+use crate::intent;
+
+/// Shared bridge transport used by the ENABLED sync forward (T4a). `tokio::sync::Mutex` is
+/// required because `BridgeClient::send_command` takes `&mut self` across an await point; the
+/// `Send` bound is required by the spawned server task (the trait object is used only here,
+/// never by the non-`Send` nautilus runtime).
+pub type BridgeForwarder = Arc<tokio::sync::Mutex<Box<dyn BridgeClient + Send>>>;
 
 /// Point-in-time health snapshot shared between the server and the shutdown path.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerState {
     inner: Arc<Mutex<Snapshot>>,
+    forwarder: Option<BridgeForwarder>,
+}
+
+impl std::fmt::Debug for ServerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerState")
+            .field("inner", &self.inner)
+            .field("forwarder", &self.forwarder.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -46,6 +64,7 @@ impl ServerState {
                 shared_secret: String::new(),
                 protocol_version: "execution-gateway.v1".into(),
             })),
+            forwarder: None,
         }
     }
 
@@ -63,7 +82,16 @@ impl ServerState {
                 shared_secret,
                 protocol_version,
             })),
+            forwarder: None,
         }
+    }
+
+    /// Attaches the bridge transport for the ENABLED sync forward (T4a). When absent the
+    /// ENABLED path returns the paper 202 ack without executing (offline/test construction).
+    #[must_use]
+    pub fn with_forwarder(mut self, forwarder: BridgeForwarder) -> Self {
+        self.forwarder = Some(forwarder);
+        self
     }
 
     /// Marks the service as draining (shutdown in progress); `/readyz` then returns 503.
@@ -138,7 +166,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec<u8> {
+async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec<u8> {
     match (method, path) {
         ("GET", "/healthz") => json(200, &health_json(state)),
         ("GET", "/readyz") => {
@@ -178,12 +206,82 @@ fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec<u8> {
                 });
                 return json(503, &doc);
             }
-            // Gate ENABLED + envelope accepted — paper/fake path would forward to bridge here.
-            // For T4, acknowledge without executing (no LiveNode wiring yet).
-            json(
-                202,
-                &serde_json::json!({ "accepted": true, "gate_state": snap.gate.as_str() }),
-            )
+            // Gate ENABLED + envelope accepted — T4a sync leg: forward the order to the
+            // bridge transport (Fake locally, Http in production) and map the synchronous
+            // report. Fail-closed mapping: SUCCESS → 202, REJECTED → 409, UNKNOWN/transport
+            // error → 503 (never an ack, never a retry — a lost ack is reconciled by query).
+            let Some(forwarder) = &state.forwarder else {
+                return json(
+                    202,
+                    &serde_json::json!({
+                        "accepted": true,
+                        "gate_state": snap.gate.as_str(),
+                        "reason": "no bridge transport configured (paper ack)",
+                    }),
+                );
+            };
+            let envelope = ver
+                .envelope
+                .expect("accepted verification carries the decoded envelope");
+            let place = match intent::place_envelope_from_payload(&envelope.payload) {
+                Ok(p) => p,
+                Err(reason) => {
+                    return json(
+                        422,
+                        &serde_json::json!({
+                            "accepted": false,
+                            "reason": reason,
+                            "gate_state": snap.gate.as_str(),
+                        }),
+                    );
+                }
+            };
+            let mut guard = forwarder.lock().await;
+            match guard.send_command(place.clone()).await {
+                Ok(report) if report.is_success() => json(
+                    202,
+                    &serde_json::json!({
+                        "accepted": true,
+                        "gate_state": snap.gate.as_str(),
+                        "instruction_id": place.instruction_id,
+                        "execution_attempt_id": place.execution_attempt_id,
+                        "client_order_ref": place.client_order_ref,
+                        "broker_order_id": report.broker_order_id,
+                        "order_status": report.order_status,
+                    }),
+                ),
+                Ok(report) if report.outcome() == Some(ReportOutcome::Rejected) => json(
+                    409,
+                    &serde_json::json!({
+                        "accepted": false,
+                        "outcome": "REJECTED",
+                        "reason": report.reason,
+                        "gate_state": snap.gate.as_str(),
+                    }),
+                ),
+                Ok(report) => json(
+                    503,
+                    &serde_json::json!({
+                        "accepted": false,
+                        "outcome": "UNKNOWN",
+                        "reason": if report.reason.is_empty() {
+                            "bridge UNKNOWN outcome".to_string()
+                        } else {
+                            report.reason
+                        },
+                        "gate_state": snap.gate.as_str(),
+                    }),
+                ),
+                Err(e) => json(
+                    503,
+                    &serde_json::json!({
+                        "accepted": false,
+                        "outcome": "UNKNOWN",
+                        "reason": e.to_string(),
+                        "gate_state": snap.gate.as_str(),
+                    }),
+                ),
+            }
         }
         (m, "/healthz") | (m, "/readyz") if m != "GET" => text(405, "method_not_allowed"),
         (_, "/v1/intents") if method != "POST" => text(405, "method_not_allowed"),
@@ -272,7 +370,7 @@ async fn handle_conn(mut stream: TcpStream, state: ServerState) -> Result<()> {
     body_bytes.truncate(content_length);
     let body = String::from_utf8_lossy(&body_bytes).to_string();
 
-    let resp = route(&state, &method, &path, &body);
+    let resp = route(&state, &method, &path, &body).await;
     let _ = stream.write_all(&resp).await;
     let _ = stream.flush().await;
     Ok(())
@@ -281,6 +379,7 @@ async fn handle_conn(mut stream: TcpStream, state: ServerState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::{CommandScript, FakeBridge};
     use crate::gate::ExecState;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -427,39 +526,146 @@ mod tests {
         assert!(b.contains("\"accepted\":false"), "body: {b}");
     }
 
-    #[tokio::test]
-    async fn intents_enabled_accepts_valid_envelope() {
+    fn bieq_payload_json() -> String {
+        serde_json::to_string(&serde_json::json!({
+            "instruction_id": "T9-SB-0001",
+            "symbol": "BI-EQ",
+            "exchange": "NSE",
+            "side": "BUY",
+            "quantity": 1,
+            "order_type": "LIMIT",
+            "limit_price_paise": 5050,
+            "product_type": "CNC",
+            "time_in_force": "DAY",
+        }))
+        .unwrap()
+    }
+
+    async fn encoded_request_with_payload(secret: &str, payload: serde_json::Value) -> String {
         use crate::gateway_protocol::{encode_envelope, sha256_hex, Envelope};
-        let payload = serde_json::json!({"instruction_id":"i2"});
         let payload_json = serde_json::to_string(&payload).unwrap();
         let hash = sha256_hex(payload_json.as_bytes());
         let env = Envelope {
             protocol_version: "execution-gateway.v1".into(),
             message_type: "EXECUTION_INTENT".into(),
-            request_id: "req-2".into(),
+            request_id: "req-t4a".into(),
             account_scope_id: "acc-1".into(),
             execution_partition_id: "part-1".into(),
             payload_hash: hash,
             gate_epoch: 1,
-            fence_token: "fence-xyz".into(),
+            fence_token: "fence-t4a".into(),
             deadline_epoch_ms: 9_999_999_999_999,
-            payload: payload.clone(),
+            payload,
             authentication: String::new(),
         };
-        let encoded = encode_envelope("s3cr3t", &env).unwrap();
-        let state = ServerState::with_gateway_auth(
-            ExecState::Enabled,
-            "s3cr3t".into(),
-            "execution-gateway.v1".into(),
-        );
-        let addr = spawn_server(state.clone()).await;
-        let req = format!(
+        let encoded = encode_envelope(secret, &env).unwrap();
+        format!(
             "POST /v1/intents HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             encoded.len(),
             encoded
-        );
+        )
+    }
+
+    async fn encoded_bieq_request(secret: &str) -> String {
+        let payload = serde_json::from_str(&bieq_payload_json()).unwrap();
+        encoded_request_with_payload(secret, payload).await
+    }
+
+    fn fake_forwarder(script: CommandScript) -> BridgeForwarder {
+        let mut fake = FakeBridge::new();
+        fake.script(script);
+        Arc::new(tokio::sync::Mutex::new(
+            Box::new(fake) as Box<dyn BridgeClient + Send>
+        ))
+    }
+
+    fn enabled_state(forwarder: BridgeForwarder) -> ServerState {
+        ServerState::with_gateway_auth(
+            ExecState::Enabled,
+            "s3cr3t".into(),
+            "execution-gateway.v1".into(),
+        )
+        .with_forwarder(forwarder)
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_forwards_to_bridge_and_returns_start_report() {
+        let state = enabled_state(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
         let (s, b) = raw_request(addr, &req).await;
         assert_eq!(s, 202, "body: {b}");
         assert!(b.contains("\"accepted\":true"), "body: {b}");
+        // The minted 14-hex deterministic ref is echoed with the bridge's broker id.
+        assert!(b.contains("\"client_order_ref\":"), "body: {b}");
+        assert!(b.contains("\"broker_order_id\":\"BRK-0001\""), "body: {b}");
+        assert!(b.contains("\"execution_attempt_id\":"), "body: {b}");
+        assert!(b.contains("\"gate_state\":\"ENABLED\""), "body: {b}");
+        let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+        let ref_ = v["client_order_ref"].as_str().unwrap();
+        assert_eq!(ref_.len(), 14, "deterministic 14-hex ref: {ref_}");
+        assert!(ref_.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_bridge_unknown_returns_503_never_ack() {
+        let state = enabled_state(fake_forwarder(CommandScript::Unknown(
+            "synthetic-unknown".into(),
+        )));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 503, "body: {b}");
+        assert!(b.contains("\"accepted\":false"), "body: {b}");
+        assert!(b.contains("\"outcome\":\"UNKNOWN\""), "body: {b}");
+        assert!(
+            !b.contains("broker_order_id"),
+            "UNKNOWN must not leak a broker id: {b}"
+        );
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_bridge_rejected_returns_409() {
+        let state = enabled_state(fake_forwarder(CommandScript::Reject(
+            "synthetic-reject".into(),
+        )));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 409, "body: {b}");
+        assert!(b.contains("\"accepted\":false"), "body: {b}");
+        assert!(b.contains("\"outcome\":\"REJECTED\""), "body: {b}");
+        assert!(b.contains("synthetic-reject"), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_rejects_unsupported_payload_mapping() {
+        let state = enabled_state(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        // Drop symbol from the payload: the mapper must fail closed (422), never forward.
+        let mut payload: serde_json::Value = serde_json::from_str(&bieq_payload_json()).unwrap();
+        payload.as_object_mut().unwrap().remove("symbol");
+        let req = encoded_request_with_payload("s3cr3t", payload).await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 422, "body: {b}");
+        assert!(b.contains("\"accepted\":false"), "body: {b}");
+        assert!(b.contains("symbol required"), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn intents_halted_never_forward_is_bridge_untouched() {
+        let state = ServerState::with_gateway_auth(
+            ExecState::Halted,
+            "s3cr3t".into(),
+            "execution-gateway.v1".into(),
+        )
+        .with_forwarder(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        let req = encoded_bieq_request("s3cr3t").await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 503, "body: {b}");
+        assert!(b.contains("HALTED"), "body: {b}");
+        // HALTED must not have reached the bridge: no broker id in the response.
+        assert!(!b.contains("broker_order_id"), "body: {b}");
     }
 }

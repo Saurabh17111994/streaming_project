@@ -8,12 +8,33 @@
 
 use std::net::SocketAddr;
 
+use std::sync::Arc;
+
 use nautilus_execution_service::{
     bootstrap::Runtime,
+    bridge::{BridgeClient, CommandScript, FakeBridge, HttpBridgeClient},
     config::ServiceConfig,
     engine::{BridgeSelection, LiveNodeRuntime},
     http, telemetry,
 };
+
+/// Builds the route's bridge transport (T4a sync forward) from the same selection the node's
+/// exec client uses: the deterministic fake (offline slice, seeded with an Accept script) or
+/// the production `HttpBridgeClient`. The forwarder is fail-closed by construction — it is
+/// only ever reached when the route's gate is ENABLED.
+fn build_route_forwarder(selection: &BridgeSelection) -> Box<dyn BridgeClient + Send> {
+    match selection {
+        BridgeSelection::Fake => {
+            let mut fake = FakeBridge::new();
+            fake.script(CommandScript::Accept);
+            Box::new(fake)
+        }
+        BridgeSelection::Http {
+            base_url,
+            auth_token,
+        } => Box::new(HttpBridgeClient::new(base_url.clone(), auth_token.clone())),
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,6 +46,8 @@ async fn main() -> anyhow::Result<()> {
     // approval advances the gate.
     let selection = BridgeSelection::from_config(&config);
     let bridge_mode = selection.mode();
+    let route_forwarder: http::BridgeForwarder =
+        Arc::new(tokio::sync::Mutex::new(build_route_forwarder(&selection)));
     let runtime = Runtime::init(config)?;
     // Nautilus's kernel registers the process-wide `log` logger (LoggerConfig owns
     // set_boxed_logger); our own tracing subscriber registers a `log` bridge
@@ -41,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
         "nautilus-execution-service boot: gate HALTED, bridge mode {bridge_mode}, LiveNode hosted run loop armed, health on {addr} (execution enabled: false)"
     );
 
-    let state = runtime.server_state();
+    let state = runtime.server_state().with_forwarder(route_forwarder);
     let server = tokio::spawn(http::serve(addr, state));
 
     tokio::select! {

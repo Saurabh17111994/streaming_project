@@ -219,6 +219,12 @@ This plan closes the remaining gaps in five phases:
 - [x] `A2.5` Add `T9_ORDER_SANDBOX` Python integration in `code/01_platform/04_scripts/tests/` (reuses `t8_sandbox_contract_check.py` harness): place→poll→assert, then cancel. (CHG-084: `t9_order_sandbox.py` + `tests/test_12_t9_order_sandbox.py` — t8 12/12 reuse, 20 offline checks, gateway-envelope signing port pinned to a REAL JVM run of `GatewayProtocol.java`, BI-EQ x1 payload schema, DDL poll columns, `T9_APPROVED_BY` fail-closed gate; live leg implemented but honestly classified `LIVE-CHAIN-UNWIRED` (exit 3) until A2.3/A2.4 + T4 bridge wiring land. pytest 11/11, full suite 351.)
 - [ ] `A2.6` Run `python3 code/01_platform/04_scripts/t8_sandbox_contract_check.py` (expect 12/12) + the new test.
 - [ ] `A2.7` Evidence `logs/tracker-14/t9-order-sandbox-<yyyymmdd>.md` + `CHG-058`.
+- **T4a landed 2026-08-24 (CHG-090, commit pending):** the ENABLED `/v1/intents` route now
+  maps the verified payload → bridge `place` (deterministic 14-hex `client_order_ref`,
+  fresh UUID v4 attempt id) and forwards — SUCCESS→202 (broker id + ref echo), REJECTED→409,
+  UNKNOWN/transport-err→503 (never ack, never retry). Sync leg only: the life cycle leg
+  (postback → normalized event → gateway `/v1/events`) + B7.5 durable-flag decision are
+  still open, so A2.4/A2.6 remain gated. Auth 401 and HALTED 503 paths unchanged.
 **DoD:** one sandbox order placed end-to-end; attempt/lifecycle tables populated; cancel succeeds; no real order possible without `T9_APPROVED_BY`.
 
 ### Task A3 — Live postback capture evidence (VM-BROKER-PBK-009)

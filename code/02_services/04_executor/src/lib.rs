@@ -12,6 +12,7 @@ pub mod gate;
 pub mod gateway_protocol;
 pub mod health;
 pub mod http;
+pub mod intent;
 pub mod projection;
 pub mod resilience;
 pub mod shutdown;
