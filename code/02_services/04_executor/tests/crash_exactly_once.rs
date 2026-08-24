@@ -18,9 +18,8 @@
 //! Run: `cargo test --offline --test crash_exactly_once`
 
 use nautilus_execution_service::executiongate::{
-    AttemptPhase, AttemptStore, BridgeCaller, BridgeOutcome, Command, CrashHooks,
-    ExecutionGate, GateRow, GateState, GateStateStore, InMemoryAttemptStore,
-    InMemoryGateStateStore, Outcome,
+    AttemptPhase, AttemptStore, BridgeCaller, BridgeOutcome, Command, CrashHooks, ExecutionGate,
+    GateRow, GateState, GateStateStore, InMemoryAttemptStore, InMemoryGateStateStore, Outcome,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -79,7 +78,10 @@ impl AttemptStore for RecordingAttempts {
     fn get(&self, attempt_id: &str) -> Option<nautilus_execution_service::executiongate::Attempt> {
         self.inner.get(attempt_id)
     }
-    fn put(&self, attempt: &nautilus_execution_service::executiongate::Attempt) -> anyhow::Result<()> {
+    fn put(
+        &self,
+        attempt: &nautilus_execution_service::executiongate::Attempt,
+    ) -> anyhow::Result<()> {
         let mut ids = self.ids.borrow_mut();
         if !ids.contains(&attempt.attempt_id) {
             ids.push(attempt.attempt_id.clone());
@@ -89,6 +91,9 @@ impl AttemptStore for RecordingAttempts {
     }
     fn has_duplicate(&self, instruction_id: &str, request_hash: &str) -> bool {
         self.inner.has_duplicate(instruction_id, request_hash)
+    }
+    fn has_instruction(&self, instruction_id: &str) -> bool {
+        self.inner.has_instruction(instruction_id)
     }
 }
 
@@ -133,12 +138,16 @@ fn crash_exactly_once_composite() {
         Rc::clone(&bridge) as Rc<dyn BridgeCaller>,
     );
     bridge.crash.set(true);
-    let crashed = g0.execute(
-        &command("a-1", "ins-1", "h-1", 5, 7),
-        CrashHooks::default(),
+    let crashed = g0.execute(&command("a-1", "ins-1", "h-1", 5, 7), CrashHooks::default());
+    assert!(
+        crashed.is_err(),
+        "mid-bridge kill must surface as process death"
     );
-    assert!(crashed.is_err(), "mid-bridge kill must surface as process death");
-    assert_eq!(calls.get(), 1, "bridge saw the order exactly once (broker has it)");
+    assert_eq!(
+        calls.get(),
+        1,
+        "bridge saw the order exactly once (broker has it)"
+    );
 
     // ---- Leg B: restart on the SAME durable memory; replay the same attempt. ----
     bridge.crash.set(false);
@@ -214,10 +223,7 @@ fn crash_exactly_once_composite() {
 
     // ---- Leg D: fresh order under the new epoch/fence succeeds exactly once. ----
     let fresh = g1
-        .execute(
-            &command("a-2", "ins-2", "h-2", 7, 9),
-            CrashHooks::default(),
-        )
+        .execute(&command("a-2", "ins-2", "h-2", 7, 9), CrashHooks::default())
         .expect("fresh post-recovery order must not crash");
     assert_eq!(fresh, Outcome::Accepted);
     assert_eq!(calls.get(), 2, "second DISTINCT order = second call");

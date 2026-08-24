@@ -224,14 +224,15 @@ impl BridgeClient for FakeBridge {
         // client_order_ref (remarks) carries only client_order_ref. Treat that as valid
         // for the offline fake so the UNKNOWN→HALT never-retry path can be exercised.
         match envelope.validate() {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
                 let msg = e.to_string();
                 let is_query_by_ref = envelope.command == "query-order"
                     && envelope.broker_order_id.is_empty()
                     && !envelope.client_order_ref.is_empty()
                     && envelope.client_order_ref.len() <= 16;
-                if !(is_query_by_ref && msg.contains("broker_order_id is required for query-order")) {
+                if !(is_query_by_ref && msg.contains("broker_order_id is required for query-order"))
+                {
                     return Err(anyhow!("invalid command: {e}"));
                 }
             }
@@ -310,11 +311,15 @@ impl BridgeClient for FakeBridge {
                     outcome: "SUCCESS".to_string(),
                     client_order_ref: envelope.client_order_ref.clone(),
                     broker_order_id: envelope.broker_order_id.clone(),
-                    order_status: Some(if snapshot.is_empty() { "NO_OPEN_ORDERS".to_string() } else { "OPEN_SNAPSHOT".to_string() }),
+                    order_status: Some(if snapshot.is_empty() {
+                        "NO_OPEN_ORDERS".to_string()
+                    } else {
+                        "OPEN_SNAPSHOT".to_string()
+                    }),
                     report_type: Some("reconcile_snapshot".to_string()),
                     ..ReportEnvelope::default()
                 })
-            },
+            }
             CommandScript::Accept => self.handle_accept(cmd, envelope).await,
             CommandScript::AcceptThenFill => {
                 let report = self.handle_accept(cmd, envelope.clone()).await?;
@@ -459,17 +464,17 @@ impl FakeBridge {
                     outcome: "SUCCESS".to_string(),
                     client_order_ref: envelope.client_order_ref.clone(),
                     broker_order_id: envelope.broker_order_id.clone(),
-                    order_status: Some(if snap.is_empty() { "NO_OPEN_ORDERS".to_string() } else { "OPEN_SNAPSHOT".to_string() }),
+                    order_status: Some(if snap.is_empty() {
+                        "NO_OPEN_ORDERS".to_string()
+                    } else {
+                        "OPEN_SNAPSHOT".to_string()
+                    }),
                     report_type: Some("reconcile_snapshot".to_string()),
                     ..ReportEnvelope::default()
                 })
             }
-            _ => Err(anyhow!(
-                "fake bridge: scripted Accept for non-order command"
-            )),
         }
     }
-
     fn emit_fill(&self, envelope: &CommandEnvelope) {
         let Some(order) = envelope.order.as_ref() else {
             return;

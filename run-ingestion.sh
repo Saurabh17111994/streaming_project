@@ -37,11 +37,9 @@ source "$SECRETS_FILE"
 # Required creds (fail fast, never print values)
 : "${ARROW_APP_ID:?ARROW_APP_ID must be set in $SECRETS_FILE}"
 : "${ARROW_APP_SECRET:?ARROW_APP_SECRET must be set in $SECRETS_FILE}"
-if [ -z "${ARROW_TOKEN:-}" ]; then
-	: "${ARROW_USER_ID:?ARROW_USER_ID must be set (or set ARROW_TOKEN)}"
-	: "${ARROW_PASSWORD:?ARROW_PASSWORD must be set (or set ARROW_TOKEN)}"
-	: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (or set ARROW_TOKEN)}"
-fi
+: "${ARROW_USER_ID:?ARROW_USER_ID must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
+: "${ARROW_PASSWORD:?ARROW_PASSWORD must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
+: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
 
 export ARROW_HFT_LATENCY_MS=50
 export FLUSS_BOOTSTRAP=localhost:9123

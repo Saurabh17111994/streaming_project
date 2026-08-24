@@ -33,7 +33,6 @@ use nautilus_common::{
     },
 };
 use nautilus_core::{time::get_atomic_clock_realtime, Params, UnixNanos, UUID4};
-use sha2::{Digest, Sha256};
 use nautilus_live::{ExecutionClientCore, ExecutionEventEmitter};
 use nautilus_model::{
     accounts::AccountAny,
@@ -45,13 +44,21 @@ use nautilus_model::{
     reports::{FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, Currency, MarginBalance, Price, Quantity},
 };
+use sha2::{Digest, Sha256};
 
 use crate::resilience::{AttemptError, RetryConfig, RetryError, RetryOrchestrator};
 
 /// Deterministic broker-facing reference: sha256(format_version|instruction_id|execution_attempt_id) 14 hex chars.
 /// Format_version is pinned to `v1` per 05-execution-core §Reconciliation (fits Arrow 16-char remarks).
-fn deterministic_client_order_ref(format_version: &str, instruction_id: &str, execution_attempt_id: &str) -> String {
-    let canonical = format!("{}|{}|{}", format_version, instruction_id, execution_attempt_id);
+fn deterministic_client_order_ref(
+    format_version: &str,
+    instruction_id: &str,
+    execution_attempt_id: &str,
+) -> String {
+    let canonical = format!(
+        "{}|{}|{}",
+        format_version, instruction_id, execution_attempt_id
+    );
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());
     let digest = hasher.finalize();
@@ -61,13 +68,19 @@ fn deterministic_client_order_ref(format_version: &str, instruction_id: &str, ex
 
 /// Bridge outcome classification (dossier §Reconciliation, offline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BridgeOutcome { Accepted, Rejected, Unknown }
+pub enum BridgeOutcome {
+    Accepted,
+    Rejected,
+    Unknown,
+}
 
 /// Classify a synchronous bridge report. Pure function — no I/O, no retry.
 pub fn classify_bridge_report(report: &crate::bridge::protocol::ReportEnvelope) -> BridgeOutcome {
     use crate::bridge::protocol::ReportOutcome;
     match report.outcome() {
-        Some(ReportOutcome::Success) if !report.broker_order_id.is_empty() => BridgeOutcome::Accepted,
+        Some(ReportOutcome::Success) if !report.broker_order_id.is_empty() => {
+            BridgeOutcome::Accepted
+        }
         Some(ReportOutcome::Rejected) => BridgeOutcome::Rejected,
         Some(ReportOutcome::Unknown) => BridgeOutcome::Unknown,
         _ => BridgeOutcome::Unknown,
@@ -78,7 +91,6 @@ pub fn classify_bridge_report(report: &crate::bridge::protocol::ReportEnvelope) 
 pub fn unknown_halts_never_retries(outcome: BridgeOutcome) -> bool {
     outcome == BridgeOutcome::Unknown
 }
-
 
 #[cfg(test)]
 mod deterministic_ref_tests {
@@ -126,7 +138,6 @@ mod deterministic_ref_tests {
         assert!(r.len() <= 16);
     }
 }
-
 
 use crate::{
     bridge::{
@@ -249,7 +260,10 @@ impl BridgeExecutionClient {
     /// Hook for future portfolio delegation (Tier 1+). Returns `None` until the
     /// Nautilus portfolio API is wired via `self.core.cache` or `portfolio`.
     #[allow(dead_code)]
-    fn try_portfolio_position(&self, _instrument_id: &InstrumentId) -> Option<rust_decimal::Decimal> {
+    fn try_portfolio_position(
+        &self,
+        _instrument_id: &InstrumentId,
+    ) -> Option<rust_decimal::Decimal> {
         // Placeholder: when `ExecutionClientCore` exposes `cache`/`portfolio`,
         // query it here and convert `Position` quantity to `Decimal`.
         // Kept as `None` for now to preserve Tier 0 parity behavior while
@@ -446,7 +460,12 @@ impl BridgeExecutionClient {
             .fetch_add(1, Ordering::Relaxed);
         // Deterministic `client_order_ref` (14-char hash) is the broker echo; map via `client_refs` to the
         // Nautilus `ClientOrderId` (which may be RND-xxx in tests, deterministic in prod).
-        let client_order_id = if let Some(mapped) = self.client_refs.borrow().get(&report.client_order_ref).cloned() {
+        let client_order_id = if let Some(mapped) = self
+            .client_refs
+            .borrow()
+            .get(&report.client_order_ref)
+            .cloned()
+        {
             mapped
         } else {
             // Fallback for legacy/fake reports where remarks == client_order_id directly.
@@ -540,9 +559,15 @@ impl BridgeExecutionClient {
         // broker-facing ref. None of them reuse the other.
         envelope.instruction_id = order.init_id().to_string();
         envelope.execution_attempt_id = UUID4::new().to_string();
-        envelope.client_order_ref = deterministic_client_order_ref("v1", &envelope.instruction_id, &envelope.execution_attempt_id);
+        envelope.client_order_ref = deterministic_client_order_ref(
+            "v1",
+            &envelope.instruction_id,
+            &envelope.execution_attempt_id,
+        );
         // Record mapping for report correlation (deterministic ref -> Nautilus client order id)
-        self.client_refs.borrow_mut().insert(envelope.client_order_ref.clone(), order.client_order_id());
+        self.client_refs
+            .borrow_mut()
+            .insert(envelope.client_order_ref.clone(), order.client_order_id());
         envelope.order = Some(
             OrderCommand::new(self.core.venue.as_str(), &symbol)
                 .with_side(side)
@@ -1127,7 +1152,6 @@ mod tests {
             "bounded retries must surface, not fabricate success"
         );
         // Bounded behavior is the proof (`result` is Err, never a phantom success). The retry
-    
 
         // counter is populated too, but its exact value is not cross-test deterministic because
         // `METRICS` is process-global and parallel tests share it.

@@ -11,5 +11,11 @@ RUN mvn -q -f /workspace/pom.xml -pl 02_services/06_execution_gateway -am packag
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /workspace/02_services/06_execution_gateway/target/execution-gateway.jar /app/execution-gateway.jar
+# 2026-08-22 single-pane: OTel Javaagent for JVM metrics (jvm.*) → collector:4317 (same as ingestion)
+ADD --chmod=0444 https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.9.0/opentelemetry-javaagent.jar /app/opentelemetry-javaagent.jar
+ENV OTEL_SERVICE_NAME=execution-gateway
+ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+ENV OTEL_METRICS_EXPORTER=otlp
+ENV JAVA_TOOL_OPTIONS=-javaagent:/app/opentelemetry-javaagent.jar
 USER 10001:10001
 ENTRYPOINT ["java", "--add-opens=java.base/java.nio=ALL-UNNAMED", "-jar", "/app/execution-gateway.jar"]

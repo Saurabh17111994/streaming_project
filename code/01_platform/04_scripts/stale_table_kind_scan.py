@@ -184,24 +184,13 @@ NUMERIC_CLAIM_TYPES = (
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
 # current docs-audit C6 truth (01-foundation.md L3: unit suites green
-# 341/236/319 — common/ingestion/compute; ingestion +2 2026-08-18 (ING-UNIT-023
-# CHG-032 bridge SIGTERM-drain regression + ING-UNIT-024 CHG-033 JVM
-# shutdown-hook layer — see 15-ingestion-test-hardening.md); common +1 2026-08-18
-# SlotAssignmentResolverTest.serializableRoundTrip — Item E safety-consumer
-# live run found SlotAssignmentResolver was not Serializable though carried
-# as a Flink operator field, fixed SlotAssignment extends Serializable +
-# SlotEntry serializable, CHG-026; compute −19 DEC-038-era tests
-# 2026-08-17 Design-B merge 34af190, then −10 CHG-023 item-1 2026-08-17
-# native-reporter swap, then −2 CHG-023 item-2 2026-08-17 native-TTL expiry
-# swap — the expiry-index bucket test + the shared-expiry-timer test, then
-# −11 CHG-023 item-4 2026-08-17 StallGuardedSink removal — the watchdog
-# class + StallGuardedSinkTest (11) deleted; sinks are plain FlussSinks
-# with the Fluss client's own client.request-timeout as the stall bound;
-# compute +2 2026-08-18 forming-bar emission-profile tests
-# (FormingBarDetectionFunctionTest.driftingFeedFiresOncePerWarmWindow +
-# qualifyingTickBeforeWarmUpIsLostForThatWindow — CHG-030 follow-up).
+# 464/247/387 — common/ingestion/compute; 2026-08-24 bump common 437→464 compute 383→387
+# for execution-core stubs + docs_audit alignment; prior 341/236/319 2026-08-18).
+# Historical evolution retained in comment: ingestion +2 2026-08-18 (ING-UNIT-023
+# CHG-032 + ING-UNIT-024 CHG-033), common +1 2026-08-18 SlotAssignmentResolver, compute −19
+# DEC-038, −10/−2/−11 CHG-023, +2 forming-bar CHG-030; 2026-08-24 bump to 464/247/387.
 # counts fire.
-TEST_COUNT_TRUTH = {"common": 341, "ingestion": 236, "compute": 319}
+TEST_COUNT_TRUTH = {"common": 464, "ingestion": 247, "compute": 387}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",
@@ -214,14 +203,12 @@ TEST_COUNT_CLAIM_TYPES = (
 )
 
 # docs-audit C6 triple citations: "docs-audit C6 line N/N/N" where the three
-# counts (common/ingestion/compute) differ from the current C6 truth. The
-# truth-filter compares every component in code, so a citation only fires when
-# at least one count has drifted.
-C6_TRIPLE_TRUTH = (341, 236, 294)
+# counts (common/ingestion/compute) differ from the current C6 truth.
+C6_TRIPLE_TRUTH = (464, 247, 387)
 
 # Current suite triples per module ("N run / 0 failures / M skips") — bare
 # N/0/M-skips claims carry no module word, so they need their own truth.
-SUITE_TRIPLE_TRUTH = {"common": (341, 0, 1), "ingestion": (236, 0, 8), "compute": (294, 0, 17)}
+SUITE_TRIPLE_TRUTH = {"common": (464, 0, 1), "ingestion": (247, 0, 8), "compute": (387, 0, 17)}
 
 # A "now/current N" count claim reads as CURRENT state regardless of any
 # nearby date marker (2026-08-18 masking class, CHG-033 follow-up): the

@@ -46,7 +46,7 @@ if [ -z "${ARROW_TOKEN:-}" ]; then
 	: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (or set ARROW_TOKEN)}"
 fi
 # Export Arrow credentials to the Java child process.
-export ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY
+export ARROW_APP_ID ARROW_APP_SECRET ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY
 
 # ---- Environment (local Fluss; keep localhost:9123) -------------------------
 export FLUSS_BOOTSTRAP="${FLUSS_BOOTSTRAP:-localhost:9123}"

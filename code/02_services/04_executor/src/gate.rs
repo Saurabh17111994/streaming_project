@@ -240,7 +240,6 @@ impl Gate {
         Ok(true)
     }
 
-
     /// Records one operator approval binding an evidence hash (DEC-044). INVARIANT-003 requires
     /// an **authorized** operator approval before `enable` becomes possible; the first approval
     /// binds the evidence hash. A second approval, if supplied, is not required and not checked
@@ -518,10 +517,10 @@ mod tests {
         let mut g = Gate::new_with_authorized(&["saurabh"]);
         assert_eq!(g.state(), ExecState::Halted);
         // No reconciliation needed → stays HALTED, returns false.
-        assert_eq!(g.enter_reconciling_if_needed(false).unwrap(), false);
+        assert!(!g.enter_reconciling_if_needed(false).unwrap());
         assert_eq!(g.state(), ExecState::Halted);
         // Needed → transitions to RECONCILING, returns true.
-        assert_eq!(g.enter_reconciling_if_needed(true).unwrap(), true);
+        assert!(g.enter_reconciling_if_needed(true).unwrap());
         assert_eq!(g.state(), ExecState::Reconciling);
         // Already RECONCILING → fails closed.
         assert!(g.enter_reconciling_if_needed(true).is_err());

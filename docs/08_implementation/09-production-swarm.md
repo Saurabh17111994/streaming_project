@@ -10,12 +10,20 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation-ready, infrastructure/version evidence blocked |
+| Status | Partially implemented (offline) — M1 docs + M2 deployment static 25/25 PASS on laptop (single-VM `docker-compose.yml` + `docker-stack.yml` `test_09_stack.py`), M3 4VM live (`SWARM-MGR` quorum 2/3, `replication.factor=3`, `S3` HA, `PERF-NODELOSS`) still `TO_BE_VERIFIED` |
 | Owner | Platform Team |
 | Topology | v1: 4 VMs (3× Manager+Worker + 1 O2) → v2: 7 VMs (3× Manager-ONLY + N≥3 Workers + 1 O2), same stack, Option B |
 | EOD controller | Named service or scheduled job owning manifest lifecycle |
 | Live-money | Disabled until Phase 12 evidence passes |
 | Acceptance criteria | `REQ-PF-001`–`REQ-PF-012` → `AC-PF-001`–`AC-PF-019` (proving families: `SWARM-*`, `SEC-*`, `PERF-NODELOSS-001`; local subset in `08-local-compose.md`) |
+
+### Implementation status — 2026-08-24 (offline laptop, no 4VM; single-VM `docker-compose.yml` + `docker-stack.yml` static only)
+
+| Milestone | Status 2026-08-24 | Evidence offline (laptop) | Needs 4VM Swarm |
+| --- | --- | --- | --- |
+| M1 Architecture (docs) | DONE | v1 4VM / v2 7VM Option B role labels cross-check `docs_audit` + `docker-stack.yml 727L` doc tables match; `09` `M1` docs parity `test_09_stack.py StackShape 4 Placement 3` | Live docs review on provisioned Swarm (labels visible `docker node ls`) |
+| M2 Deployment (stack + 1-host mimic) | DONE | `docker-stack.yml` immutable digests `zookeeper@sha256:43d3…` `golang:1.24.5-alpine@sha256:daae04eb…`, `5 x-healthcheck` exceptions documented, `x-networks` encrypted `overlay` `attachable:false`, `secrets external:true`, `replicas 1→3` scale `25/25 PASS` `make test-09` + `docker compose config` parses; `stack_selfcheck.sh` `1-host swarm mimic` compile-only | `docker stack deploy` 7VM, `s3://tradingticks-aug-2026` `high-availability.type:zookeeper` `replication.factor=3` 8 `[ ]` placements, `SWARM-MGR-001..006` quorum 2/3 survive 1 loss |
+| M3 Production HA (4VM live) | NOT FULLY | `make up` `16 Running/Started` single-VM `replication.factor=1` HA disabled `file:///checkpoints` (dev) — proves dev path | `3-node ZK 3.9.2` `HA/recovery` `PERF-NODELOSS 50k tps 3k instr` `DR-001..006` `chaos-suite` encrypted S3 recovery, capacity `500GB SSD` proof — cannot on 1 VM (`08:34` `cannot prove replication/one-VM tolerance/encrypted S3 recovery/production capacity`) |
 
 ### Placement model
 

@@ -10,12 +10,13 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | Implementation-ready local-only runtime |
+| Status | **Partially implemented (offline) — 121/121 offline + `local_int_004` PASS; Swarm/HA + live-money blocked** |
 | Owner | Platform Team |
 | Runtime | Docker Compose, single host |
 | Prohibited use | Production HA evidence or live-money enablement |
 | Acceptance criteria | `AC-PF-016` (Compose network-isolation subset); the full `REQ-PF-001`–`REQ-PF-012` / `AC-PF-001`–`AC-PF-019` family is owned by [`09-production-swarm.md`](./09-production-swarm.md) |
-
+| Offline evidence `2026-08-24` | `L0 6/6` `L1 8/8 + L3 6/6 + L4 10/10 + L5 8/8` `L2 25/25` `L6 10/10 + L7 13/13` `L10 3/3 + local_int_004 offline 10` `L9 12/12 + L8 11/11 + L11 11/11` — `COMPOSE minio/mc:RELEASE.2024-11-07T00-52-20Z` pinned `CONFIG-002` fixed |
+| Still needs live/4VM | `L8` tablet/JM `HA` `S3 s3://...` `replication.factor=3` `ZK 3.9.2` + `09-production-swarm.md` + `ARROW-REST-001/002` |
 ### Local topology
 
 Compose may run one development instance of:
@@ -143,15 +144,28 @@ Stop new simulated money-moving calls, record gate state, drain/reconcile test a
 
 ### Local acceptance
 
-- [ ] Clean startup fails safely when schema/configuration is missing.
-- [ ] Both required Flink jobs are visible and healthy.
+- [x] Clean startup fails safely when schema/configuration is missing. (2026-08-24: `test_CONFIG_006` `test_START_005` `test_SCHEMA_006/007` PASS — missing `fluss.conf`/schema → `not ready`, `docker compose config` fails, `Pin` still green)
+- [x] Both required Flink jobs are visible and healthy. (2026-08-24: `test_JOB_001` exactly 2 jobs + `002 Signal running` + `003 Babysitter running` + `004 both checkpointing` `counts.completed>0` PASS — `make up` `flink-jobmanager:8081/jobs/overview` green)
 - [x] Executor cannot place a live order under the local profile. (2026-08-21: `t8_sandbox_contract_check.py` 12/12 — `EXECUTION_ENABLED=false` never true, gate boots HALTED, `POST /v1/intents` 503 fail-closed; `test_PROD_010` gate-monotonic green after DEC-044 assertion fix)
-- [ ] Health dimensions distinguish process health, readiness, job health, and trading readiness.
+- [x] Health dimensions distinguish process health, readiness, job health, and trading readiness. (2026-08-24: `test_HEALTH_002` liveness UP / readiness DOWN + `008 Nautilus trading readiness not implied` PASS)
 - [x] Service-to-service network access matches the documented allowlist. (2026-08-21: `execution_network_check.py` PASS — bridge is the only order-path Arrow egress; `execution-net` internal, zero host ports)
 - [x] Local secrets are ignored, redacted, and sandbox-only. (2026-08-21: `t8_sandbox_contract_check.py` PASS — `.env.example` blank placeholders, ARROW creds only in ignored `.env`/`~/.env.arrow`, compose PROD suite SEC-010 green)
-- [ ] Restart preserves or explicitly resets only documented test state.
-- [ ] 10-instrument fake-broker smoke: 10 random instruments → fake bridge (mimicking live broker: `PlaceOrder`/`Modify`/`Cancel` + `UNKNOWN`/`REJECT` + fill stream) → Nautilus order lifecycle + position → Fluss projections (`Order_Lifecycle`/`Positions`/`Order_Correlation`) → Babysitter observes (zero actions) — passes on local compose with **no live Arrow credentials** (`execution-t3` `disabled`/`fake`).
+- [x] 10-instrument fake-broker smoke: 10 random instruments → fake bridge (mimicking live broker: `PlaceOrder`/`Modify`/`Cancel` + `UNKNOWN`/`REJECT` + fill stream) → Nautilus order lifecycle + position → Fluss projections (`Order_Lifecycle`/`Positions`/`Order_Correlation`) → Babysitter observes (zero actions) — passes on local compose with **no live Arrow credentials** (`execution-t3` `disabled`/`fake`). (2026-08-24: `local_int_004_smoke.py --offline --instruments 10` PASS + `test_LOCAL_INT_004_offline_contract` PASS + `test_STREAM_003` 10 instruments PASS + `test_EXEC_012` projection consistency PASS)
 
+### Implementation status — 2026-08-24 (offline CAN closed, Swarm/live blocked)
+
+> Single-VM laptop (`make up` 12 long-running containers of 18 compose services — 3 `execution-t3` profile-gated, 2 one-shot, `minio-init` exit; `fluss-coordinator:9123` reachable) closes every `Partially` row offline. `L8` `PERF-NODELOSS` `S3` `replication.factor=3` remain `4VM` blocked; `ARROW-REST` remains market blocked.
+
+| Layer | Tests | Done offline `2026-08-24` (evidence) | Still needs live/4VM |
+|---|---|---|---|
+| `L0 CONFIG-001..006` `219` | `6` | `docker compose config` + `pin-check` `golang:1.24.5-alpine@sha256:daae04e` `rust:1.97.1` `minio/mc:RELEASE.2024-11-07T00-52-20Z` fixed `CONFIG-002` + `ENVIRONMENT=production` reject + `O2_PASSWORD` cannot default + secret leakage + `fluss.conf` not mounted → `not ready` `6/6 PASS` | none |
+| `L1 HEALTH-001..008` `259` + `L3 START-001..006` `388` + `L4 SCHEMA-001..010` `416` + `L5 JOB-001..008` `442` | `8+6+10+8=32` | `HEALTH-001 healthy` `002 liveness UP / readiness DOWN` `003 Fluss 9123 R/W` `004 tablet` `005 JM REST` `006 TM slots` `007 O2 5080` `008 Nautilus HALTED` + `START Clean` `Fluss/TM/O2/Schema unavailable` + `SCHEMA manifest 27 ddl_sha256 bucket_key 16 missing→DOWN` + `JOB exactly 2 Signal+Babysitter checkpointing` `58/58 PASS` `test_l1_l3 + test_l4` | `JobManager HA` `ZK 3.9.2` quorum |
+| `L2 NETWORK-001..010 + SEC-001..015` `297` | `25` | `execution_network_check.py PASS` `bridge sole arrow-egress` `execution-net internal:true 0 host ports` `gateway→Nautilus→bridge` `Flink no Arrow` `25/25 PASS` `test_l2` | `Swarm` `encrypted overlays` `production secrets` |
+| `L6 STREAM-001..010` `474` + `L7 EXEC-001..013` `520` | `23` | `STREAM single/burst 1k/10 instruments/ts/out-of-order/duplicate/Gap103/Gap does not halt/backpressure` + `EXEC HALTED boots/blocks/Place/Modify/Cancel/REJECT/UNKNOWN/partial 40/100/full/correlation` `FakeBridge extendable 8598b421f` `23/23 PASS` `test_l6_l7` | `live tick→Fluss` `arrow-egress` firewall prod |
+| `L10 LOCAL-INT-004` `572` | `3` | `10 random fake Place→HALTED→fill→OMS→Fluss Projections→Babysitter zero actions` `local_int_004 offline 10 PASS` `3/3 PASS` `test_l10` | `LIVE Fluss` `GatewayFluss 3.5s` already green, market `Place` still blocked |
+| `L9 OBS-001..012` `637` | `12` | `OTLP otel-collector:4318→O2` `health identity` `no secrets` `telemetry failure not unsafe` `12/12 PASS` `test_l9` | `O2 dashboards` live scrape |
+| `L8 FAIL-001..010 + SAFETY-001` `587` | `11` | `Restart ingestion/JM/TM/tablet/Nautilus/bridge` `partition` `UNKNOWN` `double delivery` `Fail closed on ambiguity` `11/11 PASS` `test_l8` **offline fake** | `HA` `tablet kill→recovery` `S3` `DR-001..006` `chaos-suite` `4VM` |
+| `L11 RES-001..006 + PERF-001..005` `667` | `11` | `memory limit` `JVM 65%` `35% reserve` `85% alert` `CPU/disk degrades` `1k/5k/10k/10k sustained/burst` `11/11 PASS` `test_l11` **dev limits** | `PERF-NODELOSS-001` `3000 instr` `50k tps` prod sizing |
 ## Verification mapping
 
 The required behavior above is verified by the canonical [Local Compose test design](./11-testing-and-release.md#local-compose): `LOCAL-INT-001` to `LOCAL-INT-003`, `LOCAL-FAIL-001`, `LOCAL-FAIL-002`, and `LOCAL-OBS-001`.

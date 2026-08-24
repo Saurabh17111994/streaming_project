@@ -84,24 +84,20 @@ func main() {
 	client := arrow.NewClient(appID, appSecret)
 	var refreshAuth func(context.Context) error
 
-	if userID != "" && password != "" && totpKey != "" {
-		refreshAuth = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return client.AutoLogin(userID, password, totpKey)
+	if userID == "" || password == "" || totpKey == "" {
+		logf("live mode requires ARROW_USER_ID+PASSWORD+TOTP_KEY (ARROW_TOKEN removed 2026-08-24)")
+		// Fatal auth failure → status 2 (plan §main.go).
+		os.Exit(exitFatalStart)
+	}
+	refreshAuth = func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		logf("auto-login user=%s", userID)
-		if err := client.AutoLogin(userID, password, totpKey); err != nil {
-			fmt.Fprintf(os.Stderr, "arrow-bridge: AutoLogin failed: %v\n", err)
-			// Fatal auth failure → status 2 (plan §main.go).
-			os.Exit(exitFatalStart)
-		}
-	} else if token := os.Getenv("ARROW_TOKEN"); token != "" {
-		client.SetToken(token)
-		logf("using ARROW_TOKEN from env (len=%d)", len(token))
-	} else {
-		logf("no ARROW_TOKEN or autologin creds; cannot authenticate")
+		return client.AutoLogin(userID, password, totpKey)
+	}
+	logf("auto-login user=%s", userID)
+	if err := client.AutoLogin(userID, password, totpKey); err != nil {
+		fmt.Fprintf(os.Stderr, "arrow-bridge: AutoLogin failed: %v\n", err)
 		// Fatal auth failure → status 2 (plan §main.go).
 		os.Exit(exitFatalStart)
 	}

@@ -280,12 +280,16 @@ class SignalChainLiveE2ETest {
             e.put("ARROW_HFT_URL", "ws://127.0.0.1:" + faketoolPort());
             e.put("ARROW_APP_ID", "e2e");
             e.put("ARROW_APP_SECRET", "e2esecret");
-            e.put("ARROW_TOKEN", "e2etoken");
+            e.put("ARROW_USER_ID", "e2e-user");
+        e.put("ARROW_PASSWORD", "e2e-pass");
+        e.put("ARROW_TOTP_KEY", "JBSWY3DPEHPK3PXP");
             e.put("ARROW_HFT_CONNECTIONS", "1");
         } else {
             e.put("ARROW_APP_ID", env("ARROW_APP_ID", ""));
             e.put("ARROW_APP_SECRET", env("ARROW_APP_SECRET", ""));
-            e.put("ARROW_TOKEN", env("ARROW_TOKEN", ""));
+            e.put("ARROW_USER_ID", env("ARROW_USER_ID", ""));
+            e.put("ARROW_PASSWORD", env("ARROW_PASSWORD", ""));
+            e.put("ARROW_TOTP_KEY", env("ARROW_TOTP_KEY", ""));
             String tokens = env("ARROW_INSTRUMENT_TOKENS", "");
             if (!tokens.isBlank()) {
                 e.put("ARROW_INSTRUMENT_TOKENS", tokens);

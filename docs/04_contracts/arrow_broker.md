@@ -31,33 +31,19 @@ base36 (e.g. `INS` + 13 chars). Confirm if a different compact form is preferred
 order book, trade book) = `Token` column in the cash_stocks CSV. This is the
 `bucket.key` for `01_ticks_raw` and the link across market/postback/order books.
 
-## 1. Authentication (`broker_market`, `broker_postback`, `arrow_rest` share it)
+## 1. Authentication (`broker_market`, `broker_postback`, `arrow_rest` share it) — TOTP only (ARROW_TOKEN removed 2026-08-24)
 
-OAuth-style token exchange. Credentials: `appID` + `appSecret` (never exposed client-side).
+OAuth-style token exchange via TOTP AutoLogin only. Credentials: `appID` + `appSecret` + `userID` + `password` + `TOTP` (never expose client-side, IP 152.59.63.5 whitelisted).
 
-1. Login redirect: `https://app.arrow.trade/app/login?appID=<appID>` → user enters User ID + Password + TOTP.
-2. Redirect returns `request-token` + `checksum` = SHA256(`request-token:appID`).
-3. Exchange: `POST https://edge.arrow.trade/auth/app/authenticate-token`
-   body `{ "checkSum": SHA256("appID:appSecret:request-token"), "token": <request-token>, "appID": <appID> }`
-   → `{ "data": { "name", "token": <ACCESS_TOKEN>, "userID" }, "status": "success" }`
-4. All API + WebSocket calls use headers `appID` + `token`.
+1. `Client.AutoLogin(userID, password, totpSecret)` — Go SDK POSTs to `https://api.arrow.trade/auth/validate-2fa` with `{code, requestId, userID}` after initial login (`userID`, `password`, `captchaValue`, `captchaID`, `appID`, `isAppLogin`), then exchange POSTs to `https://edge.arrow.trade/auth/app/authenticate-token` with `checkSum` SHA256 `appID:appSecret:request-token` → `{ "data": { "name", "token": <ACCESS_TOKEN 24h>, "userID" }, "status": "success" }`. No `request-token` redirect, no pre-seeded `ARROW_TOKEN`.
+2. All API + WebSocket calls use headers `appID` + `token` (24h token obtained via AutoLogin).
 
-**Non-interactive alternative (verified 2026-08-13):** `Client.AutoLogin(userID,
-password, totpSecret)` completes the same flow programmatically — no request
-token, no redirect. The Go SDK's login step POSTs to
-`https://api.arrow.trade/auth/validate-2fa` with `{code, requestId, userID}`
-after the initial login (body: `userID`, `password`, `captchaValue`,
-`captchaID`, `appID`, `isAppLogin`); the exchange then POSTs to
-`https://edge.arrow.trade/auth/app/authenticate-token` with the same
-`checkSum` (SHA256 `appID:appSecret:request-token`). Requires the same
-`appID` + `appSecret` credentials (TOTP secret base32-decoded, standard 30 s
-window). Python client `auto_login(user_id, password, api_secret,
-totp_secret)` mirrors this flow.
+**Legacy `ARROW_TOKEN` (pre-authenticated 24h) removed 2026-08-24** — previously allowed `ARROW_TOKEN` env to skip AutoLogin; now deleted. Bridge fails closed if `ARROW_USER_ID`/`PASSWORD`/`TOTP_KEY` missing (see `main.go` `live mode requires … TOTP`).
 
 **Constraints:**
 
-- Access token lifespan **24h** (regulatory). No refresh token by default — executor must re-authenticate before expiry.
-- Static IP is mandatory (SEBI circular, Feb 2025).
+- Access token lifespan **24h** (via AutoLogin). No refresh token — executor re-authenticates via `ReauthBroker` (TOTP refresh, one retry → `broker_disabled`).
+- Static IP `152.59.63.5` mandatory (SEBI circular, Feb 2025, new key `8e0e190b0686` `01M0S9T1QSZB04REM5FAK24WSM`).
 
 ## 2. Market data feed (`broker_market`)
 

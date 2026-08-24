@@ -23,7 +23,10 @@ pub fn validate_client_order_ref(s: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
     {
-        return Err(format!("client_order_ref must match {}: {}", BROKER_CLIENT_REF_PATTERN, s));
+        return Err(format!(
+            "client_order_ref must match {}: {}",
+            BROKER_CLIENT_REF_PATTERN, s
+        ));
     }
     Ok(())
 }

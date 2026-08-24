@@ -189,7 +189,9 @@ class BridgeShutdownRegressionTest {
         Map<String, String> env = new HashMap<>();
         env.put("ARROW_APP_ID", "test-app");
         env.put("ARROW_APP_SECRET", "test-secret");
-        env.put("ARROW_TOKEN", "test-token");
+        env.put("ARROW_USER_ID", "test-user");
+        env.put("ARROW_PASSWORD", "test-pass");
+        env.put("ARROW_TOTP_KEY", "JBSWY3DPEHPK3PXP");
         env.put("FLUSS_BOOTSTRAP", "localhost:9123");
         env.put("RAW_TABLE_NAME", "raw_table_1");
         env.put("ARROW_MAX_EVENT_AGE_MS", "5000");

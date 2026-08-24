@@ -30,7 +30,7 @@ Current matrix `docs/08_implementation/12-version-compatibility-evidence.md`: ro
 - Manifest 26 tables, `C1/C2` PASS, `C4` header↔DDL parity PASS.
 - Live parity: `CompatFlussDdlParityIntegrationTest` 21/21 DDL-parity descriptors green on dev Fluss `9123` (env-gated) — 21 of the 26-table manifest (2026-08-21).
 - Composite-PK matrix: `CompositeKeyMatrixVerifierTest` + `DdlApplyToolStatusTest` + `CompatFlussCompositeKeyIntegrationTest` — `PASS`/`PASS_WITH_LIMITATION` contract verified (CHG-052).
-- Evidence `logs/schema-compat/compat-fluss-001-003-20260815.md` + `compat-flink-002-20260815.md` (superseded counts noted in 11-testing.md: now `341 common / 0 / 1 skip`).
+- Evidence `logs/schema-compat/compat-fluss-001-003-20260815.md` + `compat-flink-002-20260815.md` (superseded counts noted in 11-testing.md: as of 2026-08-15 `341 common / 0 / 1 skip` historical 2026-08-15).
 
 ---
 

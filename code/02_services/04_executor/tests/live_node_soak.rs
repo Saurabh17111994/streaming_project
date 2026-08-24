@@ -141,5 +141,5 @@ fn probe_rss_kb() -> Option<u64> {
     status
         .lines()
         .find_map(|l| l.strip_prefix("VmRSS:"))
-        .and_then(|rest| rest.trim().split_whitespace().next()?.parse().ok())
+        .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
 }

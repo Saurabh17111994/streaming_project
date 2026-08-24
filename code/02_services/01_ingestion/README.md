@@ -33,7 +33,7 @@ The current architecture does **not** assume Arrow Trade, `seq_no`, exact sequen
 - [x] Go bridge binary — `go-bridge/main.go` (~220 lines)
 - [x] Arrow Go SDK (`go-arrow`) via local replace directive — HFT WebSocket (Standard feed removed 2026-08-14)
 - [x] NDJSON stdout output matching `TickPacket`/`GoTick` schema
-- [x] Auth: AutoLogin (user+pass+TOTP) or static `ARROW_TOKEN`
+- [x] Auth: AutoLogin (user+pass+TOTP) only (ARROW_TOKEN removed 2026-08-24)
 - [x] Subscription: configurable token set via `ARROW_INSTRUMENT_TOKENS` env
 - [x] Graceful shutdown via SIGINT/SIGTERM
 - [x] Pin broker protocol/decoder and Fluss client versions. _(go-arrow pinned: upstream base 7cce1630 + in-repo patches R-101..R-243, vendored replace, tree sha256:f622f8a9...; see versions.pin BROKER_PROTOCOL)_

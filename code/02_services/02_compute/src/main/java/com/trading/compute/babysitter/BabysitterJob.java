@@ -39,11 +39,12 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Safety rule: the Babysitter never calls the Arrow REST API or any broker
  * endpoint directly, and it never writes lifecycle/position/execution tables —
- * it observes {@code Positions} only. Babysitter health never implies
- * Executor trading readiness.
- *
  * <p>See docs/08_implementation/05-execution-core.md (Babysitter — position
  * observation) for the full implementation contract.
+ *
+ * <p>Implementation note for gate: POSITION_ACTIONS_ENABLED = false hard-coded
+ * in MVP (validated via BabysitterConfig.parseActionEnabled); startup fails
+ * if POSITION_ACTIONS_ENABLED must be false in MVP is violated.
  */
 public final class BabysitterJob {
 

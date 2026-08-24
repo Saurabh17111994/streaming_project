@@ -127,21 +127,23 @@ public final class IngestionConfig {
         List<String> errors = new ArrayList<>();
         Builder b = new Builder();
 
-        // ---- Arrow auth ----
+        // ---- Arrow auth (TOTP only — ARROW_TOKEN removed 2026-08-24) ----
         b.arrowAppId = required(env, "ARROW_APP_ID", errors);
         b.arrowAppSecret = required(env, "ARROW_APP_SECRET", errors);
         b.arrowToken = optional(env, "ARROW_TOKEN");
+        if (!b.arrowToken.isBlank()) {
+            errors.add("ARROW_TOKEN removed 2026-08-24 — use ARROW_USER_ID+PASSWORD+TOTP_KEY (TOTP AutoLogin) only");
+        }
         b.arrowUserId = optional(env, "ARROW_USER_ID");
         b.arrowPassword = optional(env, "ARROW_PASSWORD");
         b.arrowTotpKey = optional(env, "ARROW_TOTP_KEY");
 
-        // At least one auth mechanism must be available
-        boolean hasToken = !b.arrowToken.isBlank();
+        // TOTP AutoLogin is the only supported auth (access-token path removed)
         boolean hasAutoLogin = !b.arrowUserId.isBlank()
                 && !b.arrowPassword.isBlank()
                 && !b.arrowTotpKey.isBlank();
-        if (!hasToken && !hasAutoLogin) {
-            errors.add("Either ARROW_TOKEN or ARROW_USER_ID+PASSWORD+TOTP_KEY must be set");
+        if (!hasAutoLogin) {
+            errors.add("ARROW_USER_ID+PASSWORD+TOTP_KEY must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)");
         }
 
         // ---- Arrow feed (HFT only — the Standard feed was removed 2026-08-14) ----

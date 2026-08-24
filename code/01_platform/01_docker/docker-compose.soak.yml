@@ -37,14 +37,12 @@ services:
       # OTel collector is a host-published port; the default
       # `otel-collector:4318` is unresolvable on the host network.
       OTEL_COLLECTOR_HOST: localhost:4318
-      # Dummy credentials: the fake broker performs no auth; same shape the
-      # FullStackE2ETest uses (ARROW_TOKEN present -> token auth path).
+      # Dummy credentials: fake broker performs no auth; TOTP only (ARROW_TOKEN removed 2026-08-24)
       ARROW_APP_ID: soak
       ARROW_APP_SECRET: soaksecret
-      ARROW_TOKEN: soaktoken
-      ARROW_USER_ID: ""
-      ARROW_PASSWORD: ""
-      ARROW_TOTP_KEY: ""
+      ARROW_USER_ID: soak-user
+      ARROW_PASSWORD: soak-pass
+      ARROW_TOTP_KEY: JBSWY3DPEHPK3PXP
       # T0 3-slot: env-driven N=1..3, default 1 for 1k baseline; N=3 uses 1024+1024+952 via BuildSubscriptionPlan.
       ARROW_HFT_CONNECTIONS: ${ARROW_HFT_CONNECTIONS:-1}
       GO_ARROW_SDK_VERSION: v0.0.0-20260622-7cce1630

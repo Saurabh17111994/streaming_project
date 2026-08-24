@@ -116,6 +116,13 @@ x-flink-common: &flink-common
       # options) — do NOT set env.java.opts here: it collides with the
       # nested env.java.opts.all key in YamlParserUtils and aborts startup
       # (ClassCastException: String cannot be cast to Map).
+    DEDUP_TTL_MS: "300000"
+    CANDLE_WINDOW_MS: "15000"
+    CHECKPOINT_INTERVAL_MS: "10000"
+    CHECKPOINT_TIMEOUT_MS: "30000"
+    MAX_CONCURRENT_CHECKPOINTS: "1"
+    RESTART_MAX_ATTEMPTS: "3"
+    RESTART_DELAY_MS: "30000"
     FLUSS_BOOTSTRAP: fluss-coordinator:9123
     # Signal job Fluss wiring (prod wiring for Position_State handshake,
     # Option B max-one-active): explicit bootstrap alias + database + Position_State
@@ -367,7 +374,6 @@ services:
     environment:
       ARROW_APP_ID: ${ARROW_APP_ID}
       ARROW_APP_SECRET: ${ARROW_APP_SECRET}
-      ARROW_TOKEN: ${ARROW_TOKEN:-}
       ARROW_USER_ID: ${ARROW_USER_ID}
       ARROW_PASSWORD: ${ARROW_PASSWORD}
       ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
@@ -477,7 +483,6 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
-
 
   # ---- T8 execution topology (private, profile-gated) ----------------------
   # execution-gateway (Java) + nautilus (Rust) on execution-net, zero host
@@ -590,7 +595,7 @@ services:
   #   environment:
   #     ARROW_ORDER_UPDATES_URL: ${ARROW_ORDER_UPDATES_URL}
   #     ARROW_APP_ID: ${ARROW_APP_ID}
-  #     ARROW_TOKEN: ${ARROW_TOKEN}
+  #
   #
   # compute:
   #   <<: *flink-common
@@ -711,7 +716,7 @@ services:
 
   # ---- MinIO: S3-compatible lake for Fluss Iceberg tiering (dev) ----------
   minio:
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
     networks: [trading-net]
     ports:
@@ -731,7 +736,7 @@ services:
       start_period: 10s
 
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
     networks: [trading-net]
     depends_on:
       minio:

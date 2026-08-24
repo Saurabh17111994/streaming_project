@@ -84,7 +84,11 @@ impl DriftMonitor {
         let status = self.check();
         match &status {
             DriftStatus::Within(offset) => {
-                tracing::debug!(offset_ms = offset, limit_ms = self.limit_ms, "clock drift within limit");
+                tracing::debug!(
+                    offset_ms = offset,
+                    limit_ms = self.limit_ms,
+                    "clock drift within limit"
+                );
             }
             DriftStatus::Beyond(offset) => {
                 tracing::error!(
@@ -160,7 +164,11 @@ mod tests {
         let after_first = g.safety_halt_count();
         m.enforce(&mut g);
         m.enforce(&mut g);
-        assert_eq!(g.safety_halt_count(), after_first, "already halted stays halted");
+        assert_eq!(
+            g.safety_halt_count(),
+            after_first,
+            "already halted stays halted"
+        );
     }
 
     #[test]
@@ -169,7 +177,11 @@ mod tests {
         g.transition(ExecState::Reconciling).unwrap();
         let mut m = monitor(42);
         assert_eq!(m.enforce(&mut g), DriftStatus::Within(42));
-        assert_eq!(g.state(), ExecState::Reconciling, "healthy drift must not halt");
+        assert_eq!(
+            g.state(),
+            ExecState::Reconciling,
+            "healthy drift must not halt"
+        );
         assert_eq!(g.safety_halt_count(), 0);
     }
 
@@ -191,8 +203,10 @@ mod tests {
         // Only the sanctioned human path recovers.
         g.transition(ExecState::Reconciling).unwrap();
         g.transition(ExecState::ApprovalPending).unwrap();
-        g.record_approval("saurabh", "drift-resolved-evidence").unwrap();
-        g.record_approval("saurabh", "drift-resolved-evidence-2").unwrap();
+        g.record_approval("saurabh", "drift-resolved-evidence")
+            .unwrap();
+        g.record_approval("saurabh", "drift-resolved-evidence-2")
+            .unwrap();
         g.enable(g.epoch()).unwrap();
         assert_eq!(g.state(), ExecState::Enabled);
     }

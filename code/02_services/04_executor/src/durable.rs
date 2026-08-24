@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::executiongate::{
-    Attempt, AttemptStore, GateRow, GateStateStore, InMemoryAttemptStore, InMemoryGateStateStore,
+    AttemptStore, GateStateStore, InMemoryAttemptStore, InMemoryGateStateStore,
 };
 
 /// Which durable clients are enabled (all OFF by default).
@@ -73,6 +73,9 @@ pub trait JournalStore {
     fn append(&self, payload: &[u8]) -> u64;
     fn entries(&self) -> Vec<JournalEntry>;
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Debug, Default)]
@@ -117,6 +120,9 @@ pub trait AuditSink {
     fn record(&self, kind: &str, payload: &[u8]) -> u64;
     fn records(&self) -> Vec<AuditRecord>;
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Debug, Default)]
@@ -208,13 +214,20 @@ impl DurableClients {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executiongate::{AttemptPhase, GateRow, GateState};
-
+    use crate::executiongate::{Attempt, AttemptPhase, GateRow, GateState};
     // ── Flag defaults ───────────────────────────────────────────────────────
 
     #[test]
     fn flags_default_all_off() {
-        assert_eq!(DurableFlags::all_off(), DurableFlags { gate: false, attempts: false, journal: false, audit: false });
+        assert_eq!(
+            DurableFlags::all_off(),
+            DurableFlags {
+                gate: false,
+                attempts: false,
+                journal: false,
+                audit: false
+            }
+        );
         assert!(!DurableFlags::all_off().any_on());
         assert!(DurableFlags::all_on().any_on());
     }
@@ -225,9 +238,19 @@ mod tests {
     fn gate_write_restart_recovered() {
         let clients = DurableClients::new_in_memory(DurableFlags::all_on());
         // Write via first handle.
-        clients.gate_store.write(&GateRow { partition: "p".into(), owner: "w1".into(), state: GateState::Enabled, epoch: 5, fence_token: 7 }).unwrap();
+        clients
+            .gate_store
+            .write(&GateRow {
+                partition: "p".into(),
+                owner: "w1".into(),
+                state: GateState::Enabled,
+                epoch: 5,
+                fence_token: 7,
+            })
+            .unwrap();
         // Simulate restart: new bundle sharing the SAME underlying memory.
-        let restarted_gate: Rc<dyn GateStateStore> = clients.gate_mem.clone() as Rc<dyn GateStateStore>;
+        let restarted_gate: Rc<dyn GateStateStore> =
+            clients.gate_mem.clone() as Rc<dyn GateStateStore>;
         let row = restarted_gate.read("p").unwrap();
         assert_eq!(row.epoch, 5);
         assert_eq!(row.state, GateState::Enabled);
@@ -241,7 +264,15 @@ mod tests {
         let on = DurableClients::new_in_memory(DurableFlags::all_on());
         // Both accept the same write/read cycle.
         for c in [&off, &on] {
-            c.gate_store.write(&GateRow { partition: "p".into(), owner: "w1".into(), state: GateState::Halted, epoch: 1, fence_token: 1 }).unwrap();
+            c.gate_store
+                .write(&GateRow {
+                    partition: "p".into(),
+                    owner: "w1".into(),
+                    state: GateState::Halted,
+                    epoch: 1,
+                    fence_token: 1,
+                })
+                .unwrap();
             assert_eq!(c.gate_store.read("p").unwrap().state, GateState::Halted);
         }
     }

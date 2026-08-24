@@ -1,0 +1,116 @@
+{
+  "version": 8,
+  "title": "Dedup State — DEC-038",
+  "description": "DEC-038 Fluss-owns-large-state: dedup table entry count/bytes, update rate, Flink cache hit ratio/utilization, cleanup backlog, rehydration latency/failures. Bounded per-table gauges + per-reason counters. Source: fingerprint_dedup DDL 24, FlussFingerprintDedupStateStore + FingerprintDedupFunction cache.",
+  "folder_id": "default",
+  "tabs": [
+    {
+      "tabId": "dedup",
+      "name": "Dedup State",
+      "panels": [
+        {
+          "id": "D01",
+          "type": "gauge",
+          "title": "Fluss dedup-table entries — fingerprint_dedup count",
+          "description": "SELECT count(*) FROM metrics WHERE metric_name='fluss.dedup.entries' — per-table gauge (never per-key). Expected = first-seen rate × TTL horizon.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='fluss.dedup.entries' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 0, "y": 0, "w": 64, "h": 8 }
+        },
+        {
+          "id": "D02",
+          "type": "gauge",
+          "title": "Fluss dedup-table bytes — fingerprint_dedup storage",
+          "description": "Serialized bytes gauge for fingerprint_dedup. Per-table, not per-key.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='fluss.dedup.bytes' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 64, "y": 0, "w": 64, "h": 8 }
+        },
+        {
+          "id": "D03",
+          "type": "line",
+          "title": "Dedup update rate — durable writes/s",
+          "description": "Batched async writes/s to fingerprint_dedup. Per-table rate.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='fluss.dedup.updates' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 128, "y": 0, "w": 64, "h": 8 }
+        },
+        {
+          "id": "D04",
+          "type": "gauge",
+          "title": "Flink dedup cache hit ratio — hot path absorbs",
+          "description": "Hit ratio = cache hits / total lookups. Sustained drop leaks to per-tick Fluss lookups. Bounded cache DEDUP_CACHE_MAX_ENTRIES/BYTES.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink.dedup.cache.hit_ratio' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 0, "y": 8, "w": 64, "h": 8 }
+        },
+        {
+          "id": "D05",
+          "type": "bar",
+          "title": "Expired-row cleanup — backlog and rate",
+          "description": "Rows past expiry_ms awaiting delete. Per-reason counter only.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='flink.dedup.cleanup.backlog' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 64, "y": 8, "w": 64, "h": 8 }
+        },
+        {
+          "id": "D06",
+          "type": "bar",
+          "title": "Rehydration — duration and failures on restart",
+          "description": "Rehydration latency and failures; failures keep job fail-closed SIG-STATE-002/003. State-compatibility preflight failures included.",
+          "config": {},
+          "queryType": "sql",
+          "queries": [
+            {
+              "fields": { "stream": "metrics", "stream_type": "metrics" },
+              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM logs WHERE stream='trading_alerts' AND body LIKE '%rehydration%' GROUP BY x ORDER BY x LIMIT 100",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": { "x": 128, "y": 8, "w": 64, "h": 8 }
+        }
+      ]
+    }
+  ]
+}

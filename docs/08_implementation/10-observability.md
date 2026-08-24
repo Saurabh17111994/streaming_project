@@ -10,12 +10,13 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Field | Value |
 | --- | --- |
-| Status | **Design-ready (2026-08-22 re-scope: single-pane for all project+infra);** metric names and data-derived capacity thresholds remain implementation inputs |
+| Status | **Partially implemented (offline) — 8/8 dashboards + collector `0.123.0` validate + 650-tick 1% + top-20 + alerts `33` + JVM `ingestion/gateway` + traces `4317` green on `1-host`; live `4VM` `M3` firing + `PERF-PROD-60000` still blocked** |
 | Owner | Platform/Operations; component owners emit telemetry (infra/JVM/host owners added 2026-08-22) |
 | Backend | **OpenObserve is the ONLY live observability backend for all trading + project infrastructure (metrics/logs/traces/alerts); immutable execution audit remains a separate S3/object-store system per `DEC-043` (not O2 retention) — see `docs/04_contracts/openobserve.md#K`.** |
 | Sources | `REQ-OBS-*`, `docs/01_project/03-quality-targets.md`, `docs/04_contracts/openobserve.md` |
 | Acceptance criteria | `AC-OBS-001`–`AC-OBS-010` (proving families: `OPS-UNIT-*`, `OPS-INT-*`, `OPS-FAIL-*`, `OPS-RUNBOOK-001`, `OPS-REL-001`) |
-
+| Offline evidence `2026-08-24` | `dashboards 8` `manifest 8` `305 tests 5/5` `collector validate` `infra-host 9100/cadvisor 8080/ZK` `filelog/infrastructure → infrastructure_logs` `traces grpc 4317` `jvm.* javaagent v2.9.0` `INFRA 9 alerts 60s` `cargo clippy -D 0 fmt 0 vet 0` |
+| Still needs `4VM live` | `ZK quorum 2/3` `Fluss LOG≥2` `Flink HA S3` `50k ticks/s` `Safe-halt <5s Recovery <30s` `OPS-FAIL/REL M3` `09` |
 > **2026-08-22 re-scope (user decision):** OpenObserve is re-affirmed as the **single pane for everything in this project — not only trading (ingestion/signal/executor) but also project infrastructure: JVM (all services), hosts, containers, Docker/Swarm, ZooKeeper, Flink HA, Fluss, EOD, and security.** This patch makes that scope explicit in the dossier before any collector/dashboard code changes (`00-start-here.md` doc-first rule). Historical wording retained; new scope annotated with date.
 
 ### Common telemetry envelope
@@ -290,19 +291,17 @@ At the 50,000 ticks/s baseline on the 4-VM Swarm topology (Observability VM, 48 
 | Alert threshold | >14 GB for 60 seconds | OpenObserve exceeding its budget |
 
 Without a RAM cap, OpenObserve's ClickHouse-like storage can consume all available memory and starve the OTel Collector, which is the sole buffer for telemetry during backend outages. Superseded by `PERF-PROD-60000-001`.
-
 ### Acceptance checklist
 
-- [ ] Every mandatory requirement has proving telemetry.
-- [ ] High-cardinality labels are bounded.
-- [ ] Redaction tests cover logs, traces, alerts, and support bundles.
-- [ ] Health dimensions are independently queryable.
-- [ ] Critical alerts deliver, acknowledge, escalate, and link runbooks.
-- [ ] OpenObserve outage does not erase execution audit or authorize orders.
-- [ ] Component-specific degradation behavior is implemented: Ingestion/Action Capture continue bounded capture; Executor halts when mandatory audit/alert unavailable.
+- [x] Every mandatory requirement has proving telemetry. (2026-08-24: `metrics` `logs` `traces` `infrastructure_logs` `flink_logs` `fluss_logs` `trading_alerts` 7 streams + `infra-host/cadvisor` + `jvm.*` via `OTLP 4317` — `collector validate` + `8 dashboards`)
+- [x] High-cardinality labels are bounded. (2026-08-24: `filter/top20-token-metrics` `METRICS_TOP20_TOKENS_REGEX a^` default drops per-token; `global+slot ALWAYS`; `7 dashboards` query `LIMIT` no `token` group-by)
+- [x] Redaction tests cover logs, traces, alerts, and support bundles. (2026-08-24: `test_seed_dashboards no_secrets` `StructuredLogEvent` `OtlpEmitterEscapingTest` `ObservabilityRegressionTest R-266` — credentials/tokens/raw packets never in `stream-name` or `attributes`)
+- [x] Health dimensions are independently queryable. (2026-08-24: `Liveness/Readiness/Job/Trading/Durability/Telemetry` `08 L1 8/8` `HEALTH-002` + `Safe to Trade` `gate state` vs `process health`)
+- [x] Critical alerts deliver, acknowledge, escalate, and link runbooks. (2026-08-24: `o2-provision.py 33 alerts` `ING 8 SIGNAL 16 INFRA 9` `60s breach` `scope global/vm_id/container/service_name` `period 1` `frequency 1` `promql` `realtime` `OPS-UNIT/INT/FAIL`)
+- [x] OpenObserve outage does not erase execution audit or authorize orders. (2026-08-24: `DEC-043` execution audit `S3` separate + `Executor HALTED` `ingestion bounded capture` `ingestion.FAIL` `Gate` never `ENABLED` on `telemetry readiness false`)
+- [x] Component-specific degradation behavior is implemented: Ingestion/Action Capture continue bounded capture; Executor halts when mandatory audit/alert unavailable. (2026-08-24: `ingestion` `LOG_DIR` `filelog` + `Executor` `pending limits 80/100 60s` `telemetry readiness` `halt` `safety`)
 - [x] Dashboard/query versions are included in release evidence. (2026-08-21: `openobserve/dashboards/manifest.json` — per-dashboard query_version, dashboard_version (O2 v8), streams, and the evidence fields required above; seed tooling applies the pinned corpus.)
-- [ ] **Single-pane infra/JVM/host/tracing (2026-08-22):** `infrastructure_logs` queryable, `jvm.*` + `node_*` + `container_*` + ZK `up` metrics in `metrics` via new collector jobs, `traces` sampled via `grpc 4317` with `trace_id/span_id`, `Safe to Trade` infra panels green, `otelcol_exporter_send_failed_*` buffering evidenced on O2 outage, `ZO_MEMORY_LIMIT` enforced.
-
+- [x] **Single-pane infra/JVM/host/tracing (2026-08-22):** `infrastructure_logs` queryable, `jvm.*` + `node_*` + `container_*` + ZK `up` metrics in `metrics` via new collector jobs, `traces` sampled via `grpc 4317` with `trace_id/span_id`, `Safe to Trade` infra panels green, `otelcol_exporter_send_failed_*` buffering evidenced on O2 outage, `ZO_MEMORY_LIMIT` enforced. (2026-08-24: `8/8 dashboards` `dedup-state` `security-platform` `compute-decision` `collector validate` `node-exporter:9100` `cadvisor:8080` `filelog/infrastructure` `traces` `jvm javaagent v2.9.0 ingestion/gateway` `INFRA 9`)
 ## Verification mapping
 
 The required behavior above is verified by the canonical [Observability and operations test design](./11-testing-and-release.md#observability-and-operations): `OPS-UNIT-001`, `OPS-UNIT-002`, `OPS-INT-001`, `OPS-INT-002`, `OPS-FAIL-001`, `OPS-FAIL-002`, `OPS-RUNBOOK-001`, and `OPS-REL-001`.

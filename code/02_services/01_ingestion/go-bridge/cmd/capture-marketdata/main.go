@@ -110,9 +110,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ARROW_REQUEST_TOKEN requires ARROW_APP_SECRET for the checksum exchange")
 		os.Exit(2)
 	}
-	if os.Getenv("ARROW_APP_SECRET") == "" && os.Getenv("ARROW_TOKEN") == "" &&
-		(os.Getenv("ARROW_USER_ID") == "" || os.Getenv("ARROW_PASSWORD") == "" || os.Getenv("ARROW_TOTP_KEY") == "") {
-		fmt.Fprintln(os.Stderr, "need ARROW_APP_SECRET (Login), ARROW_TOKEN, or the AutoLogin trio")
+	if os.Getenv("ARROW_APP_SECRET") == "" {
+		fmt.Fprintln(os.Stderr, "ARROW_APP_SECRET is required")
+		os.Exit(2)
+	}
+	if os.Getenv("ARROW_USER_ID") == "" || os.Getenv("ARROW_PASSWORD") == "" || os.Getenv("ARROW_TOTP_KEY") == "" {
+		fmt.Fprintln(os.Stderr, "need ARROW_USER_ID+PASSWORD+TOTP_KEY (ARROW_TOKEN removed 2026-08-24, TOTP only)")
 		os.Exit(2)
 	}
 
@@ -154,21 +157,12 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "Authenticate OK, token len %d\n", len(client.GetToken()))
-	case os.Getenv("ARROW_TOKEN") != "":
-		client.SetToken(os.Getenv("ARROW_TOKEN"))
-		fmt.Fprintf(os.Stderr, "using ARROW_TOKEN (len %d)\n", len(os.Getenv("ARROW_TOKEN")))
-	case os.Getenv("ARROW_USER_ID") != "":
+	default:
 		if err := client.AutoLogin(os.Getenv("ARROW_USER_ID"), os.Getenv("ARROW_PASSWORD"), os.Getenv("ARROW_TOTP_KEY")); err != nil {
 			fmt.Fprintf(os.Stderr, "AutoLogin failed: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "AutoLogin OK, token len %d\n", len(client.GetToken()))
-	case os.Getenv("ARROW_APP_SECRET") != "":
-		if err := client.Login(); err != nil {
-			fmt.Fprintf(os.Stderr, "Login failed: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stderr, "Login OK, token len %d\n", len(client.GetToken()))
 	}
 
 	if !envBool("CAPTURE_HFT", true) {

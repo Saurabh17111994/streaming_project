@@ -69,16 +69,12 @@ func brokerFromEnvironment(mode string) (Broker, *arrow.Client, error) {
 			return nil, nil, fmt.Errorf("live mode requires Arrow credentials inside the bridge")
 		}
 		client := arrow.NewClient(appID, appSecret)
-		if token := strings.TrimSpace(os.Getenv("ARROW_TOKEN")); token != "" {
-			client.SetToken(token)
-		} else {
-			user, password, totp := os.Getenv("ARROW_USER_ID"), os.Getenv("ARROW_PASSWORD"), os.Getenv("ARROW_TOTP_KEY")
-			if user == "" || password == "" || totp == "" {
-				return nil, nil, fmt.Errorf("live mode requires ARROW_TOKEN or AutoLogin credentials")
-			}
-			if err := client.AutoLogin(user, password, totp); err != nil {
-				return nil, nil, fmt.Errorf("Arrow authentication failed")
-			}
+		user, password, totp := os.Getenv("ARROW_USER_ID"), os.Getenv("ARROW_PASSWORD"), os.Getenv("ARROW_TOTP_KEY")
+		if user == "" || password == "" || totp == "" {
+			return nil, nil, fmt.Errorf("live mode requires ARROW_USER_ID+PASSWORD+TOTP_KEY (ARROW_TOKEN removed 2026-08-24)")
+		}
+		if err := client.AutoLogin(user, password, totp); err != nil {
+			return nil, nil, fmt.Errorf("Arrow authentication failed")
 		}
 		inner, err := NewArrowBroker(client)
 		if err != nil {

@@ -80,7 +80,9 @@ class BridgeShutdownHookTest {
         pb.environment().put("ARROW_BRIDGE_BIN", bridge.toString());
         pb.environment().put("ARROW_APP_ID", "test-app");
         pb.environment().put("ARROW_APP_SECRET", "test-secret");
-        pb.environment().put("ARROW_TOKEN", "test-token");
+        pb.environment().put("ARROW_USER_ID", "test-user");
+        pb.environment().put("ARROW_PASSWORD", "test-pass");
+        pb.environment().put("ARROW_TOTP_KEY", "JBSWY3DPEHPK3PXP");
         pb.environment().put("FLUSS_BOOTSTRAP", "localhost:9123");
         pb.environment().put("RAW_TABLE_NAME", "raw_table_1");
         pb.environment().put("ARROW_MAX_EVENT_AGE_MS", "5000");

@@ -14,7 +14,7 @@
 #   (the arrow-std / Standard-feed mode was removed 2026-08-14)
 #
 # Arrow mode additionally requires (device-flow tokens, never committed):
-#   ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN
+#   ARROW_APP_ID ARROW_APP_SECRET # ARROW_TOKEN removed
 #
 # Host mode expects Fluss published on localhost:9123 (dev compose). For the
 # in-container variant (trading-net, fluss-coordinator:9123) run this script
@@ -89,9 +89,11 @@ esac
 if [ "$E2E_BROKER" != "faketool" ]; then
 	echo "==> arrow mode: REAL broker. Requires market hours (09:15-15:30 IST) — post-close"
 	echo "    data is STALE and quarantined, so raw_table_1 never grows and the test SKIPS."
-	: "${ARROW_APP_ID:?arrow mode needs ARROW_APP_ID (device-flow token)}"
+	: "${ARROW_APP_ID:?arrow mode needs ARROW_APP_ID}"
 	: "${ARROW_APP_SECRET:?arrow mode needs ARROW_APP_SECRET}"
-	: "${ARROW_TOKEN:?arrow mode needs ARROW_TOKEN}"
+	: "${ARROW_USER_ID:?arrow mode needs ARROW_USER_ID (TOTP only)}"
+	: "${ARROW_PASSWORD:?arrow mode needs ARROW_PASSWORD (TOTP only)}"
+	: "${ARROW_TOTP_KEY:?arrow mode needs ARROW_TOTP_KEY (TOTP only)}"
 fi
 
 echo "=== chain-e2e: builds (bridge + faketool + ingestion jar + classpaths)"
@@ -139,7 +141,7 @@ export TASK_MANAGER_MEMORY_MANAGED_SIZE STATE_BACKEND PARALLELISM TASK_MANAGER_N
 export INSTRUMENT_MANIFEST_PATH
 export ARROW_BRIDGE_BIN FAKETOOL_BIN
 # arrow modes: pass the credentials through untouched
-[ "$E2E_BROKER" != "faketool" ] && export ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN
+[ "$E2E_BROKER" != "faketool" ] && export ARROW_APP_ID ARROW_APP_SECRET # ARROW_TOKEN removed
 
 cd "$CODE_ROOT/02_services/02_compute" &&
 	mvn -o test -Dtest=SignalChainLiveE2ETest

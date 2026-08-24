@@ -176,7 +176,9 @@ class FullStackE2ETest {
             env.put("ARROW_BRIDGE_BIN", bridgeBin);
             env.put("ARROW_APP_ID", "e2e");
             env.put("ARROW_APP_SECRET", "e2esecret");
-            env.put("ARROW_TOKEN", "e2etoken");
+            env.put("ARROW_USER_ID", "e2e-user");
+        env.put("ARROW_PASSWORD", "e2e-pass");
+        env.put("ARROW_TOTP_KEY", "JBSWY3DPEHPK3PXP");
             env.put("FLUSS_BOOTSTRAP", "localhost:9123");
             env.put("RAW_TABLE_NAME", "raw_table_1");
             env.put("ARROW_MAX_EVENT_AGE_MS", "5000");

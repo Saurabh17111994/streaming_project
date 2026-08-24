@@ -14,8 +14,11 @@
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp; offset panel bound to service clock_offset_ms",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes — panel 2 (unresolved/unknown) and log tails explicitly capture failures",
-      "streams": ["metrics", "logs"],
+      "failures_or_restarts_included": "yes \u2014 panel 2 (unresolved/unknown) and log tails explicitly capture failures",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
       "software_versions": "OpenObserve v0.91.5-amd64 (compose OPENOBSERVE_IMAGE); dashboard API v8"
     },
     {
@@ -29,8 +32,11 @@
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes — reject/unknown panel and executor log tail",
-      "streams": ["metrics", "logs"],
+      "failures_or_restarts_included": "yes \u2014 reject/unknown panel and executor log tail",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
       "software_versions": "OpenObserve v0.91.5-amd64; nautilus-execution-service crate (pinned 74d57e7e)"
     },
     {
@@ -44,8 +50,11 @@
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp; clock-offset panel bound to service clock_offset_ms",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes — reconnect/epoch panel and ingestion log tail",
-      "streams": ["metrics", "logs"],
+      "failures_or_restarts_included": "yes \u2014 reconnect/epoch panel and ingestion log tail",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
       "software_versions": "OpenObserve v0.91.5-amd64; go-bridge (Go SDK pin GO_ARROW_SDK_VERSION)"
     },
     {
@@ -59,12 +68,15 @@
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes — checkpoint-failure panel and Fluss log tail",
-      "streams": ["metrics", "logs"],
+      "failures_or_restarts_included": "yes \u2014 checkpoint-failure panel and Fluss log tail",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
       "software_versions": "OpenObserve v0.91.5-amd64; Fluss client pinned in ingestion Cargo/pom"
     },
     {
-      "title": "Position State — Max-One-Active",
+      "title": "Position State \u2014 Max-One-Active",
       "file": "position-state.json",
       "folder": "default",
       "dashboard_version": 8,
@@ -74,9 +86,66 @@
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes — dropped/cleared counters and trading_alerts table capture indefinite-stuck and ADMIN_CLEAR break-glass",
-      "streams": ["metrics", "logs"],
+      "failures_or_restarts_included": "yes \u2014 dropped/cleared counters and trading_alerts table capture indefinite-stuck and ADMIN_CLEAR break-glass",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
       "software_versions": "OpenObserve v0.91.5-amd64; SignalJob ActiveSignalFeedbackFunction v1 (Option B strict, no TTL) + Position_State v1 (7 cols, 16 buckets)"
+    },
+    {
+      "title": "Dedup State \u2014 DEC-038",
+      "file": "dedup-state.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-22",
+      "measurement_boundary": "fingerprint_dedup 16 buckets: dedup table entries/bytes, update rate, Flink cache hit ratio/utilization, cleanup backlog, rehydration latency/failures",
+      "workload": "Fluss fingerprint_dedup (DDL 24) + SignalJob FingerprintDedupFunction cache (DEDUP_CACHE_MAX_ENTRIES/BYTES)",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes \u2014 rehydration failures and state-compatibility preflight failures (fail-closed SIG-STATE-002/003)",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
+      "software_versions": "OpenObserve v0.91.5-amd64; FlussFingerprintDedupStateStore v1 + SignalJob cache v1"
+    },
+    {
+      "title": "Security and Platform \u2014 Host/Container/JVM/ZK/Swarm",
+      "file": "security-platform.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-22",
+      "measurement_boundary": "global+vm_id/container: host CPU/mem/disk/net, container CPU/mem/restarts, JVM heap/GC/threads, ZK quorum, Swarm, credential/TLS/audit",
+      "workload": "node_exporter:9100 per vm_id + cadvisor:8080 per container + OTel Javaagent jvm.* per service_name + filelog/infrastructure + traces",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes \u2014 host alert + JVM heap 85% + ZK quorum loss + infrastructure_logs tail",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
+      "software_versions": "OpenObserve v0.91.5-amd64; node_exporter v1.8.2 cadvisor v0.49.1 opentelemetry-javaagent"
+    },
+    {
+      "title": "Compute and Decision \u2014 Backpressure/Checkpoint/DEC-038",
+      "file": "compute-decision.json",
+      "folder": "default",
+      "dashboard_version": 8,
+      "query_version": "o2-sql-2026-08-22",
+      "measurement_boundary": "slot: source throughput/lag, watermark, operator busy/idle/backpressure, checkpoint duration/size/failure/restore, decision p99",
+      "workload": "SignalJob (Flink) Prometheus 9249 + Fluss dedup-table + cache metrics via otel-collector:4318",
+      "duration": "dynamic dashboard window (relative)",
+      "utc_clock": "host UTC; O2 _timestamp",
+      "sample_count": "n/a (dynamic)",
+      "failures_or_restarts_included": "yes \u2014 checkpoint failure/restore, rehydration failure, backpressure/decision p99",
+      "streams": [
+        "metrics",
+        "logs"
+      ],
+      "software_versions": "OpenObserve v0.91.5-amd64; Flink 2.2.1 PrometheusReporter + SignalJob v1"
     }
   ]
 }

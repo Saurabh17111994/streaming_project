@@ -76,7 +76,7 @@ public final class BridgeShutdownDriver {
 
     private static IngestionConfig buildConfig() throws Exception {
         Map<String, String> env = new HashMap<>();
-        for (String key : List.of("ARROW_APP_ID", "ARROW_APP_SECRET", "ARROW_TOKEN",
+        for (String key : List.of("ARROW_APP_ID", "ARROW_APP_SECRET", "ARROW_USER_ID", "ARROW_PASSWORD", "ARROW_TOTP_KEY",
                 "FLUSS_BOOTSTRAP", "RAW_TABLE_NAME", "ARROW_MAX_EVENT_AGE_MS",
                 "ARROW_MAX_FUTURE_EVENT_SKEW_MS", "UNCERTAINTY_JOURNAL_PATH")) {
             env.put(key, System.getenv().getOrDefault(key, ""));

@@ -50,8 +50,8 @@ def collect_images_from_yaml(text: str) -> list[str]:
 
 # ——— secret / prod marker scans ———
 PROD_MARKERS = ["ENVIRONMENT=production", "production", "prod-"]
-SECRET_KEYS = ["O2_PASSWORD", "ARROW_TOKEN", "OPENALGO_API_KEY", "ARROW_APP_SECRET", "AWS_SECRET_ACCESS_KEY"]
-ARROW_CREDS = {"ARROW_APP_ID","ARROW_APP_SECRET","ARROW_USER_ID","ARROW_PASSWORD","ARROW_TOTP_KEY","ARROW_TOKEN","ARROW_REST_URL","ARROW_ORDER_UPDATES_URL"}
+SECRET_KEYS = ["O2_PASSWORD",  "OPENALGO_API_KEY", "ARROW_APP_SECRET", "AWS_SECRET_ACCESS_KEY"]
+ARROW_CREDS = {"ARROW_APP_ID","ARROW_APP_SECRET","ARROW_USER_ID","ARROW_PASSWORD","ARROW_TOTP_KEY","ARROW_REST_URL","ARROW_ORDER_UPDATES_URL"}
 
 # env leakage: values that must never appear in logs/inspect/config
 def contains_secret_value(text: str, secrets: list[str]) -> list[str]:

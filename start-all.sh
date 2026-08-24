@@ -87,20 +87,18 @@ ARROW_APP_SECRET=
 ARROW_USER_ID=
 ARROW_PASSWORD=
 ARROW_TOTP_KEY=
-# optional pre-authenticated token (alternative to AutoLogin):
-# ARROW_TOKEN=
+# ARROW_TOKEN removed 2026-08-24 — use TOTP only
+# (do not set ARROW_TOKEN)
 EOF
 	chmod 600 "$SECRETS_FILE"
 	die "created a template at $SECRETS_FILE — open it, fill in your Arrow credentials, then re-run."
 fi
 : "${ARROW_APP_ID:?ARROW_APP_ID must be set (credentials file / compose .env)}"
 : "${ARROW_APP_SECRET:?ARROW_APP_SECRET must be set (credentials file / compose .env)}"
-if [ -z "${ARROW_TOKEN:-}" ]; then
-	: "${ARROW_USER_ID:?ARROW_USER_ID must be set (or set ARROW_TOKEN)}"
-	: "${ARROW_PASSWORD:?ARROW_PASSWORD must be set (or set ARROW_TOKEN)}"
-	: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (or set ARROW_TOKEN)}"
-fi
-export ARROW_APP_ID ARROW_APP_SECRET ARROW_TOKEN ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY
+: "${ARROW_USER_ID:?ARROW_USER_ID must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
+: "${ARROW_PASSWORD:?ARROW_PASSWORD must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
+: "${ARROW_TOTP_KEY:?ARROW_TOTP_KEY must be set (ARROW_TOKEN removed 2026-08-24, TOTP only)}"
+export ARROW_APP_ID ARROW_APP_SECRET ARROW_USER_ID ARROW_PASSWORD ARROW_TOTP_KEY
 log "credentials OK (from $SECRETS_FILE)"
 
 # ── 2. Start Fluss core if not running ────────────────────────────────────────

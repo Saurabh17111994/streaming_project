@@ -137,7 +137,7 @@ def main():
     if os.path.exists(ENV_EXAMPLE):
         env_text = open(ENV_EXAMPLE, encoding="utf-8").read()
         secret_keys = [
-            "ARROW_APP_ID", "ARROW_APP_SECRET", "ARROW_TOKEN", "ARROW_USER_ID",
+            "ARROW_APP_ID", "ARROW_APP_SECRET",  "ARROW_USER_ID",
             "ARROW_PASSWORD", "ARROW_TOTP_KEY", "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY", "O2_PASSWORD",
         ]

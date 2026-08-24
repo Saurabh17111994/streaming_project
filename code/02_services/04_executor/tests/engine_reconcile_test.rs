@@ -10,8 +10,12 @@
 
 use nautilus_execution_service::bridge::protocol::ReportEnvelope;
 use nautilus_execution_service::bridge::{CommandScript, FakeBridge};
-use nautilus_execution_service::engine::reconcile::{reconcile_execution_mass_status, ReconcileDecision};
-use nautilus_execution_service::execution::client::{classify_bridge_report, unknown_halts_never_retries, BridgeOutcome};
+use nautilus_execution_service::engine::reconcile::{
+    reconcile_execution_mass_status, ReconcileDecision,
+};
+use nautilus_execution_service::execution::client::{
+    classify_bridge_report, unknown_halts_never_retries, BridgeOutcome,
+};
 
 // ---------- classify_bridge_report ----------
 
@@ -98,7 +102,11 @@ async fn engine_reconcile_two_unknowns_yields_accepted_and_still_unknown_without
 
     assert_eq!(decisions.len(), 2, "one decision per UNKNOWN ref");
     assert_eq!(decisions[0].0, "REF-ACCEPT-01");
-    assert_eq!(decisions[0].1, ReconcileDecision::Accepted, "Success+orderNo → Accepted");
+    assert_eq!(
+        decisions[0].1,
+        ReconcileDecision::Accepted,
+        "Success+orderNo → Accepted"
+    );
     assert_eq!(decisions[1].0, "REF-UNKNOWN-02");
     assert_eq!(
         decisions[1].1,
@@ -107,9 +115,17 @@ async fn engine_reconcile_two_unknowns_yields_accepted_and_still_unknown_without
     );
 
     // Never retry Place: only QueryOrder + ReconcileOrders were issued
-    assert_eq!(fake.place_call_count(), 0, "UNKNOWN→HALT must never retry Place");
+    assert_eq!(
+        fake.place_call_count(),
+        0,
+        "UNKNOWN→HALT must never retry Place"
+    );
     assert_eq!(fake.query_call_count(), 2, "one QueryOrder per UNKNOWN ref");
-    assert_eq!(fake.reconcile_call_count(), 1, "trailing ReconcileOrders mass snapshot");
+    assert_eq!(
+        fake.reconcile_call_count(),
+        1,
+        "trailing ReconcileOrders mass snapshot"
+    );
     assert_eq!(fake.command_count(), 3);
     let log = fake.command_log();
     assert_eq!(log, vec!["query-order", "query-order", "reconcile-orders"]);
@@ -118,10 +134,16 @@ async fn engine_reconcile_two_unknowns_yields_accepted_and_still_unknown_without
     fake.script(CommandScript::Unknown("still-unknown".into()));
     fake.script(CommandScript::Unknown("still-unknown".into()));
     fake.script(CommandScript::Accept);
-    let second = reconcile_execution_mass_status(&mut fake, &refs).await.unwrap();
+    let second = reconcile_execution_mass_status(&mut fake, &refs)
+        .await
+        .unwrap();
     assert_eq!(second[1].1, ReconcileDecision::StillUnknownHalted);
     // Still zero Places after second pass
-    assert_eq!(fake.place_call_count(), 0, "second pass must also never retry Place");
+    assert_eq!(
+        fake.place_call_count(),
+        0,
+        "second pass must also never retry Place"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -129,7 +151,9 @@ async fn engine_reconcile_empty_unknowns_only_does_mass_snapshot_no_place() {
     let mut fake = FakeBridge::new();
     fake.script(CommandScript::Accept); // mass ReconcileOrders only
 
-    let decisions = reconcile_execution_mass_status(&mut fake, &[]).await.unwrap();
+    let decisions = reconcile_execution_mass_status(&mut fake, &[])
+        .await
+        .unwrap();
     assert!(decisions.is_empty());
     assert_eq!(fake.place_call_count(), 0);
     assert_eq!(fake.query_call_count(), 0);
@@ -147,7 +171,9 @@ async fn engine_reconcile_rejected_maps_to_rejected_without_place() {
     fake.script(CommandScript::Accept); // mass
 
     let refs = vec!["REF-REJECT-01".to_string()];
-    let decisions = reconcile_execution_mass_status(&mut fake, &refs).await.unwrap();
+    let decisions = reconcile_execution_mass_status(&mut fake, &refs)
+        .await
+        .unwrap();
     assert_eq!(decisions[0].1, ReconcileDecision::Rejected);
     assert_eq!(fake.place_call_count(), 0);
     assert_eq!(fake.query_call_count(), 1);

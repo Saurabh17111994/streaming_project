@@ -367,9 +367,7 @@ impl AttemptStore for InMemoryAttemptStore {
             .contains_key(&(instruction_id.to_string(), request_hash.to_string()))
     }
     fn has_instruction(&self, instruction_id: &str) -> bool {
-        self.by_instruction
-            .borrow()
-            .contains_key(instruction_id)
+        self.by_instruction.borrow().contains_key(instruction_id)
     }
 }
 
@@ -644,7 +642,11 @@ mod tests {
             g.execute(&mutated, CrashHooks::default()).unwrap(),
             Outcome::ContractViolation
         );
-        assert_eq!(total_handle.get(), 1, "contract violation must never invoke bridge");
+        assert_eq!(
+            total_handle.get(),
+            1,
+            "contract violation must never invoke bridge"
+        );
         assert_eq!(
             gates.read(PARTITION).unwrap().state,
             GateState::Halted,

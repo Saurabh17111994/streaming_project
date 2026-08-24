@@ -293,9 +293,14 @@ static-check:
 # project folder (repo convention; see CLAUDE.md symlinks) and copy the
 # surefire reports from the main project's target/ dirs before this gate.
 docs-audit:
+	@echo "== T0-T8 hardening: cargo clippy -D warnings =="
+	@bash -c 'set -o pipefail; cargo clippy --manifest-path code/02_services/04_executor/Cargo.toml --all-targets -- -D warnings 2>&1 | tail -20'
+	@echo "== T0-T8 hardening: cargo fmt --check =="
+	@bash -c 'set -o pipefail; cargo fmt --manifest-path code/02_services/04_executor/Cargo.toml --check 2>&1 | tail -20'
+	@echo "== T0-T8 hardening: go vet =="
+	@bash -c 'set -o pipefail; cd code/02_services/06_execution_bridge/go-bridge && go vet ./... 2>&1 | tail -20'
+	@echo "== T0-T8 hardening: docs-audit hardening checks done =="
 	@python3 code/01_platform/04_scripts/docs_audit.py
-
-# Doc truth scan (2026-08-13 re-scope + phase status): fail when any line in the
 # implementation dossiers or the authoritative upstream layers (decisions,
 # requirements, architecture, contracts) reads feature_candles_15s as a LOG,
 # Signal_Candidates as a KV table, or feature_candles_15s_current as live — or

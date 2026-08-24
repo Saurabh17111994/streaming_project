@@ -14,6 +14,7 @@ use crate::projection::{PositionSnapshot, PositionState};
 pub struct NoOpPositionObserver {
     positions_by_state: HashMap<PositionState, usize>,
     no_op_decisions: HashMap<String, usize>,
+    #[allow(dead_code)]
     enabled: bool,
 }
 
@@ -41,7 +42,10 @@ impl NoOpPositionObserver {
 
     /// Observe without a snapshot (e.g. FLAT with no open position) — still no-op.
     pub fn observe_empty(&mut self) {
-        *self.no_op_decisions.entry("no-op: flat".to_string()).or_insert(0) += 1;
+        *self
+            .no_op_decisions
+            .entry("no-op: flat".to_string())
+            .or_insert(0) += 1;
     }
 
     pub fn positions_by_state(&self, state: PositionState) -> usize {
@@ -86,7 +90,11 @@ mod tests {
             side: Side::Buy,
             state,
             open_quantity: if state == PositionState::Flat { 0 } else { 10 },
-            closed_quantity: if state == PositionState::Closed { 10 } else { 0 },
+            closed_quantity: if state == PositionState::Closed {
+                10
+            } else {
+                0
+            },
             average_entry_paise: 100,
             average_exit_paise: 0,
             source_event_id: "evt".into(),
@@ -109,7 +117,11 @@ mod tests {
         assert_eq!(obs.positions_by_state(PositionState::Open), 1);
         assert_eq!(obs.positions_by_state(PositionState::Reducing), 1);
         assert_eq!(obs.positions_by_state(PositionState::Closed), 1);
-        assert_eq!(obs.emitted_actions(), 0, "MVP must never emit trade actions");
+        assert_eq!(
+            obs.emitted_actions(),
+            0,
+            "MVP must never emit trade actions"
+        );
         assert!(obs.total_no_ops() >= 4);
     }
 
