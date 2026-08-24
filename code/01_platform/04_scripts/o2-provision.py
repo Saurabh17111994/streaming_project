@@ -743,7 +743,7 @@ ALERTS = [
     # a historical replay of legacy rows never re-fires this alert.
     dict(
         name="SIGNAL-crit-schema-version-rejected",
-        stream="compute_invalid_byreason_schema_version",
+        stream="flink_taskmanager_job_task_operator_compute_invalid_byreason_schema_version",
         conditions=[("value", ">", 0)],
         desc="Compute gate rejected raw rows on schema_version: producer/consumer version drift",
     ),
@@ -823,7 +823,7 @@ ALERTS = [
     # same Design-B envelope on the live-set count (compute_dedup_state_count).
     dict(
         name="SIGNAL-warn-schema-rejected-rate",
-        stream="compute_invalid_byreason_schema_version",
+        stream="flink_taskmanager_job_task_operator_compute_invalid_byreason_schema_version",
         conditions=[("value", ">", 10)],
         desc="[Warning/compute] >10 schema_version rejections in one 10s flush: sustained producer/consumer drift; recovery = producer version aligned",
     ),
@@ -1237,6 +1237,12 @@ SEED_GAUGES = [
     # (otlp name, value, extra attributes)
     ("bridge.slot.capacity.remaining", 1024.0, [("slot_id", "1000")]),
     ("bridge.slot.safety.state", 1.0, [("slot_id", "1000")]),
+    # 2026-08-24: seed the FLINK-REPORTED series name so SIGNAL-crit-schema-
+    # version-rejected / SIGNAL-warn-schema-rejected-rate can be created
+    # (O2 v2 alerts validate stream existence at create; the hand-emitted
+    # unprefixed name is dead in this stack — the SignalJob counter arrives
+    # via the Prometheus reporter as flink_taskmanager_job_task_operator_*).
+    ("flink.taskmanager.job.task.operator.compute.invalid.byreason.schema_version", 0.0, []),
     ("bridge.slot.unsafe.duration.ms", 0.0, [("slot_id", "1000")]),
     ("bridge.reconnect.consecutive", 0.0, [("slot_id", "1000")]),
     ("bridge.active.sockets", 0.0, [("slot_id", "1000")]),
