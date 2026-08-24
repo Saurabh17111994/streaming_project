@@ -6,7 +6,7 @@ COMPOSE := docker compose -f code/01_platform/01_docker/docker-compose.yml
 # fails obscurely). Set MVN_FLAGS=-o when the local cache is warm.
 MVN := mvn $(MVN_FLAGS)
 
-.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config seed-dashboards rollout-savepoint chaos-suite
+.PHONY: help env ddl up down logs build clean cep-check cep-check-module test test-ingestion test-audit-r2 execution-network-check gate gate-order static-check docs-audit stale-tables full-audit pin-check ddl-apply-smoke ddl-image evidence-ownership-check test-09 stack-selfcheck stack-config seed-dashboards rollout-savepoint chaos-suite check-image-stale
 
 help:
 	@echo "Targets:"
@@ -128,8 +128,17 @@ test-audit-r2:
 # acknowledged PASS_WITH_LIMITATION / 1 refused) + the machine-readable
 # sentinels. Env-gated: SKIPPED when FLUSS_BOOTSTRAP is unset; wired into the
 # Monday verification gate (run-monday-gates.sh) after the Java full gate.
+# T8: no public execution route, HALTED defaults, no Arrow on compute — the
+# offline compose contract (CHG-047). Wired into the Monday gate.
 execution-network-check:
 	@python3 code/01_platform/04_scripts/execution_network_check.py --compose code/01_platform/01_docker/docker-compose.yml
+
+# CHG-101: no compose `build:` image older than the last change to the source
+# it packages. The 2026-08-24 gateway/bridge incident (08-20 images vs 08-24
+# source) was found only by chance — this makes it a machine gate. Run before
+# any enable (T8/T9) or Monday-gate step.
+check-image-stale:
+	@python3 code/01_platform/04_scripts/image_staleness_check.py --git-root . --compose code/01_platform/01_docker/docker-compose.yml
 
 # 08 Local Compose Phase A — L0-L4 (offline + gated container probes)
 test-local:

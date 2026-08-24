@@ -299,6 +299,27 @@ func runHFTEpoch(ctx context.Context, streamFactory hftStreamFactory, slot SlotA
 	if err != nil {
 		_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "disconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: sanitizeDiagnostic(err.Error()), ReceivedTsMs: time.Now().UnixMilli()})
 		logf("HFT connect failed: %v", err)
+		// R-301: a dial failure carrying an auth signal (e.g. the broker
+		// rejecting the WebSocket upgrade because the AutoLogin session token
+		// expired — "websocket: bad handshake") must trigger a fresh TOTP
+		// re-login BEFORE the next dial. The reconnect loop otherwise retries
+		// with the same stale Config.Token forever: the read-loop auth-refresh
+		// branch below never runs because the socket never opens.
+		if refreshAuth != nil && isHFTAuthError(err.Error()) {
+			if authRefreshes != nil && *authRefreshes >= maxAuthRefreshAttempts {
+				logf("HFT auth refresh exhausted on dial failure")
+				return epochTerminal
+			}
+			if authRefreshes != nil {
+				*authRefreshes++
+			}
+			if rerr := refreshAuth(ctx); rerr != nil {
+				logf("HFT auth refresh failed on dial failure: %v", sanitizeDiagnostic(rerr.Error()))
+			} else {
+				_ = bridgeEmitter.EmitEvent(BridgeEvent{Event: "reconnect", SlotID: slot.SlotID, ConnectionID: slot.ConnectionID, ConnectionEpoch: epoch, State: string(SlotBackoff), Reason: "authentication_refreshed", ReceivedTsMs: time.Now().UnixMilli()})
+				logf("HFT auth refreshed after dial failure")
+			}
+		}
 		return epochRetryable
 	}
 	addActiveSocket(1)
@@ -604,7 +625,9 @@ func isHFTAuthError(message string) bool {
 		strings.Contains(lower, "authentication") ||
 		strings.Contains(lower, "invalid token") ||
 		strings.Contains(lower, "token expired") ||
-		strings.Contains(lower, "401")
+		strings.Contains(lower, "401") ||
+		strings.Contains(lower, "bad handshake") ||
+		strings.Contains(lower, "handshake")
 }
 
 // authRefreshOutcome classifies one authentication-refresh step per the plan:

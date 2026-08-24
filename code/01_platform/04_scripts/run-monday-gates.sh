@@ -68,7 +68,7 @@ gate_fail() {
 }
 
 # ── 0. Static checks: bash -n + shellcheck on every script (Phase 8 G4) ─────
-echo "=== [1/12] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
+echo "=== [1/13] Static checks (bash -n, shellcheck) ===" | tee -a "$SUMMARY"
 STATIC_LOG="$OUT_DIR/static-checks.log"
 : >"$STATIC_LOG"
 STATIC_FAIL=0
@@ -111,7 +111,7 @@ fi
 echo "PASS: static checks (${#SCRIPTS[@]} scripts bash -n + shellcheck clean)" | tee -a "$SUMMARY"
 
 # ── 0b. Compose config validation (G4) ────────────────────────────────────────
-echo "=== [2/12] docker compose config ===" | tee -a "$SUMMARY"
+echo "=== [2/13] docker compose config ===" | tee -a "$SUMMARY"
 COMPOSE_FILE="$CODE_DIR/01_platform/01_docker/docker-compose.yml"
 if [ -f "$COMPOSE_FILE" ]; then
 	if ! docker compose -f "$COMPOSE_FILE" config >/dev/null 2>>"$STATIC_LOG"; then
@@ -128,7 +128,7 @@ fi
 # could silently pass a reconcile. No cluster needed — synthetic fixtures only.
 # docs-audit C16 (env-key drift) runs inside the full doc audit step after the
 # Java gate.
-echo "=== [3/12] Python unit suites (reconcile-compare ING-TCP-002 + gate helpers) ===" | tee -a "$SUMMARY"
+echo "=== [3/13] Python unit suites (reconcile-compare ING-TCP-002 + gate helpers) ===" | tee -a "$SUMMARY"
 PY_LOG="$OUT_DIR/python-tests.log"
 if ! timeout 300 python3 -m unittest discover -s "$SCRIPT_DIR/tests" -p "test_*.py" \
 	>"$PY_LOG" 2>&1; then
@@ -147,7 +147,7 @@ echo "PASS: python unit suites ($(grep -oE 'Ran [0-9]+ tests' "$PY_LOG" | head -
 # match the documented contract. Runs the entrypoint under env -i so a
 # polluted gate environment cannot mask a FATAL; bash -n + shellcheck on
 # this file run in the static stage above.
-echo "=== [4/12] Entrypoint harness (ING-INT-006) ===" | tee -a "$SUMMARY"
+echo "=== [4/13] Entrypoint harness (ING-INT-006) ===" | tee -a "$SUMMARY"
 ENTRYPOINT_LOG="$OUT_DIR/entrypoint.log"
 if ! bash "$SCRIPT_DIR/tests/test_docker_entrypoint.sh" >"$ENTRYPOINT_LOG" 2>&1; then
 	echo "FAIL: entrypoint harness — see $ENTRYPOINT_LOG" | tee -a "$SUMMARY"
@@ -156,7 +156,7 @@ fi
 echo "PASS: entrypoint harness (exit codes + messages)" | tee -a "$SUMMARY"
 
 # ── 1. Go suite with race detector (Phase 8: go test -race) ──────────────────
-echo "=== [5/12] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
+echo "=== [5/13] Go bridge suite (-race) ===" | tee -a "$SUMMARY"
 if ! timeout "$GO_TIMEOUT_SEC" bash -c "cd '$BRIDGE_DIR' && go test -race -count=1 ./..."; then
 	echo "FAIL: Go suite failed or timed out — see $GO_LOG" | tee -a "$SUMMARY"
 	gate_fail
@@ -164,7 +164,7 @@ fi
 echo "PASS: Go suite (-race)" | tee -a "$SUMMARY"
 
 # ── 2. Build E2E test binaries (R-016) + docker build smoke ───────────────
-echo "=== [6/12] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
+echo "=== [6/13] Building E2E test binaries (faketool + arrow-bridge) ===" | tee -a "$SUMMARY"
 if ! (cd "$BRIDGE_DIR" &&
 	go build -tags faketool -o faketool/faketool ./faketool &&
 	go build -o arrow-bridge .); then
@@ -174,7 +174,7 @@ fi
 echo "PASS: E2E binaries built (faketool/faketool, arrow-bridge)" | tee -a "$SUMMARY"
 
 # ── 5. Docker build smoke (G4): ingestion image must build from the reactor root ──
-echo "=== [7/12] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
+echo "=== [7/13] docker build smoke (ingestion image) ===" | tee -a "$SUMMARY"
 if command -v docker >/dev/null 2>&1 && [ -f "$CODE_DIR/02_services/01_ingestion/Dockerfile" ]; then
 	# The build needs network (base images + go/maven deps). Offline runs must
 	# not fail the gate on the network — but WITH images present, a build
@@ -198,8 +198,24 @@ else
 	echo "WARN: docker unavailable or Dockerfile missing — skipping build smoke" | tee -a "$SUMMARY"
 fi
 
+# ── 5b. CHG-101: stale-image guard — no compose build: image may be older
+# than the last change to the source it packages (2026-08-24 gateway/bridge
+# incident: 08-20 images vs 08-24 source went unnoticed until a readyz probe).
+echo "=== [8/13] image staleness (compose build: images vs source) ===" | tee -a "$SUMMARY"
+IMAGE_LOG="$OUT_DIR/image-staleness.log"
+if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
+	if ! timeout 120 python3 "$SCRIPT_DIR/image_staleness_check.py" \
+		--git-root "$PROJECT_ROOT" --compose "$COMPOSE_FILE" >"$IMAGE_LOG" 2>&1; then
+		echo "FAIL: stale/missing build images (CHG-101) — see $IMAGE_LOG" | tee -a "$SUMMARY"
+		gate_fail
+	fi
+	echo "PASS: image staleness (compose build: images current)" | tee -a "$SUMMARY"
+else
+	echo "PASS: image staleness SKIPPED (no docker/compose)" | tee -a "$SUMMARY"
+fi
+
 # ── 3. Full Java gate with ALL integration flags ──────────────────────────────
-echo "=== [8/12] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
+echo "=== [9/13] Java full gate (FLUSS+MANIFEST+PERF+E2E) ===" | tee -a "$SUMMARY"
 	if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_E2E=true INGESTION_INT_TEST_FLUSS=true \
 	INGESTION_INT_TEST_MANIFEST=true INGESTION_INT_TEST_PERF=true \
@@ -219,7 +235,7 @@ echo "PASS: Java suite" | tee -a "$SUMMARY"
 # master-dossier trio coherence. Wired here so the beyond-scanner sweeps can't
 # rot undetected — they silently drifted at HEAD once (CHG-026/027 era) because
 # only the machine gates were ever run in CI.
-echo "=== [9/12] full doc audit (make full-audit: scanners + sweeps + trio coherence) ===" | tee -a "$SUMMARY"
+echo "=== [10/13] full doc audit (make full-audit: scanners + sweeps + trio coherence) ===" | tee -a "$SUMMARY"
 AUDIT_LOG="$OUT_DIR/full-audit.log"
 if ! timeout 300 bash "$SCRIPT_DIR/full_audit.sh" >"$AUDIT_LOG" 2>&1; then
 	echo "FAIL: full doc audit — see $AUDIT_LOG" | tee -a "$SUMMARY"
@@ -232,7 +248,7 @@ fi
 echo "PASS: full doc audit (stale claims + doc↔code truth + DDL parity + sweeps + trio, incl. C16 env-key drift)" | tee -a "$SUMMARY"
 
 # ── 3c. DDL apply exit-code contract smoke (scratch catalogs) ────────────────
-echo "=== [10/12] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
+echo "=== [11/13] DDL apply exit-code smoke ===" | tee -a "$SUMMARY"
 DDL_SMOKE_LOG="$OUT_DIR/ddl-smoke.log"
 DDL_SMOKE_TIMEOUT_SEC="${DDL_SMOKE_TIMEOUT_SEC:-1800}"
 # Env-gated: SKIPPED (exit 0) when FLUSS_BOOTSTRAP is unset; any deviation from
@@ -259,7 +275,7 @@ fi
 echo "PASS: evidence ownership check (container-written records group-writable)" | tee -a "$SUMMARY"
 
 # ── 4. Schema agreement + perf certification explicit gates (G5) ─────────────
-echo "=== [11/12] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
+echo "=== [12/13] SchemaAgreementTest + PerfBaselineTest explicit ===" | tee -a "$SUMMARY"
 SCHEMA_PERF_LOG="$OUT_DIR/schema-perf.log"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	INGESTION_INT_TEST_PERF=true \
@@ -285,7 +301,7 @@ echo "PASS: SchemaAgreementTest + PerfBaselineTest (certification gates)" | tee 
 # change that silently drops or env-gates them now fails CI instead of quietly
 # shrinking the plain suite. Cluster-free: scripted fake bridge, no Fluss, no
 # Go binaries (runs on a bare checkout). POSIX-only (SIGTERM semantics).
-echo "=== [12/12] SIGTERM-drain regression explicit (ING-UNIT-023/024, CHG-015) ===" | tee -a "$SUMMARY"
+echo "=== [13/13] SIGTERM-drain regression explicit (ING-UNIT-023/024, CHG-015) ===" | tee -a "$SUMMARY"
 SHUTDOWN_LOG="$OUT_DIR/shutdown-regression.log"
 if ! timeout "$JAVA_TIMEOUT_SEC" bash -c "cd '$CODE_DIR' && \
 	mvn -o test -pl 02_services/01_ingestion -am \
@@ -309,6 +325,7 @@ echo "  Entrypoint: $ENTRYPOINT_LOG" | tee -a "$SUMMARY"
 echo "  Go:   $GO_LOG" | tee -a "$SUMMARY"
 echo "  Java: $JAVA_LOG" | tee -a "$SUMMARY"
 echo "  full doc audit: $AUDIT_LOG" | tee -a "$SUMMARY"
+echo "  Image staleness: $IMAGE_LOG" | tee -a "$SUMMARY"
 echo "  DDL smoke: $DDL_SMOKE_LOG" | tee -a "$SUMMARY"
 echo "  Schema/Perf: $SCHEMA_PERF_LOG" | tee -a "$SUMMARY"
 echo "  SIGTERM-drain: $SHUTDOWN_LOG" | tee -a "$SUMMARY"
