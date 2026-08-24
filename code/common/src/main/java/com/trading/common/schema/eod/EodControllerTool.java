@@ -10,6 +10,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.apache.fluss.client.Connection;
@@ -61,6 +66,10 @@ import org.apache.fluss.utils.CloseableIterator;
 public final class EodControllerTool {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    /** Parallel copy workers (CHG-099): capped at the bucket count. */
+    static final int COPY_THREADS = 16;
+    /** Async upserts in flight per worker before awaiting acks. */
+    static final int COPY_WRITE_BATCH = 500;
 
     /**
      * EOD-eligible live tables — now 7d TTL (T8 G1/G4 hardened 2026-08-22 — was
@@ -398,27 +407,7 @@ public final class EodControllerTool {
 
         Table liveTable = connection.getTable(livePath);
         Table shadowTable = connection.getTable(shadowPath);
-        UpsertWriter writer = shadowTable.newUpsert().createWriter();
-        long copied = 0;
-        try {
-            for (int b = 0; b < live.getNumBuckets(); b++) {
-                TableBucket bucket = new TableBucket(live.getTableId(), b);
-                try (BatchScanner scanner = liveTable.newScan()
-                             .limit(Integer.MAX_VALUE)
-                             .createBatchScanner(bucket);
-                     CloseableIterator<InternalRow> it =
-                             scanner.pollBatch(Duration.ofMillis(250))) {
-                    while (it.hasNext()) {
-                        InternalRow row = it.next();
-                        writer.upsert(GenericRow.of(toValues(row, schema)))
-                                .get(timeoutMs, TimeUnit.MILLISECONDS);
-                        copied++;
-                    }
-                }
-            }
-        } finally {
-            writer.flush();
-        }
+        long copied = copyBucketsParallel(liveTable, shadowTable, live, schema, timeoutMs);
         long liveCount = scanCount(liveTable, live, timeoutMs);
         long shadowCount = scanCount(shadowTable,
                 admin.getTableInfo(shadowPath).get(timeoutMs, TimeUnit.MILLISECONDS), timeoutMs);
@@ -430,6 +419,94 @@ public final class EodControllerTool {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Parallel bucket copy (CHG-099): one worker per bucket (capped at
+     * {@link #COPY_THREADS}), each with its own {@code UpsertWriter} and
+     * batched async acks ({@link #COPY_WRITE_BATCH} futures per await). The
+     * old single-threaded path awaited every row's ack before the next —
+     * one RTT per row, ~10 rows/s (measured 2026-08-24 on a 385k-row table).
+     * Batching + 16-way parallelism targets thousands of rows/s. Correctness
+     * contract unchanged: per-bucket full scan + PK upserts (idempotent) +
+     * final flush, then the caller's count parity. (Note: a Flink bounded
+     * source is NOT viable on lake-disabled tables in fluss 0.9.1-incubating —
+     * the enumerator throws "Batch only supports when table option
+     * 'table.datalake.enabled' is set to true" — so the copy stays on the
+     * raw client, where the batch scanner is supported.)
+     */
+    static long copyBucketsParallel(Table liveTable, Table shadowTable, TableInfo info,
+            Schema schema, long timeoutMs) throws Exception {
+        int buckets = info.getNumBuckets();
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(buckets, COPY_THREADS));
+        List<Future<Long>> futures = new ArrayList<>();
+        for (int b = 0; b < buckets; b++) {
+            final int bucketId = b;
+            futures.add(pool.submit(
+                    () -> copyBucket(liveTable, shadowTable, info, schema, bucketId, timeoutMs)));
+        }
+        long copied = 0;
+        try {
+            for (Future<Long> f : futures) {
+                copied += f.get(timeoutMs * 4, TimeUnit.MILLISECONDS);
+            }
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException("eod-controller: bucket copy failed: " + cause, cause);
+        } finally {
+            pool.shutdown();
+        }
+        return copied;
+    }
+
+    private static long copyBucket(Table liveTable, Table shadowTable, TableInfo info,
+            Schema schema, int bucketId, long timeoutMs) throws Exception {
+        TableBucket bucket = new TableBucket(info.getTableId(), bucketId);
+        UpsertWriter writer = shadowTable.newUpsert().createWriter();
+        long copied = 0;
+        try {
+            List<CompletableFuture<?>> batch = new ArrayList<>();
+            try (BatchScanner scanner = liveTable.newScan()
+                         .limit(Integer.MAX_VALUE)
+                         .createBatchScanner(bucket)) {
+                // pollBatch returns one time-bounded batch; repeat until empty
+                // (a null/empty batch = scan of this bucket exhausted) —
+                // measured 2026-08-24: a single pollBatch under 16-way
+                // write contention yielded only ~6.8% of the rows (uniform
+                // sample), while the drain loop reads the full bucket.
+                while (true) {
+                    boolean any = false;
+                    try (CloseableIterator<InternalRow> it =
+                            scanner.pollBatch(Duration.ofMillis(250))) {
+                        while (it != null && it.hasNext()) {
+                            InternalRow row = it.next();
+                            batch.add(writer.upsert(GenericRow.of(toValues(row, schema))));
+                            if (batch.size() == COPY_WRITE_BATCH) {
+                                awaitBatch(batch, timeoutMs);
+                            }
+                            copied++;
+                            any = true;
+                        }
+                    }
+                    if (!any) {
+                        break;
+                    }
+                }
+            }
+            awaitBatch(batch, timeoutMs);
+            System.out.println("eod-controller: copy bucket=" + bucketId + " rows=" + copied);
+        } finally {
+            writer.flush();
+        }
+        return copied;
+    }
+
+    private static void awaitBatch(List<CompletableFuture<?>> batch, long timeoutMs)
+            throws Exception {
+        for (CompletableFuture<?> f : batch) {
+            f.get(timeoutMs, TimeUnit.MILLISECONDS);
+        }
+        batch.clear();
     }
 
     /** Row → Object[] in schema order (raw-client upsert values). */
