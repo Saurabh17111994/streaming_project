@@ -27,8 +27,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * WP-2 backpressure flood soak (dossier §staleness bounds): flood
- * {@code POST /v1/events} past {@code MAX_PENDING_PROJECTION_RECORDS} with a
+ * Backpressure/projection-backlog flood soak (11-testing-and-release.md §required
+ * fault coverage, line 534): flood {@code POST /v1/events} past {@code MAX_PENDING_PROJECTION_RECORDS} with a
  * blocked projection consumer. Expected: in-flight applies beyond the bound
  * shed with 503 and flip {@code durableWrites} readiness false; after the drain,
  * readiness restores and intake resumes 202.
