@@ -421,7 +421,7 @@ def main():
                    expect_rc=0,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS exit=0",
-                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=27 MANIFEST="],
                    expect_absent=["PASS_WITH_LIMITATION", "LIMITATION"],
                    check_evidence={"status": "PASS",
                                    "acknowledged_limitations": [],
@@ -438,7 +438,7 @@ def main():
                    expect_rc=0,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS exit=0",
-                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=27 MANIFEST="],
                    expect_absent=["PASS_WITH_LIMITATION", "LIMITATION",
                                   "REFUSED"],
                    check_evidence={"status": "PASS",
@@ -454,7 +454,7 @@ def main():
                    expect_rc=0,
                    expect_parts=[
                        "DDL-APPLY-RESULT: PASS exit=0",
-                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=26 MANIFEST="],
+                       "ddl-apply: RESULT=PASS EXIT=0 TABLES=27 MANIFEST="],
                    expect_absent=["PASS_WITH_LIMITATION", "LIMITATION"],
                    check_evidence={"status": "PASS",
                                    "ack_mode": "auto",
