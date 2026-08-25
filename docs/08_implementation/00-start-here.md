@@ -56,6 +56,7 @@ Documentation-complete is not code-complete. A checklist item may be marked docu
 | [`10-observability.md`](./10-observability.md) | Monitoring/operations instructions and test design | 10 |
 | [`11-testing-and-release.md`](./11-testing-and-release.md) | Master test list, traceability, and final release evidence | 11–12 |
 | [`15-ingestion-test-hardening.md`](./15-ingestion-test-hardening.md) | Ingestion test-hardening backlog — additional robustness tests mapped to `03-ingestion.md` aspects (2026-08-15 audit) | 4 (ingestion) |
+| [`../commands/COMMANDS.md`](../commands/COMMANDS.md) | Command reference — every project command entry point, categorized functionally (lifecycle / trading / testing / ops / prod); 4-command fast path for day-to-day use | — |
 | **Roadmap** | Step-by-step plans live INSIDE their dossiers (2026-08-13 merge): current build plan → `04-signal-job.md` (appended section); P7 bench + completed gaps → `11-testing-and-release.md`; P10 rehearsal → `09-production-swarm.md`; executor/execution-core plan → `05-execution-core.md` | — |
 
 ## Document status vocabulary
