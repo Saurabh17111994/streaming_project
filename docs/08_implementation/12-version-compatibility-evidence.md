@@ -14,7 +14,7 @@ tables.
 
 | Field | Value |
 | --- | --- |
-| Status | Partially implemented (offline) — 5 boundaries with live evidence (VM-FLUSS-SRV-005 partial, VM-FLUSS-CLI-006 partial, VM-FLUSS-CONN-007 partial, VM-BROKER-MKT-008 COMPATIBLE 2026-08-13, VM-PERF-001 loopback 59k) + 6 pins verified offline; 7 still UNKNOWN needing market/4VM |
+| Status | Partially implemented (offline) — 6 boundaries COMPATIBLE/COMPATIBLE_WITH_LIMITATION with live evidence (VM-JAVA-001, VM-FLINK-SRV-003/004, VM-FLUSS-CLI-006, VM-FLUSS-CONN-007, VM-BROKER-MKT-008 COMPATIBLE 2026-08-13, VM-OPENOBS-011, VM-FLUSS-SRV-005) + VM-PERF-001 loopback 59k; 6 still UNKNOWN/TO_BE_VERIFIED needing market/4VM (VM-PBK-009, VM-ARROW-010, VM-IMAGES-012, VM-ZK-013, VM-PERF-001, VM-NAUTILUS-014) |
 | Owner | Platform |
 | Scope | 15 boundaries (VM-JAVA-001 … VM-NAUTILUS-014) |
 | Rule | Matrix stays UNKNOWN until capability tests flip to COMPATIBLE; DDL gate requires VM-JAVA-001, VM-PYTHON-002, VM-FLINK-SRV-003/004, VM-FLUSS-SRV-005, VM-FLUSS-CONN-007 |
@@ -26,7 +26,7 @@ tables.
 | VM-JAVA-001 Java 17.0.19 | PARTIALLY (pin verified) | `java -version 17.0.19` + `mvn -v` Java 17 + `code/pom.xml <flink.version>2.2.1</flink.version> <fluss.version>0.9.1-incubating` compiles (`common 17/17` historical 2026-08-24, `compute 23/23` historical 2026-08-24 — not C6 466/247/387) — version_matrix_verify.py OK pin discipline, pin-check.sh 4/4 PASS | Live build smoke on Flink 2.2 image `LOCAL-INT-002` full stack |
 | VM-PYTHON-002 Python 3.11.9 | PARTIALLY (pin verified) | `python3 --version 3.11.15` (3.11 series) + `ddl_apply.py` + `version_matrix_verify.py` parse OK, `pin-check.sh` corpus 6/6 golden OK | Capture Python 3.11.9 exact from executor image digest |
 | VM-FLINK-SRV-003 / VM-FLINK-API-004 Flink 2.2.1 | PARTIALLY (pin verified) | `code/pom.xml` flink 2.2.1 managed deps compile green; `docker compose config` parses `flink-jobmanager:2.2.1` via fluss-flink-2.2 connector `5dddeb...` SHA, `flink-streaming-java` `bb41cde...` | Live `COMPAT-FLINK-001` checkpoint/restore/rescale + `SIG-HARNESS-003/005` on Docker Flink 2.2.1 |
-| VM-FLUSS-SRV-005 Fluss 0.9.1-incubating | COMPATIBLE_WITH_LIMITATION (2026-08-24) | 28 DDL files exist, `pin-check` PASS, `version_matrix.yaml` result COMPATIBLE_WITH_LIMITATION (2026-08-24: changelog FULL SCH-14 + bucket-skew COMPAT-FLUSS-006 closed; retention/lake create-only limits recorded) | Replication/failover (multi-node) remains UNKNOWN; lake re-enable create-only limitation |
+| VM-FLUSS-SRV-005 Fluss 0.9.1-incubating | COMPATIBLE_WITH_LIMITATION (2026-08-24) | 27 DDL files exist, `pin-check` PASS, `version_matrix.yaml` result COMPATIBLE_WITH_LIMITATION (2026-08-24: changelog FULL SCH-14 + bucket-skew COMPAT-FLUSS-006 closed; retention/lake create-only limits recorded) | Replication/failover (multi-node) remains UNKNOWN; lake re-enable create-only limitation |
 | VM-FLUSS-CLI-006 Fluss client 0.9.1 | COMPATIBLE (2026-08-24) | `versions.pin` `FLUSS_CLIENT_JAR_SHA256=6921994a2067...` official client jar, `CompatFlussIntegrationTest` compile vs 0.9.1-incubating 100/1000 appends 0 loss | Routing/bucket-key stress + connector checkpoint closed 2026-08-24; replication = server/topology boundary |
 | VM-FLUSS-CONN-007 fluss-flink-2.2:0.9.1 | COMPATIBLE (2026-08-24) | `FLUSS_FLINK_CONNECTOR_JAR_SHA256=5dddeb...` `COMPATIBLE` source consume 15,219,441 rows → 205k candles 48 EXACTLY_ONCE checkpoints (`04-signal-job.md` §Connector, `logs/safety-int-001/`) | None — closed 2026-08-13/15/24 (COMPAT-FLINK-001 rescale + STATE-COMPAT-001 + SIG-INT-001/002) |
 | VM-ZK-013 ZooKeeper 3.9.2 | NOT FULLY | `docker-compose.yml` single `zookeeper:3.9.2` parses, Fluss registers via `zookeeper:2181` single-node | 3-node ensemble quorum 2/3, Flink HA leader election — needs 4VM Swarm stack |
@@ -35,8 +35,8 @@ tables.
 | VM-ARROW-010 Arrow REST | PARTIALLY (2026-08-24) | `ARROW_REST_URL=https://edge.arrow.trade` pinned + TOTP auth PROVEN live 2026-08-21 (`execution-auth-001`, token len 238) | Order round-trip `ARROW-REST-001/002` (market hours + approval); timeout/retry pins open |
 | VM-OPENOBS-011 OpenObserve v0.91.5 | COMPATIBLE_WITH_LIMITATION (2026-08-24)  | `otel-collector-config.yaml` `0.123.0` validate OK, `o2-provision.py` 43 alerts (INFRA 9 @60s) `docker compose config` O2 `v0.91.5-amd64`, dashboards 8/8, `OPS-INT-001` telemetry redaction (offline) | Multi-host M3 firing (4VM) + PERF-PROD-60000 remain; OPS-INT-001 + OPS-FAIL-001 evidence recorded 2026-08-24 (DR-004) |
 | VM-IMAGES-012 Base images | UNKNOWN (2026-08-24 partial — digest+SBOM verified; vuln-policy unverified) | `versions.pin` digests: `FLUSS_CLIENT 6921994a`, `FLUSS_FLINK 5dddeb`, `FLINK_STREAMING bb41cde`, `docker-compose.yml` `${FLUSS_IMAGE:?set ...}` digest-required, `pin-check.sh` no SNAPSHOT | 12/12 digests verified + SBOM attestations (4/5 images) + OS-layer trivy counts disclosed (`logs/version-matrix/images-012-20260824T171559Z.md`); library-layer scan-unavailable, SEC-IMAGE-001 threshold TO_BE_VERIFIED |
-| VM-PERF-001 Mock-broker 50k | PARTIALLY | `PerfBaselineTest` loopback 59,221 tps 592k/10s 0 loss `PARTIAL_EVIDENCE_LOOPBACK_50K` (ingestion 576 tests green) | Fluss ingestion capacity 50k + 90k peak RETIRED DEC-036 — needs multi-node E2E perf |
-| VM-NAUTILUS-014 Nautilus 0.62.0 | PARTIALLY | `NAUTILUS_COMMIT=74d57e7…` `NAUTILUS_RUST_TOOLCHAIN 1.97.1` `cargo 1.97.1` `cargo test 168/168` `EXECUTION_BRIDGE_GO 1.24.5` `f622f8a9…` SHA, `nautilus-execution-service` 0.62.0 | Locked Rust service lifecycle + event-store replay + restart crash-window — needs live execution bridge evidence |
+| VM-PERF-001 Mock-broker 50k | PARTIALLY | `PerfBaselineTest` loopback 59,221 tps 592k/10s 0 loss `PARTIAL_EVIDENCE_LOOPBACK_50K` (ingestion 247 tests green) | Fluss ingestion capacity 50k + 90k peak RETIRED DEC-036 — needs multi-node E2E perf |
+| VM-NAUTILUS-014 Nautilus 0.62.0 | PARTIALLY | `NAUTILUS_COMMIT=74d57e7…` `NAUTILUS_RUST_TOOLCHAIN 1.97.1` `cargo 1.97.1` `cargo test 196/196` (CHG-102 re-count; was 168) `EXECUTION_BRIDGE_GO 1.24.5` `f622f8a9…` SHA, `nautilus-execution-service` 0.62.0 | Locked Rust service lifecycle + event-store replay + restart crash-window — needs live execution bridge evidence |
 
 ## Authority and scope
 
@@ -56,7 +56,7 @@ tables.
    pinned images).
 2. A runnable local stack (Docker + Compose) per `08-local-compose.md` using the
    pinned images.
-3. `make ddl` already emits `schema_manifest.json` (21 tables as of 2026-08-14, pre-CHG-003 — now 24) — confirmed; it
+3. `make ddl` already emits `schema_manifest.json` (21 tables as of 2026-08-14, pre-CHG-003 — now 27) — confirmed; it
    still refuses application by design.
 4. For external rows, a sandbox broker and Arrow REST stub (no real credentials).
 
@@ -73,8 +73,9 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 1 | Java 17.0.19 | VM-JAVA-001 | `LOCAL-INT-002`; build smoke on Java 17 | `common` + services compile/run on the pinned JVM; effective config reports `17.0.19`; no module fails to start |
 | 2 | Python 3.11.9 | VM-PYTHON-002 | run `ddl_apply.py` + `version_matrix_verify.py` on 3.11 | Both scripts execute; matrix parses; verifier passes |
 | 3 | Flink 2.2.1 | VM-FLINK-SRV-003, VM-FLINK-API-004 | `COMPAT-FLINK-001`; `SIG-HARNESS-003`, `SIG-HARNESS-005`; `STATE-COMPAT-001` | Source/sink checkpoint, restore, rescale correct on 2.2.1; savepoint restores through the approved compatibility path |
-| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`006`; `SCHEMA-UNIT-001`/`002`/`003` | All 21 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited; distinct bucket keys spread evenly across buckets (constant key collapses) |
+| 4 | Fluss 0.9.1-incubating | VM-FLUSS-SRV-005 | `COMPAT-FLUSS-001`..`006`; `SCHEMA-UNIT-001`/`002`/`003` | All 27 DDLs parse/apply; effective schema == manifest; LOG/KV/changelog behavior matches; stale/conflict KV rejected and audited; distinct bucket keys spread evenly across buckets (constant key collapses) |
 | 5 | Fluss connector (fluss-flink-2.2:0.9.1) | VM-FLUSS-CONN-007 | `COMPAT-FLINK-001`; `SIG-INT-001` | Pinned connector checkpoint/restore on the 2.2.1 boundary works with the Fluss source/sink |
+| 5c | Fluss client 0.9.1 | VM-FLUSS-CLI-006 | `COMPAT-FLUSS-006` | `CompatFlussIntegrationTest` compile + append/consume vs 0.9.1-incubating; 100/1000 appends 0 loss; routing/bucket-key stress — `COMPATIBLE` (closed 2026-08-24) |
 | 5a | ZooKeeper ensemble (3.9.2) | VM-ZK-013 | `SWARM-INT-002`; `SWARM-FAIL-001`; `PERF-NODELOSS-001` | 3-node ensemble starts; quorum 2-of-3 survives one node loss; Fluss coordinator/tablet register via `zookeeper.address`; Flink JobManager HA leader election + failover works |
 | 5b | Fluss state-table schema + rehydration (DEC-038, 2026-08-14) | VM-FLUSS-SRV-005 | `SIG-STATE-001` to `SIG-STATE-003`; `STATE-COMPAT-001` (Fluss-state-table half); rehydration integration test | Dedup state-table schema/serialization reads and writes match on the pinned connector; restart rehydrates the Flink working cache from the Fluss table; schema change is additive or blocks before unsafe use; Fluss unavailability/incompatibility fails closed |
 
@@ -84,6 +85,7 @@ on pass. External boundaries that need real broker/Arrow contracts stay
 | 8 | Arrow REST API | VM-ARROW-010 | `ARROW-REST-001`, `ARROW-REST-002` | Request/response/auth/timeout captured; client-reference correlates one attempt to one broker order — `TO_BE_VERIFIED` |
 | 9 | OpenObserve | VM-OPENOBS-011 | `OPS-INT-001`, `OPS-FAIL-001` | Telemetry envelope/redaction correct; OpenObserve outage leaves durable audit available — `TO_BE_VERIFIED` |
 | 10 | Base images | VM-IMAGES-012 | `LOCAL-INT-002`; `SWARM-INT-001`; `SEC-IMAGE-001` | Images referenced by digest; no mutable tag; digest+SBOM PARTIAL evidence (2026-08-24); vulnerability-policy PASS TO_BE_VERIFIED |
+| 11 | Mock-broker 50k | VM-PERF-001 | `PERF-PROD-60000`; `PerfBaselineTest` | Loopback 59,221 tps 592k/10s 0 loss recorded (`PARTIAL_EVIDENCE_LOOPBACK_50K`); multi-node E2E 50k capacity needs 4VM — `PARTIALLY` |
 
 **Matrix evidence recorded (2026-08-24, laptop-only):** `version_matrix.yaml` rows 1/3/4
 flipped `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE` / `EVIDENCE_RECORDED`):

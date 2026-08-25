@@ -51,7 +51,7 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | Broker hard maximum — fixed inside code (`PlatformConfig` → `FixedScope`), not an env key | — | `30` ticks/instrument/s hard maximum enforced by the synthetic workload profile |
 | `ARROW_APP_ID` | Yes | Arrow application ID for the Go bridge |
 | `ARROW_APP_SECRET` | Yes | Arrow application secret for AutoLogin |
-| `ARROW_TOKEN` | No | Pre-authenticated access token (24h TTL); if absent, AutoLogin creds are required |
+| `ARROW_TOKEN` | No | **REMOVED 2026-08-24** — code rejects it at startup (`IngestionConfig.java`, `go-bridge/main.go`); AutoLogin creds (`ARROW_USER_ID`+`ARROW_PASSWORD`+`ARROW_TOTP_KEY`) are the only auth path |
 | `ARROW_USER_ID` | No | User ID for AutoLogin (with password+TOTP) |
 | `ARROW_PASSWORD` | No | Password for AutoLogin |
 | `ARROW_TOTP_KEY` | No | TOTP secret for 2FA during AutoLogin |

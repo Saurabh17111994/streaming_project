@@ -161,7 +161,7 @@ Stop new simulated money-moving calls, record gate state, drain/reconcile test a
 | `L0 CONFIG-001..006` `219` | `6` | `docker compose config` + `pin-check` `golang:1.24.5-alpine@sha256:daae04e` `rust:1.97.1` `minio/mc:RELEASE.2024-11-07T00-52-20Z` fixed `CONFIG-002` + `ENVIRONMENT=production` reject + `O2_PASSWORD` cannot default + secret leakage + `fluss.conf` not mounted → `not ready` `6/6 PASS` | none |
 | `L1 HEALTH-001..008` `259` + `L3 START-001..006` `388` + `L4 SCHEMA-001..010` `416` + `L5 JOB-001..008` `442` | `8+6+10+8=32` | `HEALTH-001 healthy` `002 liveness UP / readiness DOWN` `003 Fluss 9123 R/W` `004 tablet` `005 JM REST` `006 TM slots` `007 O2 5080` `008 Nautilus HALTED` + `START Clean` `Fluss/TM/O2/Schema unavailable` + `SCHEMA manifest 27 ddl_sha256 bucket_key 16 missing→DOWN` + `JOB exactly 2 Signal+Babysitter checkpointing` `58/58 PASS` `test_l1_l3 + test_l4` | `JobManager HA` `ZK 3.9.2` quorum |
 | `L2 NETWORK-001..010 + SEC-001..015` `297` | `25` | `execution_network_check.py PASS` `bridge sole arrow-egress` `execution-net internal:true 0 host ports` `gateway→Nautilus→bridge` `Flink no Arrow` `25/25 PASS` `test_l2` | `Swarm` `encrypted overlays` `production secrets` |
-| `L6 STREAM-001..010` `474` + `L7 EXEC-001..013` `520` | `23` | `STREAM single/burst 1k/10 instruments/ts/out-of-order/duplicate/Gap103/Gap does not halt/backpressure` + `EXEC HALTED boots/blocks/Place/Modify/Cancel/REJECT/UNKNOWN/partial 40/100/full/correlation` `FakeBridge extendable 8598b421f` `23/23 PASS` `test_l6_l7` | `live tick→Fluss` `arrow-egress` firewall prod |
+| `L6 STREAM-001..010` `474` + `L7 EXEC-001..013` `520` | `19` | `STREAM single/burst 1k/10 instruments/ts/out-of-order/duplicate/Gap103/Gap does not halt/backpressure` + `EXEC HALTED boots/blocks/Place/Modify/Cancel/REJECT/UNKNOWN/partial 40/100/full/correlation` `FakeBridge extendable 8598b421f` `19/19 PASS` `test_l6_l7` (EXEC-003/004/005 and EXEC-006/007 are collapsed into single tests) | `live tick→Fluss` `arrow-egress` firewall prod |
 | `L10 LOCAL-INT-004` `572` | `3` | `10 random fake Place→HALTED→fill→OMS→Fluss Projections→Babysitter zero actions` `local_int_004 offline 10 PASS` `3/3 PASS` `test_l10` | `LIVE Fluss` `GatewayFluss 3.5s` already green, market `Place` still blocked |
 | `L9 OBS-001..012` `637` | `12` | `OTLP otel-collector:4318→O2` `health identity` `no secrets` `telemetry failure not unsafe` `12/12 PASS` `test_l9` | `O2 dashboards` live scrape |
 | `L8 FAIL-001..010 + SAFETY-001` `587` | `11` | `Restart ingestion/JM/TM/tablet/Nautilus/bridge` `partition` `UNKNOWN` `double delivery` `Fail closed on ambiguity` `11/11 PASS` `test_l8` **offline fake** | `HA` `tablet kill→recovery` `S3` `DR-001..006` `chaos-suite` `4VM` |
@@ -172,7 +172,7 @@ The required behavior above is verified by the canonical [Local Compose test des
 
 > **Added 2026-08-21:** the 10-instrument fake-broker smoke above is verified as `LOCAL-INT-004` (10 random instruments, `execution-t3` `fake` bridge mimicking live Arrow lifecycle, no `ARROW_*` live secrets): intent → gateway → bridge → Nautilus `ReportEnvelope` → `src/projection/mod.rs` → Fluss `Order_Lifecycle`/`Positions`/`Order_Correlation` → Babysitter `Positions` observation (zero actions). Runs on the local single-host Compose exactly as it will run on the Swarm — same images, same `execution-net` isolation (v1: 4 VMs Manager+Worker, v2: 7 VMs Manager ONLY + Workers per 09 DECISION 2026-08-20).
 
-## Layered test suite — local compose (L0–L11, ~116 tests)
+## Layered test suite — local compose (L0–L11, 118 pytest tests / 121 evidence count)
 
 > **Purpose 2026-08-21:** the six canonical tests in `11-testing-and-release.md#local-compose`
 > (`LOCAL-INT-001..003`, `LOCAL-FAIL-001/002`, `LOCAL-OBS-001`) plus the new `LOCAL-INT-004`
@@ -197,7 +197,7 @@ The required behavior above is verified by the canonical [Local Compose test des
 | L9 | Observability | ~10 |
 | L10 | End-to-end business-flow simulation | ~8 |
 | L11 | Resource / memory behavior | ~8 |
-| **Total** | | **~116** |
+| **Total** | | **118** |
 
 Harness shape (same Compose stack, contract-based — no container-name/sleep coupling):
 

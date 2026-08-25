@@ -21,9 +21,9 @@ Build this phase, then implement the tests in the second section before moving o
 
 | Milestone | Status 2026-08-24 | Evidence offline (laptop) | Needs 4VM Swarm |
 | --- | --- | --- | --- |
-| M1 Architecture (docs) | DONE | v1 4VM / v2 7VM Option B role labels cross-check `docs_audit` + `docker-stack.yml 727L` doc tables match; `09` `M1` docs parity `test_09_stack.py StackShape 4 Placement 3` | Live docs review on provisioned Swarm (labels visible `docker node ls`) |
+| M1 Architecture (docs) | DONE | v1 4VM / v2 7VM Option B role labels cross-check `docs_audit` + `docker-stack.yml 724L` doc tables match; `09` `M1` docs parity `test_09_stack.py StackShape 5 Placement 3` | Live docs review on provisioned Swarm (labels visible `docker node ls`) |
 | M2 Deployment (stack + 1-host mimic) | DONE | `docker-stack.yml` immutable digests `zookeeper@sha256:43d3…` `golang:1.24.5-alpine@sha256:daae04eb…`, `5 x-healthcheck` exceptions documented, `x-networks` encrypted `overlay` `attachable:false`, `secrets external:true`, `replicas 1→3` scale `25/25 PASS` `make test-09` + `docker compose config` parses; `stack_selfcheck.sh` `1-host swarm mimic` compile-only | `docker stack deploy` 7VM, `s3://tradingticks-aug-2026` `high-availability.type:zookeeper` `replication.factor=3` 8 `[ ]` placements, `SWARM-MGR-001..006` quorum 2/3 survive 1 loss |
-| M3 Production HA (4VM live) | NOT FULLY | `make up` `16 Running/Started` single-VM `replication.factor=1` HA disabled `file:///checkpoints` (dev) — proves dev path | `3-node ZK 3.9.2` `HA/recovery` `PERF-NODELOSS 50k tps 3k instr` `DR-001..006` `chaos-suite` encrypted S3 recovery, capacity `500GB SSD` proof — cannot on 1 VM (`08:34` `cannot prove replication/one-VM tolerance/encrypted S3 recovery/production capacity`) |
+| M3 Production HA (4VM live) | NOT FULLY | `make up` `12 Running/Started` single-VM `replication.factor=1` HA disabled `file:///checkpoints` (dev) — proves dev path | `3-node ZK 3.9.2` `HA/recovery` `PERF-NODELOSS 50k tps 3k instr` `DR-001..006` `chaos-suite` encrypted S3 recovery, capacity `500GB SSD` proof — cannot on 1 VM (`08:34` `cannot prove replication/one-VM tolerance/encrypted S3 recovery/production capacity`) |
 
 ### Placement model
 
@@ -189,11 +189,11 @@ Purpose (both): validate topology, Swarm `docker node ls` quorum, placement, ant
 
 | Milestone | Scope | Phases | Entry gate | Exit evidence |
 | :--- | :--- | :--- | :--- | :--- |
-| **M1 — Architecture** | Docs only, no infra | Inspect repo + cross-check (already saved as `docs/plans/2026-08-20-swarm-reference-cross-check.md`), update `09` with v1/v2 diagrams, label model, isolation, security | Cross-check complete | `09` updated, no contradictions, `M1-3 = Manager+Worker` pinned as v1 |
+| **M1 — Architecture** | Docs only, no infra | Inspect repo + cross-check (cross-check record superseded 2026-08-25 by `docs/plans/2026-08-25-live-readiness-unified-plan.md` §U5), update `09` with v1/v2 diagrams, label model, isolation, security | Cross-check complete | `09` updated, no contradictions, `M1-3 = Manager+Worker` pinned as v1 |
 | **M2 — Deployment** | `docker-stack.yml` + Swarm config | Author `docker-stack.yml` with `replicas`, `placement: constraints [node.labels.role==worker || role==manager]` (not hostname), `preferences spread`, `healthcheck`, `restart_policy`, `update_config`, `rollback`, `Swarm resource reservations/limits` (infrastructure — not ranking; ranking removed CHG-005), `encrypted overlay` (`--opt encrypted` for `trading-net`, `execution-net`), `secrets` (Swarm secrets for S3/ARROW/O2), `volumes` (per-node durable) | `09` v1 diagram approved | `docker stack deploy` succeeds on `1-host swarm` mimic; `docker node ls` shows 3 managers quorum 2 |
 | **M3 — Validation** | Local multi-VM HA | Deploy local 4-VM rig (multipass/Vagrant), run `SWARM-MGR-001..006`, `SWARM-NET-001`, `SWARM-PLACEMENT-001`, `SWARM-DEPLOY-001`, `SWARM-SCALE-001..003`, `RECOVERY-001`, `Flink SCALE` (TM slots), `Fluss SCALE` (native), `O1 FAIL` | M2 stack deploys | Evidence per `11-testing-and-release.md § Production Swarm` (SWARM-*, SEC-*, PERF-NODELOSS) |
 
-Detailed test mapping is in `docs/plans/production_swarm_plan_revision.md` (Phases 13–17) and `docs/plans/2026-08-20-swarm-reference-cross-check.md` (gap table). v2 evolution (W4+ scale) is a label/drain operation with the same stack — no redesign.
+Detailed test mapping is in `docs/plans/2026-08-25-live-readiness-unified-plan.md` §U5 (the earlier `docs/plans/production_swarm_plan_revision.md` Phases 13–17 and `docs/plans/2026-08-20-swarm-reference-cross-check.md` gap table were superseded/deleted with the 08-21/08-24 plan merge). v2 evolution (W4+ scale) is a label/drain operation with the same stack — no redesign.
 
 ### Repository and branching model
 
@@ -595,7 +595,7 @@ halt, and no-skip/regress tests. The two production-caller test helpers
 (`execution/client.rs` roundtrip health test and `shutdown.rs` `enable()`) were migrated to the
 single-operator (saurabh, DEC-044) flow.
 
-Gate: `cargo test --lib` = **125 passed, 0 failed, 0 warnings (all binaries + `tests/differential_parity` + `tests/live_go_bridge` green on full `cargo test`)**.
+Gate: `cargo test --lib` = **196 passed, 0 failed, 0 warnings (CHG-102 re-count; was 125; all binaries + `tests/differential_parity` + `tests/live_go_bridge` green on full `cargo test`)**.
 
 **2026-08-21b — buckets A1 + A2 + B (implemented offline, no VMs):**
 
@@ -670,8 +670,8 @@ resilience-wired: `BridgeExecutionClient::execute_job` runs every bridge round-t
 `RetryOrchestrator::execute_async` (exponential backoff + hard retry budget + circuit breaker).
 Only a clearly-transient transport `Err` is retried; a broker envelope (Success/Rejected/
 **Unknown**) is terminal and fails closed — an `Unknown` outcome is **never** auto-retried
- (commits `beff8c1`, `94eb058`). Gate: **126 tests** (2026-08-21d measurement, before the
-DEC-044 single-operator gate rework later the same day; current `cargo test --lib` = 125),
+ (commits `beff8c1`, `94eb058`). Gate: **196 tests** (CHG-102 re-count 2026-08-25; earlier 126 was the 2026-08-21 measurement, before the
+DEC-044 single-operator gate rework later the same day),
 0 failed, 0 warnings, stable across parallel runs. Behavior proven: transient timeouts → retried then the order fills; persistent
 outage → bounded exhaustion surfaces an error, never a phantom success.
 

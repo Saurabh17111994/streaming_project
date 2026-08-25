@@ -10,8 +10,9 @@
 > `docs/04_contracts/05-babysitter.md`/`06-action-capture.md`/`07-executor.md`, functional
 > requirements `02-functional/05/06/07`, and DEC-006 are re-scoped — see their dated banners.
 >
-> Status banner: **Design — Draft · Implementation — Partially implemented (offline) · Evidence — Tested-in-sandbox (164 Rust + 17 Java + Go ok) · Live-money — Blocked.**
+> Status banner: **Design — Draft · Implementation — Partially implemented (offline) · Evidence — Tested-in-sandbox (196 Rust + 17 Java + Go ok) · Live-money — Blocked.**
 > Update 2026-08-24: `19` (T0–T9) + `20` (WP-0–WP-7) **integrated here**; offline gaps closed (gate helper, contract-violation halt, PostbackCorrelator, babysitter NoOp, durable flags, fencing pins, `T7` `BabysitterJob.env.fromSource`, hardening `clippy/fmt/vet`); live single-VM green, Arrow/4VM still block live-money (see Implementation status + Implementation plan + Close-gaps below).
+> Update 2026-08-25: Rust lib count re-counted **196** (CHG-102; was 164/168); live order path proven to Arrow (`RCF-EQ×1` `26082501010305` — BILCARE/`BI-EQ` delisted) — broker `MARGIN ERROR` (sandbox unfunded), auth is AutoLogin (`ARROW_TOKEN` removed).
 
 <!-- markdownlint-disable MD013 -->
 
@@ -28,7 +29,7 @@
 | Must not own | Strategy, candidate scoring, gate approval, order submission to any component other than the go-arrow bridge (**ranking/reservations/decisions REMOVED 2026-08-15, CHG-005**) |
 ## Implementation status (2026-08-24 — offline done, live blocked)
 
-> Single-VM laptop (`make up` 12 long-running containers of 18 compose services — 3 `execution-t3` profile-gated + 2 one-shot `ddl-apply`/`eod-controller` + `minio-init` exit; `fluss-coordinator:9123` reachable) can now make every `Partially done` row `Fully done offline`. Live Fluss single-VM prove (`FLUSS_BOOTSTRAP`) and Arrow market `BI-EQ×1` remain live-money blockers.
+> Single-VM laptop (`make up` 12 long-running containers of 18 compose services — 3 `execution-t3` profile-gated + 2 one-shot `ddl-apply`/`eod-controller` + `minio-init` exit; `fluss-coordinator:9123` reachable) can now make every `Partially done` row `Fully done offline`. Live Fluss single-VM prove (`FLUSS_BOOTSTRAP`) and Arrow market `RCF-EQ×1` remain live-money blockers (order proven to Arrow 2026-08-25 — sandbox margin only).
 
 | Area | Done offline on laptop (evidence) | Still not done (needs live) |
 |---|---|---|
@@ -45,7 +46,7 @@
 | Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + halted-by-default via `EXECUTION_ENABLED` rejected-at-boot (`config.rs:81`, `execution_enabled=false`, `is_halted_default()`) 12/12 | 6 keys `TO_BE_VERIFIED` (Arrow timeout/retry profile, broker status/reference format+echo, Arrow request schema) |
 | Readiness / Backpressure | 11 readiness flags (broker/bridge/Fluss/gate/backlog/clock), `MAX_PENDING` logic, `health` not-ready | Load flood `MAX_PENDING_PROJECTION_RECORDS` live |
 | Metrics 30 | `telemetry` 3/3 OTLP native, bridge 14/14, Go `go-bridge` ok | O2 dashboards for execution domain |
-| Tests | Rust 164/164, common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 12 long-running of 18 compose services) — historical count not C6 466/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
+| Tests | Rust 196/196 (CHG-102 re-count; was 164/168), common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 12 long-running of 18 compose services) — historical count not C6 466/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
 
 
 ## Why one dossier
@@ -523,7 +524,7 @@ stored in audit (only redacted hashes and summaries).
 
 | Key | Rule |
 | --- | --- |
-| `ARROW_APP_ID` / `ARROW_APP_SECRET` / `ARROW_TOKEN` / `ARROW_USER_ID` / `ARROW_PASSWORD` / `ARROW_TOTP_KEY` | Bridge credentials — secret refs only, never in Nautilus, never committed |
+| `ARROW_APP_ID` / `ARROW_APP_SECRET` / `ARROW_USER_ID` / `ARROW_PASSWORD` / `ARROW_TOTP_KEY` | Bridge credentials (AutoLogin) — secret refs only, never in Nautilus, never committed. (`ARROW_TOKEN` removed 2026-08-24 — dead key) |
 | `ARROW_REST_URL` (**RESOLVED 2026-08-24:** `https://edge.arrow.trade` in `.env`, consumed by bridge; TOTP AutoLogin proven live 2026-08-21 `execution-auth-001`; static `ARROW_TOKEN` path removed 2026-08-24) | Bridge → Arrow base URL; no unsafe production default |
 | `ARROW_TIMEOUT_PROFILE_TO_BE_VERIFIED` / `ARROW_RETRY_POLICY_TO_BE_VERIFIED` | Timeout + classification; unknown outcomes never blind-retried |
 | `BROKER_CLIENT_REFERENCE_FORMAT_TO_BE_VERIFIED` | Length/charset/echo evidence for the ≤16-char `client_order_ref` (carried in `remarks`) |
@@ -616,7 +617,7 @@ all broker calls remain disabled until the release evidence package approves ena
 
 ## Implementation plan — Nautilus execution service (T0–T9) — integrated from `19`
 
-> Source: `19-nautilus-execution-service-implementation-plan.md` §8 Implementation Plan (1856 lines). This section is the **condensed normative extract** — full task audits (per-task `Repository audit and implementation handoff`) remain in git history. Status reflects `2026-08-24 07:45 UTC` single-VM green (`fluss-coordinator:9123`, `execution-gateway:9190 HALTED`, 164 Rust + GatewayFluss/ProjectionWriter live).
+> Source: `19-nautilus-execution-service-implementation-plan.md` §8 Implementation Plan (1856 lines). This section is the **condensed normative extract** — full task audits (per-task `Repository audit and implementation handoff`) remain in git history. Status reflects `2026-08-24 07:45 UTC` single-VM green (`fluss-coordinator:9123`, `execution-gateway:9190 HALTED`, 196 Rust + GatewayFluss/ProjectionWriter live).
 
 ## 8. Implementation Plan
 
@@ -681,15 +682,15 @@ each major workstream; the detailed checkboxes under that task are the actual TO
 | `T0` | **FULLY DONE OFFLINE+SINGLE-VM** | `versions.pin:33` `golang:1.24.5-alpine@sha256:daae04eb...` digest pinned, `EXECUTION_BRIDGE_GO_TOOLCHAIN=1.24.5`, `cargo metadata --locked` + `go vet` pass, `git check-ignore` secrets ignored | — |
 | `T1` | **FULLY DONE OFFLINE+SINGLE-VM** | `27_execution_intent.sql` + `ExecutionIntentBuilder` deterministic `trade_context_id` + `EXECUTION_INTENT_ENABLED=false` default, compute suite 319 run, DDL file exists | — |
 | `T2` | **FULLY DONE OFFLINE+SINGLE-VM** | Java gateway `IntentReader` `subscribeFromBeginning(0)` + `NautilusIntentClient` fence re-check, `make up` 12 long-running/18 defined (`fluss-coordinator:9123` Started), live `GatewayFlussIntegrationTest` 1/1 3.5s `Skipped:0` + `FlussProjectionWriterIntegrationTest` 1/1 9.0s | — |
-| `T3` | **FULLY DONE OFFLINE** | `go-bridge` separate module, fake HTTP+WS lifecycle, `broker_classification` 401/429->UNKNOWN, `EventHub` fan-out, `go test ./...` ok `0.236s`, network check | Live `Token+AutoLogin` re-auth + real `edge.arrow.trade` `Place` + `order-updates` WS `BI-EQx1` needs **market hours** |
+| `T3` | **FULLY DONE OFFLINE** | `go-bridge` separate module, fake HTTP+WS lifecycle, `broker_classification` 401/429->UNKNOWN, `EventHub` fan-out, `go test ./...` ok `0.236s`, network check | Live re-auth (AutoLogin) + `edge.arrow.trade` `Place` proven 2026-08-25 (`RCF-EQ×1` `26082501010305`); `order-updates` WS fill needs **funded market session** |
 | `T4` | **FULLY DONE OFFLINE+SINGLE-VM** | `code/02_services/04_executor/` Rust binary `0.62.0` + `gate.rs:enter_reconciling_if_needed` + `executiongate` 20/20 `ContractViolation` + `gate` 9/9 + live `FlussGateStateStore` connect via gateway | — |
 | `T5` | **FULLY DONE OFFLINE+SINGLE-VM** | `InMemoryAttemptStore` `by_instruction`/`has_instruction` 20/20, `Budget/Breaker` only `Transient`, `clockwatch` 7/7, fence stale 0 calls, `put(PREPARED)` before `bridge.call` + `CrashHooks after_prepared` | — |
 | `T6` | **FULLY DONE OFFLINE+SINGLE-VM** | `PostbackCorrelator` 3-step bijective pure + Java `PositionProjector` 12/12 + Rust `projection` 7/7 i64 wrapping + live `FlussProjectionWriter` 9.0s | — |
 | `T7` | **FULLY DONE OFFLINE+SINGLE-VM** | New `babysitter.rs:NoOpPositionObserver` 3/3 + `BabysitterPositionsSource.java` `positions` changelog source swap (`env.fromSource(flussPositionsSource)`), `fail-closed` when `POSITION_ACTIONS_ENABLED=true` | — |
 | `T8` | **FULLY DONE OFFLINE+SINGLE-VM** | `docker-compose.yml` `execution-net`/`arrow-egress` + `execution-gateway` + `nautilus` `profiles:[execution-t3]` + `make up --profile execution-t3` → `execution-gateway Running` `execution-bridge Healthy` `nautilus Started` `gate HALTED health on 0.0.0.0:9190` | — |
-| `T9` | **NOT IMPLEMENTED** | No sandbox bundle `logs/` | All live Arrow place/fill/reconciliation + shadow + R2 1-year lock + 4VM HA `docker-stack.yml` needs **market + 4VM** |
+| `T9` | **PARTIAL — MARKET-OPEN 2026-08-25** | Place proven to Arrow: `POST /order/regular` `26082501010305` `RCF-EQ×1 @₹105` (broker `MARGIN ERROR` — sandbox unfunded, not code). Auth AutoLogin live. | Full chain (funded place → WS fill → reconcile → cancel) + R2 1-year lock + 4VM HA `docker-stack.yml` needs **funded market session + 4VM** |
 
-All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 164/164`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 466/247/387. Only T3/T9 live market remain.
+All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 196/196`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 466/247/387. T3/T9 live market: place proven to Arrow (`MARGIN ERROR` — sandbox unfunded); fill still needs funded order.
 ### Live single-VM evidence — 2026-08-24 07:37/07:45 UTC (fluss-coordinator:9123)
 
 ```text
@@ -697,12 +698,12 @@ FLUSS_BOOTSTRAP=fluss-coordinator:9123 mvn test -Dtest=GatewayFlussIntegrationTe
 FLUSS_BOOTSTRAP=fluss-coordinator:9123 mvn test -Dtest=FlussProjectionWriterIntegrationTest :: PASS 1/1 9.0s Skipped:0
 docker compose ps :: 12 long-running of 18 compose services (fluss-coordinator, fluss-tablet, flink-jobmanager, openobserve, otel-collector)
 docker compose --profile execution-t3 ps :: execution-gateway Running, execution-bridge Healthy, nautilus Started, gate HALTED health 0.0.0.0:9190
-cargo test --lib :: 164/164 pass (gate 9, executiongate 20, babysitter 3, projection 7, durable 11, resilience 8, clockwatch 7, config 12, gateway_protocol 6, http 5, bridge 14)
+cargo test --lib :: 196/196 pass (CHG-102 re-count: gate 13, executiongate 20, babysitter 3, projection 15, durable 11, resilience 8, clockwatch 7, config 12, gateway_protocol 13, http 21, bridge 14+, intent 10, engine 10, t9paper 12, etc.)
 mvn -f common test -Dtest=PositionProjectorTest :: 12/12
 go test ./... :: ok 0.236s
 ```
 
-T0-T2,T4-T6,T8 now fully proven on single-VM Fluss (offline+sandbox), T7 observer fully offline. Remaining live gates are only multi-VM HA (`docker-stack.yml`) and Arrow sandbox `BI-EQx1` market-hours.
+T0-T2,T4-T6,T8 now fully proven on single-VM Fluss (offline+sandbox), T7 observer fully offline. Remaining live gates are only multi-VM HA (`docker-stack.yml`) and the Arrow sandbox `RCF-EQ×1` funded fill (place proven 2026-08-25, `MARGIN ERROR`).
 
 This progress table is evidence that the first slices are intentionally **not** reported as full
 task completion. The system remains safe: the new bridge defaults to `disabled`, no broker
@@ -755,7 +756,7 @@ task to complete and do not authorize live orders.
   work begins.
 
 
-> **Offline vs live boundary (unchanged):** Every `T0–T8` row is `FULLY DONE offline+single-VM` on laptop (`make up` 12 long-running/18 compose services, `FLUSS_BOOTSTRAP=fluss-coordinator:9123` live single-VM green). Only `T9` (`BI-EQ×1` live Arrow place/WS fill/reconciliation/shadow + single-operator enablement) and the running-`LiveNode` event path (`WP-2` deferred) still need market/4VM.
+> **Offline vs live boundary (unchanged):** Every `T0–T8` row is `FULLY DONE offline+single-VM` on laptop (`make up` 12 long-running/18 compose services, `FLUSS_BOOTSTRAP=fluss-coordinator:9123` live single-VM green). Only `T9` (`RCF-EQ×1` live Arrow place proven to Arrow 2026-08-25 — `MARGIN ERROR`, sandbox unfunded; WS fill/reconciliation/shadow + single-operator enablement pending funded re-run) and the running-`LiveNode` event path (`WP-2` deferred) still need market/4VM.
 
 ---
 
@@ -986,7 +987,7 @@ python t8_sandbox_contract_check.py                                             
 
 ## 8. Explicitly NOT in this plan (IP gate accepted 2026-08-21 — awaiting auth + release review)
 
-- **T9** live-Arrow order-path evidence (real `BI-EQ x1`, broker id + `remarks`).
+- **T9** live-Arrow order-path evidence (real `RCF-EQ x1`, broker id `26082501010305` + `remarks` — place proven 2026-08-25, `MARGIN ERROR` pending funded re-run).
 - **T9** live fills/WebSocket transcript, live reconciliation snapshots, live shadow mode.
 - **T3** real sandbox authentication / auto re-auth.
 - Full-path **real** runtime evidence over live Arrow.
@@ -1014,6 +1015,6 @@ and until then the system remains `HALTED`/`disabled` by design.
 - [Action Capture test design](./11-testing-and-release.md#action-capture)
 - [Babysitter test design](./11-testing-and-release.md#babysitter)
 - [Executor test design](./11-testing-and-release.md#executor)
-- **T0–T8 hardening now gated in `make docs-audit`:** `cargo clippy -D warnings` (164 Rust, 0 errors) + `cargo fmt --check` + `go vet ./...` (bridge), proven `2026-08-24` `make docs-audit` hardening `Finished` before `C14` pre-existing 19 fails. See `Makefile:295-303`.
+- **T0–T8 hardening now gated in `make docs-audit`:** `cargo clippy -D warnings` (196 Rust, 0 errors) + `cargo fmt --check` + `go vet ./...` (bridge), proven `2026-08-24` `make docs-audit` hardening `Finished` before `C14` pre-existing 19 fails. See `Makefile:295-303`.
 - **Single-VM live prove:** `FLUSS_BOOTSTRAP=fluss-coordinator:9123 mvn test -Dtest=GatewayFlussIntegrationTest` `PASS 1/1 3.5s` + `FlussProjectionWriterIntegrationTest` `PASS 1/1 9.0s` (`execution-gateway` `Running`, `execution-bridge` `Healthy`, `nautilus` `HALTED 9190`).
 

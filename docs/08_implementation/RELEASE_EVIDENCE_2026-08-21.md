@@ -1,5 +1,13 @@
 # Release Evidence Package — 2026-08-21
 
+> **2026-08-25 supersession note (do not rewrite this dated evidence):** counts/status in this
+> file are the 2026-08-21 snapshot. Current truth (CHG-100/101/102 + 2026-08-25 unified plan
+> `docs/plans/2026-08-25-live-readiness-unified-plan.md`): Rust lib **196** (was 148/168), C6
+> triple **466/247/387**, `make gate` **13/13** (was 12/12), instrument **`RCF-EQ`** (BI-EQ/BILCARE
+> delisted), auth **AutoLogin** (`ARROW_TOKEN` removed 2026-08-24). Live order `26082501010305`
+> reached Arrow 2026-08-25 — `MARGIN ERROR` (sandbox unfunded). A new `RELEASE_EVIDENCE_*.md`
+> append is a known open item (unified plan U4.4) once the funded market session lands.
+
 **Release:** `2026-08-21` · **Source commit:** `22371e3` (E2 gate) — evidence lands on next commit `CHG-077/078`
 **Status:** `Blocked` → `Approved-for-Testing` only after E5 single-operator (Saurabh, DEC-044) sign-off. Live money stays `HALTED`/`disabled`.
 **Scope:** Everything proven on laptop + dev Fluss + fake bridges. Market-session (`BI-EQ ×1` live order) and prod-VM (`PERF-PROD-60000`, `FAIL-VM-LOSS`) evidence stays `BLOCKED: market-hours` / `needs prod VMs`.

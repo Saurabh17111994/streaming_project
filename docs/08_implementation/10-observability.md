@@ -88,7 +88,7 @@ binary** (build-only; the 3k fake-ticks test runs separately at mock-3k):
   `METRICS_TOP20_TOKENS_REGEX=^(AAA111|ZZZ999)$` exactly those two pass and
   the third token is dropped.
 
-The 7 dashboard files (`openobserve/dashboards/*.json`) query only aggregated
+The 8 dashboard files (`openobserve/dashboards/*.json`) query only aggregated
 global/slot series (`avg`/`count` over `histogram(_timestamp)` buckets, no
 group-by on token labels, log tails bounded by `LIMIT`), so they stay low
 cardinality by construction; each dashboard description records the sampling
@@ -154,7 +154,7 @@ empty until their source exports (EXECUTOR export lands via the telemetry.rs `Te
 seam). `Safe to Trade` (primary) covers execution gate/order flow, data-feed health, system
 state; the remaining families (Dedup, Order safety, Security) extend the same corpus pattern.
 
-> **2026-08-22 delta (not yet implemented):** single-pane requires **3 additional families** beyond the 4 shipped: `Dedup state (DEC-038)` + `Security and platform (host/container/JVM/ZK/Swarm)` + full `Compute and decision` backpressure. Collector delta: `prometheus` jobs for `node_exporter`/`cAdvisor`/ZK + `filelog/infrastructure` (`/var/log/*.log`, `journald`) → `infrastructure_logs` + `traces` pipeline `otlp grpc 4317` → `traces` stream. Until wired, `infrastructure_logs`/`traces`/`jvm.*` outside Flink stay `NOT IMPLEMENTED`.
+> **2026-08-22 delta → IMPLEMENTED 2026-08-24:** single-pane shipped the **3 additional families** beyond the 4: `Dedup state (DEC-038)` + `Security and platform (host/container/JVM/ZK/Swarm)` + full `Compute and decision` backpressure. Collector delta delivered: `prometheus` jobs for `node_exporter`/`cAdvisor`/ZK + `filelog/infrastructure` (`/var/log/*.log`, `journald`) → `infrastructure_logs` + `traces` pipeline `otlp grpc 4317` → `traces` stream. Verified 2026-08-24: `collector validate` PASS, `8 dashboards` seeded, `infrastructure_logs`/`traces`/`jvm.*` (javaagent v2.9.0) live via `OTLP 4317`.
 
 #### Data and ingestion dashboard
 
@@ -294,7 +294,7 @@ Without a RAM cap, OpenObserve's ClickHouse-like storage can consume all availab
 ### Acceptance checklist
 
 - [x] Every mandatory requirement has proving telemetry. (2026-08-24: `metrics` `logs` `traces` `infrastructure_logs` `flink_logs` `fluss_logs` `trading_alerts` 7 streams + `infra-host/cadvisor` + `jvm.*` via `OTLP 4317` — `collector validate` + `8 dashboards`)
-- [x] High-cardinality labels are bounded. (2026-08-24: `filter/top20-token-metrics` `METRICS_TOP20_TOKENS_REGEX a^` default drops per-token; `global+slot ALWAYS`; `7 dashboards` query `LIMIT` no `token` group-by)
+- [x] High-cardinality labels are bounded. (2026-08-24: `filter/top20-token-metrics` `METRICS_TOP20_TOKENS_REGEX a^` default drops per-token; `global+slot ALWAYS`; `8 dashboards` query `LIMIT` no `token` group-by)
 - [x] Redaction tests cover logs, traces, alerts, and support bundles. (2026-08-24: `test_seed_dashboards no_secrets` `StructuredLogEvent` `OtlpEmitterEscapingTest` `ObservabilityRegressionTest R-266` — credentials/tokens/raw packets never in `stream-name` or `attributes`)
 - [x] Health dimensions are independently queryable. (2026-08-24: `Liveness/Readiness/Job/Trading/Durability/Telemetry` `08 L1 8/8` `HEALTH-002` + `Safe to Trade` `gate state` vs `process health`)
 - [x] Critical alerts deliver, acknowledge, escalate, and link runbooks. (2026-08-24: `o2-provision.py 43 alerts` `ING 18 SIGNAL 16 INFRA 9` — includes the 11-rule `02-ingestion-alerting.md` contract wired live, CHG-093; `60s breach` `scope global/vm_id/container/service_name` `period 1` `frequency 1` `promql` `realtime` `OPS-UNIT/INT/FAIL`)
