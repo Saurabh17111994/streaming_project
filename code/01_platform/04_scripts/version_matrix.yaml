@@ -65,34 +65,42 @@ boundaries:
     evidence_source: >-
       Runtime image / build record; ddl-apply image build record
       (01_docker-ddl-apply); host toolchain python3 (miniconda)
-    compatibility_class: COMPATIBLE_WITH_LIMITATION
+    compatibility_class: COMPATIBLE
     evidence_owner: Platform
     evidence_method: >-
-      Capture Python version from Executor/mock image; assert equals
-      matrix.
+      Capture Python version from ddl-apply image; assert equals matrix.
     source_artifact: >-
-      docker run --rm --entrypoint python3 01_docker-ddl-apply:latest
-      --version -> Python 3.14.4; host python3 --version -> 3.11.15
-    fixture: Laptop host + 01_docker-ddl-apply:latest image, 2026-08-24
+      docker compose -f code/01_platform/01_docker/docker-compose.yml run
+      --rm ddl-apply version -> python3 Python 3.11.9, pinned
+      PYTHON_VERSION=3.11.9, "matches pin series 3.11 (VM-PYTHON-002)";
+      ddl-apply self-test -> DDL-APPLY-RESULT: PASS exit=0
+    fixture: Laptop host + 01_docker-ddl-apply image (rebuilt 2026-08-25
+      on python:3.11.9-slim + openjdk-17-jre-headless), 2026-08-25
     scenario: >-
-      version_matrix_verify.py (OK: 15 boundaries; pin discipline
-      satisfied) and ddl_apply.py --help execute on host 3.11.15; image
-      python3 --version captured from ddl-apply image
+      ddl-apply image rebuilt on the exact pinned Python base
+      (python:3.11.9-slim) after the 2026-08-24 drift; the new `ddl-apply
+      version` subcommand proves the running python matches the
+      PYTHON_VERSION pin in versions.pin; self-test runs the engine suite
+      (test_ddl_apply.py + test_evidence_ownership_check.py) inside the
+      rebuilt image.
     result: >-
-      PASS on host (3.11.15); DRIFT vs pin on execution image
-      (3.14.4 != 3.11.9)
+      PASS — image python 3.11.9 == pin 3.11.9; `ddl-apply version`
+      exit 0; self-test PASS exit=0. DRIFT RESOLVED (was 3.14.4 on
+      2026-08-24).
     observed_behavior: >-
-      Host 3.11.15 runs the version-matrix verifier and ddl_apply CLI
-      cleanly. The ddl-apply Docker image ships Python 3.14.4 — the
-      pinned 3.11.9 is NOT the runtime inside the execution image.
+      2026-08-24: image shipped 3.14.4 (apt default on the temurin Ubuntu
+      base) — DRIFT_RECORDED_PIN_UNSATISFIED. 2026-08-25 fix: runtime
+      stage base changed to python:3.11.9-slim (official image = the pin,
+      no distro drift possible) + openjdk-17-jre-headless for the
+      precompiled engine; PYTHON_VERSION added to versions.pin; `ddl-apply
+      version` subcommand added to assert the series. Host tooling remains
+      3.11.15 (3.11-series, in-family).
     limitations: >-
-      PIN DRIFT: execution image python 3.14.4 vs proposed 3.11.9.
-      Either the image must be rebuilt on python:3.11.9 or the pin
-      updated — decision required before treating 3.11.9 as verified.
-      Host 3.11.15 is 3.11-series (compatible class limited to host
-      tooling). Image-to-matrix mismatch is the blocking limitation.
-    date: 2026-08-24
-    status: DRIFT_RECORDED_PIN_UNSATISFIED
+      None — pin now enforced at build time (base image) and run time
+      (`ddl-apply version`). Host miniconda 3.11.15 is a newer 3.11 patch
+      than the pin (in-family, host-tooling only).
+    date: 2026-08-25
+    status: EVIDENCE_RECORDED
 
   - compatibility_id: VM-FLINK-SRV-003
     boundary: Flink server/image

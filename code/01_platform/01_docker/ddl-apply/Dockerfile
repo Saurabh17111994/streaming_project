@@ -39,14 +39,22 @@ RUN cd code && (mvn -q -pl common dependency:go-offline -DskipTests || true)
 COPY code/common /src/code/common
 RUN cd code && mvn -q -pl common package -DskipTests
 
-# ── Stage 2: runtime — JRE 17 (engine is precompiled) + python3 (stdlib only)
-#    for the orchestrator/smoke; nothing else. The ENGINE runs as the non-root
-#    ddlapply user (uid/gid 10001): the entrypoint wrapper repairs the evidence
-#    bind-mount ownership as root, then setpriv-drops before any engine work. ─
-FROM eclipse-temurin:17-jre
+# ── Stage 2: runtime — Python 3.11.9 EXACT (official python:3.11.9-slim,
+#    Debian bookworm) + JRE 17 headless (engine is precompiled). The pinned
+#    Python is **3.11.9** (versions.pin PYTHON_VERSION): the previous temurin
+#    base's `apt-get python3` drifted with the distro (2026-08-24 image shipped
+#    3.14.4 — VM-PYTHON-002 DRIFT_RECORDED_PIN_UNSATISFIED; Ubuntu resolute has
+#    no python3.11 in-repo and the deadsnakes PPA key fetch is build-flaky).
+#    `python:3.11.9-slim` IS the pin — no drift possible. The ENGINE runs as
+#    the non-root ddlapply user (uid/gid 10001): the entrypoint wrapper
+#    repairs the evidence bind-mount ownership as root, then setpriv-drops
+#    before any engine work. ─
+FROM python:3.11.9-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
+    && python3 --version \
+    && java -version \
     && groupadd -g 10001 ddlapply \
     && useradd -u 10001 -g 10001 -d /nonexistent -s /usr/sbin/nologin ddlapply
 

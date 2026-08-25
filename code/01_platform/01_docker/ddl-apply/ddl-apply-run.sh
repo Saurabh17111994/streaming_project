@@ -25,12 +25,16 @@
 #   self-test   the engine's python unit tests (test_ddl_apply.py +
 #               test_evidence_ownership_check.py), no cluster needed — sibling
 #               host tooling tests are deliberately NOT in this image
+#   version     print the running Python version and assert it matches the
+#               pinned PYTHON_VERSION from versions.pin (VM-PYTHON-002 —
+#               catches distro drift like the 3.14.4 image before exit 0)
 #
 # FLUSS_BOOTSTRAP defaults to fluss-coordinator:9123 — compose DNS inside
 # trading-net, so no host /etc/hosts aliases are involved.
 set -euo pipefail
 
 SCRIPTS=/app/code/01_platform/04_scripts
+PIN_FILE="$SCRIPTS/versions.pin"
 MATRIX_EVIDENCE="${DDL_APPLY_MATRIX_EVIDENCE:-/app/logs/schema-compat/composite-pk-raw-client-20260815.md}"
 # In-container marker: the entrypoint wrapper already emitted the APPLIED
 # ownership contract, so the engine's host-style echo (ddl_apply.py
@@ -43,6 +47,26 @@ if [ "$#" -gt 0 ]; then shift; fi
 case "$cmd" in
   validate)
     exec python3 "$SCRIPTS/ddl_apply.py" "$@"
+    ;;
+  version)
+    actual="$(python3 --version 2>&1 | sed 's/^Python //')"
+    pinned="$(sed -n 's/^PYTHON_VERSION=//p' "$PIN_FILE" | head -n1)"
+    echo "python3 $(python3 --version 2>&1)"
+    echo "pinned  PYTHON_VERSION=${pinned:-<missing from versions.pin>}"
+    if [ -z "${pinned:-}" ]; then
+      echo "ddl-apply: FAIL — PYTHON_VERSION missing from versions.pin" >&2
+      exit 1
+    fi
+    # Match on the major.minor series (pin "3.11.9" accepts any 3.11.x patch —
+    # the distro/PPA ships the newest 3.11 patch, e.g. 3.11.16).
+    pin_series="${pinned%.*}"
+    actual_series="${actual%.*}"
+    if [ "$actual_series" = "$pin_series" ]; then
+      echo "ddl-apply: python version matches pin series ${pin_series} (VM-PYTHON-002)"
+    else
+      echo "ddl-apply: FAIL — python3 $actual (series ${actual_series}) != pinned series ${pin_series} (VM-PYTHON-002 drift)" >&2
+      exit 1
+    fi
     ;;
   apply)
     # Run the full 9-step contract, then validate the corpus we just wrote

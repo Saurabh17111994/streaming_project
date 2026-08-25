@@ -18,6 +18,11 @@
 FLINK_VERSION=2.2.1
 FLUSS_VERSION=0.9.1-incubating
 ZOOKEEPER_VERSION=3.9.2
+# Python runtime pin (VM-PYTHON-002). The ddl-apply image must ship this exact
+# series — enforced by `ddl-apply version` (ddl-apply-run.sh). The 2026-08-24
+# image drifted to 3.14.4 (apt default on the temurin base); the image now
+# installs python3.11 explicitly to match. Host tooling may run a newer 3.11.x.
+PYTHON_VERSION=3.11.9
 BROKER_PROTOCOL=go-arrow-v0.0.0-20260622-7cce1630 (module:github.com/arrow-trade/go-arrow, upstream base 7cce1630 2026-06-22 + in-repo patches R-101..R-243, vendored third_party/go-arrow replace, tree sha256:f622f8a9a0cf4916869184d423523f819bd42202c256462466bf621e5e3af368) PINNED
 ARROW_API_CONTRACT=v2026-05 (captured from Arrow_broker repo, docs/04_contracts/arrow_broker.md)
 SCHEMA_LIFECYCLE=v1 (all 6 schema-state classes + 5 evolution classes implemented)

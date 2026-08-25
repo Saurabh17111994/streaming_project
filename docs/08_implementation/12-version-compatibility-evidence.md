@@ -24,7 +24,7 @@ tables.
 | Boundary | Status 2026-08-24 | Evidence offline (laptop) | Needs market/4VM |
 | --- | --- | --- | --- |
 | VM-JAVA-001 Java 17.0.19 | PARTIALLY (pin verified) | `java -version 17.0.19` + `mvn -v` Java 17 + `code/pom.xml <flink.version>2.2.1</flink.version> <fluss.version>0.9.1-incubating` compiles (`common 17/17` historical 2026-08-24, `compute 23/23` historical 2026-08-24 — not C6 466/247/387) — version_matrix_verify.py OK pin discipline, pin-check.sh 4/4 PASS | Live build smoke on Flink 2.2 image `LOCAL-INT-002` full stack |
-| VM-PYTHON-002 Python 3.11.9 | PARTIALLY (pin verified) | `python3 --version 3.11.15` (3.11 series) + `ddl_apply.py` + `version_matrix_verify.py` parse OK, `pin-check.sh` corpus 6/6 golden OK | Capture Python 3.11.9 exact from executor image digest |
+| VM-PYTHON-002 Python 3.11.9 | COMPATIBLE (2026-08-25) | `ddl-apply version` in rebuilt image: `python3 Python 3.11.9` == pin `PYTHON_VERSION=3.11.9` (image rebuilt on `python:3.11.9-slim` + `openjdk-17-jre-headless`); self-test `DDL-APPLY-RESULT: PASS exit=0`; `pin-check.sh` 4/4 PASS | None — pin now enforced at build + runtime (`ddl-apply version`); host tooling 3.11.15 in-family |
 | VM-FLINK-SRV-003 / VM-FLINK-API-004 Flink 2.2.1 | PARTIALLY (pin verified) | `code/pom.xml` flink 2.2.1 managed deps compile green; `docker compose config` parses `flink-jobmanager:2.2.1` via fluss-flink-2.2 connector `5dddeb...` SHA, `flink-streaming-java` `bb41cde...` | Live `COMPAT-FLINK-001` checkpoint/restore/rescale + `SIG-HARNESS-003/005` on Docker Flink 2.2.1 |
 | VM-FLUSS-SRV-005 Fluss 0.9.1-incubating | COMPATIBLE_WITH_LIMITATION (2026-08-24) | 27 DDL files exist, `pin-check` PASS, `version_matrix.yaml` result COMPATIBLE_WITH_LIMITATION (2026-08-24: changelog FULL SCH-14 + bucket-skew COMPAT-FLUSS-006 closed; retention/lake create-only limits recorded) | Replication/failover (multi-node) remains UNKNOWN; lake re-enable create-only limitation |
 | VM-FLUSS-CLI-006 Fluss client 0.9.1 | COMPATIBLE (2026-08-24) | `versions.pin` `FLUSS_CLIENT_JAR_SHA256=6921994a2067...` official client jar, `CompatFlussIntegrationTest` compile vs 0.9.1-incubating 100/1000 appends 0 loss | Routing/bucket-key stress + connector checkpoint closed 2026-08-24; replication = server/topology boundary |
@@ -100,13 +100,17 @@ flipped `COMPATIBLE` (`EVIDENCE_RECORDED_LIVE` / `EVIDENCE_RECORDED`):
 | VM-FLUSS-CONN-007 | `COMPATIBLE` | 2026-08-24 flip: COMPAT-FLINK-001 rescale 1/1 (2026-08-24) + SIG-INT-001/002 3/3 (2026-08-13) + STATE-COMPAT-001 serializer half (2026-08-15) — connector checkpoint/restore/rescale + sink partial-visibility proven on the 2.2.1 boundary |
 | VM-FLUSS-SRV-005 | `COMPATIBLE_WITH_LIMITATION` | 2026-08-24: changelog FULL closed (SCH-14 `compatFluss003ChangelogFullImage`); bucket-skew closed (COMPAT-FLUSS-006); limitation = replication/failover (multi-node) + retention/lake create-only (`LIMITATION_RECORDED_REPLICATION_PENDING`) |
 | VM-FLUSS-CLI-006 | `COMPATIBLE` | 2026-08-24: client compile + runtime + routing/bucket-key stress (COMPAT-FLUSS-006) on official 0.9.1-incubating jar; replication is a server/topology boundary |
+| VM-PYTHON-002 | `COMPATIBLE` (2026-08-25, DRIFT RESOLVED) | ddl-apply image rebuilt on `python:3.11.9-slim` — image `python3 --version` == `3.11.9` == pin; `ddl-apply version` subcommand (new) asserts series vs `PYTHON_VERSION` in `versions.pin` (pin added 2026-08-25); self-test PASS. 2026-08-24 record (historical): image shipped 3.14.4 (`DRIFT_RECORDED_PIN_UNSATISFIED`) |
 | VM-ARROW-010 | `UNKNOWN` (partial evidence) | URL `https://edge.arrow.trade` pinned + TOTP AutoLogin proven live 2026-08-21 (`execution-auth-001`); order round-trip + timeout/retry pins remain (market hours + approval) |
 | VM-OPENOBS-011 | `COMPATIBLE_WITH_LIMITATION` | OPS-INT-001 (redaction) + live OTLP / dashboards 8/8 / 43 alerts + OPS-FAIL-001 DR-004 outage drill 2026-08-24; limitation = multi-host M3 + PERF-PROD-60000 |
 
-Python drift is a real finding from this pass: proposed `3.11.9` never matched any
-runtime — host is 3.11.15 (3.11-series, acceptable for tooling) and the execution
-image runs 3.14.4. The pin must be re-decided before the DDL gate can treat
-VM-PYTHON-002 as `COMPATIBLE`.
+Python drift was a real finding from the 2026-08-24 pass: proposed `3.11.9` matched no
+runtime — host was 3.11.15 (3.11-series, acceptable for tooling) and the execution
+image ran 3.14.4. **RESOLVED 2026-08-25:** the ddl-apply runtime stage was rebuilt on
+the exact pinned base `python:3.11.9-slim` (official image = the pin, no distro
+drift possible) + `openjdk-17-jre-headless` for the precompiled engine;
+`PYTHON_VERSION=3.11.9` was added to `versions.pin`; a `ddl-apply version` subcommand
+now proves the series at runtime. VM-PYTHON-002 flipped `COMPATIBLE` 2026-08-25.
 
 **Live evidence recorded (2026-08-13, BROKER-MD-001):** real wire frames from the HFT
 Arrow feed (socket.arrow.trade HFT 40/196 B zstd LE) captured raw and decoded to
@@ -148,8 +152,9 @@ Run the evidence in this order (matches the mandatory build order):
 - `VM-JAVA-001`, `VM-PYTHON-002`, `VM-FLINK-SRV-003`, `VM-FLINK-API-004`,
   `VM-FLUSS-SRV-005`, `VM-FLUSS-CONN-007` are `COMPATIBLE`.
   (2026-08-24: JAVA + FLINK-SRV/API + FLUSS-CONN-007 done (CONN flipped
-  COMPATIBLE 2026-08-24); PYTHON-002 is pinned `3.11.9` but the execution
-  image runs 3.14.4 — the drift must be resolved first; FLUSS-SRV-005 is
+  COMPATIBLE 2026-08-24); PYTHON-002 flipped `COMPATIBLE` 2026-08-25
+  (image rebuilt on `python:3.11.9-slim` — drift from 3.14.4 resolved);
+  FLUSS-SRV-005 is
   `COMPATIBLE_WITH_LIMITATION` since 2026-08-24 — replication/failover and
   retention/lake create-only limits remain (multi-node evidence pending) —
   so the gate's `COMPATIBLE` requirement is still not met there.)

@@ -445,7 +445,7 @@ Canonical draft artifact: `code/01_platform/04_scripts/version_matrix.yaml` (pro
 | Boundary | Required value | Evidence source | Compatibility result | Owner | Status |
 | --- | --- | --- | --- | --- | --- |
 | Java runtime | `17.0.19` (eclipse-temurin) | Runtime image/build record | Must match Flink/Fluss clients | Platform | Pinned, awaiting evidence |
-| Python runtime | `3.11.9` | Runtime image/build record | Must match Executor dependencies | Platform | Pinned, awaiting evidence |
+| Python runtime | `3.11.9` | Runtime image/build record | Must match Executor dependencies | Platform | **COMPATIBLE (2026-08-25)** — image rebuilt on `python:3.11.9-slim`; `ddl-apply version` proves series vs `PYTHON_VERSION` in `versions.pin` |
 | Flink server/image | `2.2.1` | Official artifact/digest | Must match job API and connector | Platform | Pinned, awaiting evidence |
 | Flink Java API | `2.2.1` | Dependency lock | Must match server | Platform | Pinned, awaiting evidence |
 | Fluss server | `0.9.1-incubating` | Official artifact/digest | DDL/features tested | Platform | Pinned, awaiting evidence |
