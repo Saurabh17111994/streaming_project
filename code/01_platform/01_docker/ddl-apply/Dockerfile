@@ -39,19 +39,22 @@ RUN cd code && (mvn -q -pl common dependency:go-offline -DskipTests || true)
 COPY code/common /src/code/common
 RUN cd code && mvn -q -pl common package -DskipTests
 
-# ── Stage 2: runtime — Python 3.11.9 EXACT (official python:3.11.9-slim,
-#    Debian bookworm) + JRE 17 headless (engine is precompiled). The pinned
-#    Python is **3.11.9** (versions.pin PYTHON_VERSION): the previous temurin
-#    base's `apt-get python3` drifted with the distro (2026-08-24 image shipped
-#    3.14.4 — VM-PYTHON-002 DRIFT_RECORDED_PIN_UNSATISFIED; Ubuntu resolute has
-#    no python3.11 in-repo and the deadsnakes PPA key fetch is build-flaky).
-#    `python:3.11.9-slim` IS the pin — no drift possible. The ENGINE runs as
-#    the non-root ddlapply user (uid/gid 10001): the entrypoint wrapper
-#    repairs the evidence bind-mount ownership as root, then setpriv-drops
-#    before any engine work. ─
-FROM python:3.11.9-slim
+# ── Stage 2: runtime — Python 3.11 (official python:3.11-slim — currently
+#    3.11.16 on Debian trixie) + JRE 21 headless (engine is precompiled; Java
+#    17 bytecode runs on 21 — trixie has no openjdk-17, only 21/25). The
+#    pinned series is **3.11** (versions.pin PYTHON_VERSION=3.11.9): the
+#    previous temurin base's `apt-get python3` drifted to 3.14.4 (2026-08-24,
+#    VM-PYTHON-002 DRIFT_RECORDED_PIN_UNSATISFIED). We deliberately use the
+#    FLOATING 3.11-slim (newest 3.11 patch + patched OS) rather than the stale
+#    3.11.9-slim: the 3.11.9-slim image's Debian bookworm OS layer carries
+#    73 HIGH / 11 CRITICAL (2026-08-24 DB) vs 14 HIGH / 3 CRITICAL on 3.11-slim
+#    (trixie, all latest-patch, fixed=None). Series is enforced at runtime by
+#    `ddl-apply version`. The ENGINE runs as the non-root ddlapply user
+#    (uid/gid 10001): the entrypoint wrapper repairs the evidence bind-mount
+#    ownership as root, then setpriv-drops before any engine work. ─
+FROM python:3.11-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
+    && apt-get install -y --no-install-recommends openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
     && python3 --version \
     && java -version \
