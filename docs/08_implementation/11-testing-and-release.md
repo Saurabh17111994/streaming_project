@@ -367,7 +367,7 @@ Swarm control-plane HA (Raft) is tested separately from ZooKeeper HA and Fluss H
 | `SEC-TRANSPORT-001` | TLS and storage-encryption verification for broker, Arrow REST, S3, and internal sensitive paths | Unencrypted or unverified transport/storage is rejected and readiness is false. |
 | `SEC-CRED-001` | Secret rotation, revocation, expiry, and invalid-secret startup | Access is removed or restored safely; no secret is exposed in logs or evidence. |
 | `SEC-AUTHZ-001` | Least-privilege table, state, broker, and control permissions | Authorized operations work; every excessive or unauthorized operation is denied and audited. |
-| `SEC-IMAGE-001` | Pinned image digest, SBOM, and vulnerability-policy validation | Mutable, unapproved, or policy-failing images block deployment. |
+| `SEC-IMAGE-001` | Pinned image digest, SBOM, and vulnerability-policy validation | Mutable, unapproved, or policy-failing images block deployment. **Vuln policy (2026-08-25, Platform):** deployment is blocked when any image carries a **CRITICAL with an available fix**. CRITICALs without a fix, and HIGHs with an available fix, require a **dated, owner-signed waiver** recorded in the scan evidence. HIGHs without a fix are **accepted risk**, documented each scan. Applies to the OS layer until the library layer is scannable (Java DB network-blocked as of 2026-08-25). |
 | `SEC-AUDIT-001` | Audit access, deletion, retention, and legal-hold policy | Unauthorized access/deletion is denied and retention/legal-hold behavior is evidenced. |
 
 #### M2 deployment gate — offline stack validation + one-host Swarm mimic
