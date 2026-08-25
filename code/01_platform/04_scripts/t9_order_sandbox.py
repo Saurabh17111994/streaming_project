@@ -74,9 +74,17 @@ SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 COMPOSE = os.path.join(ROOT, "code", "01_platform", "01_docker", "docker-compose.yml")
 EVIDENCE_DIR_DEFAULT = os.path.join(ROOT, "logs", "nautilus-execution")
 
-# BI-EQ x1 safe instrument (t9paper INPUT-11) and the placement gate.
-BIEQ_SYMBOL = "BI-EQ"
-BIEQ_INSTRUMENT_TOKEN = 762583
+# RCF x1 safe instrument (live-verified 2026-08-25) and the placement gate.
+# NOTE: the original t9paper INPUT-11 instrument BILCARE (token 762583) is
+# DELISTED / absent from Arrow's live NSE CM instrument list — the order API
+# rejects it with 400 "invalid trading symbol". Replaced with RCF
+# (RASHTRIYA CHEMICALS, token 2866, Symbol "RCF", TradingSymbol "RCF-EQ",
+# lot 1, band 95.23-142.83) which IS in the live list. `symbol` sent to
+# POST /order/regular must be the TradingSymbol column ("RCF-EQ") — the plain
+# Symbol "RCF" is rejected with 400 "invalid trading symbol", while "RCF-EQ"
+# is recognized (verified live 2026-08-25).
+BIEQ_SYMBOL = "RCF-EQ"
+BIEQ_INSTRUMENT_TOKEN = 2866
 BIEQ_QUANTITY = 1
 APPROVED_OPERATOR = "saurabh"
 
@@ -200,7 +208,7 @@ def verify_envelope(json_text, secret, expected_version, now_ms):
 
 
 def bieq_payload(instruction_id="T9-SB-0001", candidate_id="cand-T9-0001",
-                 trade_context_id="tc-T9-0001", limit_price_paise=5050,
+                 trade_context_id="tc-T9-0001", limit_price_paise=10500,
                  request_hash="6304f2a4a8f25c0c3a4e7429a5bd2bbd2eb58d4d2d3b8a7c9d5f6e1a2b3c4d5e6"):
     """Payload exactly as NautilusIntentClient.sendWithFence() serializes it
     (INSTRUMENTATION: field order is part of the canonical bytes — do not

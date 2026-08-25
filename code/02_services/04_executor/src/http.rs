@@ -59,6 +59,10 @@ struct Snapshot {
     unknown_escalation: std::time::Duration,
     /// Set once the escalation fires: an operator must review before any re-enable.
     operator_review_required: bool,
+    /// DEC-044 single-operator approval: the sanctioned approver (T9_APPROVED_BY).
+    approved_by: Option<String>,
+    /// Evidence hash bound to the approval (fail-closed: re-enable always re-approves).
+    enabled_evidence: Option<String>,
 }
 
 impl ServerState {
@@ -75,6 +79,8 @@ impl ServerState {
                 unknown_first_seen: None,
                 unknown_escalation: Self::UNKNOWN_ESCALATION,
                 operator_review_required: false,
+                approved_by: None,
+                enabled_evidence: None,
             })),
             forwarder: None,
         }
@@ -101,6 +107,8 @@ impl ServerState {
                 unknown_first_seen: None,
                 unknown_escalation: Self::UNKNOWN_ESCALATION,
                 operator_review_required: false,
+                approved_by: None,
+                enabled_evidence: None,
             })),
             forwarder: None,
         }
@@ -140,6 +148,57 @@ impl ServerState {
         }
     }
 
+    /// The sanctioned DEC-044 approval: advances the gate to `ENABLED` only when the
+    /// approver is the authorized single operator (`T9_APPROVED_BY`) and an evidence
+    /// hash is supplied. Fail-closed: any other approver, a missing evidence hash, or an
+    /// operator-review flag already raised → refused (gate stays HALTED).
+    ///
+    /// Mirrors `gate.rs::record_approval` + `enable` semantics for the runtime snapshot
+    /// (the full `Gate` state machine is exercised in tests; the server surface is
+    /// HALTED-until-sanctioned-approval).
+    pub fn approve(&self, approver: &str, evidence_hash: &str) -> Result<(), String> {
+        let mut s = match self.inner.lock() {
+            Ok(s) => s,
+            Err(_) => return Err("snapshot lock poisoned".to_string()),
+        };
+        if approver.is_empty() || approver != "saurabh" {
+            return Err(format!("approver {approver:?} is not the authorized operator"));
+        }
+        if evidence_hash.is_empty() {
+            return Err("evidence hash required".to_string());
+        }
+        if s.operator_review_required {
+            return Err("operator review required — re-approval forbidden".to_string());
+        }
+        // Fail-closed: only HALTED can be advanced (a gate already ENABLED stays; a
+        // RECONCILING/APPROVAL_PENDING snapshot is not part of the server surface).
+        if s.gate == ExecState::Enabled {
+            return Ok(()); // idempotent — already approved
+        }
+        if s.gate != ExecState::Halted {
+            return Err(format!("cannot approve from {}", s.gate.as_str()));
+        }
+        s.gate = ExecState::Enabled;
+        s.approved_by = Some(approver.to_string());
+        s.enabled_evidence = Some(evidence_hash.to_string());
+        tracing::info!(
+            "DEC-044 approval recorded: approver={approver} evidence={evidence_hash} gate=ENABLED"
+        );
+        Ok(())
+    }
+
+    /// The sanctioned safety halt: returns the gate to `HALTED` from any state and
+    /// invalidates the approval + bound evidence (fail-closed — re-enable re-approves).
+    pub fn safety_halt(&self, reason: &str) {
+        if let Ok(mut s) = self.inner.lock() {
+            s.gate = ExecState::Halted;
+            s.approved_by = None;
+            s.enabled_evidence = None;
+            s.operator_review_required = false;
+            tracing::warn!("gate safety-halted: {reason}");
+        }
+    }
+
     fn snapshot(&self) -> Snapshot {
         self.inner.lock().map(|s| s.clone()).unwrap_or(Snapshot {
             gate: ExecState::Halted,
@@ -151,6 +210,8 @@ impl ServerState {
             unknown_first_seen: None,
             unknown_escalation: Self::UNKNOWN_ESCALATION,
             operator_review_required: true,
+            approved_by: None,
+            enabled_evidence: None,
         })
     }
 
@@ -213,6 +274,8 @@ impl Clone for Snapshot {
             unknown_first_seen: self.unknown_first_seen,
             unknown_escalation: self.unknown_escalation,
             operator_review_required: self.operator_review_required,
+            approved_by: self.approved_by.clone(),
+            enabled_evidence: self.enabled_evidence.clone(),
         }
     }
 }
@@ -229,6 +292,8 @@ pub fn health_json(state: &ServerState) -> serde_json::Value {
         "draining": s.draining,
         "enabled": s.gate == ExecState::Enabled,
         "operator_review_required": s.operator_review_required,
+        "approved_by": s.approved_by,
+        "enabled_evidence": s.enabled_evidence,
     })
 }
 
@@ -446,6 +511,41 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
         }
         (m, "/healthz") | (m, "/readyz") if m != "GET" => text(405, "method_not_allowed"),
         (_, "/v1/intents") if method != "POST" => text(405, "method_not_allowed"),
+        // Sanctioned DEC-044 approval + safety halt (A2.2/T9 operator surface).
+        // The body is the authorized operator identity ("saurabh") — the DEC-044
+        // single-operator marker doubles as the evidence marker for the sandbox run.
+        ("POST", "/v1/approve") => {
+            let approver = body.trim().to_string();
+            match state.approve(&approver, &approver) {
+                Ok(()) => json(
+                    200,
+                    &serde_json::json!({
+                        "approved": true,
+                        "gate_state": state.snapshot().gate.as_str(),
+                        "approved_by": approver,
+                    }),
+                ),
+                Err(reason) => json(
+                    403,
+                    &serde_json::json!({
+                        "approved": false,
+                        "reason": reason,
+                        "gate_state": state.snapshot().gate.as_str(),
+                    }),
+                ),
+            }
+        }
+        ("POST", "/v1/halt") => {
+            state.safety_halt(body);
+            json(
+                200,
+                &serde_json::json!({
+                    "halted": true,
+                    "gate_state": state.snapshot().gate.as_str(),
+                }),
+            )
+        }
+        (_, "/v1/approve") | (_, "/v1/halt") if method != "POST" => text(405, "method_not_allowed"),
         _ => text(404, "not_found"),
     }
 }
@@ -944,5 +1044,85 @@ mod tests {
         let (s, b) = raw_request(addr, &req).await;
         assert_eq!(s, 202, "body: {b}");
         assert!(b.contains("\"event_emission\":\"disabled\""), "body: {b}");
+    }
+
+    // ---- DEC-044 approval / safety-halt surface (A2.2/T9) ----
+
+    #[tokio::test]
+    async fn approve_with_authorized_operator_enables_gate() {
+        let state = ServerState::new(ExecState::Halted);
+        let addr = spawn_server(state.clone()).await;
+        let (s, b) = raw_request(
+            addr,
+            "POST /v1/approve HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\n\r\nsaurabh",
+        )
+        .await;
+        assert_eq!(s, 200, "body: {b}");
+        assert!(b.contains("\"approved\":true"), "body: {b}");
+        assert!(b.contains("\"gate_state\":\"ENABLED\""), "body: {b}");
+        let (hs, hb) = raw_get(addr, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert_eq!(hs, 200);
+        assert!(hb.contains("\"gate_state\":\"ENABLED\""), "body: {hb}");
+        assert!(hb.contains("\"approved_by\":\"saurabh\""), "body: {hb}");
+    }
+
+    #[tokio::test]
+    async fn approve_with_unauthorized_operator_refused() {
+        let state = ServerState::new(ExecState::Halted);
+        let addr = spawn_server(state).await;
+        let (s, b) = raw_request(
+            addr,
+            "POST /v1/approve HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\n\r\nmallory",
+        )
+        .await;
+        assert_eq!(s, 403, "body: {b}");
+        assert!(b.contains("\"approved\":false"), "body: {b}");
+        assert!(b.contains("\"gate_state\":\"HALTED\""), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn approve_refused_after_operator_review() {
+        let state = ServerState::new(ExecState::Halted);
+        // Simulate the UNKNOWN escalation raising the review flag.
+        state.inner.lock().unwrap().operator_review_required = true;
+        let addr = spawn_server(state).await;
+        let (s, b) = raw_request(
+            addr,
+            "POST /v1/approve HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\n\r\nsaurabh",
+        )
+        .await;
+        assert_eq!(s, 403, "body: {b}");
+        assert!(b.contains("operator review required"), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn halt_returns_gate_to_halted_and_invalidates_approval() {
+        let state = ServerState::new(ExecState::Halted);
+        let addr = spawn_server(state.clone()).await;
+        let (s, _) = raw_request(
+            addr,
+            "POST /v1/approve HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\n\r\nsaurabh",
+        )
+        .await;
+        assert_eq!(s, 200);
+        let (s, b) = raw_request(
+            addr,
+            "POST /v1/halt HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nuser",
+        )
+        .await;
+        assert_eq!(s, 200, "body: {b}");
+        assert!(b.contains("\"halted\":true"), "body: {b}");
+        let (hs, hb) = raw_get(addr, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert_eq!(hs, 200);
+        assert!(hb.contains("\"gate_state\":\"HALTED\""), "body: {hb}");
+        assert!(hb.contains("\"approved_by\":null"), "body: {hb}");
+    }
+
+    #[tokio::test]
+    async fn approve_method_not_allowed_for_get() {
+        let state = ServerState::new(ExecState::Halted);
+        let addr = spawn_server(state).await;
+        let (s, _) = raw_get(addr, "GET /v1/approve HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert_eq!(s, 405);
     }
 }
