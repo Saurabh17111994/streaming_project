@@ -85,6 +85,7 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clockwatch::{FailingSource, FixedOffsetSource};
     use crate::config::ServiceConfig;
 
     fn halted_config() -> ServiceConfig {
@@ -123,5 +124,39 @@ mod tests {
         assert!(!rt.health_json()["draining"].as_bool().unwrap());
         rt.begin_shutdown();
         assert!(rt.health_json()["draining"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn clock_drift_enforcement_uses_configured_limit_and_stays_fail_closed() {
+        // Ties the config value (CLOCK_OFFSET_LIMIT_MS=200) through the runtime's
+        // enforce_clock_drift to the DriftMonitor classification: at the limit it is
+        // WITHIN (no halt — the gate was already HALTED at boot and stays so), and an
+        // unmeasurable probe fails closed to HALTED rather than ever opening the gate.
+        let mut rt = Runtime::init(halted_config()).unwrap();
+        let mut within = DriftMonitor::new(200, Box::new(FixedOffsetSource(200)));
+        assert_eq!(
+            rt.enforce_clock_drift(&mut within),
+            DriftStatus::Within(200)
+        );
+        assert_eq!(rt.gate_state(), ExecState::Halted);
+
+        // The offline slice boots HALTED, so a beyond-limit sample cannot "halt" further —
+        // the fail-closed contract is that it must NEVER leave HALTED. An unmeasurable
+        // probe exercises the same enforcement path and must keep the gate HALTED.
+        let mut beyond = DriftMonitor::new(200, Box::new(FixedOffsetSource(500)));
+        assert_eq!(
+            rt.enforce_clock_drift(&mut beyond),
+            DriftStatus::Beyond(500)
+        );
+        let mut failing = DriftMonitor::new(200, Box::new(FailingSource));
+        assert!(matches!(
+            rt.enforce_clock_drift(&mut failing),
+            DriftStatus::Unmeasurable(_)
+        ));
+        assert_eq!(
+            rt.gate_state(),
+            ExecState::Halted,
+            "fail-closed: never leaves HALTED"
+        );
     }
 }

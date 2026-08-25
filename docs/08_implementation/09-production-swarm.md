@@ -688,7 +688,7 @@ artifact that does not exist in this component yet.
 | 2 | S3 client + retry for DR/EOD offload | no `aws-sdk-s3`; offload is a projection in-memory artifact | real S3/MinIO + durable offload wiring (**Option B** / rig) |
 | 3 | Durable Broker-KV `AttemptStore` impl + resilient writes | only `InMemoryAttemptStore` (test fixture); durable store is Postgres DDL (`25_trade_instruction_state`) not wired into the Rust gate | persistent `AttemptStore` impl + gate wiring (**Option B** / rig) |
 | 4 | Observability export via a real sink | `TelemetrySink` default is the no-op `NullSink`; no OTLP/OpenObserve client | network sink + credentials (rig) |
-| 5 | `CLOCK_OFFSET_LIMIT_MS` enforcement | declared in stack env, **zero references** in `04_executor/src` | open implementation item (see note above) |
+| 5 | `CLOCK_OFFSET_LIMIT_MS` enforcement | `DriftMonitor` (clockwatch.rs) + `Runtime::enforce_clock_drift` existed and were unit-tested, but nothing in the live boot loop invoked them | **DONE 2026-08-25 (CHG-107):** `main.rs` now arms a periodic drift monitor (interval `CLOCK_DRIFT_CHECK_INTERVAL_S`, default 30s) with `FixedOffsetSource(0)` offline (real NTP/chrony source is a Workstream-D/prod concern behind the same `OffsetSource` trait); `|offset| > CLOCK_OFFSET_LIMIT_MS` or unmeasurable → fail-closed `safety_halt()`; recovery only via sanctioned reconcile→approval→enable. Rust 206→207 tests |
 | 6 | Credentialed 50k/s, p99<100ms, one-VM-loss numbers | need a real multi-node cluster; local dev swarm is sanity-only | M3 rig |
 | 7 | Real network partition, quorum loss, ZK/Fluss/Flink failover | need live multi-node cluster + genuine fault injection | M3 rig |
 
