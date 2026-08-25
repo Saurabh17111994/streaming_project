@@ -99,6 +99,12 @@ class TabletKillChaosIntegrationTest {
     private static final int QUIESCE_POLLS = 12;
     private static final long SCAN_TIMEOUT_MS = 1_000L
             * Long.parseLong(System.getenv().getOrDefault("CHAOS_SCAN_TIMEOUT_SEC", "600"));
+    // Full-log invariant scans take minutes on the dev box (observed 2026-08-25:
+    // 11.5M rows = ~3m49s), so the post-recovery invariant scan is bounded by
+    // SCAN_TIMEOUT_MS (600s default), NOT by the 60s attempt bound that only
+    // exists to keep leader-less/loading scans from hanging forever.
+    private static final long POST_KILL_SCAN_BOUND_SEC = Long.parseLong(
+            System.getenv().getOrDefault("CHAOS_POST_KILL_SCAN_BOUND_SEC", "600"));
 
     /**
      * Runs {@code body} on a daemon worker with a hard wall-clock bound.
@@ -123,6 +129,34 @@ class TabletKillChaosIntegrationTest {
                     + bound.toSeconds() + "s (leader-less client or slow tablet "
                     + "replay) — will retry");
         }
+    }
+
+    /**
+     * Fast recovery probe: subscribe to bucket 0 only and poll with short
+     * timeouts until the scanner either returns records or proves the leader
+     * is serving (no exception and no endless empty-poll). This detects
+     * "table readable again" in seconds, independent of how long a FULL
+     * 11.5M-row rescan takes (which is minutes and must not gate recovery
+     * detection — see the 2026-08-25 reproduction where the 60s attempt
+     * bound kept aborting scans that were making progress).
+     */
+    private static boolean probeReadable(Table table) throws Exception {
+        long start = System.currentTimeMillis();
+        try (LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribe(0, 0L);
+            int emptyStreak = 0;
+            while (System.currentTimeMillis() - start < 30_000) {
+                ScanRecords records = scanner.poll(Duration.ofMillis(500));
+                if (records != null && !records.isEmpty()) {
+                    return true; // records flowing -> data plane serving
+                }
+                if (emptyStreak++ > 4) {
+                    return true; // 4 consecutive clean polls, no exception -> leader serving
+                }
+                Thread.sleep(500);
+            }
+        }
+        return false;
     }
 
     // Column indexes of the schema-v2 row builder below (DDL order).
@@ -381,18 +415,44 @@ class TabletKillChaosIntegrationTest {
                     + RECOVERY_TIMEOUT.toSeconds() + "s of SIGKILL+start");
 
             ScanWindow after = null;
+            boolean readable = false;
             while (System.currentTimeMillis() < deadline) {
                 try {
-                    after = withAttemptBound("post-kill log scan",
-                            Duration.ofSeconds(60), () -> scanWindow(table, scanLimit));
+                    readable = probeReadable(table);
+                } catch (Exception e) {
+                    System.out.println("DUR-TABLETKILL-001: probe error (will retry): " + e);
+                }
+                if (readable) {
+                    System.out.println("DUR-TABLETKILL-001: table readable after probe ("
+                            + ((System.currentTimeMillis() - (deadline - RECOVERY_TIMEOUT.toMillis()))
+                                    / 1000) + "s) — running the full invariant scan");
+                    break;
+                }
+                System.out.println("DUR-TABLETKILL-001: table not readable yet (probe) — retrying");
+                Thread.sleep(2_000);
+            }
+            assertTrue(readable, "raw_table_1 not readable within "
+                    + RECOVERY_TIMEOUT.toSeconds() + "s of tablet restart (probe)");
+            // The invariant scan re-reads the WHOLE log from offset 0; on this
+            // dev box 11.5M rows takes ~4 min, so the bound is the scan's own
+            // SCAN_TIMEOUT_MS (default 600s), NOT the 60s attempt bound that was
+            // aborting in-progress scans (2026-08-25 reproduction: 3 consecutive
+            // "did not finish within 60s" while the probe then completed the
+            // scan in 3m49s). Retried on exception up to the scan bound.
+            long scanDeadline = System.currentTimeMillis() + POST_KILL_SCAN_BOUND_SEC * 1_000L;
+            while (System.currentTimeMillis() < scanDeadline) {
+                try {
+                    after = withAttemptBound("post-kill invariant log scan",
+                            Duration.ofSeconds(POST_KILL_SCAN_BOUND_SEC),
+                            () -> scanWindow(table, scanLimit));
                     break;
                 } catch (Exception e) {
-                    System.out.println("DUR-TABLETKILL-001: table not readable yet: " + e);
+                    System.out.println("DUR-TABLETKILL-001: invariant scan retry: " + e);
                     Thread.sleep(2_000);
                 }
             }
-            assertTrue(after != null, "raw_table_1 not readable within "
-                    + RECOVERY_TIMEOUT.toSeconds() + "s of tablet restart");
+            assertTrue(after != null, "raw_table_1 invariant scan did not complete within "
+                    + POST_KILL_SCAN_BOUND_SEC + "s of the table becoming readable");
 
             // Invariants — scoped by replication factor (evidence 2026-08-22):
             // * RF >= 3 (prod contract, CHAOS_REPLICATION_REQUIRED=true / factor check

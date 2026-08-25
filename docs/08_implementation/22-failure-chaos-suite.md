@@ -1,6 +1,6 @@
 # 22 — Failure chaos suite (T13, G5 Ops)
 
-**Status:** Partially implemented — 5 runner scripts created; offline legs green. Live stack results 2026-08-24 (CHG-096, evidence `logs/phase-d-20260824T151952Z/`): 01 slot PASS, 02 TM kill **PASS** (both legs; leg B after a runner fix — this docker daemon does not auto-restart a `docker kill -s KILL`ed container despite `restart: unless-stopped`, the runner now falls back to explicit `docker start`; job survived via checkpoint failover, checkpoint strictly newer), 03 tablet kill **FAIL (reproducible 2/2)** — coordinator re-registers the tablet in ~1s but data-plane reads do not return within the drill's 180s bound on this RF1 single-tablet dev box (16 buckets, 7.8M rows); post-recovery probe returns the exact pre-kill count (no acked-row loss); prod x3 tablet validation is the actionable residual. VM-loss `multi-node` + `3k×30` still `TO_BE_VERIFIED`.
+**Status:** Partially implemented — 5 runner scripts created; offline legs green. Live stack results 2026-08-24 (CHG-096, evidence `logs/phase-d-20260824T151952Z/`): 01 slot PASS, 02 TM kill **PASS** (both legs; leg B after a runner fix — this docker daemon does not auto-restart a `docker kill -s KILL`ed container despite `restart: unless-stopped`, the runner now falls back to explicit `docker start`; job survived via checkpoint failover, checkpoint strictly newer), 03 tablet kill **FAIL (reproducible 3/3 → FIXED 2026-08-25, CHG-104)** — coordinator re-registers the tablet in ~1s but data-plane reads did not return within the drill's 180s bound on this RF1 single-tablet dev box; root cause was a **test-harness bug, not data loss**: the recovery loop conflated "is the table serving reads" (needs a small probe) with "full-log rescan of 11.5M rows" (takes ~4 min on this box), and the 60s per-attempt bound aborted in-progress scans. Fixed by separating a fast `probeReadable()` (detected recovery in **5s**) from the full invariant scan (bounded by `CHAOS_POST_KILL_SCAN_BOUND_SEC`, default 600s). Re-run 2026-08-25: **PASS** — `total-log-rows-after=11,535,601` = exact pre-kill count (LOG never shrank); RF1 tail-loss of the just-acked rows observed as expected (motivates D23 LOG x3 for prod). VM-loss `multi-node` + `3k×30` still `TO_BE_VERIFIED`.
 
 
 The four planned failure tests (plan `streaming-3000-flink-fluss-hardening.md`
@@ -129,7 +129,10 @@ the single-tablet dev compose. A truncated tail (repair-tablet.sh symptom)
 surfaces as a missing acked row / failed scan → FAIL.
 
 Env: `FLUSS_BOOTSTRAP`, `TABLET_CONTAINER`, `TABLET_KILL_ROWS` (default 25),
-`CHAOS_REPLICATION_REQUIRED`, `CHAOS_REPLICATION_MIN`.
+`CHAOS_REPLICATION_REQUIRED`, `CHAOS_REPLICATION_MIN`,
+`CHAOS_POST_KILL_SCAN_BOUND_SEC` (default 600 — the full-log invariant rescan
+on this dev box takes ~4 min for 11.5M rows; the old 60s attempt bound aborted
+in-progress scans, see CHG-104), `CHAOS_SCAN_TIMEOUT_SEC`.
 
 ## Test 4 — VM loss (Swarm)
 
