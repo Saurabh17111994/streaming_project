@@ -1,7 +1,7 @@
 # PROD VM Provisioning — Swarm target topology (v1 4 → v2 7 VMs)
 
 - **Plan task:** `D1.1` — VM provisioning + agent-verifiable checklist
-  (`docs/plans/2026-08-21-live-readiness-master-plan.md`, Phase D)
+  (`docs/plans/2026-08-25-live-readiness-unified-plan.md`, Phase U5)
 - **Authoritative references this doc must stay consistent with:**
   `docs/08_implementation/09-production-swarm.md`, `docs/05_deployment/02-environments.md`,
   `code/01_platform/01_docker/docker-stack.yml`, `docs/06_operations/04-dr-plan.md`,

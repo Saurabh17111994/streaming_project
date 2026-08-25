@@ -1,5 +1,5 @@
 //! Crash-exactly-once composite proof — plan Task B2
-//! (docs/plans/2026-08-21-live-readiness-master-plan.md, Phase B).
+//! (docs/plans/2026-08-25-live-readiness-unified-plan.md, Phase B).
 //!
 //! The unit suite in `src/executiongate.rs` covers each crash hook individually. This
 //! integration test walks the FULL plan checklist in one scenario against shared durable

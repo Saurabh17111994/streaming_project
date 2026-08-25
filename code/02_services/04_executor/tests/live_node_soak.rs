@@ -1,5 +1,5 @@
 //! LiveNodeRuntime long-run soak — plan Task B1
-//! (docs/plans/2026-08-21-live-readiness-master-plan.md, Phase B).
+//! (docs/plans/2026-08-25-live-readiness-unified-plan.md, Phase B).
 //!
 //! Drives the hosted run loop against the deterministic FakeBridge for a sustained
 //! interval and asserts the fail-closed contract holds for the whole soak:
