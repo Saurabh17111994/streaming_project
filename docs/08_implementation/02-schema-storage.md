@@ -130,10 +130,10 @@ Proposed routing review:
 | `Signal_Candidates`          | `instrument_token` (LOG append; R-084 KV conversion reversed 2026-08-13) | Per-instrument signal locality          |
 | `Signal_Candidates_current`  | `instrument_token` (KV primary key)                            | Colocated current-state per instrument  |
 | `Execution_Intent`           | `instruction_id`                                               | Durable immutable execution request routing |
-| `Ranking_Results`            | ~~`evaluation_id`~~ (R-136 — was `candidate_id`) — **REMOVED 2026-08-15 (CHG-005)**                         | ~~Avoid cross-instrument/null ambiguity~~    |
+| `Ranking_Results`            | ~~`evaluation_id`~~ (R-136 — was `candidate_id`) — **REMOVED from scope 2026-08-15 (CHG-005)**; DDL retained as reserved schema (in `schema_manifest.json`, applied, never written)                         | ~~Avoid cross-instrument/null ambiguity~~    |
 | `Fills`                      | `postback_event_id` when broker ID may be absent          | Every delivery is routable               |
 | `Execution_Audit`            | `audit_event_id`                                          | Gate-only events may lack instruction ID |
-| `Portfolio_Reservations`     | ~~`reservation_id`~~ — **REMOVED 2026-08-15 (CHG-005)**                                          | ~~Authoritative reservation state~~          |
+| `Portfolio_Reservations`     | ~~`reservation_id`~~ — **REMOVED from scope 2026-08-15 (CHG-005)**; DDL retained as reserved schema (in `schema_manifest.json`, applied, never written)                                          | ~~Authoritative reservation state~~          |
 | `Postback_Projection_Ledger` | `postback_event_id`                                       | Recovery workflow state                  |
 | `Safety_Halt_Requests`       | `halt_request_id`                                         | Durable control event identity           |
 | `Postback_Quarantine`        | `quarantine_id`                                           | Missing broker ID is expected            |
@@ -277,7 +277,7 @@ upstream is complete.
 > declare `enabled=true`: `raw_table_1`(696), `feature_candles_15s`(697),
 > `ingestion_quarantine`(698), `Order_Lifecycle`(699),
 > `suspected_discontinuities`(700), `Postback_Quarantine`(701),
-> ~~`Trade_Decisions`(702), `Ranking_Results`(703), `Portfolio_Reservations`(704)~~ — **REMOVED 2026-08-15 (CHG-005)**,
+> ~~`Trade_Decisions`(702), `Ranking_Results`(703), `Portfolio_Reservations`(704)~~ — **REMOVED from scope 2026-08-15 (CHG-005)** (DDLs retained as reserved schema, still in `schema_manifest.json`),
 > `Postback_Projection_Ledger`(705). Why: Fluss 0.9.1 `table.datalake.enabled`
 > is create-only — enabling after create collides with orphaned R2 lake
 > objects (`LakeTableAlreadyExistException` precedent: `candle_scale_log` drop

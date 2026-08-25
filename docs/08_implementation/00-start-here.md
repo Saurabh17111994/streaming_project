@@ -80,7 +80,7 @@ The previous single-axis status vocabulary (`Draft`, `Design-ready`, `Implementa
 | Architecture and ownership | Design-ready | Implemented | Tested-in-sandbox | Blocked |
 | Broker protocols | Design-ready | Implemented (error half VERIFIED: TOTP `execution-auth-001` len 238 + re-auth `reauth.go` + Arrow REST error 401/UNKNOWN/duplicate — `a1-*`/`a4-*`; success half `BI-EQ ×1` waits market-hours A2) | Tested-in-sandbox (error half) | Blocked |
 | DDL/schema | Design-ready | Implemented (26 tables, `ddl_sha256` + `compatibility_class`, composite-PK matrix, 21/21 live on dev Fluss) | Tested-in-sandbox (`compat-fluss-*` + matrix verifier + live DDL drills) | Blocked |
-| Ingestion | Design-ready | Implemented (576 tests 236/340; losslessness + 1800 s soak proven) | Tested-in-sandbox (10,716 rows fake→Fluss, 49k tps synthetic envelope, `full-audit` C6 `341/236/319`) | Blocked |
+| Ingestion | Design-ready | Implemented (247 ingestion + 466 common tests; losslessness + 1800 s soak proven) | Tested-in-sandbox (10,716 rows fake→Fluss, 49k tps synthetic envelope, `full-audit` C6 `466/247/387`) | Blocked |
 | Signal job | Design-ready | Implemented (Slice 1 candles + Slice 2.1 signal LIVE smoke — 205k candles/1,074 instruments/48 ckpt; `SIG-FAIL-001` ckpt-failure + `feature_candles_15s` KV-only) | Tested-in-sandbox (envelope + `make gate`/`full-audit` green) | Blocked |
 | Execution Core (Action Capture + Babysitter + Executor — Nautilus + go-arrow bridge, 2026-08-21) | Design-ready (re-scoped CHG-028) | Implemented (WP-0..8 DONE: `LiveNodeRuntime` 1800 s soak B1, crash fence B2, gate lifecycle B3, durable 4 clients B7, clock drift B8; multi-conn C1..C4 synthetic `48,660 tps`; T9 `BI-EQ ×1` live order pending market-hours) | Tested-in-sandbox (148 Rust lib + 18.7 s/1.12 s Go + 246 Java; `make gate` 12/12 2026-08-21) | Blocked |
 | Local runtime | Design-ready | Implemented (`t8` 12/12 + `execution_network_check` PASS on `--profile execution-t3`; Swarm duties on holder) | Tested-in-sandbox | Blocked |
@@ -170,7 +170,7 @@ Read these **in order** before writing any code:
 | **Contract** | [`../04_contracts/04-business-logic.md`](../04_contracts/04-business-logic.md) | Feature compute, candidate detection, filtering rules |
 | **Contract** | [`../04_contracts/10-ranking.md`](../04_contracts/10-ranking.md) | **REMOVED 2026-08-15 (CHG-005 — in-operator ranking out of scope, not deferred); stub retained for cross-reference** |
 | **Dossier** | [`04-signal-job.md`](./04-signal-job.md) | How to build — state layout, dedup, candle (**ranking/reservation/decisions REMOVED 2026-08-15, CHG-005**) |
-| **DDL** | `code/01_platform/02_sql/ddl/03_feature_candles_15s.sql`, `05_signal_candidates.sql` (**`06_ranking_results.sql`, `07_trade_decisions.sql`, `15_portfolio_reservations.sql` REMOVED 2026-08-15, CHG-005**) | Physical schemas |
+| **DDL** | `code/01_platform/02_sql/ddl/03_feature_candles_15s.sql`, `05_signal_candidates.sql` (**`06_ranking_results.sql`, `07_trade_decisions.sql`, `15_portfolio_reservations.sql` REMOVED from scope 2026-08-15, CHG-005 — DDL files retained as reserved schema: still in `schema_manifest.json` and applied by the 2026-08-24 scratch run, but never written by any job**) | Physical schemas |
 
 **What to build (in-order, inside one Flink job):**
 

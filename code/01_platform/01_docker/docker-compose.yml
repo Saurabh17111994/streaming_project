@@ -458,8 +458,19 @@ services:
     networks: [execution-net, arrow-egress]
     environment:
       EXECUTION_BRIDGE_AUTH_TOKEN: ${EXECUTION_BRIDGE_AUTH_TOKEN:-local-only}
+      # Live mode authenticates to Arrow with the real broker creds (injected
+      # below) and only observes order-updates; the executor gate stays HALTED
+      # so no order is ever sent until a sanctioned approval advances it.
+      # CHG-047: the mode MUST default to disabled, never live — the sanctioned
+      # P4.1 approval path is the only way to reach ENABLED. Override
+      # EXECUTION_BRIDGE_MODE=live only for a sanctioned sandbox run.
       EXECUTION_BRIDGE_MODE: ${EXECUTION_BRIDGE_MODE:-disabled}
       EXECUTION_BRIDGE_LISTEN_ADDR: 0.0.0.0:8787
+      ARROW_APP_ID: ${ARROW_APP_ID}
+      ARROW_APP_SECRET: ${ARROW_APP_SECRET}
+      ARROW_USER_ID: ${ARROW_USER_ID}
+      ARROW_PASSWORD: ${ARROW_PASSWORD}
+      ARROW_TOTP_KEY: ${ARROW_TOTP_KEY}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/healthz >/dev/null || exit 1"]
       interval: 5s

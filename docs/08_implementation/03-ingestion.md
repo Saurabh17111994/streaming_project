@@ -78,8 +78,8 @@ The pipe is the kernel's stdin/stdout — not a message queue, not a network hop
 | `INSTRUMENT_MANIFEST_PATH` | Yes | Path to the approved instrument-manifest CSV; the manifest version is a loader parameter (default 1) |
 | `INGESTION_MAX_BATCH_RECORDS` | Yes | Validated `1..1000` (default `1`); append each accepted tick immediately; startup fails outside range |
 | `INGESTION_MAX_BATCH_WAIT_MS` | Yes | Validated `0..100` (default `0`); do not wait for a batch; startup fails outside range |
-| `MAX_PENDING_APPEND_RECORDS` | Yes | Validated `100..1000000` (default `50000`); stop accepting new broker data and set readiness false at the limit |
-| `MAX_PENDING_APPEND_BYTES` | Yes | Default 67108864 (64 MiB; minimum 1 MiB); stop accepting new broker data and set readiness false at the limit |
+| `MAX_PENDING_APPEND_RECORDS` | Yes | Validated `100..1000000` (default `150000` — T2 3k-tune, was `50000` pre-streaming-3000); stop accepting new broker data and set readiness false at the limit |
+| `MAX_PENDING_APPEND_BYTES` | Yes | Default 201326592 (192 MiB; minimum 1 MiB) — T2 3k-tune, was 67108864/64 MiB pre-streaming-3000; stop accepting new broker data and set readiness false at the limit |
 | `PENDING_APPEND_WARNING_PERCENT` | Yes | Default 0.80 (range 0.10-0.99); emit warning alert and set readiness false at that fraction of either pending limit |
 | `APPEND_TIMEOUT_SECONDS` | Yes | Pinned client classification (default 5 s, range 1-30) |
 | `DRAIN_DEADLINE_SECONDS` | Yes | Shutdown drain deadline for pending appends (default 30 s, range 1-300); added 2026-08-15 (ING-FAIL-010) — the deadline was previously hardcoded 30 s, and a never-acking Fluss must not hang shutdown |
@@ -146,7 +146,7 @@ Fingerprint identity is best-effort, not broker-global identity ([`DEC-012`](../
 
 ### Backpressure and memory
 
-- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (50000 records) and `MAX_PENDING_APPEND_BYTES` (default 67108864 bytes / 64 MiB).
+- The pending append queue is bounded by `MAX_PENDING_APPEND_RECORDS` (default 150000 records) and `MAX_PENDING_APPEND_BYTES` (default 201326592 bytes / 192 MiB).
 - Before accepting a tick, ingestion SHALL reject it when accepting would exceed either pending limit.
 - At 80% of either pending limit: set readiness false, emit a warning event containing current records, current bytes, and both limits.
 - At 100% of either pending limit: stop broker reads/subscriptions, keep readiness false, emit a critical event, and preserve an acknowledged-loss/uncertainty record. Silently discarding data is prohibited.
@@ -163,7 +163,7 @@ When Fluss latency, retry count, pending records, or pending bytes cross a confi
 
 **Resolution:** Fluss ingests up to 1-2 million ticks/s, and the platform's theoretical cap ceiling is 90,000 ticks/s (3,000 instruments × 30 ticks/s; sustained gate 50,000 per DEC-036). The steady state and peak are within Fluss capacity with margin, so neither a durable local SSD buffer nor a controlled subscription pause is required.
 
-**Remaining defensive bound:** Bounded pending-append limits (50,000 records / 64 MiB bytes default) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
+**Remaining defensive bound:** Bounded pending-append limits (150,000 records / 192 MiB bytes default) remain. Reaching a limit is a platform-capacity fault, not a normal operating condition; the existing readiness-halt behavior applies, and indefinite in-memory buffering or silent data loss remains prohibited.
 
 ### Failure matrix
 
