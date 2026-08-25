@@ -255,8 +255,17 @@ elif [ -n "$JOB_ID" ]; then
 else
 	if [ "$JM_OK" = "1" ]; then
 		overview="$(api_get "/jobs/overview")"
+		# Field-order/omission tolerant: Flink's /jobs/overview does NOT include
+		# isStoppable in this version, and field order is jid,name,start-time,
+		# end-time,duration,state — so match jid+name+state in any order within
+		# each job object rather than demanding a fixed field sequence
+		# (2026-08-25: the old fixed-order regex never matched, breaking
+		# auto-resolve).
 		JOB_ID="$(printf '%s' "$overview" \
-			| sed -n "s/.*\"jid\":\"\\([0-9a-f]\\{32\\}\\)\",\"name\":\"$JOB_NAME\",\"isStoppable\":\\(true\\|false\\),\"state\":\"RUNNING\".*/\\1/p" \
+			| grep -oE '\{"jid":"[0-9a-f]{32}".*?"state":"(RUNNING|[A-Z_]+)"' \
+			| grep -E "\"name\":\"$JOB_NAME\"" \
+			| grep -E "\"state\":\"RUNNING\"" \
+			| sed -n "s/.*\"jid\":\"\([0-9a-f]\{32\}\)\".*/\1/p" \
 			| head -n 1)"
 		[ -n "$JOB_ID" ] || die "no RUNNING job named '$JOB_NAME' in /jobs/overview (use JOB_ID=<jid> to target explicitly)"
 		log "resolved $JOB_NAME -> job $JOB_ID (RUNNING)"
