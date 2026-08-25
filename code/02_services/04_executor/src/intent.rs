@@ -33,6 +33,80 @@ use crate::execution::client::deterministic_client_order_ref;
 /// - `time_in_force`: `DAY` | `IOC`.
 pub fn place_envelope_from_payload(payload: &serde_json::Value) -> Result<CommandEnvelope, String> {
     let instruction_id = required_str(payload, "instruction_id")?;
+    let order = order_command_from_payload(payload)?;
+
+    // Fresh attempt id per attempt + deterministic broker-facing ref (identity separation).
+    let execution_attempt_id = UUID4::new().to_string();
+    let client_order_ref =
+        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
+    let mut envelope = CommandEnvelope::new(Command::Place, &UUID4::new().to_string());
+    envelope.instruction_id = instruction_id;
+    envelope.execution_attempt_id = execution_attempt_id;
+    envelope.client_order_ref = client_order_ref;
+    envelope.order = Some(order);
+    envelope.validate().map_err(|e| e.to_string())?;
+    Ok(envelope)
+}
+
+/// Builds a cancel [`CommandEnvelope`] from a verified gateway payload
+/// (`"action": "cancel"` on `/v1/intents`).
+///
+/// Required: `instruction_id` (correlation) and `broker_order_id` (the bridge's
+/// cancel keys on the broker id — protocol validation rejects a cancel without
+/// one). The identity rule mirrors the place leg exactly: fresh UUID v4
+/// `execution_attempt_id`, deterministic 14-hex `client_order_ref` over
+/// `v1|instruction_id|execution_attempt_id`. No `order` block is attached.
+pub fn cancel_envelope_from_payload(
+    payload: &serde_json::Value,
+) -> Result<CommandEnvelope, String> {
+    let instruction_id = required_str(payload, "instruction_id")?;
+    let broker_order_id = required_str(payload, "broker_order_id")
+        .map_err(|_| "broker_order_id required for cancel".to_string())?;
+
+    let execution_attempt_id = UUID4::new().to_string();
+    let client_order_ref =
+        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
+    let mut envelope = CommandEnvelope::new(Command::Cancel, &UUID4::new().to_string());
+    envelope.instruction_id = instruction_id;
+    envelope.execution_attempt_id = execution_attempt_id;
+    envelope.client_order_ref = client_order_ref;
+    envelope.broker_order_id = broker_order_id;
+    envelope.validate().map_err(|e| e.to_string())?;
+    Ok(envelope)
+}
+
+/// Builds an amend (modify) [`CommandEnvelope`] from a verified gateway payload
+/// (`"action": "amend"` on `/v1/intents`).
+///
+/// Same identity rule as place/cancel (fresh `execution_attempt_id`, deterministic
+/// 14-hex `client_order_ref` over `v1|instruction_id|execution_attempt_id`), plus the
+/// required `broker_order_id` (the bridge's modify keys on the broker id — protocol
+/// validation rejects a modify without one, mirroring `validateCommand` in the bridge:
+/// `broker_order_id is required for modify`). The `order` block is the AMENDED order
+/// (symbol/exchange/side/order_type/quantity/limit_price_paise/product_type/
+/// time_in_force), same schema as place.
+pub fn amend_envelope_from_payload(payload: &serde_json::Value) -> Result<CommandEnvelope, String> {
+    let instruction_id = required_str(payload, "instruction_id")?;
+    let broker_order_id = required_str(payload, "broker_order_id")
+        .map_err(|_| "broker_order_id required for amend".to_string())?;
+    let order = order_command_from_payload(payload)?;
+
+    let execution_attempt_id = UUID4::new().to_string();
+    let client_order_ref =
+        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
+    let mut envelope = CommandEnvelope::new(Command::Modify, &UUID4::new().to_string());
+    envelope.instruction_id = instruction_id;
+    envelope.execution_attempt_id = execution_attempt_id;
+    envelope.client_order_ref = client_order_ref;
+    envelope.broker_order_id = broker_order_id;
+    envelope.order = Some(order);
+    envelope.validate().map_err(|e| e.to_string())?;
+    Ok(envelope)
+}
+
+/// Shared order-block mapping for place/amend (the amended order has the same
+/// schema as a fresh order; only the command/`broker_order_id` differ).
+fn order_command_from_payload(payload: &serde_json::Value) -> Result<OrderCommand, String> {
     let symbol = required_str(payload, "symbol")?;
     let exchange = required_str(payload, "exchange")?;
     let side = match required_str(payload, "side")?.as_str() {
@@ -80,45 +154,7 @@ pub fn place_envelope_from_payload(payload: &serde_json::Value) -> Result<Comman
             .ok_or_else(|| "limit_price_paise required for LIMIT".to_string())?;
         order = order.with_price(&price_paise.to_string());
     }
-
-    // Fresh attempt id per attempt + deterministic broker-facing ref (identity separation).
-    let execution_attempt_id = UUID4::new().to_string();
-    let client_order_ref =
-        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
-    let mut envelope = CommandEnvelope::new(Command::Place, &UUID4::new().to_string());
-    envelope.instruction_id = instruction_id;
-    envelope.execution_attempt_id = execution_attempt_id;
-    envelope.client_order_ref = client_order_ref;
-    envelope.order = Some(order);
-    envelope.validate().map_err(|e| e.to_string())?;
-    Ok(envelope)
-}
-
-/// Builds a cancel [`CommandEnvelope`] from a verified gateway payload
-/// (`"action": "cancel"` on `/v1/intents`).
-///
-/// Required: `instruction_id` (correlation) and `broker_order_id` (the bridge's
-/// cancel keys on the broker id — protocol validation rejects a cancel without
-/// one). The identity rule mirrors the place leg exactly: fresh UUID v4
-/// `execution_attempt_id`, deterministic 14-hex `client_order_ref` over
-/// `v1|instruction_id|execution_attempt_id`. No `order` block is attached.
-pub fn cancel_envelope_from_payload(
-    payload: &serde_json::Value,
-) -> Result<CommandEnvelope, String> {
-    let instruction_id = required_str(payload, "instruction_id")?;
-    let broker_order_id = required_str(payload, "broker_order_id")
-        .map_err(|_| "broker_order_id required for cancel".to_string())?;
-
-    let execution_attempt_id = UUID4::new().to_string();
-    let client_order_ref =
-        deterministic_client_order_ref("v1", &instruction_id, &execution_attempt_id);
-    let mut envelope = CommandEnvelope::new(Command::Cancel, &UUID4::new().to_string());
-    envelope.instruction_id = instruction_id;
-    envelope.execution_attempt_id = execution_attempt_id;
-    envelope.client_order_ref = client_order_ref;
-    envelope.broker_order_id = broker_order_id;
-    envelope.validate().map_err(|e| e.to_string())?;
-    Ok(envelope)
+    Ok(order)
 }
 
 fn required_str(payload: &serde_json::Value, key: &str) -> Result<String, String> {
@@ -284,6 +320,51 @@ mod tests {
         let mut p = cancel_payload();
         p.as_object_mut().unwrap().remove("instruction_id");
         let err = cancel_envelope_from_payload(&p).unwrap_err();
+        assert!(err.contains("instruction_id"), "err: {err}");
+    }
+
+    fn amend_payload() -> serde_json::Value {
+        let mut p = bieq();
+        p["action"] = serde_json::json!("amend");
+        p["broker_order_id"] = serde_json::json!("BRK-0001");
+        p["limit_price_paise"] = serde_json::json!(5090); // amended price
+        p
+    }
+
+    #[test]
+    fn maps_amend_payload_to_modify_envelope() {
+        let env = amend_envelope_from_payload(&amend_payload()).expect("amend payload maps");
+        assert_eq!(env.command, "modify");
+        assert_eq!(env.instruction_id, "T9-SB-0001");
+        assert_eq!(env.broker_order_id, "BRK-0001");
+        // Same deterministic identity rule as place/cancel.
+        assert_eq!(env.client_order_ref.len(), 14);
+        assert!(env.client_order_ref.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            env.client_order_ref,
+            deterministic_client_order_ref("v1", "T9-SB-0001", &env.execution_attempt_id)
+        );
+        // The order block is the AMENDED order (same schema as place).
+        let order = env.order.expect("amend carries the amended order block");
+        assert_eq!(order.exchange, "NSE");
+        assert_eq!(order.symbol, "BI-EQ");
+        assert_eq!(order.quantity, "1");
+        assert_eq!(order.price, "5090");
+    }
+
+    #[test]
+    fn amend_requires_broker_order_id() {
+        let mut p = amend_payload();
+        p.as_object_mut().unwrap().remove("broker_order_id");
+        let err = amend_envelope_from_payload(&p).unwrap_err();
+        assert!(err.contains("broker_order_id"), "err: {err}");
+    }
+
+    #[test]
+    fn amend_requires_instruction_for_correlation() {
+        let mut p = amend_payload();
+        p.as_object_mut().unwrap().remove("instruction_id");
+        let err = amend_envelope_from_payload(&p).unwrap_err();
         assert!(err.contains("instruction_id"), "err: {err}");
     }
 }

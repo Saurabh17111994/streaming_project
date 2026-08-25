@@ -162,7 +162,9 @@ impl ServerState {
             Err(_) => return Err("snapshot lock poisoned".to_string()),
         };
         if approver.is_empty() || approver != "saurabh" {
-            return Err(format!("approver {approver:?} is not the authorized operator"));
+            return Err(format!(
+                "approver {approver:?} is not the authorized operator"
+            ));
         }
         if evidence_hash.is_empty() {
             return Err("evidence hash required".to_string());
@@ -384,7 +386,8 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
                 .expect("accepted verification carries the decoded envelope");
             // Optional `action` field: absent → "place" (back-compatible with the
             // pinned schema-v1 payload bytes); "cancel" → cancel mapping (requires
-            // broker_order_id). Anything else fails closed with 422.
+            // broker_order_id); "amend" → modify mapping (requires broker_order_id
+            // + the amended order block). Anything else fails closed with 422.
             let action = envelope
                 .payload
                 .get("action")
@@ -394,6 +397,7 @@ async fn route(state: &ServerState, method: &str, path: &str, body: &str) -> Vec
             let cmd_env = match action.as_str() {
                 "place" => intent::place_envelope_from_payload(&envelope.payload),
                 "cancel" => intent::cancel_envelope_from_payload(&envelope.payload),
+                "amend" => intent::amend_envelope_from_payload(&envelope.payload),
                 other => Err(format!("unsupported action: {other}")),
             };
             let cmd_env = match cmd_env {
@@ -980,11 +984,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn intents_enabled_rejects_unknown_action_with_422() {
+    async fn intents_enabled_amend_action_modifies_placed_order() {
+        // place, then amend — the fake consumes scripts FIFO, one per send_command.
+        let mut fake = FakeBridge::new();
+        fake.script(CommandScript::Accept);
+        fake.script(CommandScript::Accept);
+        let forwarder = Arc::new(tokio::sync::Mutex::new(
+            Box::new(fake) as Box<dyn BridgeClient + Send>
+        ));
+        let state = enabled_state(forwarder);
+        let addr = spawn_server(state).await;
+        // Place first: the fake mints BRK-0001 into its order book.
+        let (sp, bp) = raw_request(addr, &encoded_bieq_request("s3cr3t").await).await;
+        assert_eq!(sp, 202, "place body: {bp}");
+        assert!(
+            bp.contains("\"broker_order_id\":\"BRK-0001\""),
+            "body: {bp}"
+        );
+        // Amend it via the action discriminator: needs broker_order_id + the
+        // amended order block; the fake accepts the modify (202 + modify ack).
+        let payload = serde_json::json!({
+            "action": "amend",
+            "instruction_id": "T9-SB-0001",
+            "broker_order_id": "BRK-0001",
+            "symbol": "BI-EQ",
+            "exchange": "NSE",
+            "side": "BUY",
+            "order_type": "LIMIT",
+            "quantity": 2,
+            "limit_price_paise": 5090,
+            "product_type": "CNC",
+            "time_in_force": "DAY",
+        });
+        let (sc, bc) =
+            raw_request(addr, &encoded_request_with_payload("s3cr3t", payload).await).await;
+        assert_eq!(sc, 202, "amend body: {bc}");
+        assert!(bc.contains("\"action\":\"amend\""), "body: {bc}");
+        assert!(
+            bc.contains("\"broker_order_id\":\"BRK-0001\""),
+            "body: {bc}"
+        );
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_amend_requires_broker_order_id_422() {
         let state = enabled_state(fake_forwarder(CommandScript::Accept));
         let addr = spawn_server(state).await;
         let mut payload: serde_json::Value = serde_json::from_str(&bieq_payload_json()).unwrap();
         payload["action"] = serde_json::json!("amend");
+        // No broker_order_id: the amend mapper must fail closed (422), never forward.
+        let req = encoded_request_with_payload("s3cr3t", payload).await;
+        let (s, b) = raw_request(addr, &req).await;
+        assert_eq!(s, 422, "body: {b}");
+        assert!(b.contains("broker_order_id"), "body: {b}");
+    }
+
+    #[tokio::test]
+    async fn intents_enabled_rejects_unknown_action_with_422() {
+        let state = enabled_state(fake_forwarder(CommandScript::Accept));
+        let addr = spawn_server(state).await;
+        let mut payload: serde_json::Value = serde_json::from_str(&bieq_payload_json()).unwrap();
+        payload["action"] = serde_json::json!("delete"); // genuinely unknown action
         let req = encoded_request_with_payload("s3cr3t", payload).await;
         let (s, b) = raw_request(addr, &req).await;
         assert_eq!(s, 422, "body: {b}");
