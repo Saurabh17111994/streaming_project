@@ -513,3 +513,46 @@ or `MemoryUtil` `InaccessibleObjectException` (`--add-opens` missing); later `in
 - Executor contract: `../04_contracts/07-executor.md`
 - Rollback and recovery: `../05_deployment/03-rollback.md`
 - Alert definitions and thresholds: `../08_implementation/10-observability.md`
+
+## Bench/load tools: faketool "dies" mid-run (PERF-AUDIT-001, 2026-08-26)
+
+**Symptom:** `bench-throughput.sh` reaches `container health: healthy` + full
+`subscription_ack acknowledged=1024`, then measurement windows produce 0 rows
+and the journal shows `connection refused` on `127.0.0.1:8899` shortly after
+the first ticks. The faketool log stops without `read end` or `send failed`.
+
+**This is a checklist, not a single cause — three independent causes were
+found on one day. Check them in order:**
+
+1. **Fake-broker auth mode missing** — the bridge must not AutoLogin against
+   faketool. If the journal shows `AutoLogin failed ... user not found`
+   (HTTP 400) and the bridge exits 2, `ARROW_FAKE_BROKER=1` is not set in
+   `docker-compose.soak.yml`. Add it (test-only mode: skip AutoLogin, fake
+   token). See CHG-111.
+2. **OTel endpoint on the gRPC port** — the javaagent speaks HTTP/protobuf, so
+   `OTEL_EXPORTER_OTLP_ENDPOINT` MUST be `http://<collector>:4318`, never
+   `:4317` (gRPC). Symptom: repeated
+   `io.opentelemetry...HttpExporter - Failed to export logs ... EOFException:
+   \n not found` in the ingestion logs, and 0 ticks appended even though the
+   bridge subscribed. See CHG-111.
+3. **Process-group kill by the launching harness** — if both the bench AND
+   its faketool child die together (0.6s apart, no `teardown` line in the
+   bench log), the bench was killed as a process group. `nohup ... &` from an
+   interactive/agent shell does NOT protect children. Launch long load/bench
+   jobs with `setsid` (or the harness's background-task launcher, e.g.
+   `bg_run`), and verify with a monitor that the child survives across
+   separate shells before trusting a 30-min run.
+
+**Fast triage (2 minutes):**
+1. `docker logs <ingestion-container> | grep -c EOFException` → 0 = OTel ok
+   (cause 2 ruled out).
+2. Journal contains `AutoLogin failed` / `user not found` → cause 1.
+3. Both bench + faketool died at the same second, no teardown → cause 3.
+4. If all three are clean, reproduce on the host (faketool + bridge, no
+   container) — if it works, the difference is the container/launcher path.
+
+**Proof the load path is healthy (before a long run):** run
+`bench-throughput.sh` and require ALL of: healthy container, 1024 ack,
+non-zero baseline `append_latency_ms_count`, 0 EOFException, AND the bench
+finishing all 3 windows with rows >= 15000. This is the smoke gate before any
+30-min PERF-AUDIT run.

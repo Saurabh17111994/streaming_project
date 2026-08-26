@@ -37,12 +37,32 @@ services:
       # OTel collector is a host-published port; the default
       # `otel-collector:4318` is unresolvable on the host network.
       OTEL_COLLECTOR_HOST: localhost:4318
+      # The OTel SDK exporter reads OTEL_EXPORTER_OTLP_ENDPOINT (NOT
+      # OTEL_COLLECTOR_HOST) — without this override it defaults to
+      # `otel-collector:4317`, which is unresolvable on the host network
+      # and fails ingestion at startup (UnknownHostException, 0 ticks
+      # appended — observed 2026-08-26 during PERF-AUDIT-001 smoke).
+      # otel-collector publishes 4317 (gRPC) + 4318 (HTTP) on the host.
+      # The javaagent's default OTLP protocol is http/protobuf (HTTP), so
+      # the endpoint MUST be the HTTP port 4318, NOT the gRPC port 4317:
+      # HTTP/1.1 against gRPC returns binary framing → OkHttp
+      # `EOFException: \n not found` → the agent exporter spins forever,
+      # wedging the JVM reader loop → 0 ticks processed (observed 199x
+      # during PERF-AUDIT-001 smoke, 2026-08-26).
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
       # Dummy credentials: fake broker performs no auth; TOTP only (ARROW_TOKEN removed 2026-08-24)
       ARROW_APP_ID: soak
       ARROW_APP_SECRET: soaksecret
       ARROW_USER_ID: soak-user
       ARROW_PASSWORD: soak-pass
       ARROW_TOTP_KEY: JBSWY3DPEHPK3PXP
+      # Test-only fake-broker auth mode (main.go isFakeBrokerMode): skip
+      # AutoLogin so the bridge can run against faketool (WS feed on
+      # localhost:8899) without hitting the real login API. Without this,
+      # the bridge AutoLogins with dummy creds -> faketool has no login
+      # REST endpoint -> HTTP 400 "user not found" -> BRIDGE_CRASH exit 2
+      # -> 0 ticks (observed 2026-08-26 PERF-AUDIT-001 smoke).
+      ARROW_FAKE_BROKER: "1"
       # T0 3-slot: env-driven N=1..3, default 1 for 1k baseline; N=3 uses 1024+1024+952 via BuildSubscriptionPlan.
       ARROW_HFT_CONNECTIONS: ${ARROW_HFT_CONNECTIONS:-1}
       GO_ARROW_SDK_VERSION: v0.0.0-20260622-7cce1630
