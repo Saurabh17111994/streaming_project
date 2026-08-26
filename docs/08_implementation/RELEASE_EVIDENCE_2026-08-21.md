@@ -3,7 +3,7 @@
 > **2026-08-25 supersession note (do not rewrite this dated evidence):** counts/status in this
 > file are the 2026-08-21 snapshot. Current truth (CHG-100/101/102 + 2026-08-25 unified plan
 > `docs/plans/2026-08-25-live-readiness-unified-plan.md`): Rust lib **196** (was 148/168), C6
-> triple **466/247/387**, `make gate` **13/13** (was 12/12), instrument **`RCF-EQ`** (BI-EQ/BILCARE
+> triple **466/247/388**, `make gate` **13/13** (was 12/12), instrument **`RCF-EQ`** (BI-EQ/BILCARE
 > delisted), auth **AutoLogin** (`ARROW_TOKEN` removed 2026-08-24). Live order `26082501010305`
 > reached Arrow 2026-08-25 — `MARGIN ERROR` (sandbox unfunded). A new `RELEASE_EVIDENCE_*.md`
 > append is a known open item (unified plan U4.4) once the funded market session lands.

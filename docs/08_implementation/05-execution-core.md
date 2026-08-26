@@ -48,7 +48,7 @@
 | Config pins | `FENCING_LEASE=30s`, `BROKER_REF` pattern, `CORRELATION=v1`, `GATE_FENCE_BITS=64` (`config.rs`) + halted-by-default via `EXECUTION_ENABLED` rejected-at-boot (`config.rs:81`, `execution_enabled=false`, `is_halted_default()`) 12/12 | 6 keys `TO_BE_VERIFIED` (Arrow timeout/retry profile, broker status/reference format+echo, Arrow request schema) |
 | Readiness / Backpressure | 11 readiness flags (broker/bridge/Fluss/gate/backlog/clock), `MAX_PENDING` logic, `health` not-ready | Load flood `MAX_PENDING_PROJECTION_RECORDS` live |
 | Metrics 30 | `telemetry` 3/3 OTLP native, bridge 14/14, Go `go-bridge` ok | O2 dashboards for execution domain |
-| Tests | Rust 207/207 (CHG-107; was 206/206), common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 12 long-running of 18 compose services) — historical count not C6 466/247/387 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
+| Tests | Rust 207/207 (CHG-107; was 206/206), common 12/12 historical 2026-08-24 (exec common), capture 4/4, gateway 1/1, Go 1 pkg ok (`make up` 12 long-running of 18 compose services) — historical count not C6 466/247/388 | `AC-INT/BAB-INT/EXE-INT/ARROW-REST-001/002`, `EXE-AUDIT-001` 1-year R2 lock |
 
 
 ## Why one dossier
@@ -692,7 +692,7 @@ each major workstream; the detailed checkboxes under that task are the actual TO
 | `T8` | **FULLY DONE OFFLINE+SINGLE-VM** | `docker-compose.yml` `execution-net`/`arrow-egress` + `execution-gateway` + `nautilus` `profiles:[execution-t3]` + `make up --profile execution-t3` → `execution-gateway Running` `execution-bridge Healthy` `nautilus Started` `gate HALTED health on 0.0.0.0:9190` | — |
 | `T9` | **PARTIAL — MARKET-OPEN 2026-08-25** | Place proven to Arrow: `POST /order/regular` `26082501010305` `RCF-EQ×1 @₹105` (broker `MARGIN ERROR` — sandbox unfunded, not code). Auth AutoLogin live. | Full chain (funded place → WS fill → reconcile → cancel) + R2 1-year lock + 4VM HA `docker-stack.yml` needs **funded market session + 4VM** |
 
-All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 207/207`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 466/247/387. T3/T9 live market: place proven to Arrow (`MARGIN ERROR` — sandbox unfunded); fill still needs funded order.
+All T0-T8 as of 2026-08-24 `FULLY DONE` offline+single-VM green (`cargo 207/207`, `common 12/12` historical 2026-08-24 + `BabysitterPositionsSource`, `go ok`, `GatewayFluss 3.5s`, `ProjectionWriter 9.0s`, `make up --profile execution-t3` 18 Running) — not current C6 466/247/388. T3/T9 live market: place proven to Arrow (`MARGIN ERROR` — sandbox unfunded); fill still needs funded order.
 ### Live single-VM evidence — 2026-08-24 07:37/07:45 UTC (fluss-coordinator:9123)
 
 ```text

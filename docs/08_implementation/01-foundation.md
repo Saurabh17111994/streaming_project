@@ -1,6 +1,6 @@
 # Foundation
 
-> **2026-08-25 current test truth:** unit suites green 466/247/387 (common/ingestion/compute) — CHG-102 doc-repair re-verified 2026-08-25: common surefire 469 raw minus 2 gated `FlussBundleReader*` reports (classes removed from src/test — C6 counts only live classes; 469−2=467 vs stated 466 — see `docs_audit` C6 for the live-class definition); compute plain-suite skip count 22 env-gated classes; CHG-100 DdlSmokeTwinSweepTest +4 (2 unit run everywhere, 2 env-gated live skipped in plain runs; common 464→466); plain-suite totals re-verified 2026-08-25 (mvn test per module).
+> **2026-08-25 current test truth:** unit suites green 466/247/388 (common/ingestion/compute) — CHG-102 doc-repair re-verified 2026-08-25: common surefire 469 raw minus 2 gated `FlussBundleReader*` reports (classes removed from src/test — C6 counts only live classes; 469−2=467 vs stated 466 — see `docs_audit` C6 for the live-class definition); compute plain-suite skip count 22 env-gated classes; CHG-100 DdlSmokeTwinSweepTest +4 (2 unit run everywhere, 2 env-gated live skipped in plain runs; common 464→466); plain-suite totals re-verified 2026-08-25 (mvn test per module).
 > The longer historical status line below remains a dated implementation record; the current
 > C6 machine gate reads this line.
 
