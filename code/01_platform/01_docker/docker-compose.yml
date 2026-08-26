@@ -57,9 +57,10 @@ x-flink-common: &flink-common
     # PROFILE alias for prod (task G4 T9: validate s3:// when PROFILE=prod or similar)
     PROFILE: ${PROFILE:-}
     # Streaming-3000 T3 G3 Compute (p=8, 16 Fluss buckets → 8 slots, hash(token) 2:1)
-    # Dev single-host keeps 8 TaskSlots (taskmanager.numberOfTaskSlots=8) so p=8
-    # runs without slot starvation; scale target 3000 instruments @50k tps avg
-    # (1024 tokens/slot at 8). Override with explicit env for tests (PARALLELISM=1).
+    # Dev single-host keeps 10 TaskSlots (was 8) — signal-job p=8 holds 8, the
+    # extra 2 host the slot-scoped babysitter + SafetyHaltJob (both pinned
+    # p=1). Scale target 3000 instruments @50k tps avg (1024 tokens/slot at 8).
+    # Override with explicit env for tests (PARALLELISM=1).
     PARALLELISM: ${PARALLELISM:-8}
     STATE_BACKEND: ${STATE_BACKEND:-rocksdb}
     STATE_BACKEND_LOCAL_DIRS: ${STATE_BACKEND_LOCAL_DIRS:-/tmp/flink-rocksdb}
@@ -83,7 +84,7 @@ x-flink-common: &flink-common
       # gate (flink_taskmanager_job_task_operator_*_latency_*). 5s interval
       # matches the collector scrape cadence; default granularity=operator.
       metrics.latency.interval: 5000
-      taskmanager.numberOfTaskSlots: 8
+      taskmanager.numberOfTaskSlots: 10
       # P9 (tracker 14 box 1007): explicit JM/TM memory envelopes. JM process
       # 1600m = heap 1024m (the 1 GiB cap the SIGNAL-warn-jvm-heap-high 900 MB
       # threshold was verified against) + off-heap 128m + metaspace 256m +

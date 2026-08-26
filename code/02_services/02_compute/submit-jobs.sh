@@ -134,6 +134,7 @@ submit_job() {
 	local job_name="$1"
 	local entry_class="$2"
 	local nonfatal="${3:-0}"
+	local parallelism="${4:-}"
 	local run_response
 	local job_id
 
@@ -159,9 +160,15 @@ submit_job() {
 	fi
 
 	echo "compute: submitting ${job_name} (${entry_class})"
+	if [ -n "${parallelism}" ]; then
+		run_response=$(curl -fsS -X POST "http://${JM}/jars/${jar_id}/run" \
+			-H "Content-Type: application/json" \
+			-d "{\"entryClass\":\"${entry_class}\",\"parallelism\":${parallelism}}")
+	else
 	run_response=$(curl -fsS -X POST "http://${JM}/jars/${jar_id}/run" \
 		-H "Content-Type: application/json" \
 		-d "{\"entryClass\":\"${entry_class}\"}")
+	fi
 	job_id=$(printf '%s' "${run_response}" \
 		| sed -n 's/.*"jobid":"\([^"]*\)".*/\1/p')
 
@@ -195,14 +202,18 @@ fi
 # Babysitter is a no-op Positions observer (MVP marker shell) — its checkpoint
 # gate failing (e.g. Fluss idle-table leader-less client quirk on an empty
 # Positions table) must NOT block the SafetyHaltJob submission that follows.
-submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob" 1
+# Parallelism pinned to 1: it is a slot-scoped observer; inheriting the
+# cluster PARALLELISM=8 would require 8 slots (impossible alongside signal-job
+# p=8 on the single-VM taskmanager).
+submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob" 1 1
 
 # SafetyHaltJob — the slot-scoped safety-halt consumer (SAFETY-INT-001).
 # Requires SAFETY_MANIFEST_TOKENS (comma-separated instrument tokens); without
 # it the job fails at startup, so skip with a clear warning in dev rather than
 # failing the whole compute container. Production MUST set it (fail-closed).
 if [ -n "${SAFETY_MANIFEST_TOKENS:-}" ]; then
-	submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob"
+	# Parallelism pinned to 1 — same slot-scoped rationale as babysitter.
+	submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob" 0 1
 	echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op; safety-halt submitted)"
 else
 	echo "compute: WARN — SAFETY_MANIFEST_TOKENS unset; SafetyHaltJob NOT submitted (safety consumer skipped in dev; set it in production)"
