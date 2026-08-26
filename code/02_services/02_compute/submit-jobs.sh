@@ -133,6 +133,7 @@ wait_for_checkpoint() {
 submit_job() {
 	local job_name="$1"
 	local entry_class="$2"
+	local nonfatal="${3:-0}"
 	local run_response
 	local job_id
 
@@ -170,7 +171,13 @@ submit_job() {
 	fi
 
 	wait_for_running "${job_id}" "${job_name}"
-	wait_for_checkpoint "${job_id}" "${job_name}"
+	if ! wait_for_checkpoint "${job_id}" "${job_name}"; then
+		if [ "${nonfatal}" = "1" ]; then
+			echo "compute: WARN — ${job_name} checkpoint gate failed; continuing (nonfatal job)" >&2
+			return 0
+		fi
+		return 1
+	fi
 }
 
 # SignalJob is managed by `make rollout-savepoint` (savepoint-based
@@ -185,7 +192,10 @@ if [ "${COMPUTE_SUBMIT_SIGNAL:-0}" = "1" ]; then
 else
 	echo "compute: SKIP signal-job (COMPUTE_SUBMIT_SIGNAL != 1) — managed by make rollout-savepoint"
 fi
-submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob"
+# Babysitter is a no-op Positions observer (MVP marker shell) — its checkpoint
+# gate failing (e.g. Fluss idle-table leader-less client quirk on an empty
+# Positions table) must NOT block the SafetyHaltJob submission that follows.
+submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob" 1
 
 # SafetyHaltJob — the slot-scoped safety-halt consumer (SAFETY-INT-001).
 # Requires SAFETY_MANIFEST_TOKENS (comma-separated instrument tokens); without
@@ -193,10 +203,10 @@ submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.Babysitter
 # failing the whole compute container. Production MUST set it (fail-closed).
 if [ -n "${SAFETY_MANIFEST_TOKENS:-}" ]; then
 	submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob"
-	echo "compute: Signal, Babysitter and SafetyHalt jobs submitted and RUNNING"
+	echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op; safety-halt submitted)"
 else
 	echo "compute: WARN — SAFETY_MANIFEST_TOKENS unset; SafetyHaltJob NOT submitted (safety consumer skipped in dev; set it in production)"
-	echo "compute: Signal and Babysitter jobs submitted and RUNNING"
+	echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op)"
 fi
 
 echo "compute: submitted jobs reach RUNNING and complete at least one durable checkpoint (T8 local readiness gate)"

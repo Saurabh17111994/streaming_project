@@ -134,6 +134,11 @@ x-flink-common: &flink-common
     FLUSS_BOOTSTRAP_SERVERS: ${FLUSS_BOOTSTRAP_SERVERS:-${FLUSS_BOOTSTRAP:-fluss-coordinator:9123}}
     FLUSS_DATABASE: ${FLUSS_DATABASE:-default}
     POSITION_STATE_TABLE: ${POSITION_STATE_TABLE:-Position_State}
+    # SafetyHaltJob reads SAFETY_MANIFEST_TOKENS via System.getenv in the
+    # JobManager JVM (the /jars/run main() runs there) — it must be on the
+    # flink-common anchor, not just the compute service. Dev default: empty →
+    # submit-jobs.sh skips the safety consumer; production MUST set it.
+    SAFETY_MANIFEST_TOKENS: ${SAFETY_MANIFEST_TOKENS:-}
 
 networks:
   trading-net:
@@ -604,8 +609,8 @@ services:
   compute:
     <<: *flink-common
     build:
-      context: ../../02_services/02_compute
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: 02_services/02_compute/Dockerfile
     depends_on: [flink-jobmanager, flink-taskmanager]
     volumes: [flink-checkpoints:/checkpoints]
     environment:
