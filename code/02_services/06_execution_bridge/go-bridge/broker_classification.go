@@ -118,16 +118,6 @@ func ClassifyBrokerResponse(statusCode int, body interface{}) string {
 	return OutcomeUnknown
 }
 
-// ClassifyBrokerResponseBytes is a convenience wrapper for raw HTTP bodies.
-func ClassifyBrokerResponseBytes(statusCode int, body []byte) string {
-	return ClassifyBrokerResponse(statusCode, body)
-}
-
-// ClassifyBrokerResponseString is a convenience wrapper for string bodies.
-func ClassifyBrokerResponseString(statusCode int, body string) string {
-	return ClassifyBrokerResponse(statusCode, body)
-}
-
 func isSuccessEnvelope(env classificationEnvelope) bool {
 	if strings.EqualFold(strings.TrimSpace(env.Status), "success") {
 		return true

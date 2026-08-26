@@ -77,7 +77,6 @@ pub struct FakeBridge {
     reconcile_calls: u64,
     command_log: Vec<String>,
     scripts: VecDeque<CommandScript>,
-    emit_fill_after_place: bool,
 }
 
 impl FakeBridge {
@@ -96,7 +95,6 @@ impl FakeBridge {
             reconcile_calls: 0,
             command_log: Vec::new(),
             scripts: VecDeque::new(),
-            emit_fill_after_place: false,
         }
     }
 
@@ -108,11 +106,6 @@ impl FakeBridge {
     /// Number of Place commands received.
     pub fn place_call_count(&self) -> u64 {
         self.place_calls
-    }
-
-    /// Number of Modify commands received.
-    pub fn modify_call_count(&self) -> u64 {
-        self.modify_calls
     }
 
     /// Number of Cancel commands received.
@@ -138,19 +131,6 @@ impl FakeBridge {
     /// Queues a scripted reply for the next `send_command` call (consumed in FIFO order).
     pub fn script(&mut self, script: CommandScript) -> &mut Self {
         self.scripts.push_back(script);
-        self
-    }
-
-    /// Enables emission of an asynchronous full-fill report after every successful place
-    /// (used to reproduce fill-driven position updates end-to-end).
-    pub fn emit_fill_after_place(&mut self, enabled: bool) -> &mut Self {
-        self.emit_fill_after_place = enabled;
-        self
-    }
-
-    /// Directly seed an order record for mass-status / query tests (offline only).
-    pub fn seed_order(&mut self, rec: OrderRecord) -> &mut Self {
-        self.orders.insert(rec.broker_order_id.clone(), rec);
         self
     }
 

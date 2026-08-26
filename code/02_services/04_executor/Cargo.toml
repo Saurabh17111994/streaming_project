@@ -32,9 +32,7 @@ nautilus-sandbox = { git = "https://github.com/nautechsystems/nautilus_trader", 
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs"] }
 anyhow = "1"
-thiserror = "2"
 async-trait = "0.1"
-futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }  # payload key order must match Java/Python signers (GatewayProtocol canonical — Jackson ObjectNode inserts in order; BTreeMap default sorted and breaks cross-language HMAC)
 sha2 = "0.10"
@@ -43,12 +41,8 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
-tokio-tungstenite = "0.24"
-tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
-tempfile = "3"
-rand = "0.8"
 
 [profile.release]
 lto = "thin"
