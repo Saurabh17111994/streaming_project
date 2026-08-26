@@ -14,7 +14,8 @@ import org.apache.flink.table.types.logical.VarCharType;
  * v1, PK {@code instrument_token}, 16 buckets). Pinned against the DDL.
  *
  * <p>Writer: Execution Gateway / Nautilus (sole writer); Reader: Signal job
- * (feedback to clear ActiveSignalFilter). Lifecycle handshake for Option B:
+ * (feedback to clear active state in {@code ActiveSignalFeedbackFunction}).
+ * Lifecycle handshake for Option B:
  * Flink → signal → Nautilus → broker → Nautilus UPSERTS CLOSED. No TTL.
  */
 public final class PositionStateTableColumns {

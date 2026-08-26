@@ -1,7 +1,7 @@
 {
   "version": 8,
-  "title": "Compute and Decision — Backpressure/Checkpoint/DEC-038",
-  "description": "SignalJob throughput/lag, watermarks, operator busy/idle/backpressure, checkpoint duration/size/failure/restore, plus DEC-038 dedup-table size/update rate/cache. Source: SignalJob Flink metrics via prometheus:9249 → metrics, logs via flink_logs/trading_alerts.",
+  "title": "Compute and Decision \u2014 Backpressure/Checkpoint/DEC-038",
+  "description": "SignalJob throughput/lag, watermarks, operator busy/idle/backpressure, checkpoint duration/size/failure/restore, plus DEC-038 dedup-table size/update rate/cache. Source: SignalJob Flink metrics via prometheus:9249 \u2192 metrics, logs via flink_logs/trading_alerts.",
   "folder_id": "default",
   "tabs": [
     {
@@ -11,22 +11,52 @@
         {
           "id": "C01",
           "type": "line",
-          "title": "Source throughput/lag — source rate + watermark lag",
+          "title": "Source throughput/lag \u2014 source rate + watermark lag",
           "description": "ALERT-LAG-100 >100 ticks or >5s 60s. Flink source lag/rate, watermark lag/idleness.",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_source_lag' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 0, "y": 0, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_source_lag' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 8
+          }
         },
         {
           "id": "C02",
           "type": "gauge",
-          "title": "Operator busy/idle/backpressure — per slot",
+          "title": "Operator busy/idle/backpressure \u2014 per slot",
           "description": "Busy vs idle vs backpressure per Slot. Global+slot ALWAYS, top-20 per-token guard.",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_busyTimeMsPerSecond' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 64, "y": 0, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_busyTimeMsPerSecond' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 8
+          }
         },
         {
           "id": "C03",
@@ -35,38 +65,98 @@
           "description": "ALERT-CKPT-DURATION p99>5s 60s, ALERT-CKPT-SIZE-2X. Flink built-ins + state compatibility failures.",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT histogram(_timestamp) as x, avg(value) as y FROM metrics WHERE metric_name='flink_jobmanager_job_lastCheckpointDuration' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 128, "y": 0, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT histogram(_timestamp) as x, avg(value) as y FROM metrics WHERE metric_name='flink_jobmanager_job_lastCheckpointDuration' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 8
+          }
         },
         {
           "id": "C04",
           "type": "gauge",
-          "title": "Decision p99 — trigger tick → immutable decision",
+          "title": "Decision p99 \u2014 trigger tick \u2192 immutable decision",
           "description": "ALERT-DECISION-P99 >100ms trending 3 windows 60s. SignalJob decision latency.",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='compute.decision.latency.p99' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 0, "y": 8, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='compute.decision.latency.p99' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 64,
+            "h": 8
+          }
         },
         {
           "id": "C05",
           "type": "line",
-          "title": "DEC-038 dedup-table size — fluss.dedup.entries/bytes update rate",
-          "description": "Per-table gauges entries + bytes + batched async writes/s. Never per-key.",
+          "title": "Dedup live state \u2014 compute.dedup.state.count / bytes.estimate (Design B)",
+          "description": "Design B (CHG-022/023): authoritative Flink keyed MapState, native TTL. Live entry count + bytes estimate gauge; no Fluss dedup table.",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='fluss.dedup.entries' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 64, "y": 8, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_state_count' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 64,
+            "y": 8,
+            "w": 64,
+            "h": 8
+          }
         },
         {
           "id": "C06",
           "type": "gauge",
-          "title": "Dedup cache — size/utilization + hit ratio",
-          "description": "Cache size vs DEDUP_CACHE_MAX_ENTRIES/BYTES bounds, hit ratio. Sustained drop = leak to per-tick Fluss lookups.",
+          "title": "Dedup accepted vs duplicate rate \u2014 compute.dedup.first / .duplicates (Design B)",
+          "description": "Design B (CHG-022/023): first-seen acceptances vs TTL-window duplicate drops; no cache hit-ratio (cache removed).",
           "config": {},
           "queryType": "sql",
-          "queries": [{ "fields": { "stream": "metrics", "stream_type": "metrics" }, "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink.dedup.cache.hit_ratio' GROUP BY x ORDER BY x", "startTime": 0, "endTime": 0 }],
-          "layout": { "x": 128, "y": 8, "w": 64, "h": 8 }
+          "queries": [
+            {
+              "fields": {
+                "stream": "metrics",
+                "stream_type": "metrics"
+              },
+              "query": "SELECT rate(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_first' GROUP BY x ORDER BY x",
+              "startTime": 0,
+              "endTime": 0
+            }
+          ],
+          "layout": {
+            "x": 128,
+            "y": 8,
+            "w": 64,
+            "h": 8
+          }
         }
       ]
     }

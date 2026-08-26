@@ -119,4 +119,36 @@ class ActiveSignalFeedbackFunctionTest {
         harness.processElement1(candidate(10L, "id-3"), 3000L);
         assertEquals(2, emitted().size());
     }
+
+    @Test
+    void indefiniteBlockSurvivesProcessingTimeAdvance() throws Exception {
+        open();
+        harness.processElement1(candidate(30L, "id-1"), 1000L);
+        assertEquals(1, emitted().size());
+
+        // Advance processing time far past any plausible TTL — the block must
+        // persist (no timer, no TTL; only CLOSED/ADMIN_CLEAR clears it).
+        harness.setProcessingTime(60_000L);
+        harness.processElement1(candidate(30L, "id-2"), 1001L);
+        assertEquals(1, emitted().size(), "processing-time advance must not clear the block");
+
+        harness.setProcessingTime(3_700_000L); // 1h+
+        harness.processElement1(candidate(30L, "id-3"), 1002L);
+        assertEquals(1, emitted().size(), "still blocked after 1h — wait for CLOSED");
+    }
+
+    @Test
+    void remainsBlockedAcrossManyWindows() throws Exception {
+        open();
+        harness.processElement1(candidate(40L, "id-1"), 1000L);
+        assertEquals(1, emitted().size());
+
+        // Simulate many window boundaries passing without any CLOSED feedback.
+        for (int w = 1; w <= 10; w++) {
+            long ts = w * 15_000L;
+            harness.setProcessingTime(ts);
+            harness.processElement1(candidate(40L, "id-" + (w + 1)), ts);
+        }
+        assertEquals(1, emitted().size(), "indefinite — no auto-free across windows");
+    }
 }

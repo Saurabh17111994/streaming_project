@@ -1,24 +1,24 @@
 {
-  "version": 8,
-  "title": "Dedup State — DEC-038",
-  "description": "DEC-038 Fluss-owns-large-state: dedup table entry count/bytes, update rate, Flink cache hit ratio/utilization, cleanup backlog, rehydration latency/failures. Bounded per-table gauges + per-reason counters. Source: fingerprint_dedup DDL 24, FlussFingerprintDedupStateStore + FingerprintDedupFunction cache.",
+  "version": 9,
+  "title": "Dedup State — Design B (Flink keyed MapState, native TTL)",
+  "description": "Design-B fingerprint dedup (CHG-022/023, 2026-08-17): the 5-minute dedup set is authoritative Flink keyed MapState with native StateTtlConfig (DEDUP_TTL_MS=300000, ProcessingTime, OnCreateAndWrite). No Fluss dedup table, no cache, no cleanup backlog, no rehydration (the DEC-038 Fluss store is removed). Gauges: compute.dedup.state.count (live entries, TTL-resynced), compute.dedup.state.bytes.estimate (RocksDB). Counters: compute.dedup.first (accepted), compute.dedup.duplicates (dropped). Source: FingerprintDedupFunction -> flink-metrics-otel -> otel-collector:4318 -> metrics.",
   "folder_id": "default",
   "tabs": [
     {
       "tabId": "dedup",
-      "name": "Dedup State",
+      "name": "Dedup State (Design B)",
       "panels": [
         {
           "id": "D01",
           "type": "gauge",
-          "title": "Fluss dedup-table entries — fingerprint_dedup count",
-          "description": "SELECT count(*) FROM metrics WHERE metric_name='fluss.dedup.entries' — per-table gauge (never per-key). Expected = first-seen rate × TTL horizon.",
+          "title": "Live dedup entries — compute.dedup.state.count",
+          "description": "Per-subtask gauge of the current live MapState entry count (TTL-aware resync: expired entries skipped). Expected = first-seen rate × TTL horizon (5 min). Bounded by accepted rate, never by a cache cap.",
           "config": {},
           "queryType": "sql",
           "queries": [
             {
               "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='fluss.dedup.entries' GROUP BY x ORDER BY x",
+              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_state_count' GROUP BY x ORDER BY x",
               "startTime": 0,
               "endTime": 0
             }
@@ -28,14 +28,14 @@
         {
           "id": "D02",
           "type": "gauge",
-          "title": "Fluss dedup-table bytes — fingerprint_dedup storage",
-          "description": "Serialized bytes gauge for fingerprint_dedup. Per-table, not per-key.",
+          "title": "Dedup state bytes estimate — compute.dedup.state.bytes.estimate",
+          "description": "Per-subtask estimated RocksDB bytes for the dedup MapState. Monitors state growth vs the checkpoint contract (state IS authoritative — checkpoint grows with the live set by design).",
           "config": {},
           "queryType": "sql",
           "queries": [
             {
               "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='fluss.dedup.bytes' GROUP BY x ORDER BY x",
+              "query": "SELECT max(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_state_bytes_estimate' GROUP BY x ORDER BY x",
               "startTime": 0,
               "endTime": 0
             }
@@ -45,31 +45,14 @@
         {
           "id": "D03",
           "type": "line",
-          "title": "Dedup update rate — durable writes/s",
-          "description": "Batched async writes/s to fingerprint_dedup. Per-table rate.",
+          "title": "Accepted first-seen rate — compute.dedup.first",
+          "description": "Delta of first-seen acceptances (new fingerprints admitted). Rate = live-set growth rate; steady-state should equal new-fingerprint arrival.",
           "config": {},
           "queryType": "sql",
           "queries": [
             {
               "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='fluss.dedup.updates' GROUP BY x ORDER BY x",
-              "startTime": 0,
-              "endTime": 0
-            }
-          ],
-          "layout": { "x": 128, "y": 0, "w": 64, "h": 8 }
-        },
-        {
-          "id": "D04",
-          "type": "gauge",
-          "title": "Flink dedup cache hit ratio — hot path absorbs",
-          "description": "Hit ratio = cache hits / total lookups. Sustained drop leaks to per-tick Fluss lookups. Bounded cache DEDUP_CACHE_MAX_ENTRIES/BYTES.",
-          "config": {},
-          "queryType": "sql",
-          "queries": [
-            {
-              "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT avg(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink.dedup.cache.hit_ratio' GROUP BY x ORDER BY x",
+              "query": "SELECT rate(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_first' GROUP BY x ORDER BY x",
               "startTime": 0,
               "endTime": 0
             }
@@ -77,38 +60,21 @@
           "layout": { "x": 0, "y": 8, "w": 64, "h": 8 }
         },
         {
-          "id": "D05",
-          "type": "bar",
-          "title": "Expired-row cleanup — backlog and rate",
-          "description": "Rows past expiry_ms awaiting delete. Per-reason counter only.",
+          "id": "D04",
+          "type": "line",
+          "title": "Duplicate drop rate — compute.dedup.duplicates",
+          "description": "Delta of dropped duplicates (re-arrivals within TTL). Expected ≈ re-delivery rate; a spike signals replay or a re-connect storm.",
           "config": {},
           "queryType": "sql",
           "queries": [
             {
               "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM metrics WHERE metric_name='flink.dedup.cleanup.backlog' GROUP BY x ORDER BY x",
+              "query": "SELECT rate(value) as y, _timestamp as x FROM metrics WHERE metric_name='flink_taskmanager_job_task_operator_compute_dedup_duplicates' GROUP BY x ORDER BY x",
               "startTime": 0,
               "endTime": 0
             }
           ],
           "layout": { "x": 64, "y": 8, "w": 64, "h": 8 }
-        },
-        {
-          "id": "D06",
-          "type": "bar",
-          "title": "Rehydration — duration and failures on restart",
-          "description": "Rehydration latency and failures; failures keep job fail-closed SIG-STATE-002/003. State-compatibility preflight failures included.",
-          "config": {},
-          "queryType": "sql",
-          "queries": [
-            {
-              "fields": { "stream": "metrics", "stream_type": "metrics" },
-              "query": "SELECT histogram(_timestamp) as x, count(*) as y FROM logs WHERE stream='trading_alerts' AND body LIKE '%rehydration%' GROUP BY x ORDER BY x LIMIT 100",
-              "startTime": 0,
-              "endTime": 0
-            }
-          ],
-          "layout": { "x": 128, "y": 8, "w": 64, "h": 8 }
         }
       ]
     }

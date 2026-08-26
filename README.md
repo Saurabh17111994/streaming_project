@@ -63,7 +63,8 @@ code/
     ├── 03_action_capture/       scaffold (capture path → Execution Core dossier)
     ├── 04_executor/             scaffold (order path → Execution Core dossier)
     ├── 05_mock_arrow/           Mock Arrow broker (per-instrument, deterministic)
-    └── 06_mock_openalgo/        Retained for compatibility; no longer active
+    ├── 06_execution_bridge/     Go Arrow execution bridge (AutoLogin auth, REST + WS)
+    └── 06_execution_gateway/    Execution gateway (intent intake, dedup, projection)
 ```
 
 **Schema status:** [`code/01_platform/02_sql/ddl/*.sql`](code/01_platform/02_sql/ddl/) contains reconciled proposals, but they are blocked from runtime application until the pinned Fluss/Flink compatibility and schema lifecycle tests pass. See [`docs/08_implementation/01-foundation.md`](docs/08_implementation/01-foundation.md).

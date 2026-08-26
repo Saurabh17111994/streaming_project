@@ -184,7 +184,9 @@ NUMERIC_CLAIM_TYPES = (
 # Test-count drift: "common N" / "ingestion N" / "compute N" (or "N
 # common/ingestion/compute tests") claims whose count differs from the
 # current docs-audit C6 truth (01-foundation.md L3: unit suites green
-# 466/247/388 — common/ingestion/compute; 2026-08-25 CHG-102 re-verified
+# 466/247/386 — common/ingestion/compute; 2026-08-26 stale-code audit
+# compute 388→386 (ActiveSignalFilterFunctionTest deleted −4, feedback
+# test +2); 2026-08-25 CHG-102 re-verified
 # 466/247/388 (surefire 469 minus 3 gated FlussBundleReader* reports — C6
 # counts only classes present in src/test; the C6 gate reads live surefire);
 # prior 2026-08-25 CHG-100 +2 net (DdlSmokeTwinSweepUnitTest
@@ -196,7 +198,7 @@ NUMERIC_CLAIM_TYPES = (
 # DEC-038, −10/−2/−11 CHG-023, +2 forming-bar CHG-030; 2026-08-24 bump to 464/247/387,
 # 2026-08-25 CHG-100 to 466/247/387.
 # counts fire.
-TEST_COUNT_TRUTH = {"common": 466, "ingestion": 247, "compute": 388}
+TEST_COUNT_TRUTH = {"common": 466, "ingestion": 247, "compute": 386}
 TEST_COUNT_CLAIM_TYPES = (
     (
         "test-count-stale",
@@ -210,11 +212,11 @@ TEST_COUNT_CLAIM_TYPES = (
 
 # docs-audit C6 triple citations: "docs-audit C6 line N/N/N" where the three
 # counts (common/ingestion/compute) differ from the current C6 truth.
-C6_TRIPLE_TRUTH = (466, 247, 388)
+C6_TRIPLE_TRUTH = (466, 247, 386)
 
 # Current suite triples per module ("N run / 0 failures / M skips") — bare
 # N/0/M-skips claims carry no module word, so they need their own truth.
-SUITE_TRIPLE_TRUTH = {"common": (466, 0, 2), "ingestion": (247, 0, 8), "compute": (388, 0, 22)}
+SUITE_TRIPLE_TRUTH = {"common": (466, 0, 2), "ingestion": (247, 0, 8), "compute": (386, 0, 22)}
 
 # A "now/current N" count claim reads as CURRENT state regardless of any
 # nearby date marker (2026-08-18 masking class, CHG-033 follow-up): the

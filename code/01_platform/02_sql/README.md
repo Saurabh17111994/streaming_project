@@ -8,7 +8,6 @@
 
 | File | Logical object |
 | --- | --- |
-| `01_catalog.sql` | Fluss catalog and `trading` database |
 | `02_raw_table_1.sql` | `raw_table_1` — immutable raw packet/tick LOG |
 | `03_feature_candles_15s.sql` | `feature_candles_15s` — final 15-second candle LOG (immutable evidence trail) |
 | `04_forming_bar.sql` | `forming_bar` — per-ticker forming-bar KV |
@@ -30,6 +29,12 @@
 | `20_instruments.sql` | `instruments` — versioned instrument manifest KV |
 | `21_ingestion_quarantine.sql` | `ingestion_quarantine` — immutable ingestion quarantine LOG |
 | `23_signal_candidates_current.sql` | `Signal_Candidates_current` — signal KV current-state, PK `(instrument_token)`, latest/active per instrument, supersession overwrites; 22-column twin of `Signal_Candidates` (DEC-035) |
+| `24_fingerprint_dedup.sql` | `fingerprint_dedup` — DEC-038 dedup state KV (retained unused since CHG-022/023; Flink MapState is authoritative) |
+| `25_trade_instruction_state.sql` | `trade_instruction_state` — SCH-19 instruction-index KV |
+| `26_eod_offload_state.sql` | `eod_offload_state` — SCH-23 EOD offload-state KV |
+| `27_execution_intent.sql` | `Execution_Intent` — trade-intent feed LOG |
+| `28_execution_intent_processed.sql` | `Execution_Intent_Processed` — processed-intent KV |
+| `29_position_state.sql` | `Position_State` — active-position feedback KV |
 
 ## Validation required before application
 

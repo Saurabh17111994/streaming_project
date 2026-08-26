@@ -37,13 +37,16 @@ FLUSS_FLINK_CONNECTOR=fluss-flink-2.2
 # Order execution: REST POST /order/regular on https://edge.arrow.trade
 # Order updates: JSON WebSocket on wss://order-updates.arrow.trade
 # Reconciliation: GET /user/orders, /user/trades, /user/positions, /order/{id}
-# Auth: appID + token headers, token from /auth/app/authenticate-token (24hr expiry)
+# Auth (2026-08-24+): TOTP AutoLogin — ARROW_APP_ID + ARROW_APP_SECRET +
+#   ARROW_USER_ID + ARROW_PASSWORD + ARROW_TOTP_KEY (client.AutoLogin).
+#   ARROW_TOKEN is REMOVED (dead since 2026-08-24); only the faketool test
+#   broker path (run-full-suite.sh, ARROW_FAKE_BROKER=1) sets a fake token.
 # SDK: github.com/arrow-trade/go-arrow
 # Rate limit: 10 req/sec per endpoint
 
 # ---- Required env vars (values from .env; listed here for completeness) ----
 # ARROW_MARKET_DATA_URL, ARROW_ORDER_UPDATES_URL, ARROW_REST_URL
-# ARROW_APP_ID, ARROW_TOKEN
+# ARROW_APP_ID, ARROW_APP_SECRET, ARROW_USER_ID, ARROW_PASSWORD, ARROW_TOTP_KEY
 # EXECUTION_ENABLED (must be false)
 # AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_WAREHOUSE_PATH
 # O2_USER, O2_PASSWORD

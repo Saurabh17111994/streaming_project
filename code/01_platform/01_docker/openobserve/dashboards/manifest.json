@@ -94,22 +94,22 @@
       "software_versions": "OpenObserve v0.91.5-amd64; SignalJob ActiveSignalFeedbackFunction v1 (Option B strict, no TTL) + Position_State v1 (7 cols, 16 buckets)"
     },
     {
-      "title": "Dedup State \u2014 DEC-038",
+      "title": "Dedup State \u2014 Design B (Flink keyed MapState, native TTL)",
       "file": "dedup-state.json",
       "folder": "default",
-      "dashboard_version": 8,
+      "dashboard_version": 9,
       "query_version": "o2-sql-2026-08-22",
-      "measurement_boundary": "fingerprint_dedup 16 buckets: dedup table entries/bytes, update rate, Flink cache hit ratio/utilization, cleanup backlog, rehydration latency/failures",
-      "workload": "Fluss fingerprint_dedup (DDL 24) + SignalJob FingerprintDedupFunction cache (DEDUP_CACHE_MAX_ENTRIES/BYTES)",
+      "measurement_boundary": "SignalJob FingerprintDedupFunction keyed MapState: live entry count (compute.dedup.state.count), bytes estimate (compute.dedup.state.bytes.estimate), accepted first-seen rate (compute.dedup.first), duplicate drop rate (compute.dedup.duplicates). Native StateTtlConfig expiry (DEDUP_TTL_MS, ProcessingTime, OnCreateAndWrite) \u2014 CHG-022/023.",
+      "workload": "SignalJob FingerprintDedupFunction (Flink keyed MapState, native TTL) via flink-metrics-otel -> otel-collector:4318",
       "duration": "dynamic dashboard window (relative)",
       "utc_clock": "host UTC; O2 _timestamp",
       "sample_count": "n/a (dynamic)",
-      "failures_or_restarts_included": "yes \u2014 rehydration failures and state-compatibility preflight failures (fail-closed SIG-STATE-002/003)",
+      "failures_or_restarts_included": "yes \u2014 TTL expiry is native; state restored from checkpoint includes the full live set (state IS authoritative)",
       "streams": [
         "metrics",
         "logs"
       ],
-      "software_versions": "OpenObserve v0.91.5-amd64; FlussFingerprintDedupStateStore v1 + SignalJob cache v1"
+      "software_versions": "OpenObserve v0.91.5-amd64; FingerprintDedupFunction Design-B v1 (CHG-022/023); no Fluss dedup store"
     },
     {
       "title": "Security and Platform \u2014 Host/Container/JVM/ZK/Swarm",
