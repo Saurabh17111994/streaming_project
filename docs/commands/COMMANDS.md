@@ -61,6 +61,8 @@ unless a command says otherwise.
 | DDL validate only | `make ddl` | Validate without applying |
 | DDL smoke | `make ddl-apply-smoke` | Live regression smoke for the exit-code contract |
 | Build DDL image | `make ddl-image` | Build the ddl-apply contract container |
+| Build compute jar | `cd code/02_services/02_compute && mvn -q -DskipTests package` | Build the Flink job jar (host artifact — CHG-110 native split: the compute image is platform-only; the jar is volume-mounted, so code changes need **no image rebuild**) |
+| Deploy job code | `make rollout-savepoint` | Submit the freshly built jar to the running cluster + restore from savepoint (the native job-update path) |
 | EOD controller | `python3 code/01_platform/04_scripts/eod_controller.py <status\|run\|extend\|reconcile\|reset>` | End-of-day lifecycle controller (SCH-23) |
 | Savepoint rollout | `make rollout-savepoint ARGS="..."` | Flink job update with dedup-state continuity (G5/T12) |
 | Chaos suite | `make chaos-suite` | 4 failure drills: slot / TM / tablet / VM kill |

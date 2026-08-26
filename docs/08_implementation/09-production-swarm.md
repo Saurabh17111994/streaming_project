@@ -219,6 +219,13 @@ Rejected: Option A (separate branches for local / mimic / prod) — rejected bec
 
 ### Storage and recovery
 
+- **Job artifact model (CHG-110 native split):** the compute image is the
+  **platform only** (Flink + launcher) — the job jar is a **separate
+  artifact**. In production the jar SHALL be published to the object store
+  (R2/S3, alongside checkpoints) and referenced at submit time
+  (`flink run s3://…/compute.jar` via `submit-jobs.sh` / rollout), keeping
+  the image static + digest-pinned. A release = upload a new jar version +
+  savepoint-restart; **no image rebuild per code change**.
 - Fluss data uses durable per-node volumes and tested replication (LOG tables; KV tables are single-replica in Fluss 0.9.1 — durability via Fluss remote storage + rebuild from audit (Flink checkpoints hold only small working/recovery state — DEC-038)).
 - ZooKeeper ensemble members use durable per-node volumes; loss of one member is tolerated while quorum (2-of-3) holds.
 - Flink checkpoints/savepoints use encrypted versioned S3; Flink JobManager HA metadata (`high-availability.storageDir`) uses the same encrypted S3 store, with leadership in ZooKeeper.
