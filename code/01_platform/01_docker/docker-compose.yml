@@ -601,13 +601,19 @@ services:
   #     ARROW_APP_ID: ${ARROW_APP_ID}
   #
   #
-  # compute:
-  #   <<: *flink-common
-  #   build:
-  #     context: ../../02_services/02_compute
-  #     dockerfile: Dockerfile
-  #   depends_on: [flink-jobmanager, flink-taskmanager]
-  #   volumes: [flink-checkpoints:/checkpoints]
+  compute:
+    <<: *flink-common
+    build:
+      context: ../../02_services/02_compute
+      dockerfile: Dockerfile
+    depends_on: [flink-jobmanager, flink-taskmanager]
+    volumes: [flink-checkpoints:/checkpoints]
+    environment:
+      # SafetyHaltJob requires SAFETY_MANIFEST_TOKENS (comma-separated
+      # instrument tokens). Dev default: empty → submit-jobs.sh skips the
+      # safety consumer with a warning (signal + babysitter still deploy).
+      # Production MUST set this (fail-closed).
+      SAFETY_MANIFEST_TOKENS: ${SAFETY_MANIFEST_TOKENS:-}
   #
   # executor: superseded by the active `nautilus` service above (execution-t3
   # profile, CHG-053/T4 boundary — no Arrow creds, private gateway/bridge

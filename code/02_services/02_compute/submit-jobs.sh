@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Submit the two Flink jobs (signal and babysitter) to the JobManager through its
-# REST API. Feature computation is part of SignalJob. Runs in the compute container.
+# Submit the three Flink jobs (signal, babysitter, safety-halt) to the JobManager
+# through its REST API. Feature computation is part of SignalJob. SafetyHaltJob
+# is the slot-scoped Safety_Halt_Requests consumer (SAFETY-INT-001) and is
+# submitted only when SAFETY_MANIFEST_TOKENS is configured (dev default: skip
+# with a warning — it is the safety consumer, not a data-path job). Runs in the
+# compute container.
 set -euo pipefail
 
 # Tracker 14 P4.1/P4.2 — deployment validation BEFORE anything is submitted:
@@ -151,5 +155,16 @@ submit_job() {
 submit_job "signal-job-compute" "com.trading.compute.signaljob.SignalJob"
 submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob"
 
-echo "compute: Signal and Babysitter jobs submitted and RUNNING"
-echo "compute: both jobs reach RUNNING and complete at least one durable checkpoint (T8 local readiness gate)"
+# SafetyHaltJob — the slot-scoped safety-halt consumer (SAFETY-INT-001).
+# Requires SAFETY_MANIFEST_TOKENS (comma-separated instrument tokens); without
+# it the job fails at startup, so skip with a clear warning in dev rather than
+# failing the whole compute container. Production MUST set it (fail-closed).
+if [ -n "${SAFETY_MANIFEST_TOKENS:-}" ]; then
+	submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob"
+	echo "compute: Signal, Babysitter and SafetyHalt jobs submitted and RUNNING"
+else
+	echo "compute: WARN — SAFETY_MANIFEST_TOKENS unset; SafetyHaltJob NOT submitted (safety consumer skipped in dev; set it in production)"
+	echo "compute: Signal and Babysitter jobs submitted and RUNNING"
+fi
+
+echo "compute: submitted jobs reach RUNNING and complete at least one durable checkpoint (T8 local readiness gate)"
