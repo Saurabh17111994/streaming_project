@@ -609,6 +609,14 @@ services:
   #
   compute:
     <<: *flink-common
+    # CRITICAL — one-shot launcher, NOT a long-running service: it submits
+    # jobs and exits. `restart: unless-stopped` (inherited from flink-common)
+    # restarts it on ANY exit — including clean exit 0 — and every restart
+    # re-submits the babysitter/safety-halt pair, producing unbounded
+    # duplicate jobs (observed: 16 duplicates consuming all 10 TM slots,
+    # 2026-08-26). Override to `no`: the launcher runs once; job supervision
+    # is Flink's job (restart strategies on the JM).
+    restart: "no"
     build:
       context: ../../
       dockerfile: 02_services/02_compute/Dockerfile

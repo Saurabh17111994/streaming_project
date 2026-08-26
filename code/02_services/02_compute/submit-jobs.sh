@@ -213,11 +213,24 @@ submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.Babysitter
 # failing the whole compute container. Production MUST set it (fail-closed).
 if [ -n "${SAFETY_MANIFEST_TOKENS:-}" ]; then
 	# Parallelism pinned to 1 — same slot-scoped rationale as babysitter.
-	submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob" 0 1
-	echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op; safety-halt submitted)"
+	if submit_job "SafetyHaltJob (slot-scoped safety consumer)" "com.trading.compute.safetyhalt.SafetyHaltJob" 0 1; then
+		echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op; safety-halt submitted)"
+	else
+		# CRITICAL — do NOT exit 1 here: `set -e` + `restart: unless-stopped`
+		# would turn this into an infinite container restart loop, each
+		# restart submitting a fresh duplicate job pair (observed: 16
+		# duplicate safety-halt/babysitter jobs consuming all 10 TM slots
+		# on 2026-08-26). The checkpoint gate is a T8 *readiness* signal,
+		# not a crash: the job was submitted and reached RUNNING; a missing
+		# checkpoint (e.g. Fluss idle-table quirk, slot contention) is a
+		# warning the operator investigates, not a reason to resubmit.
+		echo "compute: WARN — SafetyHaltJob checkpoint gate failed; container exits cleanly, NO resubmit" >&2
+		echo "compute: WARN — inspect running SafetyHaltJob jobs before restarting this container" >&2
+	fi
 else
 	echo "compute: WARN — SAFETY_MANIFEST_TOKENS unset; SafetyHaltJob NOT submitted (safety consumer skipped in dev; set it in production)"
 	echo "compute: submitted jobs done (signal-job managed by rollout; babysitter no-op)"
 fi
 
-echo "compute: submitted jobs reach RUNNING and complete at least one durable checkpoint (T8 local readiness gate)"
+echo "compute: launcher finished — jobs submitted (readiness gate: see per-job WARN/FATAL above)"
+exit 0
