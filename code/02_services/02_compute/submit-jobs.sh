@@ -173,7 +173,18 @@ submit_job() {
 	wait_for_checkpoint "${job_id}" "${job_name}"
 }
 
-submit_job "signal-job-compute" "com.trading.compute.signaljob.SignalJob"
+# SignalJob is managed by `make rollout-savepoint` (savepoint-based
+# redeploy), NOT by the compute launcher — submitting it here would create a
+# SECOND instance reading raw_table_1 alongside the rolled-out job
+# (split-brain: independent dedup state, duplicate Signal_Candidates LOG
+# rows). COMPUTE_SUBMIT_SIGNAL=1 opts the launcher in (fresh deploy with no
+# existing job; F005 guard still applies — needs STATE_RECOVERY_PATH or
+# COMPUTE_ALLOW_REPLAY=1).
+if [ "${COMPUTE_SUBMIT_SIGNAL:-0}" = "1" ]; then
+	submit_job "signal-job-compute" "com.trading.compute.signaljob.SignalJob"
+else
+	echo "compute: SKIP signal-job (COMPUTE_SUBMIT_SIGNAL != 1) — managed by make rollout-savepoint"
+fi
 submit_job "Babysitter MVP no-op job" "com.trading.compute.babysitter.BabysitterJob"
 
 # SafetyHaltJob — the slot-scoped safety-halt consumer (SAFETY-INT-001).

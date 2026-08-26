@@ -614,6 +614,10 @@ services:
       # safety consumer with a warning (signal + babysitter still deploy).
       # Production MUST set this (fail-closed).
       SAFETY_MANIFEST_TOKENS: ${SAFETY_MANIFEST_TOKENS:-}
+      # SignalJob is managed by `make rollout-savepoint`, not the compute
+      # launcher (a second instance would split-brain on raw_table_1).
+      # COMPUTE_SUBMIT_SIGNAL=1 opts the launcher in (fresh deploy only).
+      COMPUTE_SUBMIT_SIGNAL: ${COMPUTE_SUBMIT_SIGNAL:-0}
   #
   # executor: superseded by the active `nautilus` service above (execution-t3
   # profile, CHG-053/T4 boundary — no Arrow creds, private gateway/bridge
