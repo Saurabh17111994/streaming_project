@@ -136,6 +136,27 @@ submit_job() {
 	local run_response
 	local job_id
 
+	# F005 fail-closed replay guard (CANDLE-KV-REPLAY-001 A3.3): a signal-job
+	# restart must EITHER restore from a checkpoint (STATE_RECOVERY_PATH) OR
+	# be an EXPLICIT operator-approved full replay. The compose flink-common
+	# anchor sets ALLOW_FULL_REPLAY=true by default — without this guard a
+	# stack restart would silently submit signal-job as an offset-0 full
+	# replay (re-emits the whole backlog, balloons dedup MapState past the
+	# pinned checkpoint contract, appends duplicate candle rows to the
+	# immutable Signal_Candidates LOG — observed 2026-08-10). The operator
+	# must set COMPUTE_ALLOW_REPLAY=1 at launch to override (intentional
+	# full-replay bootstrap, e.g. first-ever deploy).
+	if [ "${entry_class}" = "com.trading.compute.signaljob.SignalJob" ] \
+		&& [ -z "${STATE_RECOVERY_PATH:-}" ] \
+		&& [ "${ALLOW_FULL_REPLAY:-false}" = "true" ] \
+		&& [ "${COMPUTE_ALLOW_REPLAY:-0}" != "1" ]; then
+		echo "compute: FATAL — ${job_name} would start as a SILENT FULL REPLAY" >&2
+		echo "compute:   (ALLOW_FULL_REPLAY=true from env, no STATE_RECOVERY_PATH)." >&2
+		echo "compute:   Set STATE_RECOVERY_PATH=<savepoint|checkpoint> to resume, or" >&2
+		echo "compute:   COMPUTE_ALLOW_REPLAY=1 to explicitly approve an offset-0 replay." >&2
+		return 1
+	fi
+
 	echo "compute: submitting ${job_name} (${entry_class})"
 	run_response=$(curl -fsS -X POST "http://${JM}/jars/${jar_id}/run" \
 		-H "Content-Type: application/json" \
