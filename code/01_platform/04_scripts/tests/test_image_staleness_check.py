@@ -178,5 +178,72 @@ class MainTest(unittest.TestCase):
             self.assertEqual(rc, 2)
 
 
+class NativeSplitGuardTest(unittest.TestCase):
+    """Guard the native Flink split: the compute image is the platform only,
+    the jar is a host artifact. These tests fail if someone re-bakes the jar
+    into the image (the rebuild-per-code-change anti-pattern)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo_root = Path(__file__).resolve().parents[4]
+        cls.dockerfile = (cls.repo_root / "code" / "02_services" /
+                          "02_compute" / "Dockerfile").read_text(encoding="utf-8")
+        cls.compose = (cls.repo_root / "code" / "01_platform" / "01_docker" /
+                       "docker-compose.yml").read_text(encoding="utf-8")
+
+    def test_compute_dockerfile_does_not_bake_the_jar(self):
+        """The Dockerfile must NOT copy source in or compile the jar —
+        that couples every code change to an image rebuild."""
+        # The anti-pattern is a *build step* that copies source + compiles:
+        #   COPY 02_services /workspace/02_services
+        #   RUN mvn ... package
+        # Comments mentioning `mvn package` are fine — the build step is not.
+        # The launcher script COPY is allowed (platform); the source TREE
+        # COPY (the whole 02_services dir, or a src/ dir) is the anti-pattern.
+        self.assertNotRegex(
+            self.dockerfile,
+            r"COPY\s+\S*02_services\S*\s+/workspace",
+            "Dockerfile must not COPY the 02_services source tree (jar is a host artifact)")
+        self.assertNotIn("COPY 02_services", self.dockerfile,
+                         "Dockerfile must not COPY the bare 02_services dir")
+        self.assertNotRegex(
+            self.dockerfile,
+            r"RUN\s+\S*mvn\S*",
+            "Dockerfile must not compile the jar (mvn build belongs on the host)")
+        self.assertNotRegex(
+            self.dockerfile,
+            r"COPY\s+.*compute\.jar",
+            "Dockerfile must not COPY the jar (it is volume-mounted at runtime)")
+
+    def test_compute_dockerfile_keeps_platform_and_launcher(self):
+        """The image still carries the platform (flink base) + launcher script."""
+        self.assertIn("FROM flink:", self.dockerfile)
+        self.assertIn("submit-jobs.sh", self.dockerfile)
+
+    def test_compute_service_mounts_the_host_jar(self):
+        """The compose compute service must volume-mount the host-built jar
+        so a code change needs only `mvn package` (no image rebuild)."""
+        self.assertIn(
+            "target/compute.jar:/opt/flink-jobs/compute.jar",
+            self.compose,
+            "compute service must mount the host jar (native split)")
+
+    def test_compute_image_sources_exclude_the_jar(self):
+        """CHG-101 staleness sources for the compute image must not include
+        the jar/02_services — otherwise every code change flags the image
+        STALE and forces a rebuild."""
+        for path in isc.SERVICE_SOURCES.get("compute", []):
+            # Only the Dockerfile + launcher may be sources; the job SOURCE
+            # TREE (02_services/02_compute/src, target/) must not be — but the
+            # Dockerfile/launcher paths themselves live under 02_services, so
+            # assert on the *code* paths specifically.
+            self.assertNotIn("02_compute/src", path,
+                             f"compute image source '{path}' must not include "
+                             f"the job source tree (jar is a host artifact)")
+            self.assertNotIn("/target/", path,
+                             f"compute image source '{path}' must not include "
+                             f"the build output (jar is a host artifact)")
+
+
 if __name__ == "__main__":
     unittest.main()

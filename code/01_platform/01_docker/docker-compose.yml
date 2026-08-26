@@ -613,7 +613,12 @@ services:
       context: ../../
       dockerfile: 02_services/02_compute/Dockerfile
     depends_on: [flink-jobmanager, flink-taskmanager]
-    volumes: [flink-checkpoints:/checkpoints]
+    volumes:
+      - flink-checkpoints:/checkpoints
+      # Native split: the jar is a host artifact, mounted live — a code change
+      # needs only `mvn package` (no image rebuild). The image carries the
+      # platform + launcher only; the jar is the mount point.
+      - ../../02_services/02_compute/target/compute.jar:/opt/flink-jobs/compute.jar:ro
     environment:
       # SafetyHaltJob requires SAFETY_MANIFEST_TOKENS (comma-separated
       # instrument tokens). Dev default: empty → submit-jobs.sh skips the

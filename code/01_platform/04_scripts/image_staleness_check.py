@@ -78,6 +78,14 @@ SERVICE_SOURCES: dict[str, list[str]] = {
         "code/02_services/01_ingestion",
     ],
     "nautilus": ["code/02_services/04_executor"],
+    # Native split: the compute image is the PLATFORM + launcher only — the
+    # jar is a host artifact (mounted/submitted at runtime). Sources are the
+    # Dockerfile + submit-jobs.sh; the 02_services job code is deliberately
+    # EXCLUDED so a code change does not flag the image STALE (no rebuild).
+    "compute": [
+        "code/02_services/02_compute/Dockerfile",
+        "code/02_services/02_compute/submit-jobs.sh",
+    ],
     "ddl-apply": _platform_sources(),
     "eod-controller": _platform_sources(),
 }
